@@ -18,6 +18,11 @@
 //     node ops/loadtest/merge-load.mjs <a|a-burst|b|c|d|e|sample> [--n 200] [--burst 50] [--tag run1]
 //   GS_LT_WORK=<scratch dir> node ops/loadtest/merge-load.mjs spawn-bench [--n 100]
 // Results: $GS_LT_OUT/<scenario>-<tag>.json (+ .jsonl event logs).
+//
+// Exit codes: 0 the run can be trusted; 1 it failed or did not finish (also:
+// the queue never settled); 2 a wrong command line or environment (nothing
+// was started); 3 STOP; 4 it finished and wrote its result, but the result
+// must not be read as a pass (`verdict.reasons` in the result file).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,13 +40,72 @@ const opt = (name, dflt) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : dflt;
 };
+
+// ---------------------------------------------------------------- startup checks
+// Everything here runs before the token is read, a directory is made or a
+// request is sent: a wrong command line ends with exit 2 and nothing started.
+const USAGE = 'usage: merge-load.mjs <a|a-burst|b|c|d|e|spawn-bench|sample> [--n N] [--burst N] [--tag T]\n'
+  + '  e: [--count 10000] [--rate 21] [--burst 100] [--burst-every 30] [--duration MIN] [--docs 500] [--sample-every 30]\n'
+  + '  --preflight: check the command line and the environment, then exit 0 without running';
+/** A wrong command line or environment: say why and exit 2. */
+function usage(message) {
+  console.error(message);
+  process.exit(2);
+}
+// the numeric options of each scenario with their minimum (all are integers)
+const MR_OPTS = { n: 1, gap: 0, timeout: 1, 'retry-busy': 0 };
+const NUMERIC = {
+  a: { ...MR_OPTS, burst: 1, 'person-from': 0 },
+  'a-burst': { ...MR_OPTS, 'person-from': 0 },
+  b: MR_OPTS,
+  c: { ...MR_OPTS, burst: 1 },
+  d: { n: 1 },
+  e: { count: 1, rate: 1, burst: 0, 'burst-every': 1, duration: 0, docs: 1, 'sample-every': 1, 'repo-size-every': 1, timeout: 1, 'retry-busy': 0 },
+  'spawn-bench': { n: 1, docs: 2 },
+  sample: {},
+};
+const TEXT_OPTS = ['tag', 'group', 'file', 'digest', 'from', 'https-base', 'ca-file', 'keep', 'preflight'];
+if (!Object.hasOwn(NUMERIC, scenario ?? '')) usage(USAGE);
+for (const a of args.slice(1)) {
+  if (a.startsWith('--') && !TEXT_OPTS.includes(a.slice(2)) && !Object.hasOwn(NUMERIC[scenario], a.slice(2))) usage(`${a} is not an option of ${scenario}\n${USAGE}`);
+}
+/** `--name` as an integer of at least the scenario's minimum (exit 2 otherwise); `dflt` when it is not given. */
+function num(name, dflt) {
+  const min = NUMERIC[scenario][name];
+  if (min === undefined) throw new Error(`--${name} is not a numeric option of ${scenario}`);
+  const i = args.indexOf(`--${name}`);
+  if (i < 0) return dflt;
+  const raw = args[i + 1];
+  // digits only: no sign, fraction, exponent or blank ("abc" and "" would be NaN and 0)
+  const v = /^\d{1,15}$/.test(raw ?? '') ? Number(raw) : NaN;
+  if (!(v >= min)) usage(`--${name} must be an integer >= ${min} (got ${raw === undefined ? 'no value' : JSON.stringify(raw)})`);
+  return v;
+}
+for (const name of Object.keys(NUMERIC[scenario])) num(name, 0);
+// the tag names files, directories (one is removed recursively) and projects
+const NAME_RE = /^[A-Za-z0-9._-]+$/;
 const TAG = opt('tag', new Date().toISOString().slice(0, 16).replace(/[:T]/g, ''));
+if (!NAME_RE.test(TAG ?? '')) usage(`--tag must match ${NAME_RE} (got ${TAG === undefined ? 'no value' : JSON.stringify(TAG)})`);
+const SAMPLE_FILE = opt('file', `samples-${TAG}.jsonl`);
+if (!NAME_RE.test(SAMPLE_FILE ?? '')) usage(`--file must match ${NAME_RE}: a file name in the output directory, not a path`);
+/** An on/off environment variable: unset, empty or 0 is off, 1 is on, anything else is refused. */
+function flag(name) {
+  const v = process.env[name] ?? '';
+  if (!['', '0', '1'].includes(v)) usage(`${name} must be 0 or 1`);
+  return v === '1';
+}
 const GROUP = opt('group', 'loadtest');
 const WORK = process.env.GS_LT_WORK ?? path.join(L.OUT, 'work');
 const PG = process.env.GS_LT_PG_CONTAINER ?? 'gs-m3-test-gs-test-pg-1';
 // GS_LT_PSQL_DIRECT=1: `psql` of this host with the libpq environment
 // (PGHOST, PGPORT, PGUSER, PGPASSFILE) instead of `docker exec` (a Linux host)
-const PSQL_DIRECT = process.env.GS_LT_PSQL_DIRECT === '1';
+const PSQL_DIRECT = flag('GS_LT_PSQL_DIRECT');
+const USES_SQL = !['d', 'spawn-bench'].includes(scenario);
+// without PGHOST and PGPORT psql takes whatever PostgreSQL the default socket reaches
+const directTargetMissing = () => ['PGHOST', 'PGPORT'].filter((v) => !process.env[v]);
+if (PSQL_DIRECT && USES_SQL && directTargetMissing().length) {
+  usage(`GS_LT_PSQL_DIRECT=1 needs ${directTargetMissing().join(' and ')} set explicitly: the database of the load test is named, never the default of this host`);
+}
 const PG_DB = process.env.GS_LT_PG_DB ?? 'forge';
 // every session of the load test is read-only: a write fails in PostgreSQL
 const READ_ONLY = '-c default_transaction_read_only=on';
@@ -49,10 +113,17 @@ const READ_ONLY = '-c default_transaction_read_only=on';
 const STORAGE_ROOT = process.env.GS_LT_STORAGE_ROOT ?? null;
 const STOP_FILE = path.join(L.OUT, 'STOP');
 const MIN_FREE_GB = Number(process.env.GS_LT_MIN_FREE_GB ?? 3);
-fs.mkdirSync(WORK, { recursive: true });
+if (!/^\d+(\.\d+)?$/.test(process.env.GS_LT_MIN_FREE_GB ?? '3')) usage('GS_LT_MIN_FREE_GB must be a number >= 0 (the memory floor in GB)');
+// GS_LT_DOC_LINT_MISSING_FATAL=1: a first-parent commit of main without a
+// `forge/doc-lint` run of its own fails the integrity check. Off until plan 18
+// S1 lints the train (then run-all.sh turns it on); it is reported either way.
+const DOC_LINT_MISSING_FATAL = flag('GS_LT_DOC_LINT_MISSING_FATAL');
+// a group (one minute of MRs) of the soak revises each document at most once
+if (scenario === 'e' && num('docs', 500) < Math.max(num('rate', 21), num('burst', 100))) usage('--docs must be at least --rate and --burst');
 
 /** Read-only SQL against the test database (superuser inside the container, or `psql` of this host). */
 async function sql(q) {
+  if (PSQL_DIRECT && directTargetMissing().length) throw new Error('GS_LT_PSQL_DIRECT=1 without PGHOST and PGPORT');
   const query = ['-v', 'ON_ERROR_STOP=1', '-AtF', '\t', '-c', q];
   const r = PSQL_DIRECT
     ? await pexec('psql', ['-X', '-d', PG_DB, ...query], {
@@ -119,20 +190,34 @@ async function sampleOnce(prev) {
   out.ci_jobs = Object.fromEntries(ci.map(([s, c]) => [s, Number(c)]));
   return out;
 }
+// samples that fail this many times in a row end the sampler (10 s apart: five minutes)
+const SAMPLER_FAILURES_END = 30;
 async function sampler() {
-  const file = opt('file', `samples-${TAG}.jsonl`);
+  const file = path.join(L.OUT, SAMPLE_FILE);
   let prev = null;
+  let failures = 0;
   for (;;) {
     try {
       const s = await sampleOnce(prev);
-      fs.appendFileSync(path.join(L.OUT, file), JSON.stringify(s) + '\n');
+      fs.appendFileSync(file, JSON.stringify(s) + '\n');
       if (s.free_gb !== undefined && s.free_gb < MIN_FREE_GB && !stopRequested()) {
         fs.writeFileSync(STOP_FILE, `free memory ${s.free_gb.toFixed(2)} GB < ${MIN_FREE_GB} GB at ${s.t}\n`);
         console.error('free memory below the floor: STOP written');
       }
       prev = s;
+      failures = 0;
     } catch (e) {
-      fs.appendFileSync(path.join(L.OUT, file), JSON.stringify({ t: new Date().toISOString(), sample_error: String(e.message).slice(0, 300) }) + '\n');
+      const t = new Date().toISOString();
+      const error = String(e.message).slice(0, 300);
+      fs.appendFileSync(file, JSON.stringify({ t, sample_error: error }) + '\n');
+      if (++failures >= SAMPLER_FAILURES_END) {
+        // nobody watches the memory floor any more: the run stops instead of going on blind
+        const why = `the sampler failed ${failures} times in a row at ${t}: the memory floor is not watched`;
+        fs.appendFileSync(file, JSON.stringify({ t, sampler_failed: why }) + '\n');
+        if (!stopRequested()) fs.writeFileSync(STOP_FILE, `${why}\n`);
+        console.error(`${why} (STOP written). Last error: ${error}`);
+        process.exit(1);
+      }
     }
     await L.sleep(10000);
   }
@@ -188,7 +273,9 @@ async function makeBranches(p, branches /* [{name, files:{path:content|null}}] *
   }
 }
 // --retry-busy N: a client that retries a 503 FG-GIT-0004 (git busy) up to N times, 1 s apart
-const RETRY_BUSY = Number(opt('retry-busy', 0));
+const RETRY_BUSY = Object.hasOwn(NUMERIC[scenario], 'retry-busy') ? num('retry-busy', 0) : 0;
+// --gap S: seconds between two waves of MRs
+const GAP_S = Object.hasOwn(NUMERIC[scenario], 'gap') ? num('gap', 30) : 30;
 async function createMr(p, b) {
   const t = Date.now();
   let r;
@@ -346,7 +433,7 @@ async function burstCreate(p, branches, burst, { enqueueByPerson }) {
     if (enqueueByPerson) await Promise.all(made.filter((r) => r.iid).map((r) => enqueue(p, r)));
     for (const r of made) { recs.push(r); L.log(`${scenario}-${TAG}.jsonl`, r); }
     console.log(`burst at MR ${made[0]?.branch}: ${made.length} MRs (create p95 ${L.pct(made.map((r) => r.create_ms), 95)} ms)`);
-    if (i + burst < branches.length) await L.sleep(Number(opt('gap', 30)) * 1000);
+    if (i + burst < branches.length) await L.sleep(GAP_S * 1000);
   }
   return recs;
 }
@@ -354,48 +441,171 @@ async function gitShow(p, ref, file) {
   await L.gitOk(p.dir, ['fetch', '-q', L.repoUrl(GROUP, p.name), `+refs/heads/main:refs/remotes/origin/main`]);
   return (await L.gitOk(p.dir, ['show', `origin/main:${file}`])).stdout;
 }
+/** `read()` again every 5 s while `open(rows)` (something still runs), for at most `waitMs`. */
+async function readWhenFinal(read, open, waitMs) {
+  const end = Date.now() + waitMs;
+  for (;;) {
+    const rows = await read();
+    if (!open(rows) || Date.now() >= end) return rows;
+    await L.sleep(5000);
+  }
+}
 /**
  * What must hold on `main` after every scenario (handoff 2026-11-17, plan 18
  * §1): no conflict marker in main's tree, no push pipeline on a first-parent
- * commit that did not succeed, and (documents) `forge/doc-lint` success on
- * every first-parent commit — not only the tip. A commit without a check run
- * of its own is `missing`; `missing_merged_head_success` counts those whose
- * merged head (second parent) has a success.
+ * commit that did not succeed, and (documents) no `forge/doc-lint` run on a
+ * first-parent commit that is not success — every commit, not only the tip.
+ * Pipelines and runs still in flight right after the last merge are waited
+ * for (`waitMs`); one that is still not final then counts as not succeeded.
+ *
+ * A commit without a check run of its own is `missing`
+ * (`missing_merged_head_success` counts those whose merged head, the second
+ * parent, has a success). `missing` is always reported; it fails the check
+ * only with GS_LT_DOC_LINT_MISSING_FATAL=1 (plan 18 S1 lints the train).
+ * `failures` lists what failed; `ok` is `failures` being empty.
  */
-async function mainIntegrity(p, { docLint }) {
+async function mainIntegrity(p, { docLint, waitMs = 300000 }) {
   await L.gitOk(p.dir, ['fetch', '-q', L.repoUrl(GROUP, p.name), '+refs/heads/main:refs/remotes/origin/main']);
   const line = (await L.gitOk(p.dir, ['rev-list', '--first-parent', '--parents', 'origin/main'])).stdout.trim().split('\n').map((l) => l.split(' '));
+  const onLine = new Set(line.map(([sha]) => sha));
+  // A file counts when it has the start or the end line of a conflict (git
+  // writes both around every conflict). A `=======` line alone does not: it
+  // is also the underline of a Markdown setext heading.
   // git grep: exit 0 = a match, 1 = none
-  const grep = await L.git(p.dir, ['grep', '-l', '-I', '-E', '^(<<<<<<< |=======$|>>>>>>> )', 'origin/main', '--']);
+  const grep = await L.git(p.dir, ['grep', '-l', '-I', '-E', CONFLICT_MARKER.source, 'origin/main', '--']);
   if (!grep.ok && grep.code !== 1) throw new Error(`git grep failed: ${grep.stderr.slice(0, 300)}`);
   const marked = grep.ok ? grep.stdout.trim().split('\n').map((f) => f.replace(/^origin\/main:/, '')) : [];
-  const pipes = new Map((await sql(`select sha, status from forge.ci_pipelines where project_id=${p.id} and source='push' order by id`)).map(([sha, st]) => [sha, st]));
+  const pipes = new Map(await readWhenFinal(
+    () => sql(`select sha, status from forge.ci_pipelines where project_id=${p.id} and source='push' order by id`),
+    (rows) => rows.some(([sha, st]) => onLine.has(sha) && (st === 'pending' || st === 'running')), waitMs));
   const notGreen = line.filter(([sha]) => pipes.has(sha) && pipes.get(sha) !== 'succeeded').map(([sha]) => ({ sha, status: pipes.get(sha) }));
   const out = {
     main_sha: line[0][0], first_parent_commits: line.length,
     conflict_marker_files: marked,
     push_pipelines_not_succeeded: notGreen.length, push_pipelines_not_succeeded_first: notGreen.slice(0, 20),
-    ok: marked.length === 0 && notGreen.length === 0,
   };
-  if (!docLint) return out;
-  const runs = new Map((await sql(`select head_sha, coalesce(conclusion, status) from forge.check_runs where project_id=${p.id} and name='forge/doc-lint'`)).map(([sha, c]) => [sha, c]));
-  const lint = { success: 0, not_success: [], missing: 0, missing_merged_head_success: 0, missing_first: [], tip: runs.get(line[0][0]) ?? null };
-  for (const [sha, , mergedHead] of line) {
-    const own = runs.get(sha);
-    if (own === 'success') lint.success++;
-    else if (own) lint.not_success.push({ sha, conclusion: own });
-    else {
-      lint.missing++;
-      if (mergedHead && runs.get(mergedHead) === 'success') lint.missing_merged_head_success++;
-      if (lint.missing_first.length < 20) lint.missing_first.push(sha);
+  let lint = null;
+  if (docLint) {
+    const runs = new Map(await readWhenFinal(
+      () => sql(`select head_sha, coalesce(conclusion, status) from forge.check_runs where project_id=${p.id} and name='forge/doc-lint' order by id`),
+      (rows) => rows.some(([sha, c]) => onLine.has(sha) && (c === 'queued' || c === 'in_progress')), waitMs));
+    lint = { success: 0, not_success: [], missing: 0, missing_merged_head_success: 0, missing_first: [], tip: runs.get(line[0][0]) ?? null };
+    for (const [sha, , mergedHead] of line) {
+      const own = runs.get(sha);
+      if (own === 'success') lint.success++;
+      else if (own) lint.not_success.push({ sha, conclusion: own });
+      else {
+        lint.missing++;
+        if (mergedHead && runs.get(mergedHead) === 'success') lint.missing_merged_head_success++;
+        if (lint.missing_first.length < 20) lint.missing_first.push(sha);
+      }
     }
+    lint.every_first_parent_commit_success = lint.success === line.length;
+    lint.not_success_count = lint.not_success.length;
+    lint.not_success = lint.not_success.slice(0, 50);
+    lint.missing_fatal = DOC_LINT_MISSING_FATAL;
+    out.doc_lint_first_parent = lint;
   }
-  lint.every_first_parent_commit_success = lint.success === line.length;
-  lint.not_success_count = lint.not_success.length;
-  lint.not_success = lint.not_success.slice(0, 50);
-  out.doc_lint_first_parent = lint;
-  out.ok = out.ok && lint.every_first_parent_commit_success;
+  out.failures = integrityFailures({ markerFiles: marked.length, pipelinesNotSucceeded: notGreen.length,
+    lintNotSuccess: lint?.not_success_count ?? 0, lintMissing: lint?.missing ?? 0, missingFatal: DOC_LINT_MISSING_FATAL });
+  out.ok = out.failures.length === 0;
   return out;
+}
+// ---- the verdict: pure functions (facts in, reasons and the exit code out)
+/** The start or the end line of a conflict as git writes it (POSIX ERE, also a JS pattern). */
+const CONFLICT_MARKER = /^(<<<<<<<|>>>>>>>)( |$)/m;
+/** What fails the integrity of main, from its counts. A missing doc-lint run fails it only when `missingFatal`. */
+function integrityFailures({ markerFiles, pipelinesNotSucceeded, lintNotSuccess, lintMissing, missingFatal }) {
+  const failures = [];
+  if (markerFiles) failures.push(`${markerFiles} file(s) with a conflict marker`);
+  if (pipelinesNotSucceeded) failures.push(`${pipelinesNotSucceeded} first-parent commit(s) whose push pipeline did not succeed`);
+  if (lintNotSuccess) failures.push(`${lintNotSuccess} first-parent commit(s) whose forge/doc-lint run is not success`);
+  if (lintMissing && missingFatal) failures.push(`${lintMissing} first-parent commit(s) without a forge/doc-lint run (GS_LT_DOC_LINT_MISSING_FATAL=1)`);
+  return failures;
+}
+/** The created MRs that are not merged, as `!iid`. */
+const notMerged = (recs, merged) => recs.filter((r) => r.iid && !merged.has(r.iid)).map((r) => `!${r.iid}`);
+/**
+ * Scenario b against its plan: every non-overlapping MR merges, and of the
+ * overlapping ones (all rewrite step 1) exactly one does — the others are the
+ * conflicts the scenario plants, not failures.
+ */
+function offPlanB(recs, merged) {
+  const off = notMerged(recs.filter((r) => r.kind === 'separate'), merged).map((x) => `${x} (non-overlapping) did not merge`);
+  const overlap = recs.filter((r) => r.iid && r.kind === 'overlap');
+  const won = overlap.filter((r) => merged.has(r.iid)).length;
+  if (overlap.length && won !== 1) off.push(`${won} of ${overlap.length} overlapping MRs merged (exactly one must)`);
+  return off;
+}
+/**
+ * Scenario c against its plan: of each planted pair exactly one MR merges
+ * (whichever comes second breaks the combined build and is dropped: the stop
+ * the scenario plants), and every other MR merges.
+ */
+function offPlanC(recs, merged, pairs) {
+  const present = pairs.filter(([a, b]) => [a, b].every((i) => recs.some((r) => r.i === i)));
+  const paired = new Set(present.flatMap(([a, b]) => [a, b]));
+  const off = notMerged(recs.filter((r) => !paired.has(r.i)), merged).map((x) => `${x} did not merge`);
+  for (const [a, b, how] of present) {
+    const both = [a, b].map((i) => recs.find((r) => r.i === i));
+    if (both.some((r) => !r.iid)) continue; // one was not created: counted as a failed create
+    const won = both.filter((r) => merged.has(r.iid)).length;
+    if (won !== 1) off.push(`planted pair ${a}/${b} (${how}): ${won} merged (exactly one must)`);
+  }
+  return off;
+}
+/**
+ * Can the result of a run be trusted? `code` is the exit code: 0 = yes;
+ * 3 = stopped by the STOP file; 1 = it failed, or the queue never settled (an
+ * unfinished run); 4 = it finished, but it must not be read as a pass.
+ *   recs          one record per create attempt (`iid` null: not created)
+ *   createErrors  creates that threw; skipped: MRs whose branch was not pushed
+ *   offPlan       what went against the scenario's plan (`notMerged`, `offPlanB`, `offPlanC`)
+ *   lost          merged revisions that are not on main
+ *   extra         further reasons of the scenario
+ */
+function verdict({ settle, integrity, recs, createErrors = 0, skipped = 0, offPlan = [], lost = 0, extra = [], stopped = null, failure = null }) {
+  const reasons = [];
+  if (stopped) reasons.push(`stopped: ${stopped}`);
+  if (failure) reasons.push(`failed: ${failure}`);
+  const unsettled = !stopped && !failure && settle?.settled !== true;
+  if (unsettled) reasons.push('the queue did not settle before --timeout: the numbers are of an unfinished run');
+  const failed = recs.filter((r) => !r.iid);
+  if (failed.length || createErrors) {
+    const codes = {};
+    for (const r of failed) codes[r.create_error ?? r.create_status] = (codes[r.create_error ?? r.create_status] ?? 0) + 1;
+    reasons.push(`${failed.length + createErrors} of ${recs.length + createErrors} merge requests were not created ${JSON.stringify(codes)}`);
+  }
+  if (skipped) reasons.push(`${skipped} merge requests were skipped: their branches could not be pushed`);
+  if (offPlan.length) reasons.push(`against the scenario's plan (${offPlan.length}): ${offPlan.slice(0, 10).join('; ')}${offPlan.length > 10 ? '; ...' : ''}`);
+  if (lost) reasons.push(`${lost} merged revision(s) are not on main`);
+  for (const f of integrity.failures) reasons.push(`main: ${f}`);
+  reasons.push(...extra);
+  const code = reasons.length === 0 ? 0 : stopped ? 3 : failure || unsettled ? 1 : 4;
+  return { ok: code === 0, code, reasons };
+}
+/** Is `target` strictly inside `dir`, both resolved first (`..` segments are gone)? */
+function isInside(dir, target) {
+  const rel = path.relative(path.resolve(dir), path.resolve(target));
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+// ---- end of the pure functions
+/** After the result file is written: say why the run is not to be trusted and set the exit code. */
+function finish(v) {
+  for (const r of v.reasons) console.error(`NOT OK: ${r}`);
+  // not process.exit(): what was printed is flushed first
+  process.exitCode = v.code;
+}
+/** The iids of the merged MRs in `facts`. */
+const mergedIids = (facts) => new Set(facts.mrs.filter((x) => x.merged_at).map((x) => x.iid));
+/** Remove a scratch directory with everything in it — only one that lies inside GS_LT_WORK. */
+function removeUnderWork(target) {
+  if (!isInside(WORK, target)) {
+    console.error(`not removed: ${path.resolve(target)} is not inside the work directory ${path.resolve(WORK)}`);
+    process.exitCode = 1;
+    return;
+  }
+  fs.rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 /** The integrity of main in one line (the lists stay in the result file). */
 const integrityLine = (g) => JSON.stringify({ ...g, push_pipelines_not_succeeded_first: undefined,
@@ -405,10 +615,10 @@ const integrityLine = (g) => JSON.stringify({ ...g, push_pipelines_not_succeeded
 /** `a`: waves of --burst MRs, --gap seconds apart. `a-burst`: all --n MRs at once. */
 async function scenarioA({ atOnce = false } = {}) {
   const key = atOnce ? 'a-burst' : 'a';
-  const n = Number(opt('n', 200));
-  const burst = atOnce ? n : Number(opt('burst', 50));
+  const n = num('n', 200);
+  const burst = atOnce ? n : num('burst', 50);
   // MRs >= this index are enqueued by a person too (a-burst: none, auto-merge alone drains it)
-  const personFrom = Number(opt('person-from', atOnce ? n : Math.floor(n / 2)));
+  const personFrom = num('person-from', atOnce ? n : Math.floor(n / 2));
   const files = { '.forge/doctypes/lt.procedure.yml': D.DOCTYPE };
   for (let i = 1; i <= n; i++) files[D.docPath(i)] = D.doc(i);
   const p = await seedProject(`docs-${atOnce ? 'ab' : 'a'}-${TAG}`, files, ['forge/doc-lint']);
@@ -427,9 +637,9 @@ async function scenarioA({ atOnce = false } = {}) {
     const person = i >= personFrom;
     const got = await burstCreate(p, part, burst, { enqueueByPerson: person });
     recs.push(...got);
-    if (i + burst < n) await L.sleep(Number(opt('gap', 30)) * 1000);
+    if (i + burst < n) await L.sleep(GAP_S * 1000);
   }
-  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: Number(opt('timeout', 3600)) * 1000, label: key });
+  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: num('timeout', 3600) * 1000, label: key });
   const facts = await queueFacts(p);
   const lint = await sql(`select c.conclusion, count(*) from forge.check_runs c where c.project_id=${p.id} and c.name='forge/doc-lint' group by 1`);
   // integrity: every document on main carries its revision
@@ -442,16 +652,22 @@ async function scenarioA({ atOnce = false } = {}) {
   const listed = await L.api('GET', `/api/v1/projects/${p.id}/documents`);
   const docsListed = { status: listed.status, count: listed.body?.documents?.length ?? null, ms: Math.round(listed.ms) };
   const integrity = await mainIntegrity(p, { docLint: true });
-  const result = { scenario: key, tag: TAG, docs_listed_on_main: docsListed, project: `${GROUP}/${p.name}`, project_id: p.id, n, burst, person_from: personFrom,
-    started: iso(t0), settle, summary: summarize(recs, facts), doc_lint_runs: Object.fromEntries(lint), revisions_missing_on_main: missing, integrity, facts };
+  // every created MR merges, and the revision of a merged MR is on main
+  const merged = mergedIids(facts);
+  const lost = missing.filter((i) => merged.has(recs.find((r) => r.branch === `a/doc-${i}`)?.iid));
+  const v = verdict({ settle, integrity, recs, offPlan: notMerged(recs, merged).map((x) => `${x} did not merge`), lost: lost.length });
+  const result = { scenario: key, tag: TAG, verdict: v, docs_listed_on_main: docsListed, project: `${GROUP}/${p.name}`, project_id: p.id, n, burst, person_from: personFrom,
+    started: iso(t0), settle, summary: summarize(recs, facts), doc_lint_runs: Object.fromEntries(lint), revisions_missing_on_main: missing,
+    merged_revisions_missing_on_main: lost, integrity, facts };
   L.save(`${key}-${TAG}.json`, result);
   console.log(JSON.stringify(result.summary, null, 1), 'missing on main:', missing.length);
   console.log('integrity of main:', integrityLine(integrity));
+  finish(v);
 }
 
 // ---------------------------------------------------------------- B
 async function scenarioB() {
-  const m = Number(opt('n', 30));
+  const m = num('n', 30);
   const steps = m + 10;
   const files = { '.forge/doctypes/lt.procedure.yml': D.DOCTYPE, [D.docPath(1)]: D.doc(1, { steps }) };
   for (let i = 2; i <= 5; i++) files[D.docPath(i)] = D.doc(i);
@@ -468,7 +684,7 @@ async function scenarioB() {
   await makeBranches(p, branches);
   const recs = await burstCreate(p, branches, m, { enqueueByPerson: false });
   for (const r of recs) r.kind = branches.find((b) => b.name === r.branch).kind;
-  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: Number(opt('timeout', 900)) * 1000, label: 'B' });
+  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: num('timeout', 900) * 1000, label: 'B' });
   const facts = await queueFacts(p);
   // what a person sees on each MR that did not merge
   const views = [];
@@ -491,18 +707,22 @@ async function scenarioB() {
   }
   const mainSha = (await L.gitOk(p.dir, ['rev-parse', 'origin/main'])).stdout.trim();
   const mainChecks = await sql(`select name, conclusion from forge.check_runs where project_id=${p.id} and head_sha='${mainSha}'`);
-  const conflictMarkers = /^(<<<<<<<|=======|>>>>>>>)/m.test(text);
+  const conflictMarkers = CONFLICT_MARKER.test(text);
   // the document as the portal parses it on main (every step block still there)
   const dv = await L.api('GET', `/api/v1/projects/${p.id}/documents/${D.docId(1)}`);
   const docOnMain = { status: dv.status, step_ids: new Set((JSON.stringify(dv.body).match(/"id":"S-\d+"/g) ?? [])).size, expected_steps: steps };
   const integrity = await mainIntegrity(p, { docLint: true });
-  const result = { scenario: 'B', tag: TAG, project: `${GROUP}/${p.name}`, project_id: p.id, m, settle, integrity,
+  // the overlapping MRs but one are meant to stop (offPlanB); anything else that stopped is not
+  const v = verdict({ settle, integrity, recs, offPlan: offPlanB(recs, mergedIids(facts)), lost: lost.length,
+    extra: conflictMarkers ? ['the document on main carries a conflict marker'] : [] });
+  const result = { scenario: 'B', tag: TAG, verdict: v, project: `${GROUP}/${p.name}`, project_id: p.id, m, settle, integrity,
     summary: summarize(recs, facts),
     merged_by_kind: recs.reduce((a, r) => { const mr = facts.mrs.find((x) => x.iid === r.iid); const k = `${r.kind}:${mr?.merged_at ? 'merged' : mr?.state}`; a[k] = (a[k] ?? 0) + 1; return a; }, {}),
     lost_edits: lost, conflict_markers_on_main: conflictMarkers, doc_on_main: docOnMain, main_sha: mainSha, main_checks: mainChecks, not_merged_views: views, facts };
   L.save(`b-${TAG}.json`, result);
   console.log(JSON.stringify({ ...result.summary, merged_by_kind: result.merged_by_kind, lost: lost.length, conflictMarkers }, null, 1));
   console.log('integrity of main:', integrityLine(integrity));
+  finish(v);
 }
 
 // ---------------------------------------------------------------- C
@@ -537,7 +757,7 @@ exit $fail
 `;
 const modFile = (name, port, requires) => `NAME=${name}\nPORT=${port}\n${requires ? `REQUIRES=${requires}\n` : ''}`;
 async function scenarioC() {
-  const k = Number(opt('n', 40));
+  const k = num('n', 40);
   const digest = opt('digest', 'sha256:26ba97bef0be0407a46e30df34e515e86116fa7b59efbe0265446ec43ef68138');
   const files = { '.forge-ci.yml': CI_YML(digest), 'tests/check.sh': CHECK_SH,
     'mods/base-a.env': modFile('base-a', 8001), 'mods/base-b.env': modFile('base-b', 8002), 'mods/base-c.env': modFile('base-c', 8003) };
@@ -558,9 +778,9 @@ async function scenarioC() {
     branches.push({ name: `c/mod-${i}`, i, files: f, breaker: breaker.get(i) ?? null });
   }
   await makeBranches(p, branches);
-  const recs = await burstCreate(p, branches, Number(opt('burst', k)), { enqueueByPerson: true });
+  const recs = await burstCreate(p, branches, num('burst', k), { enqueueByPerson: true });
   for (const r of recs) { const b = branches.find((x) => x.name === r.branch); r.i = b.i; r.breaker = b.breaker; }
-  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: Number(opt('timeout', 5400)) * 1000, label: 'C' });
+  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: num('timeout', 5400) * 1000, label: 'C' });
   const facts = await queueFacts(p);
   // main never red: every commit on main's first-parent line has a green ci/pipeline (push pipeline)
   await L.gitOk(p.dir, ['fetch', '-q', L.repoUrl(GROUP, p.name), '+refs/heads/main:refs/remotes/origin/main']);
@@ -573,7 +793,10 @@ async function scenarioC() {
   await L.gitOk(p.dir, ['checkout', '-q', '--detach', 'origin/main']);
   const local = await L.git(p.dir, ['-c', 'core.autocrlf=false', 'status', '--short']);
   let localCheck;
-  try { localCheck = (await pexec('sh', ['tests/check.sh'], { cwd: p.dir })).stdout.trim(); } catch (e) { localCheck = `FAILED: ${e.stdout}`; }
+  try { localCheck = (await pexec('sh', ['tests/check.sh'], { cwd: p.dir, timeout: 60000 })).stdout.trim(); } catch (e) {
+    // an exit code: the check ran and main's tree fails it. Otherwise it did not run (no `sh`, the timeout): said, not judged
+    localCheck = typeof e.code === 'number' ? `FAILED: ${e.stdout}` : `NOT RUN: ${String(e.message).slice(0, 200)}`;
+  }
   await L.gitOk(p.dir, ['checkout', '-q', 'main']);
   const jobs = await sql(`select j.status, count(*), round(avg(extract(epoch from j.finished_at-j.started_at))::numeric,1), round(avg(extract(epoch from j.started_at-j.created_at))::numeric,1) from forge.ci_jobs j where j.project_id=${p.id} group by 1`);
   const bySource = pipes.reduce((a, x) => { const kk = `${x[1]}:${x[2]}`; a[kk] = (a[kk] ?? 0) + 1; return a; }, {});
@@ -581,7 +804,10 @@ async function scenarioC() {
     merged: !!facts.mrs.find((x) => x.iid === r.iid)?.merged_at, entries: facts.entries.filter((e) => e.iid === r.iid) }));
   const partners = pairs.map(([a]) => ({ i: a, iid: recs.find((r) => r.i === a)?.iid, merged: !!facts.mrs.find((x) => x.iid === recs.find((r) => r.i === a)?.iid)?.merged_at }));
   const integrity = await mainIntegrity(p, { docLint: false });
-  const result = { scenario: 'C', tag: TAG, project: `${GROUP}/${p.name}`, project_id: p.id, k, settle, integrity,
+  // one MR of each planted pair is meant to be dropped (offPlanC); anything else that stopped is not
+  const v = verdict({ settle, integrity, recs, offPlan: offPlanC(recs, mergedIids(facts), pairs),
+    extra: localCheck.startsWith('FAILED') ? [`tests/check.sh fails on main's tree: ${localCheck.slice(0, 200)}`] : [] });
+  const result = { scenario: 'C', tag: TAG, verdict: v, project: `${GROUP}/${p.name}`, project_id: p.id, k, settle, integrity,
     summary: summarize(recs, facts), pipelines_by_source_status: bySource,
     ci_jobs: jobs.map(([s, c, run, wait]) => ({ status: s, count: +c, avg_run_s: +run, avg_wait_s: +wait })),
     main_first_parent_commits: line.length, main_red_push_pipelines: mainRed, main_without_push_pipeline: mainUnknown.length,
@@ -589,11 +815,12 @@ async function scenarioC() {
   L.save(`c-${TAG}.json`, result);
   console.log(JSON.stringify({ ...result.summary, bySource, jobs: result.ci_jobs, mainRed: mainRed.length, localCheck, breakers: breakers.map((b) => [b.i, b.merged, b.entries.map((e) => `${e.state}/${e.error_code}/${e.reason}`)]) }, null, 1));
   console.log('integrity of main:', integrityLine(integrity));
+  finish(v);
 }
 
 // ---------------------------------------------------------------- D
 async function scenarioD() {
-  const n = Number(opt('n', 20));
+  const n = num('n', 20);
   const httpsBase = opt('https-base', process.env.GS_LT_HTTPS_BASE);
   const caFile = opt('ca-file', process.env.GS_LT_CA_FILE);
   const from = opt('from', null); // an existing local clone to seed history from (e.g. scenario A's)
@@ -652,6 +879,9 @@ async function scenarioD() {
 
 // ---------------------------------------------------------------- E (soak)
 const STEPS = 10; // `::: step` blocks per fixture document
+// this many creates, or samples, that fail in a row end the soak (exit 1)
+const SOAK_CREATE_FAILURES_END = 20;
+const SOAK_SAMPLE_FAILURES_END = 10;
 /** MR number k (1-based) revises one step of one document; (document, step) repeats after docs × STEPS MRs. */
 const soakChange = (k, docs) => ({ k, doc: ((k - 1) % docs) + 1, step: (Math.floor((k - 1) / docs) % STEPS) + 1, branch: `e/m-${k}`, mark: `rev ${TAG} #${k}` });
 /** `text` (a fixture document as it is on main) with the change's step rewritten. */
@@ -755,20 +985,16 @@ function backlogTrend(samples, rate) {
   return out;
 }
 async function scenarioE() {
-  const count = Number(opt('count', 10000));
-  const rate = Number(opt('rate', 21)); // MRs per minute, sustained
-  const burstRate = Number(opt('burst', 100)); // MRs in a burst minute (0: no bursts)
-  const burstEvery = Number(opt('burst-every', 30)); // every N-th minute is a burst minute
-  const durationMin = Number(opt('duration', 0)); // stop creating after this many minutes (0: until --count)
-  const docs = Number(opt('docs', 500));
-  const sampleEveryMs = Number(opt('sample-every', 30)) * 1000;
-  const repoSizeEveryMs = Number(opt('repo-size-every', 300)) * 1000;
-  const drainTimeoutMs = Number(opt('timeout', 3600)) * 1000;
-  for (const [name, v, min] of [['count', count, 1], ['rate', rate, 1], ['burst', burstRate, 0], ['burst-every', burstEvery, 1], ['duration', durationMin, 0], ['docs', docs, 1], ['sample-every', sampleEveryMs, 1000]]) {
-    if (!Number.isInteger(v) || v < min) throw new Error(`--${name} must be an integer >= ${min}`);
-  }
-  // a group (one minute of MRs) revises each document at most once
-  if (docs < Math.max(rate, burstRate)) throw new Error('--docs must be at least --rate and --burst');
+  // every value was checked at startup (NUMERIC; --docs against --rate and --burst)
+  const count = num('count', 10000);
+  const rate = num('rate', 21); // MRs per minute, sustained
+  const burstRate = num('burst', 100); // MRs in a burst minute (0: no bursts)
+  const burstEvery = num('burst-every', 30); // every N-th minute is a burst minute
+  const durationMin = num('duration', 0); // stop creating after this many minutes (0: until --count)
+  const docs = num('docs', 500);
+  const sampleEveryMs = num('sample-every', 30) * 1000;
+  const repoSizeEveryMs = num('repo-size-every', 300) * 1000;
+  const drainTimeoutMs = num('timeout', 3600) * 1000;
   const files = { '.forge/doctypes/lt.procedure.yml': D.DOCTYPE };
   for (let i = 1; i <= docs; i++) files[D.docPath(i)] = D.doc(i);
   const p = await seedProject(`docs-e-${TAG}`, files, ['forge/doc-lint']);
@@ -780,6 +1006,13 @@ async function scenarioE() {
 
   const t0 = Date.now();
   const state = { done: false, stop: null, created: 0, failed: 0, skipped: 0, errors: 0 };
+  // why the run cannot go on (the API, git or the database is gone): set once, it ends every loop
+  let failure = null;
+  const fail = (why) => {
+    if (failure !== null) return;
+    failure = why;
+    console.error(`failed: ${why}`);
+  };
   const samples = [];
   const sampleOnceE = async (withRepo) => {
     const x = { t: new Date().toISOString(), min: Math.round(((Date.now() - t0) / 60000) * 100) / 100, created: state.created, create_failed: state.failed,
@@ -794,20 +1027,25 @@ async function scenarioE() {
     if (!state.stop && stopRequested()) state.stop = fs.readFileSync(STOP_FILE, 'utf8').trim() || 'STOP file';
     return state.stop !== null;
   };
-  const pause = async (ms) => { for (const end = Date.now() + ms; Date.now() < end && !state.done && !stopNow();) await L.sleep(Math.min(1000, Math.max(1, end - Date.now()))); };
+  const ended = () => stopNow() || failure !== null;
+  const pause = async (ms) => { for (const end = Date.now() + ms; Date.now() < end && !state.done && !ended();) await L.sleep(Math.min(1000, Math.max(1, end - Date.now()))); };
   const sampling = (async () => {
     let lastRepo = 0;
-    while (!state.done) {
+    let sampleFailures = 0;
+    while (!state.done && !ended()) {
       try {
         const withRepo = Date.now() - lastRepo >= repoSizeEveryMs;
         const x = await sampleOnceE(withRepo);
         if (withRepo) lastRepo = Date.now();
+        sampleFailures = 0;
         if (x.free_gb < MIN_FREE_GB && !stopRequested()) {
           fs.writeFileSync(STOP_FILE, `free memory ${x.free_gb} GB < ${MIN_FREE_GB} GB at ${x.t}\n`);
           console.error('free memory below the floor: STOP written');
         }
       } catch (e) {
         L.log(`e-${TAG}-samples.jsonl`, { sample_error: String(e.message).slice(0, 300) });
+        // a soak without samples measures nothing, and nobody watches the memory floor
+        if (++sampleFailures >= SOAK_SAMPLE_FAILURES_END) fail(`the backlog could not be sampled ${sampleFailures} times in a row: ${String(e.message).slice(0, 200)}`);
       }
       await pause(sampleEveryMs);
     }
@@ -819,25 +1057,30 @@ async function scenarioE() {
   let scheduled = 0;
   let maxLagS = 0;
   let prepFailures = 0;
-  let failure = null;
+  let createFailures = 0; // in a row, in the order the answers come back
   const createOne = async (c) => {
+    let created = false;
     try {
       const rec = await createMr(p, { name: c.branch, title: `${D.docId(c.doc)} S-${c.step} 改訂` });
       Object.assign(rec, { k: c.k, doc: c.doc, step: c.step });
       recs.push(rec);
-      if (rec.iid) state.created++; else state.failed++;
+      created = rec.iid !== null;
+      if (created) state.created++; else state.failed++;
       L.log(`e-${TAG}.jsonl`, rec);
     } catch (e) {
-      // never an unhandled rejection: the run goes on and the failure is counted
+      // never an unhandled rejection: the failure is counted
       state.errors++;
       console.error(`MR ${c.k}: ${String(e.message).slice(0, 200)}`);
     }
+    // an API that takes no merge request ends the soak: it does not run out the clock
+    createFailures = created ? 0 : createFailures + 1;
+    if (createFailures >= SOAK_CREATE_FAILURES_END) fail(`${createFailures} merge requests in a row were not created`);
   };
-  for (let m = 0; scheduled < count && (!durationMin || m < durationMin) && !stopNow(); m++) {
+  for (let m = 0; scheduled < count && (!durationMin || m < durationMin) && !ended(); m++) {
     const startAt = t0 + m * 60000;
     if (startAt > Date.now()) await pause(startAt - Date.now());
     else maxLagS = Math.max(maxLagS, (Date.now() - startAt) / 1000);
-    if (stopNow()) break;
+    if (ended()) break;
     const burstMinute = burstRate > 0 && (m + 1) % burstEvery === 0;
     const size = Math.min(burstMinute ? burstRate : rate, count - scheduled);
     const group = Array.from({ length: size }, (_, j) => soakChange(scheduled + j + 1, docs));
@@ -851,11 +1094,11 @@ async function scenarioE() {
       prepFailures++;
       L.log(`e-${TAG}.jsonl`, { minute: m, skipped: size, prepare_error: String(e.message).slice(0, 300) });
       console.error(`minute ${m}: branches not pushed, ${size} MRs skipped (${prepFailures} in a row)`);
-      if (prepFailures >= 5) { failure = 'the branches could not be pushed five minutes in a row'; break; }
+      if (prepFailures >= 5) { fail('the branches could not be pushed five minutes in a row'); break; }
       continue;
     }
     const gapMs = Math.max(0, startAt + 60000 - Date.now()) / size;
-    for (let j = 0; j < size && !stopNow(); j++) {
+    for (let j = 0; j < size && !ended(); j++) {
       pending.push(createOne(group[j]));
       if (j + 1 < size) await L.sleep(gapMs);
     }
@@ -869,14 +1112,14 @@ async function scenarioE() {
   let lastMerged = -1;
   let lastChange = Date.now();
   let readFailures = 0;
-  while (!stopNow() && !failure) {
+  while (!ended()) {
     let c;
     try {
       c = await soakCounts(p);
       readFailures = 0;
     } catch (e) {
       // the database did not answer: the result is still written from what is there
-      if (++readFailures >= 10) { failure = `the backlog could not be read ten times in a row: ${String(e.message).slice(0, 200)}`; break; }
+      if (++readFailures >= 10) { fail(`the backlog could not be read ten times in a row: ${String(e.message).slice(0, 200)}`); break; }
       await pause(5000);
       continue;
     }
@@ -893,8 +1136,9 @@ async function scenarioE() {
 
   // ---- result (also after a STOP: what was measured so far)
   const facts = await queueFacts(p);
-  const merged = new Set(facts.mrs.filter((x) => x.merged_at).map((x) => x.iid));
-  const integrity = await mainIntegrity(p, { docLint: true });
+  const merged = mergedIids(facts);
+  // after a STOP or a failure nothing is waited for: what is there is written
+  const integrity = await mainIntegrity(p, { docLint: true, waitMs: ended() ? 0 : 300000 });
   // every merged revision is on main, unless a later merged MR revised the same step again
   const grep = await L.git(p.dir, ['grep', '-h', '-F', `rev ${TAG} #`, 'origin/main', '--', 'docs/procedures']);
   if (!grep.ok && grep.code !== 1) throw new Error(`git grep failed: ${grep.stderr.slice(0, 300)}`);
@@ -911,8 +1155,11 @@ async function scenarioE() {
   const perMerge = (a, b) => (merged.size ? Math.round((b - a) / merged.size) : null);
   const tablesEnd = await topTables();
   const arrivalSamples = samples.filter((x) => Date.parse(x.t) <= arrivalsEnd);
+  // every created MR merges (a group revises each document once: nothing is planted to stop)
+  const v = verdict({ settle, integrity, recs, createErrors: state.errors, skipped: state.skipped,
+    offPlan: notMerged(recs, merged).map((x) => `${x} did not merge`), lost: missing.length, stopped: state.stop, failure });
   const result = {
-    scenario: 'e', tag: TAG, project: `${GROUP}/${p.name}`, project_id: p.id,
+    scenario: 'e', tag: TAG, verdict: v, project: `${GROUP}/${p.name}`, project_id: p.id,
     params: { count, rate, burst: burstRate, burst_every: burstEvery, duration_min: durationMin, docs, sample_every_s: sampleEveryMs / 1000 },
     started: iso(t0), arrivals_end: iso(arrivalsEnd), arrival_min: Math.round(((arrivalsEnd - t0) / 60000) * 10) / 10,
     stopped: state.stop, failure, scheduled, created: state.created, create_failed: state.failed, create_errors: state.errors, skipped: state.skipped,
@@ -930,8 +1177,7 @@ async function scenarioE() {
   L.save(`e-${TAG}.json`, result);
   console.log(JSON.stringify({ ...result, samples: undefined, facts: undefined, integrity: undefined }, null, 1));
   console.log('integrity of main:', integrityLine(integrity), 'missing on main:', missing.length);
-  if (state.stop) { console.error(`stopped: ${state.stop}`); process.exit(3); }
-  if (failure) { console.error(`failed: ${failure}`); process.exit(1); }
+  finish(v);
 }
 
 // ---------------------------------------------------------------- spawn-bench
@@ -942,9 +1188,8 @@ async function scenarioE() {
  * --name-only -z <target> <head>`), one after the other. No server, no token.
  */
 async function spawnBench() {
-  const n = Number(opt('n', 100));
-  const docs = Number(opt('docs', 200));
-  if (!Number.isInteger(n) || n < 1 || !Number.isInteger(docs) || docs < 2) throw new Error('--n and --docs must be integers (n >= 1, docs >= 2)');
+  const n = num('n', 100);
+  const docs = num('docs', 200);
   const root = path.join(WORK, `spawn-bench-${TAG}-${process.pid}`);
   const work = path.join(root, 'work');
   const bare = path.join(root, 'bare.git');
@@ -995,7 +1240,7 @@ async function spawnBench() {
     L.save(`spawn-bench-${TAG}.json`, result);
     console.log(JSON.stringify(result, null, 1));
   } finally {
-    if (opt('keep', null) === null) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    if (!args.includes('--keep')) removeUnderWork(root);
   }
 }
 
@@ -1004,12 +1249,16 @@ const run = {
   a: scenarioA, 'a-burst': () => scenarioA({ atOnce: true }), b: scenarioB, c: scenarioC, d: scenarioD, e: scenarioE,
   'spawn-bench': spawnBench, sample: sampler,
 }[scenario];
-if (!run) {
-  console.error('usage: merge-load.mjs <a|a-burst|b|c|d|e|spawn-bench|sample> [--n N] [--burst N] [--tag T]\n'
-    + '  e: [--count 10000] [--rate 21] [--burst 100] [--burst-every 30] [--duration MIN] [--docs 500] [--sample-every 30]');
-  process.exit(2);
+if (!run) usage(USAGE);
+// --preflight: the checks above passed; nothing is read, made or sent (run-all.sh, before it takes the lock)
+if (args.includes('--preflight')) {
+  console.log(`preflight ok: ${scenario} --tag ${TAG}`);
+  process.exit(0);
 }
 abortIfStopped();
 // everything but the local bench talks to the server: fail now without a token
-if (scenario !== 'spawn-bench') L.requireToken();
+if (scenario !== 'spawn-bench') {
+  try { L.requireToken(); } catch (e) { usage(String(e.message)); }
+}
+fs.mkdirSync(WORK, { recursive: true });
 await run();
