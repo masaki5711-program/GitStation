@@ -11,6 +11,9 @@ use super::*;
 use crate::test_git::{stalled_git, STALL};
 use crate::GitConfig;
 
+#[path = "mergeability_path_rule_tests.rs"]
+mod path_rule;
+
 const T: Duration = Duration::from_secs(20);
 
 struct Fixture {
