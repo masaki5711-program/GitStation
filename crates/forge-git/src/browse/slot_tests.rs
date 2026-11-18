@@ -48,6 +48,9 @@ async fn more_browse_calls_than_the_repository_cap_wait_and_all_succeed() {
 #[tokio::test]
 async fn a_call_over_the_repository_cap_gets_the_next_free_slot() {
     let f = fixture().await;
+    // Only claims from here (no git): tokio's paused clock makes the
+    // waits independent of the machine's speed.
+    tokio::time::pause();
     let b = f.browser(BrowseLimits {
         max_per_repo: 1,
         repo_wait: Duration::from_secs(10),
@@ -89,6 +92,9 @@ async fn a_call_over_the_repository_cap_gets_the_next_free_slot() {
 #[tokio::test]
 async fn a_wait_for_a_repository_slot_that_runs_out_is_git_busy() {
     let f = fixture().await;
+    // Only claims from here (no git): tokio's paused clock makes the
+    // waits independent of the machine's speed.
+    tokio::time::pause();
     let b = f.browser(BrowseLimits {
         max_per_repo: 1,
         repo_wait: Duration::from_millis(100),
@@ -98,7 +104,7 @@ async fn a_wait_for_a_repository_slot_that_runs_out_is_git_busy() {
         .claim(f.id, Deadline::new(Duration::from_secs(10)))
         .await
         .expect("the only slot");
-    let started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let e = b
         .claim(f.id, Deadline::new(Duration::from_secs(10)))
         .await
@@ -116,6 +122,9 @@ async fn a_wait_for_a_repository_slot_that_runs_out_is_git_busy() {
 #[tokio::test]
 async fn a_repository_slot_wait_ends_at_the_operation_deadline() {
     let f = fixture().await;
+    // Only claims from here (no git): tokio's paused clock makes the
+    // waits independent of the machine's speed.
+    tokio::time::pause();
     let b = f.browser(BrowseLimits {
         max_per_repo: 1,
         repo_wait: Duration::from_secs(30),
@@ -125,14 +134,16 @@ async fn a_repository_slot_wait_ends_at_the_operation_deadline() {
         .claim(f.id, Deadline::new(Duration::from_secs(30)))
         .await
         .expect("the only slot");
-    let started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let e = b
         .claim(f.id, Deadline::new(Duration::from_millis(150)))
         .await
         .expect_err("busy");
+    // The paused clock; tokio's timer rounds up to the next millisecond.
+    let waited = started.elapsed();
     assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "bounded by 150 ms"
+        waited >= Duration::from_millis(150) && waited <= Duration::from_millis(155),
+        "the deadline: {waited:?}"
     );
     assert_eq!(e.code(), ErrorCode::GitBusy);
     assert_eq!(ctx(&e, "queue"), "timeout");
@@ -143,6 +154,9 @@ async fn a_repository_slot_wait_ends_at_the_operation_deadline() {
 #[tokio::test]
 async fn a_full_repository_queue_refuses_at_once() {
     let f = fixture().await;
+    // Only claims from here (no git): tokio's paused clock makes the
+    // waits independent of the machine's speed.
+    tokio::time::pause();
     let b = f.browser(BrowseLimits {
         max_per_repo: 1,
         max_repo_waiters: 1,
@@ -168,7 +182,7 @@ async fn a_full_repository_queue_refuses_at_once() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let e = b
         .claim(f.id, Deadline::new(Duration::from_secs(10)))
         .await
@@ -196,6 +210,9 @@ async fn a_full_repository_queue_refuses_at_once() {
 #[tokio::test]
 async fn a_zero_repository_wait_refuses_at_once() {
     let f = fixture().await;
+    // Only claims from here (no git): tokio's paused clock makes the
+    // waits independent of the machine's speed.
+    tokio::time::pause();
     let b = f.browser(BrowseLimits {
         max_per_repo: 1,
         repo_wait: Duration::ZERO,

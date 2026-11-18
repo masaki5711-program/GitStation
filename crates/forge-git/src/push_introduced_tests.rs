@@ -339,5 +339,35 @@ async fn the_ref_snapshot_and_listing_run_while_the_pusher_holds_every_stream() 
         .await
         .expect_err("the push cap is unchanged");
     assert_eq!(err.code(), ErrorCode::GitBusy);
+    // The key is typed: a principal string that looks like a record key is
+    // just another principal's transfer bucket, never the record bucket.
+    let lookalike = git
+        .command("cat-file")
+        .repo(&path)
+        .arg("--batch")
+        .spawn_stream("user:1#push-record")
+        .await
+        .expect("its own transfer bucket");
+    let _ = lookalike.abort_client_disconnected().await;
+    // And the record bucket has its own cap of the same size.
+    let record = git
+        .command("cat-file")
+        .repo(&path)
+        .arg("--batch")
+        .spawn_record_stream("user:1")
+        .await
+        .expect("the one record slot");
+    let err = git
+        .command("cat-file")
+        .repo(&path)
+        .arg("--batch")
+        .spawn_record_stream("user:1")
+        .await
+        .expect_err("the record cap");
+    assert!(
+        err.to_string().contains("reason=principal_record_streams"),
+        "{err}"
+    );
+    let _ = record.abort_client_disconnected().await;
     let _ = held.abort_client_disconnected().await;
 }

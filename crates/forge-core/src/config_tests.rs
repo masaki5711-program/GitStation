@@ -736,6 +736,10 @@ fn git_http_limits_have_defaults_file_env_and_rules() {
     // 0 is a valid wait: refused at once (2026-11-17 F1 / F4).
     let cfg = load(None, &env(&[("FORGE_GIT_HTTP_BUSY_WAIT_MS", "0")])).expect("zero wait");
     assert_eq!(cfg.git_http.busy_wait, Duration::ZERO);
+    let cfg = load(None, &env(&[("FORGE_GIT_HTTP_BUSY_WAIT_MS", "30000")])).expect("30 s");
+    assert_eq!(cfg.git_http.busy_wait, Duration::from_secs(30));
+    let err = load(None, &env(&[("FORGE_GIT_HTTP_BUSY_WAIT_MS", "31000")])).expect_err("31 s");
+    assert_invalid(&err, "git.http.busy_wait_ms", "above_max");
 
     let f = file("[git.http]\nmax_streams = 8\nidle_timeout_ms = 1000\n");
     let cfg = load(

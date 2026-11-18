@@ -1676,6 +1676,8 @@
       "full_not_allowed": "an administrator does not allow full auto-merge on this server, so it is not merged automatically.",
       "draft": "waiting: this is a draft.",
       "risk_pending": "waiting for the risk check (forge/risk).",
+      "doc_lint_pending": "waiting for the document check (forge/doc-lint).",
+      "doc_lint_unassessed": "stopped: the document check (forge/doc-lint) never reported (or could not run).",
       "approvals": "waiting for approvals.",
       "protected_path": "waiting: it touches paths a person decides (authentication, migrations, configuration).",
       "conflict": "waiting: it conflicts with the target branch.",
@@ -1696,6 +1698,7 @@
       "approvals": "Ask a reviewer to approve.",
       "merge_when_ready": "Check it, then press \"Merge when ready\".",
       "conflict": "Resolve the conflict and push.",
+      "rerun_doc_lint": "Push a new commit to run the check again; if it is urgent, a person who checked the change can press \"Merge when ready\".",
       "waiting": "See the merge conditions below."
     }
   },

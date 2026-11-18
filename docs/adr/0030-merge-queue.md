@@ -136,16 +136,25 @@
   自動でマージされた（`docs/handoff/2026-11-17-merge-load-test.md` F5）。
 - **決定（いちばん小さい規則）**: 自動マージの判定（forge-core `auto_merge::decide`）は、MR の head の `forge/doc-lint` を
   必須チェックと同じに読む。`failure` → `stopped`（`program_breakage`、`reason=doc_lint_failed`、`detail=forge/doc-lint`、
-  `FG-REVIEW-0026`。画面の 1 行は赤い必須チェックと同じ「必須のチェック forge/doc-lint が赤なので止めました。」）。head にまだ
-  無い → `waiting reason=doc_lint_pending`（`check.spec_index` はすべての版に 1 回走るので、待ちはそのジョブ 1 本分）。
-- **文書の無いリポジトリは止めない**: doc-lint が `failure` になるのは、`doctype` を書いた `.md` か型の定義に問題があるときだけ。
-  文書が無ければ `success`。`neutral`（上限に当たったが問題なし）と `error`（ジョブが検査できなかった）も止めない（文書があるか
-  分からないものを全リポジトリで止めない）。
+  `FG-REVIEW-0026`。画面の 1 行は赤い必須チェックと同じ「必須のチェック forge/doc-lint が赤なので止めました。」）。
+- **待ちには終わりがある（レビュー 2026-11-17 で追加）**: head に run が無い・run が `error`（検査そのものが失敗。doc-lint は
+  `action_required` を書かないので、来たら同じ扱い）→ `waiting reason=doc_lint_pending`。このあいだ自動マージは
+  `check.spec_index` を自分で頼み直す（`forge_db::checks::spec_index::request_again`: 同じ head のジョブが queued / running なら
+  何もしない、鍵 `spec_index:<p>:<iid>:<head>` で重複しない。ログ `forge.auto_merge.doc_lint_requested`）。デプロイの前の head、
+  落ちたジョブ（dead）もこれで答えが来る。同じ head で `DOC_LINT_WAIT_LIMIT`（10 分、`AutoMergeLimits::doc_lint_wait`）待っても
+  来なければ `stopped`（`not_assessed`、`reason=doc_lint_missing` / `doc_lint_error`、`detail=forge/doc-lint`）。止まった後は
+  頼み直さず（同じ head では止まったまま、待ちに戻らない）、後から run が来ればそれで判定し直す。画面の次の一手は
+  「新しいコミットを push すると検査をやり直します」。待ちの始まりは `forge.auto_merge_states.changed_at`（DB の時計）。
+- **文書の無いリポジトリは止めない**: doc-lint が `failure` になるのは、`doctype` を書いた `.md` か型の定義に問題があるときだけで、
+  文書が無ければ `success`（`check.spec_index` はすべての版に走り、doc-lint を必ず書く）。`neutral`（上限に当たったが問題なし）も
+  止めない。`error` は通さない（失敗を隠す近道にしない）。
 - **人のマージは変えない**: この規則は自動マージの主体だけ。人のマージと「準備ができたらマージ」は、これまでどおり保護したブランチの
   必須チェックで決まる。Maintainer は `forge/doc-lint` を merge rule の必須チェックに入れれば人のマージも止められ、壊れた参照だけを
   一時的に警告にしたいときはリポジトリの doc-lint の移行の期限（計画 13 Q13）を使う。プロジェクトごとにこの規則を外す設定は作らない
   （必要になったら設定とマイグレーションを足す）。
 - **残る窓**: キューに入った後で doc-lint が `failure` になった MR は、この規則では外れない（`Queued` は判定の前に返る）。
-  `doc_lint_pending` の待ちがあるので、版ごとの最初の判定より前に doc-lint が無いまま入ることはない。
-- 試験: forge-core `a_failed_doc_lint_stops_auto_merge_without_being_a_required_check` ほか、forge-review
-  `a_failed_doc_lint_stops_auto_merge_on_a_project_without_required_checks`（実際の行）。
+  `doc_lint_pending` の待ちがあるので、doc-lint が無いまま入ることはない。列車のマージ結果での doc-lint は計画 18 S1。
+- 試験: forge-core `a_failed_doc_lint_stops_auto_merge_without_being_a_required_check`・
+  `a_doc_lint_still_missing_past_the_limit_stops_with_its_reason` ほか、forge-review（実際の行）
+  `a_failed_doc_lint_stops_auto_merge_on_a_project_without_required_checks`・`a_doc_lint_that_never_arrives_stops_with_doc_lint_missing`・
+  `an_errored_doc_lint_is_asked_again_then_stops_with_doc_lint_error`。

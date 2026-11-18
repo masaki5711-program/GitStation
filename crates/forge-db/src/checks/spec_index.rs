@@ -116,6 +116,43 @@ pub fn spec_index_payload(payload: &serde_json::Value) -> Result<SpecIndexReques
     })
 }
 
+/// Ask for `request` again when nothing will answer it (ADR-0030
+/// Amendment 2026-11-17: auto-merge waits for `forge/doc-lint` on the head
+/// and asks for the run itself — a head from before the subscriber, a job
+/// that died). Nothing is added while a job of the same head is queued or
+/// running (whatever its key), and the key `spec_index:<p>:<iid>:<head>`
+/// (no state: asked for by hand) dedups again while one is held. `true`:
+/// a job was added.
+pub async fn request_again(
+    db: &Db,
+    request: &SpecIndexRequest,
+    origin: &RequestId,
+) -> Result<bool, ForgeError> {
+    const QUERY: &str = "checks.spec_index_request_again";
+    let pending: bool = db
+        .within(QUERY, async {
+            sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM forge.jobs WHERE kind = $1                  AND state IN ('queued', 'running')                  AND payload->>'project_id' = $2 AND payload->>'iid' = $3                  AND payload->>'head_sha' = $4)",
+            )
+            .bind(SPEC_INDEX_JOB)
+            .bind(request.project.get().to_string())
+            .bind(request.iid.to_string())
+            .bind(request.head.as_str())
+            .fetch_one(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    if pending {
+        return Ok(false);
+    }
+    let job = spec_index_job(request, None, origin.clone(), None)?; // clone: the job owns its origin
+    Ok(matches!(
+        jobs::enqueue(db, &job).await?,
+        jobs::Enqueued::Queued(_)
+    ))
+}
+
 /// A dead `check.spec_index` job whose head lacks one of its two runs (the
 /// reaper ended it — a crashed worker, the runner's own timeout — so its
 /// handler never answered).

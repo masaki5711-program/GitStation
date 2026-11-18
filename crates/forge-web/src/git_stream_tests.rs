@@ -41,7 +41,7 @@ async fn body_reads_are_capped_globally_and_per_user() {
 
 /// Load test 2026-11-17 F4: a user's next push waits for one of its body
 /// slots instead of being refused at once.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_body_read_over_the_per_user_cap_waits_for_the_users_next_slot() {
     let slots = BodySlots::new(4, 1, Duration::from_secs(1), Duration::from_secs(10), 4);
     let first = slots.acquire("user:1").await.expect("first");
@@ -63,13 +63,19 @@ async fn a_body_read_over_the_per_user_cap_waits_for_the_users_next_slot() {
 
 /// The per-user wait is bounded and the refusal carries the retry hint
 /// (`Retry-After` on the 503).
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_per_user_body_wait_that_runs_out_is_git_busy_with_a_retry_hint() {
     let slots = BodySlots::new(4, 1, Duration::from_secs(1), Duration::from_millis(100), 4);
     let _first = slots.acquire("user:1").await.expect("first");
-    let started = std::time::Instant::now();
+    // tokio's paused clock: no machine-speed slack.
+    let started = tokio::time::Instant::now();
     let err = slots.acquire("user:1").await.expect_err("busy");
-    assert!(started.elapsed() >= Duration::from_millis(100), "it waited");
+    // tokio's timer rounds up to the next millisecond.
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(100) && waited <= Duration::from_millis(105),
+        "it waited: {waited:?}"
+    );
     assert_eq!(err.code(), ErrorCode::GitBusy);
     assert_eq!(
         ctx_value(&err, "reason").as_deref(),

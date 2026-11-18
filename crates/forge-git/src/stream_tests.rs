@@ -456,7 +456,11 @@ async fn a_per_principal_wait_that_runs_out_is_git_busy_with_a_retry_hint() {
         .spawn_stream("user:1")
         .await
         .expect_err("over the cap after the wait");
-    assert!(started.elapsed() >= Duration::from_millis(150), "it waited");
+    // Real git runs here, so the machine's clock: within 15 ms of the wait.
+    assert!(
+        started.elapsed() >= Duration::from_millis(150 - 15),
+        "it waited"
+    );
     assert_eq!(err.code(), ErrorCode::GitBusy);
     let text = err.to_string();
     for part in [

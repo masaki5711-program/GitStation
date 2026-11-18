@@ -38,7 +38,7 @@ use crate::redact::stderr_head;
 #[derive(Debug, Clone)]
 pub(crate) struct StreamLimits {
     slots: Arc<Semaphore>,
-    per_principal: KeyedGate<String>,
+    per_principal: KeyedGate<StreamKey>,
 }
 
 impl StreamLimits {
@@ -55,12 +55,23 @@ impl StreamLimits {
     /// Streams `principal` holds now (tests).
     #[cfg(test)]
     pub(crate) fn held(&self, principal: &str) -> usize {
-        self.per_principal.held(&principal.to_owned())
+        self.per_principal
+            .held(&StreamKey::Transfer(principal.to_owned()))
     }
 }
 
 /// One principal's stream place; released when git is reaped.
-type PrincipalClaim = GatePermit<String>;
+type PrincipalClaim = GatePermit<StreamKey>;
+
+/// Whose cap a stream counts against: a principal's own transfers
+/// (clone, fetch, push), or the reads forge makes to record one of its
+/// pushes (the ref snapshot and the commit listing, `push_introduced`).
+/// Typed, so no principal string can name the other kind's bucket.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum StreamKey {
+    Transfer(String),
+    PushRecord(String),
+}
 
 /// Byte counters and the time of the last byte in either direction.
 #[derive(Debug)]
@@ -352,6 +363,22 @@ impl GitCommand {
     /// `acquire_timeout` → FG-GIT-0004 `reason=streams`; spawn failure →
     /// FG-GIT-0001.
     pub async fn spawn_stream(self, principal: &str) -> Result<GitStream, ForgeError> {
+        self.spawn_keyed(StreamKey::Transfer(principal.to_owned()))
+            .await
+    }
+
+    /// [`Self::spawn_stream`] for the reads that record a push of
+    /// `principal`: its own per-principal cap of the same size, apart from
+    /// the principal's transfers (`push_introduced`).
+    pub(crate) async fn spawn_record_stream(
+        self,
+        principal: &str,
+    ) -> Result<GitStream, ForgeError> {
+        self.spawn_keyed(StreamKey::PushRecord(principal.to_owned()))
+            .await
+    }
+
+    async fn spawn_keyed(self, key: StreamKey) -> Result<GitStream, ForgeError> {
         if self.option_like_value {
             return Err(self
                 .fail(ErrorCode::Internal)
@@ -367,14 +394,20 @@ impl GitCommand {
         let claim = match git
             .streams
             .per_principal
-            .acquire(&principal.to_owned(), config.principal_wait)
+            .acquire(&key, config.principal_wait)
             .await
         {
             Ok(claim) => claim,
             Err(refusal) => {
                 return Err(refusal.into_error(
                     self.fail(ErrorCode::GitBusy)
-                        .with_context("reason", "principal_streams")
+                        .with_context(
+                            "reason",
+                            match key {
+                                StreamKey::Transfer(_) => "principal_streams",
+                                StreamKey::PushRecord(_) => "principal_record_streams",
+                            },
+                        )
                         .with_context("max_per_principal", config.max_streams_per_principal),
                     config.max_principal_waiters,
                 ))

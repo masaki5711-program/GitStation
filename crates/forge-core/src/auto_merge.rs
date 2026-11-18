@@ -23,11 +23,12 @@
 //!   red required check (`doc_lint_failed`), whether or not a Maintainer
 //!   made it a required check; it fails only on a document (a `.md` naming
 //!   a `doctype`) or a type definition with a problem, so a repository
-//!   without documents is never stopped. Until it reports on the head the
-//!   merge request waits (`doc_lint_pending`, one `check.spec_index` job,
-//!   which every version gets); `neutral` (a bound hit, no problem) and
-//!   `error` (the job could not lint) do not stop — a person's merge is
-//!   unchanged, and a branch's required checks still decide that.
+//!   without documents (`success`) is never stopped. No run on the head
+//!   yet, or a run that ended `error`, is a wait (`doc_lint_pending`) while
+//!   auto-merge asks for the run again; past [`DOC_LINT_WAIT_LIMIT`] it
+//!   stops `not_assessed` (`doc_lint_missing` / `doc_lint_error`), never an
+//!   endless wait. `neutral` (a bound hit, no problem) does not stop. A
+//!   person's merge is unchanged; a branch's required checks decide that.
 //! - The merge result ([`MergeResultAssessor`], [`merge_result_decision`]):
 //!   the merge queue judges `forge/risk`'s rules again on the combined tree
 //!   it will write to the target, so a stop that only the combination shows
@@ -416,15 +417,32 @@ impl PipelineState {
     }
 }
 
+/// How long auto-merge waits for `forge/doc-lint` on a head (no run, or
+/// a run that ended `error`) before it stops with `doc_lint_missing` /
+/// `doc_lint_error` (ADR-0030 Amendment 2026-11-17).
+pub const DOC_LINT_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// The waiting reason while `forge/doc-lint` is asked for again.
+pub const DOC_LINT_PENDING: &str = "doc_lint_pending";
+/// The stop past [`DOC_LINT_WAIT_LIMIT`] without a run.
+pub const DOC_LINT_MISSING: &str = "doc_lint_missing";
+/// The stop past [`DOC_LINT_WAIT_LIMIT`] while the run ends `error`.
+pub const DOC_LINT_ERROR: &str = "doc_lint_error";
+
 /// `forge/doc-lint` on the head as auto-merge reads it (module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocLintState {
-    /// No completed run on the head yet: wait.
+    /// No completed run on the head yet: ask for it, wait.
     Pending,
-    /// `success`, `neutral` or `error`: nothing that stops.
+    /// The run itself failed (`error`; doc-lint never writes
+    /// `action_required`, so one is read the same): ask again, wait.
+    Errored,
+    /// `success` or `neutral` (a bound hit, no problem found).
     Clear,
     /// `failure`: a document or a type definition has a problem.
     Failed,
+    /// Still [`Self::Pending`] / [`Self::Errored`] past the wait limit.
+    Overdue { errored: bool },
 }
 
 impl DocLintState {
@@ -433,15 +451,33 @@ impl DocLintState {
         match run {
             Some(r) if r.status == CheckStatus::Completed => match r.conclusion {
                 Some(CheckConclusion::Failure) => Self::Failed,
-                Some(
-                    CheckConclusion::Success
-                    | CheckConclusion::Neutral
-                    | CheckConclusion::Error
-                    | CheckConclusion::ActionRequired,
-                ) => Self::Clear,
+                Some(CheckConclusion::Success | CheckConclusion::Neutral) => Self::Clear,
+                Some(CheckConclusion::Error | CheckConclusion::ActionRequired) => Self::Errored,
                 None => Self::Pending,
             },
             Some(_) | None => Self::Pending,
+        }
+    }
+
+    /// Whether the run is still to come (auto-merge asks for it).
+    pub fn needs_run(self) -> bool {
+        matches!(self, Self::Pending | Self::Errored)
+    }
+
+    /// `self` after auto-merge has waited `waited` for it (`None`: it has
+    /// not waited on this head yet): [`Self::Overdue`] at `limit` or more.
+    #[must_use]
+    pub fn after_waiting(
+        self,
+        waited: Option<std::time::Duration>,
+        limit: std::time::Duration,
+    ) -> Self {
+        if self.needs_run() && waited.is_some_and(|w| w >= limit) {
+            Self::Overdue {
+                errored: self == Self::Errored,
+            }
+        } else {
+            self
         }
     }
 }
@@ -648,10 +684,21 @@ pub fn decide(facts: &Facts) -> Verdict {
                 detail: Some(crate::checks::DOC_LINT_CHECK.to_owned()),
             })
         }
-        DocLintState::Pending => {
+        DocLintState::Pending | DocLintState::Errored => {
             return Verdict::Waiting {
-                reason: "doc_lint_pending",
+                reason: DOC_LINT_PENDING,
             }
+        }
+        DocLintState::Overdue { errored } => {
+            return Verdict::Stopped(Stop {
+                class: StopClass::NotAssessed,
+                reason: if errored {
+                    DOC_LINT_ERROR
+                } else {
+                    DOC_LINT_MISSING
+                },
+                detail: Some(crate::checks::DOC_LINT_CHECK.to_owned()),
+            })
         }
         DocLintState::Clear => {}
     }

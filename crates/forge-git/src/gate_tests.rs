@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)] // tests may fail loudly
-//! The keyed cap with a bounded wait (`gate.rs`).
+//! The keyed cap with a bounded wait (`gate.rs`). Every test runs on
+//! tokio's paused clock: the waits never depend on the machine's speed.
 
 use std::time::Duration;
 
@@ -25,7 +26,7 @@ async fn until_users(gate: &KeyedGate<String>, key: &str, n: usize) {
     panic!("never {n} users of {key}");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_waiter_gets_the_slot_its_holder_lets_go() {
     let gate = KeyedGate::<String>::new(1, 4);
     let key = "user:1".to_owned();
@@ -46,12 +47,12 @@ async fn a_waiter_gets_the_slot_its_holder_lets_go() {
     assert_eq!(gate.users(&key), 0, "the entry is gone");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_wait_that_runs_out_is_a_timeout_and_gives_the_place_back() {
     let gate = KeyedGate::<String>::new(1, 4);
     let key = "user:1".to_owned();
     let _held = gate.acquire(&key, Duration::ZERO).await.expect("free");
-    let started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let refusal = gate
         .acquire(&key, Duration::from_millis(80))
         .await
@@ -66,7 +67,7 @@ async fn a_wait_that_runs_out_is_a_timeout_and_gives_the_place_back() {
     assert_eq!(ctx(&e, crate::RETRY_AFTER_CONTEXT), "1");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_full_queue_is_refused_at_once_and_other_keys_are_free() {
     let gate = KeyedGate::<String>::new(1, 1);
     let key = "user:1".to_owned();
@@ -77,7 +78,7 @@ async fn a_full_queue_is_refused_at_once_and_other_keys_are_free() {
         tokio::spawn(async move { gate.acquire(&key, Duration::from_secs(10)).await.map(drop) })
     };
     until_users(&gate, &key, 2).await;
-    let started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let refusal = gate
         .acquire(&key, Duration::from_secs(10))
         .await
@@ -102,7 +103,7 @@ async fn a_full_queue_is_refused_at_once_and_other_keys_are_free() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn waiters_are_served_in_arrival_order() {
     let gate = KeyedGate::<String>::new(1, 8);
     let key = "user:1".to_owned();
@@ -135,4 +136,35 @@ async fn waiters_are_served_in_arrival_order() {
         task.await.expect("join");
     }
     assert_eq!(gate.held(&key), 0);
+}
+
+/// A client that goes away mid-wait (its request future is dropped)
+/// gives its place back at once; the queue does not fill with the dead.
+#[tokio::test(start_paused = true)]
+async fn a_waiter_dropped_mid_wait_frees_its_place() {
+    let gate = KeyedGate::<String>::new(1, 1);
+    let key = "user:1".to_owned();
+    let held = gate.acquire(&key, Duration::ZERO).await.expect("free");
+    {
+        let waiting = gate.acquire(&key, Duration::from_secs(10));
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err(),
+            "still waiting"
+        );
+        assert_eq!(gate.users(&key), 2, "holder and waiter");
+    } // dropped here: the client disconnected
+    assert_eq!(gate.users(&key), 1, "the waiter's place is free");
+    // The queue (one waiter) accepts the next caller.
+    let next = {
+        let gate = gate.clone(); // clone: the task's handle
+        let key = key.clone(); // clone: the task's key
+        tokio::spawn(async move { gate.acquire(&key, Duration::from_secs(10)).await.map(drop) })
+    };
+    until_users(&gate, &key, 2).await;
+    drop(held);
+    next.await.expect("join").expect("served");
+    assert_eq!(gate.users(&key), 0);
 }

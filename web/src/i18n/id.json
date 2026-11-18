@@ -1676,6 +1676,8 @@
       "full_not_allowed": "administrator tidak mengizinkan merge otomatis penuh di server ini, jadi tidak digabung otomatis.",
       "draft": "menunggu: ini masih draf.",
       "risk_pending": "menunggu pemeriksaan risiko (forge/risk).",
+      "doc_lint_pending": "menunggu pemeriksaan dokumen (forge/doc-lint).",
+      "doc_lint_unassessed": "dihentikan: pemeriksaan dokumen (forge/doc-lint) tidak pernah melapor (atau gagal berjalan).",
       "approvals": "menunggu persetujuan.",
       "protected_path": "menunggu: menyentuh jalur yang diputuskan orang (autentikasi, migrasi, konfigurasi).",
       "conflict": "menunggu: bentrok dengan cabang tujuan.",
@@ -1696,6 +1698,7 @@
       "approvals": "Minta peninjau untuk menyetujui.",
       "merge_when_ready": "Periksa, lalu tekan \"Gabung saat siap\".",
       "conflict": "Selesaikan bentrok lalu push.",
+      "rerun_doc_lint": "Push commit baru untuk menjalankan pemeriksaan lagi; jika mendesak, orang yang sudah memeriksa perubahan dapat menekan \"Gabung saat siap\".",
       "waiting": "Lihat syarat merge di bawah."
     }
   },
