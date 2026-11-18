@@ -100,10 +100,10 @@ pub use forge_db::review::{StoredPrediction, StoredScan};
 pub use merge_conditions::MergeStatus;
 pub use mergeability::{check, prune_merge_results, CheckReport, Mergeability, PruneReport};
 pub use merges::{
-    evaluate_merge, AfterFence, AutoMergeLimits, AutoMergeReport, AutoMerger, BlockReason,
-    CredentialRef, MergeAsk, MergeClearance, MergeQueue, MergeReport, MergeSettings, MergeTimeouts,
-    Merger, QueueAsk, QueueLimits, ReconcileReport, StoredMerge, TickReport, MERGE_RESULT_BUDGET,
-    MERGE_RESULT_MAX_FAILURES,
+    evaluate_merge, AfterFence, AutoMergeLimits, AutoMergeReport, AutoMergeWake, AutoMergeWatch,
+    AutoMerger, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeQueue, MergeReport,
+    MergeSettings, MergeTimeouts, Merger, QueueAsk, QueueLimits, QueueTurn, ReconcileReport,
+    Roused, StoredMerge, TickReport, MERGE_RESULT_BUDGET, MERGE_RESULT_MAX_FAILURES,
 };
 pub use revert::{revert_branch, revert_ctx, DraftReport, RevertOpened, RevertTimeouts, Reverter};
 pub use user_lists::{

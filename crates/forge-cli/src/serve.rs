@@ -178,7 +178,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     smart_http.browse.clone(),  // clone: shares the ref cache
                 )));
         }
-        let queue_tasks = crate::serve_merge_queue::spawn(Arc::new(queue));
+        // Plan 18 S3: `merge_queue.workers` turns, woken instead of polling.
+        let queue_tasks = crate::serve_merge_queue::spawn(queue, &cfg.merge_queue);
         // M4 C10 (plan 04 M-4): the system's revert drafts after a failed
         // target pipeline write a branch: here, next to the browse cache.
         let revert_tasks = crate::serve_reverts::spawn(
@@ -235,11 +236,13 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // runs from the database (the request and the merge job read them
         // in the gate's transaction).
         .with_check_results(Arc::new(db.clone())); // clone: the pool handle is shared
-        let auto_merge_tasks =
-            crate::serve_auto_merge::spawn(Arc::new(forge_review::AutoMerger::new(
+        let auto_merge_tasks = crate::serve_auto_merge::spawn(
+            forge_review::AutoMerger::new(
                 review.clone(),                       // clone: shares the pool and caches
                 forge_review::Merger::clone(&merger), // clone: shares git and storage
-            )));
+            ),
+            cfg.auto_merge.safety_poll(), // plan 18 S3: the sweep's period
+        );
         let merge_tasks = crate::serve_merges::spawn(&db, merger)?;
         let oidc = crate::oidc::service(cfg, &db)?;
         let mut state = app_state(&db, database, cfg.web.session_idle, oidc.as_ref())

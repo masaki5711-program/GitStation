@@ -649,6 +649,7 @@ async fn an_unlintable_train_is_abandoned_and_reaped_on_the_third_time() {
     w.enqueue(&b).await.expect("enqueue");
     let hurried = w.lint_worker("w1").with_limits(QueueLimits {
         poll: Duration::ZERO,
+        idle: Duration::ZERO,
         train_lint_budget: Duration::from_nanos(1),
         ..QueueLimits::default()
     });

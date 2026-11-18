@@ -12,6 +12,8 @@
 
 mod common;
 mod queue_train_lint;
+// Plan 18 S3 (ADR-0037 (a)): the queue's and auto-merge's wakes.
+mod queue_wake;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -218,6 +220,7 @@ impl World {
     fn worker(&self, name: &str) -> MergeQueue {
         MergeQueue::new(self.merger.clone(), name, self.rules()).with_limits(QueueLimits {
             poll: Duration::ZERO,
+            idle: Duration::ZERO,
             ..QueueLimits::default()
         })
     }
@@ -616,6 +619,7 @@ async fn a_train_whose_definition_cannot_be_read_still_gets_its_pipeline_job() {
         .expect("timeouts");
     let worker = MergeQueue::new(merger, "w1", w.rules()).with_limits(QueueLimits {
         poll: Duration::ZERO,
+        idle: Duration::ZERO,
         ..QueueLimits::default()
     });
     let built = worker.tick().await.expect("tick").expect("due");
@@ -2226,6 +2230,7 @@ async fn a_merge_result_that_cannot_be_judged_releases_the_peoples_entries() {
     let worker =
         MergeQueue::new(w.merger.clone(), "w1", Arc::new(Failing)).with_limits(QueueLimits {
             poll: Duration::ZERO,
+            idle: Duration::ZERO,
             ..QueueLimits::default()
         });
     let queue = w.queue_id().await;

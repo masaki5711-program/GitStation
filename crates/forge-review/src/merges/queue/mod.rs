@@ -36,8 +36,21 @@ use crate::{
 mod worker;
 
 pub use worker::{
-    AfterFence, MergeQueue, QueueLimits, TickReport, MERGE_RESULT_BUDGET, MERGE_RESULT_MAX_FAILURES,
+    AfterFence, MergeQueue, QueueLimits, QueueTurn, Roused, TickReport, MERGE_RESULT_BUDGET,
+    MERGE_RESULT_MAX_FAILURES,
 };
+
+/// Wake the queue turns of THIS process for queue `queue_id` (plan 18 S3,
+/// ADR-0037 (a)): the change that made it actionable is committed. The
+/// transaction already sent `forge_merge_queue` to every process; this is
+/// the in-process path that does not wait for the listener's connection.
+/// A hint only: the turn that wakes claims and reads the tables. Nothing
+/// without a hub (a one-shot command).
+pub(crate) fn wake_queue(db: &forge_db::Db, queue_id: i64) {
+    if let Some(hub) = db.wake() {
+        hub.nudge(forge_db::wake::Channel::MergeQueue, &queue_id.to_string());
+    }
+}
 
 /// The runs a queued merge is decided on: `ci/pipeline` (the name forge
 /// reports on merge results) from the train — `None` is "no run" — and
@@ -489,6 +502,7 @@ impl Review {
             head_sha = entry.head_sha.as_str(),
             method = entry.method.as_str(),
         );
+        wake_queue(&self.db, entry.queue_id);
         Ok(entry)
     }
 
@@ -625,6 +639,7 @@ impl Review {
             method = entry.method.as_str(),
             by = "auto_merge",
         );
+        wake_queue(&self.db, entry.queue_id);
         Ok(entry)
     }
 
@@ -659,6 +674,7 @@ impl Review {
             entry_id = entry.id,
             queue_id = entry.queue_id,
         );
+        wake_queue(&self.db, entry.queue_id);
         Ok(entry)
     }
 
@@ -703,6 +719,10 @@ impl Review {
             target = target.as_str(),
             changed = outcome == PauseOutcome::Changed,
         );
+        // A resumed queue has work again; a pause makes nothing actionable.
+        if !paused && outcome == PauseOutcome::Changed {
+            wake_queue(&self.db, queue.id);
+        }
         Ok((outcome, queue))
     }
 
