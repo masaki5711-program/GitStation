@@ -11,7 +11,9 @@
 //!   squash, the frozen message, the requester and author identities); a
 //!   conflicting entry is removed. The train's tip is pointed at by
 //!   `refs/merge-queue/<queue_id>/train` and its pipeline (`source =
-//!   merge_queue`) is enqueued with the batch.
+//!   merge_queue`) is enqueued with the batch — unless the train has no
+//!   `.forge-ci.yml`: then no job, and the verdict is "no pipeline" at once
+//!   (the job would write nothing; ADR-0030 §5).
 //! - **testing**: an entry that left (dequeued, a new head, closed) or a
 //!   target that moved throws the batch away (the entries go back in
 //!   order); a pipeline still running waits, past the deadline the batch is
@@ -43,6 +45,10 @@ use forge_core::auto_merge::{
     merge_result_decision, merge_result_reason, MergeResultAssessor, MergeResultDecision,
     MergeResultRange, ResultStep, MERGE_RESULT_UNAVAILABLE,
 };
+
+/// The CI definition at a commit's root (forge-pipelines' `CI_FILE`; the
+/// pipeline job reads the same path).
+const CI_DEFINITION: &str = ".forge-ci.yml";
 
 /// The whole judgement of one batch's merge result in one step (every
 /// train step together, not steps × the assessor's own budget).
@@ -451,6 +457,13 @@ impl MergeQueue {
                 .await?;
         }
         let request_id = RequestId::generate();
+        // Merge load test 2026-11-17 (doc fast path): a train with no
+        // `.forge-ci.yml` gets no pipeline job — the job would find no
+        // definition and write nothing, and the verdict would read
+        // `TrainPipeline::None` once it ran (ADR-0030 §5). Without the job
+        // the verdict reads `None` at once; the landing's decision is the
+        // same (a required `ci/pipeline` is missing either way).
+        let definition = self.train_has_definition(repo, &prev, &request_id).await;
         let pipeline = create_job(
             &PipelineRequest {
                 project: queue.project_id,
@@ -478,7 +491,7 @@ impl MergeQueue {
                 .collect(),
             request_id: request_id.clone(), // clone: the log line below
             deadline: self.limits.test_timeout,
-            pipeline,
+            pipeline: definition.then_some(pipeline),
         };
         let Some(batch) = db::create_batch(&self.merger.db, &new).await? else {
             return Ok(report("raced", None));
@@ -497,8 +510,50 @@ impl MergeQueue {
             size = members.len(),
             entries = %ids.join(","),
             isolate = members.first().and_then(|(_, _, i)| i.map(Isolation::as_str)),
+            pipeline_job = definition,
         );
         Ok(report("built", Some(batch)))
+    }
+
+    /// Whether the train's commit has a root entry `.forge-ci.yml` (any
+    /// kind: a directory or a link is the pipeline job's to judge, an
+    /// `invalid` pipeline). A read that fails counts as `true` — the job
+    /// is enqueued and decides as before; the failure is logged with its
+    /// code (`forge.merge_queue.definition_unread`).
+    async fn train_has_definition(
+        &self,
+        repo: RepoId,
+        train: &ObjectId,
+        request_id: &RequestId,
+    ) -> bool {
+        let read = self
+            .merger
+            .git
+            .root_entry(
+                &self.merger.storage,
+                repo,
+                None,
+                train,
+                CI_DEFINITION,
+                self.merger.timeouts.read,
+            )
+            .await;
+        match read {
+            Ok(entry) => entry.is_some(),
+            Err(e) => {
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.merge_queue.definition_unread",
+                    error_code = e.code().id(),
+                    request_id = %request_id,
+                    repo_id = repo.get(),
+                    train_sha = train.as_str(),
+                    error = %e,
+                    "could not read .forge-ci.yml at the train; its pipeline job decides"
+                );
+                true
+            }
+        }
     }
 
     /// Why `entry` must run alone (ADR-0030 §4): a fast-forward, a

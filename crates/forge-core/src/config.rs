@@ -475,7 +475,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         git_ssh: GitSshConfig::load(get)?,
         git_pack: GitPackConfig::load(get)?,
         hosting: HostingConfig::load(get)?,
-        review: ReviewConfig::load(get)?,
+        review: ReviewConfig::load(get, write_max_connections)?,
         feed: FeedConfig::load(get)?,
         maintenance: MaintenanceConfig::load(get)?,
         notify: NotifyConfig::load(get)?,

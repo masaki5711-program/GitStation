@@ -484,7 +484,19 @@ async fn a_retarget_and_a_reopen_request_a_scan() {
     .fetch_one(&mut w.t.superuser().await)
     .await
     .expect("jobs");
-    assert_eq!(jobs, 2);
+    // The reopen's request replaced the retarget's still queued job (merge
+    // load test 2026-11-17, F2): one queued scan, of the latest seq.
+    assert_eq!(jobs, 1);
+    let latest: String = sqlx::query_scalar(
+        "SELECT dedup_key FROM forge.jobs WHERE kind = 'merge_request.conflict_scan'",
+    )
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("job");
+    assert_eq!(
+        latest,
+        format!("mr_conflict_scan:{}:{}", a.id.get(), second.scan_seq)
+    );
     w.t.drop_now().await;
 }
 

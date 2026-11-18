@@ -5,8 +5,8 @@ use forge_core::{ObjectId, RequestId};
 use forge_errors::ForgeError;
 use sqlx::postgres::PgConnection;
 
-use super::{mergeability_job, LIVE_JOB};
-use crate::jobs::{enqueue_on, Enqueued};
+use super::{mergeability_job, LIVE_JOB, MERGEABILITY_JOB};
+use crate::jobs::{enqueue_superseding_on, supersede_queued_on, Enqueued};
 use crate::{query_error, Db};
 
 /// The most merge requests one target push marks `unchecked` past the
@@ -40,7 +40,9 @@ async fn bump_on(
 
 /// Request a check of `mr` on `conn`, the caller's transaction: the row is
 /// `unchecked` with a new seq, and its job is enqueued (it exists only if
-/// the caller commits). The new seq.
+/// the caller commits), replacing the queued jobs of `mr`'s older requests
+/// (merge load test 2026-11-17, F2: one queued check per merge request).
+/// The new seq.
 pub(crate) async fn request_check_on(
     conn: &mut PgConnection,
     mr: MergeRequestId,
@@ -50,7 +52,7 @@ pub(crate) async fn request_check_on(
 ) -> Result<i64, ForgeError> {
     let seq = bump_on(conn, mr, project).await?;
     let job = mergeability_job(mr, seq, origin, origin_event_seq)?;
-    if let Enqueued::Deduped = enqueue_on(conn, &job).await? {
+    if let Enqueued::Deduped = enqueue_superseding_on(conn, &job, mr.get()).await?.enqueued {
         // A fresh seq is a fresh key: a duplicate means a job was enqueued
         // for a seq the row had not reached (never expected). The job that
         // exists runs for this seq, so nothing is lost; say so.
@@ -68,31 +70,36 @@ pub(crate) async fn request_check_on(
 /// Mark open merge requests of `project` targeting one of `targets` and not
 /// in `enqueued` `unchecked` (a new seq, no job: past the fan-out cap,
 /// ADR-0024 §3), on `conn`, at most [`DEFER_MAX`] in id order (a stable
-/// lock order); `(marked, left)` — `left` open merge requests beyond the
-/// bound kept their status.
+/// lock order), and delete their queued checks (an older seq's: superseded,
+/// the sweep requests them); `(marked, left)` — `left` open merge requests
+/// beyond the bound kept their status.
 pub(crate) async fn defer_checks_on(
     conn: &mut PgConnection,
     project: ProjectId,
     targets: &[String],
     enqueued: &[i64],
 ) -> Result<(u64, i64), ForgeError> {
-    let marked = sqlx::query(
+    let bumped: Vec<i64> = sqlx::query_scalar(
         "INSERT INTO forge.merge_request_mergeability (merge_request_id, project_id) \
          SELECT id, project_id FROM forge.merge_requests WHERE project_id = $1 \
          AND state = 'open' AND target_branch = ANY($2) AND id <> ALL($3) \
          ORDER BY id LIMIT $4 \
          ON CONFLICT (merge_request_id) DO UPDATE SET status = 'unchecked', reason = NULL, \
          conflicts = '{}', conflicts_truncated = false, \
-         check_seq = forge.merge_request_mergeability.check_seq + 1, updated_at = now()",
+         check_seq = forge.merge_request_mergeability.check_seq + 1, updated_at = now() \
+         RETURNING merge_request_id",
     )
     .bind(project.get())
     .bind(targets)
     .bind(enqueued)
     .bind(DEFER_MAX)
-    .execute(&mut *conn)
+    .fetch_all(&mut *conn)
     .await
-    .map(|r| r.rows_affected())
     .map_err(|e| query_error("review.mergeability_defer", e))?;
+    // Their queued checks are of an older seq now (merge load test
+    // 2026-11-17, F2): gone with the bump; the sweep requests them again.
+    supersede_queued_on(conn, MERGEABILITY_JOB, &bumped).await?;
+    let marked = u64::try_from(bumped.len()).unwrap_or(u64::MAX);
     if marked < u64::try_from(DEFER_MAX).unwrap_or(u64::MAX) {
         return Ok((marked, 0));
     }

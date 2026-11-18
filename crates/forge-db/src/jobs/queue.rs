@@ -95,13 +95,115 @@ pub(crate) async fn enqueue_after_on(
     Ok(id.map_or(Enqueued::Deduped, |id| Enqueued::Queued(JobId::new(id))))
 }
 
+/// What [`enqueue_superseding_on`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Superseding {
+    pub(crate) enqueued: Enqueued,
+    /// Queued jobs of older requests deleted.
+    pub(crate) superseded: i64,
+}
+
+/// [`enqueue_on`] for the job of the newest request of `merge_request`
+/// (merge load test 2026-11-17, F2): in the same statement, every QUEUED
+/// job of the kind for that merge request with another dedup key is
+/// deleted — it could only find its request superseded when it ran — and
+/// the new job keeps the oldest one's place in line (`run_after`, never
+/// later than now). A running job is left alone (its result is refused by
+/// its seq). So a merge request has at most one queued job of the kind,
+/// however often its target moves (index `jobs_queued_merge_request`,
+/// migration 20261226100000).
+pub(crate) async fn enqueue_superseding_on(
+    conn: &mut PgConnection,
+    job: &NewJob,
+    merge_request: i64,
+) -> Result<Superseding, ForgeError> {
+    let (id, superseded): (Option<i64>, i64) = sqlx::query_as(
+        "WITH gone AS ( \
+             DELETE FROM ONLY forge.jobs WHERE kind = $1 AND state = 'queued' \
+                AND payload ->> 'merge_request_id' = $8 AND dedup_key IS DISTINCT FROM $5 \
+             RETURNING run_after), \
+         added AS ( \
+             INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key, \
+                    origin_request_id, origin_event_seq, run_after) \
+             VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7, \
+                    LEAST(pg_catalog.now(), (SELECT min(run_after) FROM gone))) \
+             ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead' \
+             DO NOTHING \
+             RETURNING id) \
+         SELECT (SELECT id FROM added), (SELECT count(*) FROM gone)",
+    )
+    .bind(job.kind.as_str())
+    .bind(job.payload.to_string())
+    .bind(i32::from(job.max_attempts.get()))
+    .bind(job.timeout.millis())
+    .bind(job.dedup_key.as_ref().map(|k| k.as_str()))
+    .bind(job.origin_request_id.as_str())
+    .bind(job.origin_event_seq)
+    .bind(merge_request.to_string())
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| query_error("jobs.enqueue_superseding", e))?;
+    if superseded > 0 {
+        tracing::debug!(
+            target: "forge_db",
+            event = "forge.jobs.superseded",
+            request_id = %job.origin_request_id,
+            kind = job.kind.as_str(),
+            merge_request_id = merge_request,
+            superseded,
+            "queued jobs of older requests replaced by the newest"
+        );
+    }
+    Ok(Superseding {
+        enqueued: id.map_or(Enqueued::Deduped, |id| Enqueued::Queued(JobId::new(id))),
+        superseded,
+    })
+}
+
+/// Delete the QUEUED jobs of `kind` for `merge_requests` on `conn` (their
+/// requests were superseded without a new job: past a fan-out cap, the
+/// sweep asks again). The number deleted.
+pub(crate) async fn supersede_queued_on(
+    conn: &mut PgConnection,
+    kind: &str,
+    merge_requests: &[i64],
+) -> Result<u64, ForgeError> {
+    if merge_requests.is_empty() {
+        return Ok(0);
+    }
+    let ids: Vec<String> = merge_requests.iter().map(i64::to_string).collect();
+    sqlx::query(
+        "DELETE FROM ONLY forge.jobs WHERE kind = $1 AND state = 'queued' \
+         AND payload ->> 'merge_request_id' = ANY($2::text[])",
+    )
+    .bind(kind)
+    .bind(&ids)
+    .execute(&mut *conn)
+    .await
+    .map(|r| r.rows_affected())
+    .map_err(|e| query_error("jobs.supersede_queued", e))
+}
+
 type ClaimRow = (i64, String, String, i32, i32, i32, String, Option<i64>);
 
-/// Claim the oldest ready job of one of `kinds` (none: nothing is claimed).
+/// Claim the next ready job of one of `kinds` (none: nothing is claimed),
+/// in [`priority_sql`] order.
 pub async fn claim(
     db: &Db,
     worker: &WorkerId,
     kinds: &[JobKind],
+) -> Result<Option<ClaimedJob>, ForgeError> {
+    claim_excluding(db, worker, kinds, &[]).await
+}
+
+/// [`claim`], passing over the ready jobs whose [`ordering_key`] is in
+/// `busy` (a job of the same kind for the same subject runs in this
+/// process: `JobRunner`'s per-subject order).
+pub async fn claim_excluding(
+    db: &Db,
+    worker: &WorkerId,
+    kinds: &[JobKind],
+    busy: &[String],
 ) -> Result<Option<ClaimedJob>, ForgeError> {
     if kinds.is_empty() {
         return Ok(None);
@@ -112,25 +214,114 @@ pub async fn claim(
             .acquire()
             .await
             .map_err(|e| query_error("jobs.acquire", e))?;
-        claim_on(&mut conn, worker, kinds).await
+        claim_on_excluding(&mut conn, worker, kinds, busy).await
     })
     .await
 }
 
+/// How long a ready job waits before its tier is raised to the default
+/// one (no starvation of the bulk tiers under a steady load).
+pub const PRIORITY_AGING_SECS: i64 = 300;
+
+/// The claim order's tier of a job row `j` (lower first; then `run_after`,
+/// `id`). Merge load test 2026-11-17 (F2): what a merge waits on runs
+/// before the bulk recomputation a target push fans out.
+///
+/// - 0: the train pipeline of a merge queue (`ci.pipeline_create` with
+///   `source = merge_queue`) and `repository.provision`;
+/// - 1: `merge_request.refresh` (a pushed head, F7) and the mergeability
+///   check of a merge request with a live queue entry;
+/// - 2: everything else, and any job ready for longer than
+///   [`PRIORITY_AGING_SECS`];
+/// - 3: the other mergeability checks (a target push's fan-out);
+/// - 4: `merge_request.conflict_scan` (advisory).
+///
+/// The payload's id is cast only when it is digits (a malformed payload
+/// never fails the claim of every job).
+pub(crate) fn priority_sql() -> String {
+    use crate::pipelines::{Source, PIPELINE_CREATE_JOB};
+    use crate::repositories::PROVISION_JOB;
+    use crate::review::{CONFLICT_SCAN_JOB, MERGEABILITY_JOB, REFRESH_JOB};
+    format!(
+        "CASE \
+           WHEN j.kind = '{PIPELINE_CREATE_JOB}' \
+                AND j.payload ->> 'source' = '{queue}' THEN 0 \
+           WHEN j.kind = '{PROVISION_JOB}' THEN 0 \
+           WHEN j.kind = '{REFRESH_JOB}' THEN 1 \
+           WHEN j.kind = '{MERGEABILITY_JOB}' AND EXISTS ( \
+                SELECT 1 FROM forge.merge_queue_entries e \
+                 WHERE e.state IN ('queued', 'testing') \
+                   AND e.merge_request_id = CASE \
+                       WHEN j.payload ->> 'merge_request_id' ~ '^[0-9]{{1,18}}$' \
+                       THEN (j.payload ->> 'merge_request_id')::bigint END) THEN 1 \
+           WHEN j.run_after < pg_catalog.now() \
+                - pg_catalog.make_interval(secs => {PRIORITY_AGING_SECS}) THEN 2 \
+           WHEN j.kind = '{MERGEABILITY_JOB}' THEN 3 \
+           WHEN j.kind = '{CONFLICT_SCAN_JOB}' THEN 4 \
+           ELSE 2 END",
+        queue = Source::MergeQueue.as_str(),
+    )
+}
+
+/// The SQL of a job row `j`'s ordering key (NULL: none) — what
+/// [`ordering_key`] computes in Rust: the merge request
+/// (`merge_request_id`), else the merge request by number
+/// (`project_id` / `iid`), else the head (`project_id` / `head_sha`).
+pub(crate) const ORDERING_KEY_SQL: &str = "COALESCE( \
+     'mr:' || (j.payload ->> 'merge_request_id'), \
+     'iid:' || (j.payload ->> 'project_id') || '/' || (j.payload ->> 'iid'), \
+     'head:' || (j.payload ->> 'project_id') || '/' || (j.payload ->> 'head_sha'))";
+
+/// The ordering key of a job of `kind` with `payload` ([`ORDERING_KEY_SQL`]
+/// in Rust, prefixed with the kind): two jobs with the same key never run
+/// at once in one `JobRunner`.
+pub fn ordering_key(kind: &JobKind, payload: &serde_json::Value) -> Option<String> {
+    // `->>`: a string as is, JSON null or a missing field NULL, anything
+    // else its JSON text.
+    let text = |field: &str| match payload.get(field) {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s.clone()), // clone: the key owns it
+        Some(other) => Some(other.to_string()),
+    };
+    let subject = text("merge_request_id")
+        .map(|mr| format!("mr:{mr}"))
+        .or_else(|| Some(format!("iid:{}/{}", text("project_id")?, text("iid")?)))
+        .or_else(|| {
+            Some(format!(
+                "head:{}/{}",
+                text("project_id")?,
+                text("head_sha")?
+            ))
+        })?;
+    Some(format!("{}:{subject}", kind.as_str()))
+}
+
 /// The claim statement on `conn` (tests run it on other roles).
+#[cfg(test)]
 pub(crate) async fn claim_on(
     conn: &mut PgConnection,
     worker: &WorkerId,
     kinds: &[JobKind],
 ) -> Result<Option<ClaimedJob>, ForgeError> {
+    claim_on_excluding(conn, worker, kinds, &[]).await
+}
+
+/// [`claim_on`] passing over the ordering keys in `busy`.
+pub(crate) async fn claim_on_excluding(
+    conn: &mut PgConnection,
+    worker: &WorkerId,
+    kinds: &[JobKind],
+    busy: &[String],
+) -> Result<Option<ClaimedJob>, ForgeError> {
     let kinds: Vec<&str> = kinds.iter().map(JobKind::as_str).collect();
-    let row: Option<ClaimRow> = sqlx::query_as(
+    let sql = format!(
         "WITH next AS ( \
-             SELECT id FROM ONLY forge.jobs \
-              WHERE state = 'queued' AND run_after <= pg_catalog.now() \
-                AND attempts < max_attempts AND kind = ANY($2::text[]) \
-              ORDER BY run_after, id LIMIT 1 \
-              FOR UPDATE SKIP LOCKED) \
+             SELECT j.id FROM ONLY forge.jobs j \
+              WHERE j.state = 'queued' AND j.run_after <= pg_catalog.now() \
+                AND j.attempts < j.max_attempts AND j.kind = ANY($2::text[]) \
+                AND (j.kind || ':' || COALESCE({ORDERING_KEY_SQL}, '')) <> ALL($4::text[]) \
+              ORDER BY {priority}, j.run_after, j.id LIMIT 1 \
+              FOR UPDATE OF j SKIP LOCKED) \
          UPDATE ONLY forge.jobs AS j \
             SET state = 'running', attempts = j.attempts + 1, worker_id = $1, \
                 lease_until = pg_catalog.now() \
@@ -138,13 +329,16 @@ pub(crate) async fn claim_on(
            FROM next WHERE j.id = next.id \
          RETURNING j.id, j.kind, j.payload::text, j.attempts, j.max_attempts, j.timeout_ms, \
                    j.origin_request_id, j.origin_event_seq",
-    )
-    .bind(worker.as_str())
-    .bind(&kinds)
-    .bind(super::LEASE_SLACK_MS)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|e| query_error("jobs.claim", e))?;
+        priority = priority_sql(),
+    );
+    let row: Option<ClaimRow> = sqlx::query_as(&sql)
+        .bind(worker.as_str())
+        .bind(&kinds)
+        .bind(super::LEASE_SLACK_MS)
+        .bind(busy)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| query_error("jobs.claim", e))?;
     let Some((id, kind, payload, attempt, max_attempts, timeout_ms, origin, seq)) = row else {
         return Ok(None);
     };

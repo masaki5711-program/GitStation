@@ -131,12 +131,32 @@ struct World {
     project: ProjectId,
     repo: forge_core::RepoId,
     base: String,
+    /// The files every commit of the test starts from (`BASE`, or
+    /// `DOC_BASE` without a CI definition).
+    base_files: &'static [(&'static str, &'static str)],
     session: i64,
 }
+
+/// `main`'s files: with a `.forge-ci.yml`, so a train gets its pipeline
+/// job (the tests write the `merge_queue` pipeline row themselves).
+const BASE: &[(&str, &str)] = &[
+    ("README.md", "base\n"),
+    (
+        ".forge-ci.yml",
+        "# synthetic: the test writes the train pipeline\n",
+    ),
+];
+/// `main`'s files in a repository without a CI definition (documents).
+const DOC_BASE: &[(&str, &str)] = &[("README.md", "base\n")];
 
 /// `acme/web` with `main` at a base commit; olga owns it, dave is a
 /// Developer.
 async fn world() -> World {
+    world_with(BASE).await
+}
+
+/// [`world`] with `main` at `base_files`.
+async fn world_with(base_files: &'static [(&'static str, &'static str)]) -> World {
     let t = FreshDb::migrated().await;
     let owner = user(&t, "olga").await;
     let dev = user(&t, "dave").await;
@@ -152,7 +172,7 @@ async fn world() -> World {
         .init_bare(&git, web.repository_id, uuid::Uuid::new_v4(), None)
         .await
         .expect("init");
-    let base = commit(&path, &[("README.md", "base\n")], None);
+    let base = commit(&path, base_files, None);
     plumb(&path, &["update-ref", "refs/heads/main", &base], None);
     let browser = Browser::new(git.clone(), storage.clone(), BrowseLimits::default());
     let review = Review::new(t.db.clone(), Arc::new(browser.clone()))
@@ -187,6 +207,7 @@ async fn world() -> World {
         project: web.project_id,
         repo: web.repository_id,
         base,
+        base_files,
         session,
     }
 }
@@ -233,7 +254,7 @@ impl World {
     /// Branch `name` one commit ahead of the base with `files`, and its
     /// merge request (checked as the worker does), by dave.
     async fn mr(&mut self, name: &str, files: &[(&str, &str)]) -> StoredMergeRequest {
-        let mut all = vec![("README.md", "base\n")];
+        let mut all = self.base_files.to_vec();
         all.extend_from_slice(files);
         let head = commit(&self.path, &all, Some(&self.base));
         plumb(
@@ -524,6 +545,129 @@ async fn a_green_batch_of_four_lands_with_one_compare_and_swap() {
     }
 }
 
+/// The train pipeline jobs (`ci.pipeline_create`, `source = merge_queue`).
+async fn train_jobs(w: &World) -> i64 {
+    count(
+        &w.t,
+        "SELECT count(*) AS n FROM forge.jobs WHERE kind = 'ci.pipeline_create' \
+         AND payload ->> 'source' = 'merge_queue'",
+    )
+    .await
+}
+
+/// Merge load test 2026-11-17 (doc fast path, ADR-0030 §5): a train whose
+/// commit has no `.forge-ci.yml` gets no pipeline job — the job would find
+/// no definition and write nothing — so the verdict is "no pipeline" at
+/// once and the batch lands on the next tick, with no pipeline row at all.
+#[tokio::test]
+async fn a_train_without_a_ci_definition_lands_without_a_pipeline_job() {
+    let mut w = world_with(DOC_BASE).await;
+    let mrs = four(&mut w).await;
+    let worker = w.worker("w1");
+    let built = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(built.outcome, "built");
+    assert_eq!(train_jobs(&w).await, 0, "no pipeline job for the train");
+    let landed = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(landed.outcome, "landed");
+    assert_outcome(&w, &mrs, &BTreeSet::new()).await;
+    let pipelines = count(&w.t, "SELECT count(*) AS n FROM forge.ci_pipelines").await;
+    assert_eq!(pipelines, 0);
+}
+
+/// The other side of the fast path: with a `.forge-ci.yml` at the train
+/// the job is enqueued with the batch and the batch waits for it.
+#[tokio::test]
+async fn a_train_with_a_ci_definition_waits_for_its_pipeline_job() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    let worker = w.worker("w1");
+    let built = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(built.outcome, "built");
+    assert_eq!(train_jobs(&w).await, 1);
+    let next = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(next.outcome, "waiting");
+    assert_eq!(w.tip("main"), w.base);
+}
+
+/// Review of f44e7afd: a train whose `.forge-ci.yml` cannot be read (git
+/// does not answer `ls-tree` within the read timeout) falls back to the
+/// pipeline job — never to "no pipeline" — and the batch waits for it.
+#[tokio::test]
+async fn a_train_whose_definition_cannot_be_read_still_gets_its_pipeline_job() {
+    let mut w = world_with(DOC_BASE).await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    let fake = tempfile::tempdir().expect("fake git dir");
+    let stalled = forge_git::test_git::stalled_git(w._home.path(), fake.path(), Some("ls-tree"));
+    let merger = Merger::new(w.t.db.clone(), stalled, w.storage.clone())
+        .with_browser(w.browser.clone())
+        .with_timeouts(forge_review::MergeTimeouts {
+            read: Duration::from_secs(2),
+            ..forge_review::MergeTimeouts::default()
+        })
+        .expect("timeouts");
+    let worker = MergeQueue::new(merger, "w1", w.rules()).with_limits(QueueLimits {
+        poll: Duration::ZERO,
+        ..QueueLimits::default()
+    });
+    let built = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(built.outcome, "built");
+    assert_eq!(train_jobs(&w).await, 1, "the job decides, as before");
+    let next = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(next.outcome, "waiting");
+    assert_eq!(w.tip("main"), w.base);
+}
+
+/// Review of f44e7afd (ADR-0030 §5): the fast path never passes a required
+/// check. With `ci/pipeline` required on `main` and no `.forge-ci.yml`, the
+/// train gets no job and no pipeline, and the landing refuses the entry
+/// with `required_check_missing` — what it did after the job ran.
+#[tokio::test]
+async fn a_required_pipeline_without_a_ci_definition_is_missing_at_the_landing() {
+    let mut w = world_with(DOC_BASE).await;
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[
+            format!(
+                "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
+                 VALUES ({}, 'refs/heads/main', 'developer')",
+                w.project.get()
+            ),
+            format!(
+                "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
+                 required_approvals, required_checks, require_resolved_discussions) \
+                 SELECT id, project_id, 0, ARRAY['ci/pipeline']::text[], false \
+                 FROM forge.protected_refs WHERE project_id = {}",
+                w.project.get()
+            ),
+        ],
+    )
+    .await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.enqueue(&a)
+        .await
+        .expect("ci/pipeline is the queue's to test");
+    let worker = w.worker("w1");
+    let built = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(built.outcome, "built");
+    assert_eq!(train_jobs(&w).await, 0);
+    for _ in 0..5 {
+        if worker.tick().await.expect("tick").is_none() {
+            break;
+        }
+    }
+    let entry = w.entry_of(&a).await;
+    assert_eq!(entry.state, EntryState::Removed);
+    assert_eq!(entry.reason.as_deref(), Some("required_check_missing"));
+    assert_eq!(
+        entry.error_code.as_deref(),
+        Some(ErrorCode::MergeBlocked.id())
+    );
+    assert_eq!(w.tip("main"), w.base, "the target never moved");
+    assert!(!w.main_has("fa.txt"));
+}
+
 #[tokio::test]
 async fn a_testing_train_is_pinned_by_its_hidden_ref() {
     let mut w = world().await;
@@ -592,7 +736,7 @@ async fn a_target_moved_while_testing_rebuilds_the_train() {
     // Someone pushes to main while the train is tested.
     let moved = commit(
         &w.path,
-        &[("README.md", "base\n"), ("other.txt", "o\n")],
+        &[w.base_files, &[("other.txt", "o\n")]].concat(),
         Some(&w.base),
     );
     plumb(&w.path, &["update-ref", "refs/heads/main", &moved], None);
@@ -900,7 +1044,7 @@ async fn a_new_version_pushed_while_queued_leaves_the_queue() {
     // A new version of the merge request before its batch is built.
     let newer = commit(
         &w.path,
-        &[("README.md", "base\n"), ("fa.txt", "y\n")],
+        &[w.base_files, &[("fa.txt", "y\n")]].concat(),
         Some(&w.base),
     );
     plumb(&w.path, &["update-ref", "refs/heads/fa", &newer], None);
@@ -1751,7 +1895,7 @@ impl World {
     /// request's tree is `README.md` and its own files: what it leaves out
     /// of `files` it deletes).
     fn rebase_main(&mut self, files: &[(&str, &str)]) {
-        let mut all = vec![("README.md", "base\n")];
+        let mut all = self.base_files.to_vec();
         all.extend_from_slice(files);
         let next = commit(&self.path, &all, Some(&self.base));
         plumb(&self.path, &["update-ref", "refs/heads/main", &next], None);

@@ -237,6 +237,11 @@ pub const KEYS: &[Key] = &[
         "review.check_run_retention_days",
         "FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS",
     ),
+    // Merge load test 2026-11-17 (F2): jobs the worker runs at once.
+    number(
+        "review.worker_job_concurrency",
+        "FORGE_REVIEW_WORKER_JOB_CONCURRENCY",
+    ),
     // M3 I1c: the feed's seal-sink comparison (ADR-0018 §5; false only in M3).
     boolean(
         "feed.require_sink_compare",

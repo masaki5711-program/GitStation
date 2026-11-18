@@ -9,7 +9,11 @@
 //!   `merge_request.mergeability` is enqueued with dedup key
 //!   `mr_mergeability:<merge_request_id>:<check_seq>` — a fresh key per
 //!   request, so a target going A → B → A is checked again even though the
-//!   dedup index keeps succeeded jobs (20261027120000). Callers: the edit
+//!   dedup index keeps succeeded jobs (20261027120000). The queued jobs of
+//!   the merge request's older seqs are deleted in the same statement
+//!   (`jobs::enqueue_superseding_on`, merge load test 2026-11-17 F2: one
+//!   queued check per merge request, however often the target moves; a
+//!   running one is refused by its seq). Callers: the edit
 //!   command on a retarget, the `merge-request-refresh` subscriber on a
 //!   target push (the rest past the fan-out cap are marked without a job,
 //!   [`request::defer_checks_on`]), the version job after a version

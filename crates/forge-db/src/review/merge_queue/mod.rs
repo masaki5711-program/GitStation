@@ -805,8 +805,10 @@ pub struct NewBatch {
     pub members: Vec<BatchMember>,
     pub request_id: RequestId,
     pub deadline: Duration,
-    /// The train's `ci.pipeline_create` job (deduplicated on its sha).
-    pub pipeline: NewJob,
+    /// The train's `ci.pipeline_create` job (deduplicated on its sha);
+    /// `None` for a train without `.forge-ci.yml` (no pipeline: the verdict
+    /// reads [`TrainPipeline::None`] at once).
+    pub pipeline: Option<NewJob>,
 }
 
 /// Write `new` (state `testing`), move its entries to `testing` and
@@ -881,7 +883,9 @@ pub async fn create_batch(db: &Db, new: &NewBatch) -> Result<Option<i64>, ForgeE
             .await
             .map_err(|e| query_error(QUERY, e))?;
         }
-        enqueue_on(&mut tx, &new.pipeline).await?;
+        if let Some(pipeline) = &new.pipeline {
+            enqueue_on(&mut tx, pipeline).await?;
+        }
         tx.commit().await.map_err(|e| query_error(QUERY, e))?;
         Ok(Some(batch))
     })

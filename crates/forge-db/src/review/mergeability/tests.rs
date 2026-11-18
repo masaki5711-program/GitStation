@@ -281,15 +281,11 @@ async fn an_older_check_never_overwrites_a_newer_request() {
         .expect("row");
     assert_eq!(stored.status, MergeabilityStatus::Unchecked);
     assert_eq!(stored.check_seq, second);
+    // The first request's job was still queued: the second request
+    // replaced it (merge load test 2026-11-17, F2).
     let keys: Vec<String> = checks(&t).await.into_iter().map(|c| c.0).collect();
     let id = mr.id.get();
-    assert_eq!(
-        keys,
-        [
-            format!("mr_mergeability:{id}:{first}"),
-            format!("mr_mergeability:{id}:{second}")
-        ]
-    );
+    assert_eq!(keys, [format!("mr_mergeability:{id}:{second}")]);
     t.drop_now().await;
 }
 
@@ -344,7 +340,9 @@ async fn a_retarget_resets_to_unchecked_and_enqueues_a_check() {
         .expect("row");
     assert_eq!(stored.status, MergeabilityStatus::Unchecked);
     let jobs = checks(&t).await;
-    assert_eq!(jobs.len(), before + 1);
+    // `run` never claimed the earlier request's job: still queued, it is
+    // replaced by the retarget's (merge load test 2026-11-17, F2).
+    assert_eq!(jobs.len(), before, "{jobs:?}");
     let (key, payload) = jobs.last().expect("job");
     assert_eq!(
         key,
@@ -505,12 +503,146 @@ async fn a_target_push_checks_open_merge_requests_up_to_the_fanout_cap() {
     )
     .await;
     drain(&t, &subscriber).await;
-    assert_eq!(checks(&t).await.len(), 4);
+    // Merge load test 2026-11-17 (F2): the first push's queued checks were
+    // replaced by the second's (one queued check per merge request).
+    assert_eq!(checks(&t).await.len(), 2);
     let b_after = mergeability_written(&t.db, b.id)
         .await
         .expect("read")
         .expect("row");
     assert_eq!(b_after.check_seq, deferred.check_seq + 1, "deferred again");
+    t.drop_now().await;
+}
+
+/// (merge request id, check_seq) of the QUEUED mergeability jobs.
+async fn queued_checks(t: &FreshDb) -> Vec<(i64, i64)> {
+    let mut jobs: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT (payload ->> 'merge_request_id')::bigint, (payload ->> 'check_seq')::bigint \
+         FROM forge.jobs WHERE kind = 'merge_request.mergeability' AND state = 'queued'",
+    )
+    .fetch_all(&mut t.superuser().await)
+    .await
+    .expect("jobs");
+    jobs.sort_unstable();
+    jobs
+}
+
+/// Merge load test 2026-11-17 (F2): every push to a target asks for a
+/// check of every open merge request on it, but a merge request keeps at
+/// most ONE queued check — its newest seq's. N open merge requests and
+/// three target pushes leave N queued jobs (it was 3N, each older one only
+/// finding its seq superseded when it ran).
+#[tokio::test]
+async fn repeated_target_pushes_keep_one_queued_check_per_merge_request() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let subscriber = MergeRequestRefresh::new(50);
+    subscribers::register(&t.db, &subscriber, Start::Head)
+        .await
+        .expect("register");
+    let mut mrs = Vec::new();
+    for name in ["a", "b", "c", "d", "e"] {
+        mrs.push(open_to(&t, alice, p, name, "main").await);
+    }
+    for round in 0..3 {
+        push(
+            &t,
+            alice,
+            &format!("req-push-main-{round}"),
+            &PushRecord {
+                repository_id: web.repository_id,
+                updates: vec![pushed("refs/heads/main", PushUpdateKind::FastForward)],
+            },
+        )
+        .await;
+        drain(&t, &subscriber).await;
+    }
+    let mut expected = Vec::new();
+    for mr in &mrs {
+        let row = mergeability_written(&t.db, mr.id)
+            .await
+            .expect("read")
+            .expect("row");
+        assert_eq!(row.status, MergeabilityStatus::Unchecked);
+        expected.push((mr.id.get(), row.check_seq));
+    }
+    expected.sort_unstable();
+    assert_eq!(
+        queued_checks(&t).await,
+        expected,
+        "one queued check each, the newest"
+    );
+    assert_eq!(
+        checks(&t).await.len(),
+        mrs.len(),
+        "no other job left behind"
+    );
+    t.drop_now().await;
+}
+
+/// A merge request past the fan-out cap gets a new seq without a job
+/// (ADR-0024 §3): its queued check of the older seq is deleted too (the
+/// sweep asks again), so nothing runs only to find itself superseded.
+#[tokio::test]
+async fn a_deferred_merge_request_loses_its_queued_check() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let subscriber = MergeRequestRefresh::new(2);
+    subscribers::register(&t.db, &subscriber, Start::Head)
+        .await
+        .expect("register");
+    let x = open_to(&t, alice, p, "x", "main").await;
+    let y = open_to(&t, alice, p, "y", "main").await;
+    let z = open_to(&t, alice, p, "z", "main").await;
+    let main = |request: &str| {
+        (
+            request.to_owned(),
+            PushRecord {
+                repository_id: web.repository_id,
+                updates: vec![pushed("refs/heads/main", PushUpdateKind::FastForward)],
+            },
+        )
+    };
+    let (request, record) = main("req-push-1");
+    push(&t, alice, &request, &record).await;
+    drain(&t, &subscriber).await;
+    let first: Vec<i64> = queued_checks(&t).await.iter().map(|j| j.0).collect();
+    assert_eq!(
+        first,
+        [y.id.get(), z.id.get()],
+        "the two most recently updated"
+    );
+    // x becomes the most recently updated: y is past the cap now.
+    let _done = edit_mr_decided(
+        &t.db,
+        &as_user(alice, "req-touch-x"),
+        p,
+        x.iid,
+        alice,
+        &MergeRequestPatch {
+            title: Some("Touched".to_owned()),
+            ..MergeRequestPatch::default()
+        },
+        |_| Ok(()),
+    )
+    .await
+    .expect("touch");
+    let (request, record) = main("req-push-2");
+    push(&t, alice, &request, &record).await;
+    drain(&t, &subscriber).await;
+    let second: Vec<i64> = queued_checks(&t).await.iter().map(|j| j.0).collect();
+    assert_eq!(second, [x.id.get(), z.id.get()]);
+    let deferred = mergeability_written(&t.db, y.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(
+        (deferred.status, deferred.check_seq),
+        (MergeabilityStatus::Unchecked, 2),
+        "deferred: a new seq, no job"
+    );
     t.drop_now().await;
 }
 

@@ -710,8 +710,18 @@ reason=fenced)` and changes nothing. `fail` requeues after 10 s ×
 `release` hands a job back at shutdown (ready now, attempt not counted).
 `jobs::reap` is ONE statement for up to 1000 expired leases (dead with
 `last_error_code = FG-DB-0007` when the attempts are used up, else requeued
-with the backoff). `JobRunner` (`JobHandler` per kind, one job at a time —
-a head-of-line limit to revisit before C8 / retention jobs; handler in its
+with the backoff). The claim order is a priority tier, then the oldest
+(`jobs::queue::priority_sql`: the merge queue's train pipeline and
+provisioning, then versions and queued merge requests' checks, then the
+rest, then a target push's mergeability fan-out, then conflict scans; a
+job ready for 5 minutes rises to the default tier). A mergeability or
+conflict-scan request deletes the queued jobs of the merge request's older
+requests in the statement that enqueues its own (one queued job per merge
+request; index `jobs_queued_merge_request`, migration 20261226100000).
+`JobRunner` (`JobHandler` per kind, one job per run; several runs at once
+share its per-kind caps (`limit_kind`) and its ordering keys
+(`jobs::ordering_key`: one merge request, one head never run twice at
+once); handler in its
 own task under `timeout_ms`: `execution_timeout` → FG-DB-0007 and retry,
 a panic → FG-SYS-0001 and retry; after an abort it waits up to 5 s for the
 handler to end before settling, else `abort_pending`; `run_once_until`

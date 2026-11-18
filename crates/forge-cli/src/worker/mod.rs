@@ -52,7 +52,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::config::{Config, MaintenanceConfig, MirrorConfig, ReviewConfig, SealKeys};
-use forge_db::jobs::{JobRunner, WorkerId};
+use forge_db::jobs::JobRunner;
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::subscribers::Registry;
 use forge_db::{Db, MIGRATOR};
@@ -248,7 +248,8 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
 enum Task {
     /// `forge.assign_seq` + NOTIFY (forge-db `sequencer::run_once`).
     Sequencer,
-    /// One job at a time (forge-db `jobs::JobRunner::run_once`).
+    /// One job per run (forge-db `jobs::JobRunner::run_once`), in
+    /// `review.worker_job_concurrency` tasks (`run_all`).
     JobRunner,
     /// Expired leases (forge-db `jobs::JobRunner::reap_and_report`).
     JobReaper,
@@ -839,10 +840,7 @@ pub(crate) async fn run_full(
     (webhook, deploy): (WebhookLane, Option<deploy::DeployLane>),
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
-    let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
-    for handler in jobs::handlers(db, storage)? {
-        runner.register(handler)?;
-    }
+    let runner = jobs::main_runner(db, storage)?;
     let maintenance = match maintenance {
         Some((cfg, mirror_cfg)) => Some(MaintenanceTask {
             runner: Arc::new(maintenance::runner(db, storage, cfg)?),
@@ -859,7 +857,7 @@ pub(crate) async fn run_full(
         .transpose()?;
     run_all(
         db,
-        runner,
+        (runner, review.worker_job_concurrency),
         registry_with(review, notify.as_ref(), Some(db), webhook.runner.is_some())?,
         jobs::SHUTDOWN_GRACE,
         keys,
@@ -887,10 +885,10 @@ pub(crate) async fn run_with_notify(
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     let notify = NotifyTask::new(db, lane, sender)?;
-    let runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
+    let runner = JobRunner::new(db.clone(), forge_db::jobs::WorkerId::generate()); // clone: pool handles
     run_all(
         db,
-        runner,
+        (runner, 1),
         registry_with(&ReviewConfig::default(), Some(&notify), None, false)?,
         Duration::from_secs(5),
         keys,
@@ -921,7 +919,7 @@ pub(crate) async fn run_with(
 ) -> Result<(), ForgeError> {
     run_all(
         db,
-        runner,
+        (runner, 1),
         registry,
         grace,
         keys,
@@ -954,7 +952,8 @@ type Lanes = (
 
 async fn run_all(
     db: &Db,
-    runner: JobRunner,
+    // The main job runner and its number of slots (`review.worker_job_concurrency`).
+    (runner, slots): (JobRunner, u32),
     registry: Registry,
     grace: Duration,
     keys: Arc<SealKeys>,
@@ -967,6 +966,7 @@ async fn run_all(
     tracing::info!(
         worker_id = runner.worker_id().as_str(),
         job_kinds = runner.kinds().len(),
+        job_slots = slots,
         "forge.worker.jobs"
     );
     if let Some(m) = &maintenance {
@@ -1017,7 +1017,12 @@ async fn run_all(
             "forge.worker.deploy_lane_off"
         ),
     }
-    let runners = tasks.into_iter().map(|task| task.runner(&shared)).collect();
+    let mut runners: Vec<Runner> = tasks.iter().map(|task| task.runner(&shared)).collect();
+    // Merge load test 2026-11-17 (F2): the main job runner in `slots`
+    // tasks (one is in `tasks`); they share its caps and ordering keys.
+    for _ in 1..slots.max(1) {
+        runners.push(Task::JobRunner.runner(&shared));
+    }
     supervise(runners, MAX_BACKOFF, shutdown).await
 }
 

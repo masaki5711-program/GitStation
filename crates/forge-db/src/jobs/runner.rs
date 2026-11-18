@@ -1,5 +1,17 @@
-//! [`JobRunner`]: claims one job at a time for the kinds it has a
-//! [`JobHandler`] for, runs it under its timeout and settles it (fenced).
+//! [`JobRunner`]: claims a job for the kinds it has a [`JobHandler`] for,
+//! runs it under its timeout and settles it (fenced). One run is one job;
+//! several runs of one runner may run at once (`forge worker`'s slots):
+//! claims are taken one at a time, a kind under its cap
+//! ([`JobRunner::limit_kind`]) and never a job whose ordering key
+//! (`super::ordering_key`: one merge request, one head) runs already. A run
+//! whose handler did not end after its abort (`left_leased`) keeps its
+//! ordering key and its kind's place until the job's lease ends: nothing
+//! else guards the order of one merge request's versions —
+//! `review::record_mr_version` moves the head to whatever head its job
+//! read, with no check of the head it read it after, so a second version
+//! job of the same merge request running beside a stale one could record
+//! the older head last. After the lease the reaper may hand the job out
+//! again anyway (the at-least-once contract).
 //! It is the boundary for job failures: it logs them once, with the job's
 //! origin `request_id`, and returns what it logged (tests, the worker).
 //!
@@ -16,10 +28,11 @@
 //! `running` with its lease; the lease expires and [`super::reap`] queues it
 //! again (or deads it) — never lost, at worst run again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use forge_core::telemetry;
@@ -30,8 +43,8 @@ use super::reports::{
     dead_lettered, finished, job_error, log_outcome, report_reaped, with_job_context, Ran, Reported,
 };
 use super::{
-    claim, complete, fail, reap, release, ClaimedJob, Completed, Failed, JobFailure, JobKind,
-    Retry, WorkerId,
+    claim_excluding, complete, fail, ordering_key, reap, release, ClaimedJob, Completed, Failed,
+    JobFailure, JobKind, Retry, WorkerId,
 };
 use crate::Db;
 
@@ -63,6 +76,64 @@ pub struct JobRunner {
     handlers: BTreeMap<JobKind, Arc<dyn JobHandler>>,
     abort_wait: Duration,
     release_timeout: Duration,
+    /// The most jobs of a kind running at once in this runner (absent:
+    /// no cap besides the callers' own number of runs).
+    caps: BTreeMap<JobKind, NonZeroUsize>,
+    /// What runs now: claims are taken one at a time under `gate`, so a
+    /// cap and an ordering key are never passed by two claims at once.
+    in_flight: Arc<Mutex<InFlight>>,
+    gate: tokio::sync::Mutex<()>,
+}
+
+/// The jobs of a runner that run now.
+#[derive(Debug, Default)]
+struct InFlight {
+    per_kind: BTreeMap<JobKind, usize>,
+    /// Their ordering keys (`super::ordering_key`).
+    keys: BTreeSet<String>,
+}
+
+/// One claimed job's place in [`InFlight`], given back when the run ends
+/// (also when it is dropped: a cancelled run).
+struct Slot {
+    in_flight: Arc<Mutex<InFlight>>,
+    kind: JobKind,
+    key: Option<String>,
+}
+
+impl Slot {
+    fn take(in_flight: &Arc<Mutex<InFlight>>, job: &ClaimedJob) -> Self {
+        let key = ordering_key(&job.kind, &job.payload);
+        {
+            // A poisoned lock still holds counts that are right: every
+            // change below is one statement.
+            let mut held = in_flight.lock().unwrap_or_else(PoisonError::into_inner);
+            *held.per_kind.entry(job.kind.clone()).or_insert(0) += 1; // clone: the map owns its key
+            if let Some(k) = &key {
+                held.keys.insert(k.clone()); // clone: the set owns its key
+            }
+        }
+        Self {
+            in_flight: Arc::clone(in_flight),
+            kind: job.kind.clone(), // clone: the slot outlives the borrow
+            key,
+        }
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut held = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(n) = held.per_kind.get_mut(&self.kind) {
+            *n = n.saturating_sub(1);
+        }
+        if let Some(k) = &self.key {
+            held.keys.remove(k);
+        }
+    }
 }
 
 /// Aborts the handler's task when the run is dropped.
@@ -106,7 +177,45 @@ impl JobRunner {
             handlers: BTreeMap::new(),
             abort_wait: ABORT_WAIT,
             release_timeout: RELEASE_TIMEOUT,
+            caps: BTreeMap::new(),
+            in_flight: Arc::new(Mutex::new(InFlight::default())),
+            gate: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// At most `max` jobs of `kind` run at once in this runner (its runs
+    /// share the runner: `forge worker`'s slots).
+    pub fn limit_kind(&mut self, kind: &JobKind, max: NonZeroUsize) {
+        self.caps.insert(kind.clone(), max); // clone: the map owns its key
+    }
+
+    /// The kinds a claim may take now (under their cap) and the ordering
+    /// keys running now.
+    fn claimable(&self) -> (Vec<JobKind>, Vec<String>) {
+        let held = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let kinds = self
+            .handlers
+            .keys()
+            .filter(|kind| {
+                self.caps
+                    .get(*kind)
+                    .is_none_or(|cap| held.per_kind.get(*kind).copied().unwrap_or(0) < cap.get())
+            })
+            .cloned()
+            .collect();
+        (kinds, held.keys.iter().cloned().collect())
+    }
+
+    /// Jobs of this runner running now (tests, logs).
+    pub fn running(&self) -> usize {
+        let held = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        held.per_kind.values().sum()
     }
 
     /// Another bound for an aborted handler to end (tests).
@@ -159,8 +268,16 @@ impl JobRunner {
         stop: impl Future<Output = ()>,
         grace: Duration,
     ) -> Result<Option<Ran>, ForgeError> {
-        let Some(job) = claim(&self.db, &self.worker, &self.kinds()).await? else {
-            return Ok(None);
+        let (job, slot, claimed_at) = {
+            // One claim at a time: a cap or an ordering key is decided and
+            // taken together.
+            let _gate = self.gate.lock().await;
+            let (kinds, busy) = self.claimable();
+            let Some(job) = claim_excluding(&self.db, &self.worker, &kinds, &busy).await? else {
+                return Ok(None);
+            };
+            let slot = Slot::take(&self.in_flight, &job);
+            (job, slot, tokio::time::Instant::now())
         };
         let request_id = job.request_id();
         let settled = match self.execute(&job, stop, grace).await {
@@ -175,6 +292,16 @@ impl JobRunner {
             error: with_job_context(e, &job),
         });
         log_outcome(&outcome, &request_id);
+        if let Ran::LeftLeased { .. } = &outcome {
+            // The old handler may still run: its ordering key (and its
+            // kind's place) stays taken until its lease ends, when the
+            // reaper may hand the job out again (module docs).
+            let lease_end = claimed_at + job.timeout.get() + super::LEASE_SLACK;
+            tokio::spawn(async move {
+                tokio::time::sleep_until(lease_end).await;
+                drop(slot);
+            });
+        }
         Ok(Some(outcome))
     }
 
