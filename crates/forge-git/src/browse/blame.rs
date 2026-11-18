@@ -231,7 +231,7 @@ impl Browser {
         }
         let max_lines = self.limits.max_blame_lines.max(1);
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let (out, cut) = self
             .git
             .command("blame")

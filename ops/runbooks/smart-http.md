@@ -25,12 +25,14 @@ FG-WEB-0007、FG-REPO-0016、FG-WEB-0002（`operation=git_request_body` / `prote
 | 項目（設定のキー） | 既定 | 超えたとき |
 |---|---|---|
 | ストリームの同時数（`git.http.max_streams`） | 16 | 10 秒待って `FG-GIT-0004 reason=streams`（503） |
-| 1 人の利用者の同時数（`git.http.max_streams_per_principal`、鍵は `user:<id>`） | 4 | すぐに `FG-GIT-0004 reason=principal_streams` |
+| 1 人の利用者の同時数（`git.http.max_streams_per_principal`、鍵は `user:<id>`） | 4 | 空くのを待つ（`git.http.busy_wait_ms`、既定 5 秒。待てるのは 1 人 16 本まで）。それでも空かなければ `FG-GIT-0004 reason=principal_streams`（`queue=timeout` / `full`、503、`Retry-After: 1`）。push の前の ref の写しとコミットの一覧はこの数に入らない |
+| 上限の待ち（`git.http.busy_wait_ms`。1 人の同時数・本文・リポジトリの閲覧 `repo_browse` に共通。0 で待たずに断る。最大 30 秒） | 5 秒 | 待っても空かなければ上の各 `FG-GIT-0004`（2026-11-17 の負荷試験 F1 / F4）。待てる数は定数: 1 人 16 本（ストリーム・本文それぞれ）、1 リポジトリの閲覧 64 本。超えたらすぐ `queue=full` |
+| push の記録の読み込み（push の前の ref の写し、push したコミットの一覧） | 1 人 4（`max_streams_per_principal` と同じ数で別の枠） | `FG-GIT-0004 reason=principal_record_streams`。push の枠とは別なので、1 人が同時に持てるストリームは push / fetch の 4 と記録の 4（全体の `max_streams` の中で） |
 | 無通信（どちらの向きにも 1 バイトも流れない）（`git.http.idle_timeout_ms`） | 60 秒 | git を helper ごと強制終了、`FG-GIT-0002 kind=idle`。本文の読み込み中なら `FG-WEB-0002 operation=git_request_body kind=idle` |
 | 1 回の全体（`git.http.timeout_ms`。git の POST は要求のタイムアウトの代わりにこれ） | 1 時間 | `FG-GIT-0002 kind=total` / `FG-WEB-0002 kind=total` |
 | fetch の要求の本文（生と gzip の展開後の両方、`git.http.fetch_request_max_bytes`） | 16 MiB | `FG-GIT-0013 limit=request_body` / `gzip_decompressed`（413） |
 | 本文を読み終えるまで（`git.http.body_timeout_ms`） | 5 分 | `FG-WEB-0002 operation=git_request_body kind=total` |
-| 本文を同時に読む数（`max_streams` / `max_streams_per_principal` と同じ） | 16 / 1 人 4 | `FG-GIT-0004 reason=body_reads`（10 秒待つ）/ `principal_body_reads`（すぐ） |
+| 本文を同時に読む数（`max_streams` / `max_streams_per_principal` と同じ） | 16 / 1 人 4 | `FG-GIT-0004 reason=body_reads`（10 秒待つ）/ `principal_body_reads`（`busy_wait_ms` 待つ） |
 | `want` の到達性の確認（`git.http.want_check_timeout_ms`） | 30 秒 | `FG-GIT-0002 operation=want_check`（504） |
 | コミット以外の `want` の数（`git.http.max_object_wants`） | 10 000 | `FG-GIT-0014 reason=too_many_wants` |
 | push のパックの大きさ（`git.http.push_max_bytes` → `receive.maxInputSize`） | 2 GiB | git の index-pack が止め、`unpack` の失敗が push の結果に出る |
@@ -93,11 +95,16 @@ upload-pack と receive-pack には `keepAlive=5` を付けているので、git
    - `forge admin repo-path <repo_id>` でパスを出し、`find <path> -name '*.lock' -mmin +10 -ls` で 10 分より古いものを探す。
    - そのリポジトリで動いている git がないことを確かめる: `pgrep -af "git.*<path>"`（何か出たら終わるまで待つ）。
 
+**既定値での最悪の待ち（fetch の最初のバイトまで）**: 本文を読む枠（1 人の枠を最大 5 秒、全体の枠を最大 10 秒）→ `want` の確かめ
+（全体の git の枠を待つ）→ upload-pack のストリーム（1 人の枠を最大 5 秒、全体の枠を最大 10 秒）。1 人の利用者の同時の fetch が
+多いだけなら、およそ 5 + 5 = 10 秒にほかの git の処理（数秒）を足して **約 15 秒**。全体の枠も埋まっているとさらに延びる。
+クライアントにはその間バイトが流れないので、プロキシの無通信の時間切れはこれより長くしておく。
+
 ## Mitigate
 
 1. プロキシが原因: リバースプロキシで git の URL の本文のため込みを止め、時間切れを forge の上限（1 時間）より長くする。
    `[MUTATING — needs approval]` ロールバック: 変更前の設定ファイルを退避し、戻して再読み込みする。
-2. 枠が足りない（正当な負荷）: `git.http.max_streams` / `git.http.max_streams_per_principal` を上げて再起動する。CPU と I/O に余裕があることを
+2. 枠が足りない（正当な負荷）: `git.http.max_streams` / `git.http.max_streams_per_principal` を上げて（短い山なら `git.http.busy_wait_ms` を延ばして）再起動する。共有のアカウントや CI のボットなら、ボットごとにトークンを分ける。CPU と I/O に余裕があることを
    先に確かめる。
    `[MUTATING — needs approval]` ロールバック: 元の値に戻して再起動する。
 3. 古い `.lock`（動いている git がないことを確かめたあと）: そのファイルだけを削除する。

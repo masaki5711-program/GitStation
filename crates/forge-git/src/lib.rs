@@ -50,6 +50,7 @@ mod command;
 pub mod commit;
 mod config;
 pub mod file_commit;
+pub mod gate;
 pub mod gzip;
 pub mod hidden_refs;
 pub mod maintenance;
@@ -93,4 +94,9 @@ pub use revision::Revision;
 pub use storage::{Provisioned, Removal, StorageRoot};
 pub use stream::{GitStdin, GitStdout, GitStream, StreamEnded, StreamStats};
 pub use version::GitVersion;
+
+/// The error context key of a busy refusal (`FG-GIT-0004`) that a client
+/// may retry after this many whole seconds; forge-web answers it as
+/// `Retry-After` on the 503 (load test F1 / F4, 2026-11-17).
+pub const RETRY_AFTER_CONTEXT: &str = "retry_after_s";
 pub use want_check::{WantCheck, WantLimits};

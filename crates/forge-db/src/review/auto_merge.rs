@@ -656,6 +656,36 @@ pub async fn candidates(
     .await
 }
 
+/// What auto-merge last recorded about `forge/doc-lint` on `head` of `mr`
+/// (ADR-0030 Amendment 2026-11-17): the stored reason when it is one of
+/// `reasons` on this very head, and how long it has stood (the database's
+/// clock, from `changed_at`). `None`: another head, another reason, no row.
+pub async fn doc_lint_wait(
+    db: &Db,
+    mr: MergeRequestId,
+    head: &ObjectId,
+    reasons: &[&str],
+) -> Result<Option<(String, Duration)>, ForgeError> {
+    const QUERY: &str = "auto_merge.doc_lint_wait";
+    db.within(QUERY, async {
+        let row: Option<(String, f64)> = sqlx::query_as(
+            "SELECT reason, greatest(extract(epoch FROM now() - changed_at), 0)::float8              FROM forge.auto_merge_states              WHERE merge_request_id = $1 AND head_sha = $2 AND reason = ANY($3)",
+        )
+        .bind(mr.get())
+        .bind(head.as_str())
+        .bind(reasons)
+        .fetch_optional(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
+        Ok(row.map(|(reason, secs)| {
+            // A finite, non-negative number of seconds (the query clamps it).
+            let secs = if secs.is_finite() { secs.max(0.0) } else { 0.0 };
+            (reason, Duration::from_secs_f64(secs))
+        }))
+    })
+    .await
+}
+
 /// A state the worker records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewState<'a> {

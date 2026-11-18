@@ -283,7 +283,7 @@ impl Browser {
         let (page, fresh) = match self.cached_log(repo, &page_key) {
             Some(page) => (page, false),
             None => {
-                let _slot = self.claim(repo)?;
+                let _slot = self.claim(repo, deadline).await?;
                 let mut cmd = self
                     .git
                     .command("log")
@@ -357,7 +357,7 @@ impl Browser {
         self.commit_of(repo, &oid, caller, deadline).await?;
         let dir = self.storage.existing(repo)?;
         let (out, cut) = {
-            let _slot = self.claim(repo)?;
+            let _slot = self.claim(repo, deadline).await?;
             self.git
                 .command("log")
                 .arg("-z")
@@ -401,7 +401,7 @@ impl Browser {
         let to = object_id(to).ok_or_else(|| not_resolved("ref_not_found"))?;
         let dir = self.storage.existing(repo)?;
         let (out, cut) = {
-            let _slot = self.claim(repo)?;
+            let _slot = self.claim(repo, deadline).await?;
             self.git
                 .command("log")
                 .arg("-z")

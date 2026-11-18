@@ -1099,14 +1099,35 @@ impl World {
         )
     }
 
-    /// forge's own `forge/risk` run on `mr`'s head.
+    /// forge's own `forge/risk` run on `mr`'s head, and the
+    /// `forge/doc-lint` success `check.spec_index` gives a head without
+    /// documents (ADR-0030 Amendment 2026-11-17).
     async fn risk(&self, mr: &StoredMergeRequest, conclusion: CheckConclusion, summary: &str) {
+        self.forge_check(mr, forge_core::checks::RISK_CHECK, conclusion, summary)
+            .await;
+        self.forge_check(
+            mr,
+            forge_core::checks::DOC_LINT_CHECK,
+            CheckConclusion::Success,
+            "No document problem at this commit.",
+        )
+        .await;
+    }
+
+    /// One forge-written check run on `mr`'s head.
+    async fn forge_check(
+        &self,
+        mr: &StoredMergeRequest,
+        name: &str,
+        conclusion: CheckConclusion,
+        summary: &str,
+    ) {
         forge_db::test_support::record_forge_check(
             &self.t.db,
             self.project,
             &oid(mr.head_sha.as_deref().expect("head")),
             &forge_db::checks::NewCheckRun {
-                name: CheckName::parse(forge_core::checks::RISK_CHECK).expect("name"),
+                name: CheckName::parse(name).expect("name"),
                 status: CheckStatus::Completed,
                 conclusion: Some(conclusion),
                 summary: summary.to_owned(),
@@ -1115,6 +1136,31 @@ impl World {
             },
         )
         .await;
+    }
+
+    /// The auto-merge worker with another doc-lint wait (ADR-0030
+    /// Amendment 2026-11-17).
+    fn auto_waiting(&self, doc_lint_wait: Duration) -> forge_review::AutoMerger {
+        forge_review::AutoMerger::new(self.review.clone(), self.merger.clone()).with_limits(
+            forge_review::AutoMergeLimits {
+                recheck: Duration::ZERO,
+                doc_lint_wait,
+                ..forge_review::AutoMergeLimits::default()
+            },
+        )
+    }
+
+    /// `check.spec_index` jobs asked for `mr`'s head (queued, running or
+    /// done).
+    async fn spec_index_jobs(&self, mr: &StoredMergeRequest) -> i64 {
+        count(
+            &self.t,
+            &format!(
+                "SELECT count(*) AS n FROM forge.jobs WHERE kind = 'check.spec_index'                  AND payload->>'head_sha' = '{}'",
+                mr.head_sha.as_deref().expect("head")
+            ),
+        )
+        .await
     }
 
     /// What auto-merge recorded for `mr` (state, class, reason, detail).
@@ -1190,6 +1236,198 @@ async fn a_full_project_queues_and_lands_a_mergeable_merge_request() {
     // Once merged, auto-merge forgets it.
     auto.tick().await.expect("tick");
     assert_eq!(w.auto_state(&a).await, None);
+}
+
+/// Load test 2026-11-17 F5 (ADR-0030 Amendment 2026-11-17): a new
+/// project (`full`, no required checks) merged a document whose
+/// forge/doc-lint failed. Now: no doc-lint yet waits, a failed doc-lint
+/// stops with its one line (FG-REVIEW-0026, `program_breakage`,
+/// `doc_lint_failed`, detail `forge/doc-lint`) and nothing is queued; a
+/// new head whose doc-lint succeeds is queued.
+#[tokio::test]
+async fn a_failed_doc_lint_stops_auto_merge_on_a_project_without_required_checks() {
+    let mut w = world().await;
+    let a = w
+        .mr(
+            "doc",
+            &[(
+                "docs/spec.md",
+                "---
+doctype: spec
+---
+",
+            )],
+        )
+        .await;
+    let auto = w.auto();
+    w.forge_check(
+        &a,
+        forge_core::checks::RISK_CHECK,
+        CheckConclusion::Success,
+        "No risk found",
+    )
+    .await;
+    auto.tick().await.expect("tick");
+    assert_eq!(
+        w.auto_state(&a).await,
+        Some((
+            "waiting".to_owned(),
+            None,
+            "doc_lint_pending".to_owned(),
+            None
+        )),
+        "risk alone is not enough: the documents are not linted yet"
+    );
+    assert!(w.live_entry(&a).await.is_none());
+    // Nothing answers this head (no subscriber in this world, like a head
+    // from before the deploy): auto-merge asks for the run itself, once.
+    assert_eq!(w.spec_index_jobs(&a).await, 1, "asked for");
+    auto.tick().await.expect("tick");
+    assert_eq!(w.spec_index_jobs(&a).await, 1, "deduped while queued");
+    w.forge_check(
+        &a,
+        forge_core::checks::DOC_LINT_CHECK,
+        CheckConclusion::Failure,
+        "55 document problem(s) [FG-DOC-0001]",
+    )
+    .await;
+    let report = auto.tick().await.expect("tick");
+    assert_eq!(report.stopped, 1, "{report:?}");
+    assert_eq!(
+        w.auto_state(&a).await,
+        Some((
+            "stopped".to_owned(),
+            Some("program_breakage".to_owned()),
+            "doc_lint_failed".to_owned(),
+            Some("forge/doc-lint".to_owned()),
+        ))
+    );
+    assert!(w.live_entry(&a).await.is_none(), "never queued");
+    assert_eq!(w.state_of(&a).await, forge_core::MergeRequestState::Open);
+    // The lint passes on the same head (e.g. a migration date lowered the
+    // broken references): auto-merge goes on.
+    w.forge_check(
+        &a,
+        forge_core::checks::DOC_LINT_CHECK,
+        CheckConclusion::Success,
+        "No document problem at this commit.",
+    )
+    .await;
+    let report = auto.tick().await.expect("tick");
+    assert_eq!(report.queued, 1, "{report:?}");
+    assert!(w.live_entry(&a).await.is_some());
+}
+
+/// Review 2026-11-17: never an endless wait. A head whose doc-lint never
+/// arrives stops `not_assessed` / `doc_lint_missing` past the wait and stays
+/// stopped (no new asking, no flapping back to a wait); a run that arrives
+/// later still lets it go on.
+#[tokio::test]
+async fn a_doc_lint_that_never_arrives_stops_with_doc_lint_missing() {
+    let mut w = world().await;
+    let a = w
+        .mr(
+            "late",
+            &[(
+                "late.txt", "x
+",
+            )],
+        )
+        .await;
+    w.forge_check(
+        &a,
+        forge_core::checks::RISK_CHECK,
+        CheckConclusion::Success,
+        "No risk found",
+    )
+    .await;
+    let auto = w.auto_waiting(Duration::ZERO);
+    auto.tick().await.expect("tick");
+    assert_eq!(
+        w.auto_state(&a).await,
+        Some((
+            "waiting".to_owned(),
+            None,
+            "doc_lint_pending".to_owned(),
+            None
+        )),
+        "a first look waits and asks"
+    );
+    assert_eq!(w.spec_index_jobs(&a).await, 1);
+    let missing = Some((
+        "stopped".to_owned(),
+        Some("not_assessed".to_owned()),
+        "doc_lint_missing".to_owned(),
+        Some("forge/doc-lint".to_owned()),
+    ));
+    auto.tick().await.expect("tick");
+    assert_eq!(w.auto_state(&a).await, missing, "past the wait");
+    auto.tick().await.expect("tick");
+    assert_eq!(w.auto_state(&a).await, missing, "stays stopped");
+    assert!(w.live_entry(&a).await.is_none());
+    w.forge_check(
+        &a,
+        forge_core::checks::DOC_LINT_CHECK,
+        CheckConclusion::Success,
+        "No document problem at this commit.",
+    )
+    .await;
+    let report = auto.tick().await.expect("tick");
+    assert_eq!(report.queued, 1, "{report:?}");
+}
+
+/// Review 2026-11-17: a lint run that itself failed (`error`) never opens
+/// the gate: it is asked for again, then stops `doc_lint_error`.
+#[tokio::test]
+async fn an_errored_doc_lint_is_asked_again_then_stops_with_doc_lint_error() {
+    let mut w = world().await;
+    let a = w
+        .mr(
+            "err",
+            &[(
+                "err.txt", "x
+",
+            )],
+        )
+        .await;
+    w.forge_check(
+        &a,
+        forge_core::checks::RISK_CHECK,
+        CheckConclusion::Success,
+        "No risk found",
+    )
+    .await;
+    w.forge_check(
+        &a,
+        forge_core::checks::DOC_LINT_CHECK,
+        CheckConclusion::Error,
+        "forge/doc-lint could not be evaluated [FG-WEB-0002]",
+    )
+    .await;
+    let auto = w.auto_waiting(Duration::ZERO);
+    auto.tick().await.expect("tick");
+    assert_eq!(
+        w.auto_state(&a).await,
+        Some((
+            "waiting".to_owned(),
+            None,
+            "doc_lint_pending".to_owned(),
+            None
+        )),
+        "an error is no pass"
+    );
+    assert_eq!(w.spec_index_jobs(&a).await, 1, "asked again");
+    auto.tick().await.expect("tick");
+    assert_eq!(
+        w.auto_state(&a).await,
+        Some((
+            "stopped".to_owned(),
+            Some("not_assessed".to_owned()),
+            "doc_lint_error".to_owned(),
+            Some("forge/doc-lint".to_owned()),
+        ))
+    );
+    assert!(w.live_entry(&a).await.is_none());
 }
 
 /// FG-REVIEW-0026 against real rows: each stop class of forge/risk keeps

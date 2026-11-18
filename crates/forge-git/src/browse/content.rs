@@ -117,7 +117,7 @@ impl Browser {
             .unwrap_or(usize::MAX)
             .saturating_add(1);
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let size = entry.blob_size()?;
         if let Some(data) = self.fast_blob(repo, &dir, &entry.oid, size, deadline).await {
             return Ok(SmallFile::Found(data));
@@ -178,7 +178,7 @@ impl Browser {
         let entry = self.blob_entry(repo, commit, path, deadline).await?;
         let size = entry.blob_size()?;
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         if size <= self.limits.max_blob_bytes as u64 {
             if let Some(content) = self.fast_blob(repo, &dir, &entry.oid, size, deadline).await {
                 return Ok(Blob {
@@ -226,7 +226,7 @@ impl Browser {
             .revision(Revision::object_id(&entry.oid)?)
             .repo(&dir);
         if size <= self.limits.raw_inline_max_bytes {
-            let _slot = self.claim(repo)?;
+            let _slot = self.claim(repo, deadline).await?;
             if let Some(data) = self.fast_blob(repo, &dir, &entry.oid, size, deadline).await {
                 return Ok(RawBlob {
                     size,

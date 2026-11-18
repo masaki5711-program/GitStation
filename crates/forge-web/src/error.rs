@@ -22,8 +22,11 @@ use serde::Serialize;
 
 const BASIC: &str = "Basic realm=\"GitStation\", charset=\"UTF-8\"";
 
-/// The error context key whose value (whole seconds) a `429` answers as
-/// `Retry-After` (M2 MR6: the resolve rate limit, refused in a loader).
+/// The error context key whose value (whole seconds) a `429` or a `503`
+/// answers as `Retry-After` (M2 MR6: the resolve rate limit, refused in a
+/// loader; 2026-11-17 F1 / F4: forge-git's busy refusals, `FG-GIT-0004`).
+/// The same word as forge-git's retry hint key (pinned by
+/// `git_stream_tests`; this file does not use forge-git, ADR-0015).
 pub(crate) const RETRY_AFTER_CONTEXT: &str = "retry_after_s";
 const BEARER: &str = "Bearer realm=\"GitStation\"";
 
@@ -212,7 +215,7 @@ impl IntoResponse for ApiError {
                     .append(WWW_AUTHENTICATE, HeaderValue::from_static(challenge));
             }
         }
-        if status == StatusCode::TOO_MANY_REQUESTS {
+        if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::SERVICE_UNAVAILABLE {
             let retry = self
                 .err
                 .context()
@@ -225,5 +228,46 @@ impl IntoResponse for ApiError {
             }
         }
         res
+    }
+}
+
+#[cfg(test)]
+mod retry_after_tests {
+    use axum::http::header::RETRY_AFTER;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse as _;
+    use forge_core::RequestId;
+    use forge_errors::{ErrorCode, ForgeError, Lang};
+
+    use super::{ApiError, RETRY_AFTER_CONTEXT};
+
+    fn answer(err: ForgeError) -> axum::response::Response {
+        ApiError::new(err, RequestId::generate(), Lang::En)
+            .already_logged()
+            .into_response()
+    }
+
+    /// 2026-11-17 F1 / F4: a busy git refusal tells the client when to
+    /// try again; the body stays `error_code` / `user_message` /
+    /// `request_id`.
+    #[test]
+    fn a_busy_503_with_a_retry_hint_answers_retry_after() {
+        let res = answer(
+            ForgeError::new(ErrorCode::GitBusy)
+                .with_context("reason", "principal_streams")
+                .with_context(RETRY_AFTER_CONTEXT, 1),
+        );
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            res.headers().get(RETRY_AFTER).map(|v| v.as_bytes()),
+            Some(&b"1"[..])
+        );
+    }
+
+    #[test]
+    fn a_503_without_a_retry_hint_has_no_retry_after() {
+        let res = answer(ForgeError::new(ErrorCode::GitBusy).with_context("reason", "streams"));
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(res.headers().get(RETRY_AFTER).is_none());
     }
 }

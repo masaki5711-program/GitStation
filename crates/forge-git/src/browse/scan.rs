@@ -121,7 +121,7 @@ impl Browser {
     ) -> Result<BlobListing, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let mut cmd = self
             .git
             .command("ls-tree")
@@ -175,7 +175,7 @@ impl Browser {
         let deadline = Deadline::new(self.limits.timeout);
         let rev = Revision::object_id(&blob.oid)?;
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let (out, _cut) = self
             .git
             .command("cat-file")
@@ -216,7 +216,7 @@ impl Browser {
             let take = batch_len(rest);
             let (chunk, after) = rest.split_at(take);
             rest = after;
-            let _slot = self.claim(repo)?;
+            let _slot = self.claim(repo, deadline).await?;
             let stdin: String = chunk
                 .iter()
                 .map(|(r, _)| format!("{}\n", r.as_str()))
@@ -260,7 +260,7 @@ impl Browser {
         let rev = Revision::object_id(commit)?;
         let prefix = format!("{}:", rev.as_str());
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, Deadline::new(timeout)).await?;
         let captured = self
             .git
             .command("grep")
@@ -333,7 +333,7 @@ impl Browser {
     ) -> Result<Option<ObjectId>, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let captured = self
             .git
             .command("merge-base")

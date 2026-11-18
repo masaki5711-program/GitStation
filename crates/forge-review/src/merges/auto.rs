@@ -8,8 +8,9 @@
 //!
 //! What it decides is `forge_core::auto_merge::decide` on facts read here:
 //! the mode and the emergency stops, the queue, the `forge/risk` run on the
-//! head (its `stop` rules), the merge request's own `ci/pipeline` on its
-//! merge result, `evaluate_merge()`'s reasons (the merge status, with
+//! head (its `stop` rules), `forge/doc-lint` on the head (a failure stops,
+//! no run yet waits: ADR-0030 Amendment 2026-11-17), the merge request's
+//! own `ci/pipeline` on its merge result, `evaluate_merge()`'s reasons (the merge status, with
 //! `ci/pipeline` left to the queue) and, for `conditional`, the changed
 //! paths. It stops **only** on the stop classes and the emergency stop;
 //! everything else is a wait whose reason is shown. Each verdict is stored
@@ -19,7 +20,8 @@
 use std::time::Duration;
 
 use forge_core::auto_merge::{
-    decide, deterministic_layer, Blocker, Facts, PipelineState, QueueFacts, StopClass, Verdict,
+    decide, deterministic_layer, Blocker, DocLintState, Facts, PipelineState, QueueFacts,
+    StopClass, Verdict,
 };
 use forge_core::merge_results::reported_on_merge_results;
 use forge_core::{
@@ -44,6 +46,10 @@ pub struct AutoMergeLimits {
     pub recheck: Duration,
     /// The most changed paths read for `conditional` (more: protected).
     pub max_paths: usize,
+    /// How long a head waits for its `forge/doc-lint` run before it stops
+    /// (`doc_lint_missing` / `doc_lint_error`; ADR-0030 Amendment
+    /// 2026-11-17).
+    pub doc_lint_wait: Duration,
 }
 
 impl Default for AutoMergeLimits {
@@ -52,6 +58,7 @@ impl Default for AutoMergeLimits {
             batch: 50,
             recheck: Duration::from_secs(20),
             max_paths: 5000,
+            doc_lint_wait: forge_core::auto_merge::DOC_LINT_WAIT_LIMIT,
         }
     }
 }
@@ -231,6 +238,7 @@ impl AutoMerger {
             queue: self.queue_facts(&mr, &head).await?,
             risk: forge_core::auto_merge::RiskVerdict::Pending,
             pipeline: PipelineState::None,
+            doc_lint: DocLintState::Pending,
             blockers: Vec::new(),
             protected_path: false,
         };
@@ -332,8 +340,9 @@ impl AutoMerger {
         })
     }
 
-    /// The risk layers, the merge request's own pipeline, the merge
-    /// status and (for `conditional`) the changed paths.
+    /// The risk layers, `forge/doc-lint` on the head, the merge request's
+    /// own pipeline, the merge status and (for `conditional`) the changed
+    /// paths.
     /// The `forge/risk` warning shown by name on a queued merge request
     /// (`detail` of `queued_with_warning`): `ai_asset` (plan 17 P17-3).
     async fn read_facts(
@@ -355,6 +364,12 @@ impl AutoMerger {
             deterministic_layer(runs.run(head, &risk_name), summary.as_deref()),
             None,
         );
+        // ADR-0030 Amendment 2026-11-17: a failed forge/doc-lint on the
+        // head stops auto-merge even when it is no required check.
+        let doc_lint_run = runs.run(head, &check_name(forge_core::checks::DOC_LINT_CHECK)?);
+        facts.doc_lint = self
+            .doc_lint(mr, head, DocLintState::of(doc_lint_run), request_id)
+            .await?;
         let warn_detail = summary
             .as_deref()
             .map(forge_core::auto_merge::warn_rules)
@@ -388,6 +403,66 @@ impl AutoMerger {
                 .await?;
         }
         Ok(warn_detail)
+    }
+
+    /// `forge/doc-lint` on `head` as decided (ADR-0030 Amendment
+    /// 2026-11-17): no run, or one that ended `error`, is asked for again
+    /// (`check.spec_index`, deduped) and waited for; past
+    /// `doc_lint_wait` on this head — or once stopped for it — overdue (no
+    /// more asking; a run that arrives later still counts).
+    async fn doc_lint(
+        &self,
+        mr: &forge_db::review::StoredMergeRequest,
+        head: &ObjectId,
+        state: DocLintState,
+        request_id: &RequestId,
+    ) -> Result<DocLintState, ForgeError> {
+        use forge_core::auto_merge::{DOC_LINT_ERROR, DOC_LINT_MISSING, DOC_LINT_PENDING};
+        if !state.needs_run() {
+            return Ok(state);
+        }
+        let db = &self.merger.db;
+        let stored = db::doc_lint_wait(
+            db,
+            mr.id,
+            head,
+            &[DOC_LINT_PENDING, DOC_LINT_MISSING, DOC_LINT_ERROR],
+        )
+        .await?;
+        let limit = self.limits.doc_lint_wait;
+        let state = match stored {
+            // Already stopped for it on this head: stays stopped.
+            Some((reason, _)) if reason != DOC_LINT_PENDING => {
+                state.after_waiting(Some(limit), limit)
+            }
+            Some((_, waited)) => state.after_waiting(Some(waited), limit),
+            None => state,
+        };
+        if state.needs_run() {
+            let asked = forge_db::checks::spec_index::request_again(
+                db,
+                &forge_db::checks::spec_index::SpecIndexRequest {
+                    project: mr.project_id,
+                    iid: mr.iid,
+                    head: head.clone(), // clone: the request owns its head
+                },
+                request_id,
+            )
+            .await?;
+            if asked {
+                tracing::info!(
+                    target: "forge_review",
+                    event = "forge.auto_merge.doc_lint_requested",
+                    request_id = %request_id,
+                    project_id = mr.project_id.get(),
+                    merge_request_id = mr.id.get(),
+                    head_sha = head.as_str(),
+                    errored = state == DocLintState::Errored,
+                    "auto-merge asked for forge/doc-lint on the head again"
+                );
+            }
+        }
+        Ok(state)
     }
 
     /// Whether the diff from the merge base with the target to `head`

@@ -14,6 +14,7 @@ fn clear_facts() -> Facts {
         queue: QueueFacts::None,
         risk: RiskVerdict::Clear { warned: false },
         pipeline: PipelineState::None,
+        doc_lint: DocLintState::Clear,
         blockers: Vec::new(),
         protected_path: false,
     }
@@ -629,4 +630,156 @@ fn a_merge_result_removal_stops_the_same_head_with_its_class() {
         })
     );
     assert_eq!(merge_result_class("conflict"), None);
+}
+
+/// Load test 2026-11-17 F5 (ADR-0030 Amendment 2026-11-17): a new
+/// project is `full` without required checks, and a document whose
+/// `forge/doc-lint` failed was merged by auto-merge. A failed doc-lint on
+/// the head now stops it, named like a red required check.
+#[test]
+fn a_failed_doc_lint_stops_auto_merge_without_being_a_required_check() {
+    let facts = Facts {
+        doc_lint: DocLintState::of(run(CheckConclusion::Failure)),
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&facts),
+        Verdict::Stopped(Stop {
+            class: StopClass::ProgramBreakage,
+            reason: "doc_lint_failed",
+            detail: Some("forge/doc-lint".to_owned()),
+        })
+    );
+    // A stop outranks every wait.
+    let facts = Facts {
+        blockers: vec![Blocker {
+            reason: "approvals_missing",
+            red_check: None,
+        }],
+        ..facts
+    };
+    assert!(matches!(
+        decide(&facts),
+        Verdict::Stopped(Stop {
+            reason: "doc_lint_failed",
+            ..
+        })
+    ));
+}
+
+/// Not reported on the head yet (or still running): wait for it, so a
+/// failing document cannot slip in before its lint.
+#[test]
+fn auto_merge_waits_for_doc_lint_on_the_head() {
+    for state in [
+        DocLintState::of(None),
+        DocLintState::of(CheckRun::new(CheckStatus::InProgress, None)),
+        DocLintState::of(CheckRun::new(CheckStatus::Queued, None)),
+    ] {
+        assert_eq!(state, DocLintState::Pending);
+        let facts = Facts {
+            doc_lint: state,
+            ..clear_facts()
+        };
+        assert_eq!(
+            decide(&facts),
+            Verdict::Waiting {
+                reason: "doc_lint_pending"
+            }
+        );
+    }
+}
+
+/// A repository without documents gets `success`; a bound hit with no
+/// problem is `neutral`. Neither stops auto-merge.
+#[test]
+fn a_doc_lint_without_a_problem_never_stops_auto_merge() {
+    for conclusion in [CheckConclusion::Success, CheckConclusion::Neutral] {
+        let facts = Facts {
+            doc_lint: DocLintState::of(run(conclusion)),
+            ..clear_facts()
+        };
+        assert_eq!(
+            decide(&facts),
+            Verdict::Enqueue { warned: false },
+            "{conclusion:?}"
+        );
+    }
+}
+
+/// The mode, the emergency stop and the queue still come first: `off`
+/// never shows a doc-lint line, a live entry stays queued.
+#[test]
+fn doc_lint_is_read_only_where_auto_merge_acts() {
+    let failed = DocLintState::of(run(CheckConclusion::Failure));
+    let off = Facts {
+        mode: AutoMergeMode::Off,
+        doc_lint: failed,
+        ..clear_facts()
+    };
+    assert_eq!(decide(&off), Verdict::Inactive);
+    let queued = Facts {
+        queue: QueueFacts::Live { auto: false },
+        doc_lint: failed,
+        ..clear_facts()
+    };
+    assert_eq!(decide(&queued), Verdict::Queued { auto: false });
+}
+
+/// Review 2026-11-17: a lint run that itself failed (`error`) never opens
+/// the gate — it is asked for again (a wait), like a missing run.
+#[test]
+fn an_errored_doc_lint_waits_like_a_missing_one() {
+    for conclusion in [CheckConclusion::Error, CheckConclusion::ActionRequired] {
+        let state = DocLintState::of(run(conclusion));
+        assert_eq!(state, DocLintState::Errored, "{conclusion:?}");
+        assert!(state.needs_run());
+        let facts = Facts {
+            doc_lint: state,
+            ..clear_facts()
+        };
+        assert_eq!(
+            decide(&facts),
+            Verdict::Waiting {
+                reason: DOC_LINT_PENDING
+            }
+        );
+    }
+}
+
+/// Review 2026-11-17: never an endless wait. Past the limit a missing run
+/// stops `doc_lint_missing`, an errored one `doc_lint_error` (both
+/// `not_assessed`, named); before it, and on a first look, it waits.
+#[test]
+fn a_doc_lint_still_missing_past_the_limit_stops_with_its_reason() {
+    let limit = DOC_LINT_WAIT_LIMIT;
+    assert_eq!(limit, std::time::Duration::from_secs(600));
+    for (state, reason) in [
+        (DocLintState::Pending, DOC_LINT_MISSING),
+        (DocLintState::Errored, DOC_LINT_ERROR),
+    ] {
+        assert_eq!(state.after_waiting(None, limit), state, "a first look");
+        assert_eq!(
+            state.after_waiting(Some(limit - std::time::Duration::from_secs(1)), limit),
+            state
+        );
+        let overdue = state.after_waiting(Some(limit), limit);
+        assert!(!overdue.needs_run(), "no more asking");
+        let facts = Facts {
+            doc_lint: overdue,
+            ..clear_facts()
+        };
+        assert_eq!(
+            decide(&facts),
+            Verdict::Stopped(Stop {
+                class: StopClass::NotAssessed,
+                reason,
+                detail: Some("forge/doc-lint".to_owned()),
+            })
+        );
+    }
+    // A run that is there is never made overdue.
+    for state in [DocLintState::Clear, DocLintState::Failed] {
+        assert_eq!(state.after_waiting(Some(limit * 10), limit), state);
+    }
 }

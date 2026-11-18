@@ -17,6 +17,18 @@
 //!
 //! Object ids reach git only on stdin, validated; `--end-of-options` ends
 //! the options defensively.
+//!
+//! Both reads are streams of the push's own principal, but they count
+//! against a separate, typed per-principal key (`StreamKey::PushRecord`),
+//! never against the principal's push and fetch streams (so one principal
+//! may hold its 4 transfers and 4 record reads at once): a user's other pushes holding
+//! every one of its stream slots made the snapshot fail with
+//! `FG-GIT-0004 principal_streams` while the push itself went on, so its
+//! commits were recorded incomplete (`FG-GIT-0016 snapshot_failed`, load
+//! test 2026-11-17 F4, request_id 43a6b637…). At most one snapshot and
+//! one listing run per push, so that key is bounded by the pushes the
+//! principal has in flight; the global stream pool still applies. Over
+//! its cap it is `FG-GIT-0004 reason=principal_record_streams`.
 
 use std::time::Duration;
 
@@ -158,7 +170,7 @@ impl Git {
             .arg(SNAPSHOT_FORMAT)
             .repo(&repo)
             .timeout(timeout + Duration::from_secs(5))
-            .spawn_stream(principal)
+            .spawn_record_stream(principal)
             .await?;
         drop(stream.take_stdin());
         let Some(stdout) = stream.take_stdout() else {
@@ -284,7 +296,7 @@ impl Git {
             .arg("--end-of-options")
             .repo(&repo)
             .timeout(timeout + Duration::from_secs(5))
-            .spawn_stream(principal)
+            .spawn_record_stream(principal)
             .await?;
         let (Some(mut input), Some(stdout)) = (stream.take_stdin(), stream.take_stdout()) else {
             return Err(

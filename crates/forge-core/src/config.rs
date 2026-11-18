@@ -557,6 +557,12 @@ fn git_http<'a>(get: impl Fn(&str) -> Option<&'a str> + Copy) -> Result<GitHttpC
         )?,
         push_max_bytes: positive(get, "git.http.push_max_bytes", d.push_max_bytes)?,
         push_max_blob_bytes: positive(get, "git.http.push_max_blob_bytes", d.push_max_blob_bytes)?,
+        // 0 is allowed: refused at once, as before 2026-11-17.
+        busy_wait: Duration::from_millis(u64::from(unsigned(
+            get,
+            "git.http.busy_wait_ms",
+            ms(d.busy_wait),
+        )?)),
     }
     .validate()
 }

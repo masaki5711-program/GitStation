@@ -93,6 +93,9 @@ pub struct GitHttpLimits {
     /// The largest blob a push may bring (M3 X8, `git.http.push_max_blob_bytes`;
     /// checked by the pre-receive hook when push checks are on).
     pub push_max_blob_bytes: u64,
+    /// How long a call over the per-repository browse cap waits
+    /// (`git.http.busy_wait_ms`, load test 2026-11-17 F1).
+    pub busy_wait: Duration,
 }
 
 impl GitHttpLimits {
@@ -111,6 +114,7 @@ impl GitHttpLimits {
             push_max_bytes: NonZeroU64::new(u64::from(cfg.push_max_bytes))
                 .unwrap_or(NonZeroU64::MIN),
             push_max_blob_bytes: u64::from(cfg.push_max_blob_bytes),
+            busy_wait: cfg.busy_wait,
         }
     }
 }
@@ -229,19 +233,26 @@ impl std::fmt::Debug for SmartHttp {
 
 impl SmartHttp {
     /// The body-read slots take git's stream limits: `max_streams` in
-    /// total, `max_streams_per_principal` per user, waiting at most
-    /// `acquire_timeout` for a free one.
+    /// total (waiting at most `acquire_timeout` for a free one),
+    /// `max_streams_per_principal` per user (waiting at most
+    /// `principal_wait`). The browse cap waits `limits.busy_wait`.
     pub fn new(git: Git, storage: StorageRoot, limits: GitHttpLimits) -> Self {
         let cfg = git.config();
         let body_slots = BodySlots::new(
             cfg.max_streams,
             cfg.max_streams_per_principal,
             cfg.acquire_timeout,
+            cfg.principal_wait,
+            cfg.max_principal_waiters,
         );
         let browse = Browser::new(
             git.clone(),     // clone: a shared handle (pools, config)
             storage.clone(), // clone: a path
-            BrowseLimits::default(),
+            BrowseLimits {
+                // `git.http.busy_wait_ms` (load test 2026-11-17 F1).
+                repo_wait: limits.busy_wait,
+                ..BrowseLimits::default()
+            },
         );
         Self {
             git,

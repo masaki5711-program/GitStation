@@ -503,6 +503,8 @@ fn smart_http(
         usize::try_from(limits.max_streams_per_principal).unwrap_or(usize::MAX);
     git.stream_idle_timeout = limits.idle_timeout;
     git.stream_timeout_total = limits.timeout;
+    // A user's streams over their cap wait this long (2026-11-17 F4).
+    git.principal_wait = limits.busy_wait;
     let smart = SmartHttp::new(Git::new(git), storage, GitHttpLimits::from_config(limits));
     // M3 X8: the push checks run this binary's `forge hook pre-receive`.
     // Without a usable path to it, or with a hooks directory forge did not

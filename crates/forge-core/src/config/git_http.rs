@@ -44,7 +44,19 @@ pub struct GitHttpConfig {
     /// bring (M3 X8, the pre-receive push checks; default 100 MiB). A push
     /// with a larger new blob is refused whole with FG-GIT-0021.
     pub push_max_blob_bytes: u32,
+    /// `git.http.busy_wait_ms`: how long a git call over a concurrency cap
+    /// waits in a bounded queue before `FG-GIT-0004` — a user's
+    /// `max_streams_per_principal` streams and body reads, and a
+    /// repository's browse cap (merge request creation, the browse API;
+    /// default 5 s, 0: refused at once, at most 30 s and `timeout`; at most
+    /// 16 waiters per principal and 64 per repository, constants; load test
+    /// 2026-11-17 F1 / F4).
+    pub busy_wait: Duration,
 }
+
+/// The largest `git.http.busy_wait_ms` (30 s): a wait over a git cap is a
+/// short smoothing of bursts, never a queue a request sits in for long.
+pub const BUSY_WAIT_MAX: Duration = Duration::from_secs(30);
 
 /// The largest `git.http.fetch_request_max_bytes` (1 GiB).
 pub const FETCH_REQUEST_MAX_LIMIT: u32 = 1 << 30;
@@ -63,6 +75,7 @@ impl GitHttpConfig {
         max_streams_per_principal: 4,
         push_max_bytes: 2 * 1024 * 1024 * 1024,
         push_max_blob_bytes: 100 * 1024 * 1024,
+        busy_wait: Duration::from_secs(5),
     };
 
     /// Cross-key rules (each key is already positive).
@@ -81,6 +94,12 @@ impl GitHttpConfig {
         }
         if self.body_timeout > self.timeout {
             return Err(super::invalid("git.http.body_timeout_ms", "above_timeout"));
+        }
+        if self.busy_wait > BUSY_WAIT_MAX {
+            return Err(super::invalid("git.http.busy_wait_ms", "above_max"));
+        }
+        if self.busy_wait > self.timeout {
+            return Err(super::invalid("git.http.busy_wait_ms", "above_timeout"));
         }
         if self.idle_timeout > self.timeout {
             return Err(super::invalid("git.http.idle_timeout_ms", "above_timeout"));

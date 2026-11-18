@@ -28,6 +28,8 @@ export type LineKind =
   | 'full_not_allowed'
   | 'draft'
   | 'risk_pending'
+  | 'doc_lint_pending'
+  | 'doc_lint_unassessed'
   | 'approvals'
   | 'protected_path'
   | 'conflict'
@@ -52,6 +54,8 @@ export function stateKind(s: AutoMergeState): LineKind {
     case 'stopped':
       // M4 close: the combined merge result in the queue stopped it.
       if (s.reason === 'merge_result_risk') return 'merge_result';
+      // ADR-0030 Amendment 2026-11-17: forge/doc-lint never came (or failed to run).
+      if (s.reason === 'doc_lint_missing' || s.reason === 'doc_lint_error') return 'doc_lint_unassessed';
       switch (s.class) {
         case 'emergency_stop':
           return s.reason === 'instance_stopped' ? 'instance_stopped' : 'project_stopped';
@@ -81,6 +85,8 @@ export function stateKind(s: AutoMergeState): LineKind {
           return 'draft';
         case 'risk_pending':
           return 'risk_pending';
+        case 'doc_lint_pending':
+          return 'doc_lint_pending';
         case 'approvals_missing':
         case 'codeowner_approval_missing':
         case 'config_change_needs_maintainer_approval':
@@ -124,6 +130,10 @@ export function whyText(t: TFunction, kind: LineKind, detail: string): string {
       return t('autoMerge.why.draft');
     case 'risk_pending':
       return t('autoMerge.why.risk_pending');
+    case 'doc_lint_pending':
+      return t('autoMerge.why.doc_lint_pending');
+    case 'doc_lint_unassessed':
+      return t('autoMerge.why.doc_lint_unassessed');
     case 'approvals':
       return t('autoMerge.why.approvals');
     case 'protected_path':
@@ -165,6 +175,7 @@ export function nextText(t: TFunction, kind: LineKind): string {
     case 'draft':
       return t('autoMerge.next.draft');
     case 'risk_pending':
+    case 'doc_lint_pending':
     case 'queued':
     case 'queued_warning':
     case 'queued_ai_asset':
@@ -178,6 +189,8 @@ export function nextText(t: TFunction, kind: LineKind): string {
       return t('autoMerge.next.merge_when_ready');
     case 'conflict':
       return t('autoMerge.next.conflict');
+    case 'doc_lint_unassessed':
+      return t('autoMerge.next.rerun_doc_lint');
     case 'waiting':
       return t('autoMerge.next.waiting');
   }
@@ -195,6 +208,7 @@ const STOPS: readonly LineKind[] = [
   'breakage_risk',
   'not_assessed',
   'merge_result',
+  'doc_lint_unassessed',
 ];
 
 export function AutoMergeLine({ projectId, iid, open }: { projectId: number; iid: number; open: boolean }) {

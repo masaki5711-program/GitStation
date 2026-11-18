@@ -204,7 +204,7 @@ impl Browser {
 
     async fn load_refs(&self, repo: RepoId, deadline: Deadline) -> Result<RefList, ForgeError> {
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let (out, truncated_bytes) = self
             .git
             .command("for-each-ref")
@@ -242,7 +242,7 @@ impl Browser {
             return Ok(RefList::default());
         }
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let mut cmd = self.git.command("for-each-ref").arg(REF_FORMAT);
         for name in names {
             cmd = cmd.revision(name);

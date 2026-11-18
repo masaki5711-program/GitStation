@@ -29,8 +29,12 @@
 //! - **Caps**: tree entries and blob bytes are truncated at their limit
 //!   (git is killed at the cap, `truncated: true`), never buffered whole;
 //!   at most [`BrowseLimits::max_per_repo`] captured browse calls run per
-//!   repository at once (more are `FG-GIT-0004 reason=repo_browse`, at
-//!   once); the global subprocess and stream pools still apply.
+//!   repository at once. More wait in a bounded FIFO queue
+//!   ([`BrowseLimits::max_repo_waiters`]) for at most
+//!   [`BrowseLimits::repo_wait`] (never past the operation's deadline);
+//!   a full queue or a wait that ran out is `FG-GIT-0004
+//!   reason=repo_browse` (`queue=full|timeout`; load test F1,
+//!   2026-11-17). The global subprocess and stream pools still apply.
 //! - **History** (M2 MR8, `history.rs` / `diff.rs` / `blame.rs`): commits
 //!   (`log -z`, a cursor that is checked against the commit it names), one
 //!   commit and a comparison (`diff-tree` with per-file patches under
@@ -58,6 +62,7 @@ use tokio::time::Instant;
 
 use crate::batch::{BatchConfig, CatFilePool};
 use crate::command::Git;
+use crate::gate::{GatePermit, KeyedGate};
 use crate::storage::StorageRoot;
 
 mod blame;
@@ -88,6 +93,12 @@ pub struct BrowseLimits {
     pub timeout: Duration,
     /// Captured browse calls at once per repository.
     pub max_per_repo: usize,
+    /// How long a call over `max_per_repo` waits for a slot (never past
+    /// its operation's deadline); zero: refused at once.
+    pub repo_wait: Duration,
+    /// Calls that may wait for a repository's slots at once; one more is
+    /// refused at once (`queue=full`).
+    pub max_repo_waiters: usize,
     /// Refs kept by one listing; more marks the list `truncated` (and
     /// resolution then asks git directly).
     pub max_refs: usize,
@@ -166,6 +177,8 @@ impl Default for BrowseLimits {
         Self {
             timeout: Duration::from_secs(10),
             max_per_repo: 8,
+            repo_wait: Duration::from_secs(5),
+            max_repo_waiters: 64,
             max_refs: 5_000,
             refs_ttl: Duration::from_secs(5),
             max_cached_repos: 256,
@@ -220,7 +233,7 @@ pub struct Browser {
     git: Git,
     storage: StorageRoot,
     limits: BrowseLimits,
-    slots: Arc<Mutex<HashMap<RepoId, usize>>>,
+    slots: KeyedGate<RepoId>,
     cache: Arc<RefCache>,
     reach: Arc<reach::ReachCache>,
     /// `None` when `batch_per_repo` is 0.
@@ -247,23 +260,7 @@ struct Cached {
 
 /// One captured browse call's place in its repository's cap; released on
 /// drop.
-#[derive(Debug)]
-struct RepoSlot {
-    map: Arc<Mutex<HashMap<RepoId, usize>>>,
-    repo: RepoId,
-}
-
-impl Drop for RepoSlot {
-    fn drop(&mut self) {
-        let mut map = self.map.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(n) = map.get_mut(&self.repo) {
-            *n = n.saturating_sub(1);
-            if *n == 0 {
-                map.remove(&self.repo);
-            }
-        }
-    }
-}
+type RepoSlot = GatePermit<RepoId>;
 
 /// The deadline of one operation.
 #[derive(Debug, Clone, Copy)]
@@ -363,7 +360,7 @@ impl Browser {
             git,
             storage,
             limits,
-            slots: Arc::new(Mutex::new(HashMap::new())),
+            slots: KeyedGate::new(limits.max_per_repo, limits.max_repo_waiters),
             cache: Arc::new(RefCache::default()),
             reach: Arc::new(reach::ReachCache::default()),
         }
@@ -406,20 +403,31 @@ impl Browser {
         epochs.get(&repo).copied().unwrap_or(0)
     }
 
-    fn claim(&self, repo: RepoId) -> Result<RepoSlot, ForgeError> {
-        let mut map = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
-        let n = map.entry(repo).or_insert(0);
-        if *n >= self.limits.max_per_repo.max(1) {
-            return Err(ForgeError::new(ErrorCode::GitBusy)
-                .with_context("reason", "repo_browse")
-                .with_context("repo_id", repo.get())
-                .with_context("max_per_repo", self.limits.max_per_repo));
-        }
-        *n += 1;
-        Ok(RepoSlot {
-            map: Arc::clone(&self.slots),
-            repo,
+    /// One of `repo`'s browse slots: at once when one is free, else after
+    /// waiting in the repository's queue (see the module docs).
+    async fn claim(&self, repo: RepoId, deadline: Deadline) -> Result<RepoSlot, ForgeError> {
+        let wait = deadline.left()?.min(self.limits.repo_wait);
+        self.slots.acquire(&repo, wait).await.map_err(|refusal| {
+            refusal.into_error(
+                ForgeError::new(ErrorCode::GitBusy)
+                    .with_context("reason", "repo_browse")
+                    .with_context("repo_id", repo.get())
+                    .with_context("max_per_repo", self.limits.max_per_repo),
+                self.limits.max_repo_waiters,
+            )
         })
+    }
+
+    /// Slots of `repo` taken now (tests).
+    #[cfg(test)]
+    fn held(&self, repo: RepoId) -> usize {
+        self.slots.held(&repo)
+    }
+
+    /// Calls holding or waiting for a slot of `repo` (tests).
+    #[cfg(test)]
+    fn users(&self, repo: RepoId) -> usize {
+        self.slots.users(&repo)
     }
 }
 
@@ -441,6 +449,9 @@ mod tests;
 
 #[cfg(test)]
 mod scan_tests;
+
+#[cfg(test)]
+mod slot_tests;
 
 #[cfg(test)]
 mod bench_tests;

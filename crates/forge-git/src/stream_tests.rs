@@ -359,9 +359,10 @@ async fn stream_slot_exhaustion_is_git_busy_streams() {
 }
 
 #[tokio::test]
-async fn per_principal_cap_refuses_at_once_and_releases() {
+async fn per_principal_cap_with_zero_wait_refuses_at_once_and_releases() {
     let (_h, g) = git_with(|c| {
         c.max_streams_per_principal = 2;
+        c.principal_wait = Duration::ZERO;
         c.acquire_timeout = Duration::from_secs(30);
     });
     let repo = bare_repo(&g).await;
@@ -388,6 +389,89 @@ async fn per_principal_cap_refuses_at_once_and_releases() {
     let _a3 = spawn("user:1")
         .await
         .expect("released after the stream ended");
+}
+
+/// Load test 2026-11-17 F4: the 5th push of one user was refused at once.
+/// A stream over the per-principal cap now waits for the principal's next
+/// free slot.
+#[tokio::test]
+async fn a_stream_over_the_per_principal_cap_waits_for_a_free_slot() {
+    let (_h, g) = git_with(|c| {
+        c.max_streams_per_principal = 1;
+        c.principal_wait = Duration::from_secs(20);
+    });
+    let repo = bare_repo(&g).await;
+    let first = g
+        .command("cat-file")
+        .repo(repo.path())
+        .arg("--batch")
+        .spawn_stream("user:1")
+        .await
+        .expect("1st");
+    let waiting = {
+        let g = g.clone(); // clone: the task's handle
+        let path = repo.path().to_path_buf();
+        tokio::spawn(async move {
+            g.command("cat-file")
+                .repo(&path)
+                .arg("--batch")
+                .spawn_stream("user:1")
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "waits while the 1st runs");
+    assert_eq!(g.streams.held("user:1"), 1);
+    let _ = first.abort_client_disconnected().await;
+    let second = tokio::time::timeout(Duration::from_secs(15), waiting)
+        .await
+        .expect("served after the 1st ended")
+        .expect("join")
+        .expect("2nd");
+    let _ = second.abort_client_disconnected().await;
+}
+
+/// The wait is bounded: past `principal_wait` the stream is the same
+/// `FG-GIT-0004 principal_streams`, now with `queue=timeout` and the
+/// retry hint.
+#[tokio::test]
+async fn a_per_principal_wait_that_runs_out_is_git_busy_with_a_retry_hint() {
+    let (_h, g) = git_with(|c| {
+        c.max_streams_per_principal = 1;
+        c.principal_wait = Duration::from_millis(150);
+    });
+    let repo = bare_repo(&g).await;
+    let first = g
+        .command("cat-file")
+        .repo(repo.path())
+        .arg("--batch")
+        .spawn_stream("user:1")
+        .await
+        .expect("1st");
+    let started = Instant::now();
+    let err = g
+        .command("cat-file")
+        .repo(repo.path())
+        .arg("--batch")
+        .spawn_stream("user:1")
+        .await
+        .expect_err("over the cap after the wait");
+    // Real git runs here, so the machine's clock: within 15 ms of the wait.
+    assert!(
+        started.elapsed() >= Duration::from_millis(150 - 15),
+        "it waited"
+    );
+    assert_eq!(err.code(), ErrorCode::GitBusy);
+    let text = err.to_string();
+    for part in [
+        "reason=principal_streams",
+        "queue=timeout",
+        "waited_ms=150",
+        "retry_after_s=1",
+    ] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+    let _ = first.abort_client_disconnected().await;
 }
 
 #[tokio::test]
