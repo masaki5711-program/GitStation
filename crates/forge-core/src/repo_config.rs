@@ -10,7 +10,16 @@
 //!     track: main               # or a branch, followed as it moves
 //!   - path: spec/               # this repository's own specification
 //! review: …                     # ADR-0017 §2.7: reserved, not read here
+//! merge_queue:
+//!   doc_lint_strict: true       # plan 18 S1: nothing lands while the
+//!                               # target's documents have a lint problem
 //! ```
+//!
+//! `merge_queue.doc_lint_strict` (`true` / `false`, default `false`;
+//! ADR-0037 (b)) is the merge queue's rule for this repository: the train
+//! lint reads it from the commit the train is built on (the target's tip),
+//! never from a merge request's own tree — a merge request cannot relax
+//! the rule for its own landing.
 //!
 //! [`parse_repo_config`] is pure: bytes in, a [`RepoConfig`] or one
 //! [`RepoConfigProblem`] (the first rule broken, with its 1-based line; 0
@@ -55,6 +64,18 @@ pub use forge_doc::yaml::MAX_MAP_KEYS;
 pub struct RepoConfig {
     /// In file order.
     pub specs: Vec<SpecEntry>,
+    /// `merge_queue:` (plan 18 S1).
+    pub merge_queue: MergeQueueSettings,
+}
+
+/// The `merge_queue:` section: the repository's own rules for its merge
+/// queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MergeQueueSettings {
+    /// `doc_lint_strict`: a train lands only when the documents of its
+    /// last step have no lint problem at all (default: only when it adds
+    /// none to the target's).
+    pub doc_lint_strict: bool,
 }
 
 /// One `specs:` entry.
@@ -209,10 +230,32 @@ fn config_of(root: &Node) -> Result<RepoConfig, RepoConfigProblem> {
             // ADR-0017 §2.7 (`review.ai_approval.*`): reserved for the MR
             // that reads it; accepted unread so the file can carry it.
             "review" => {}
+            "merge_queue" => config.merge_queue = merge_queue_of(field.value)?,
             _ => return Err(problem(field.line, "unknown_key")),
         }
     }
     Ok(config)
+}
+
+/// `merge_queue:` — a mapping whose only key is `doc_lint_strict`, written
+/// `true` or `false` (nothing else: a typo never reads as "not strict").
+fn merge_queue_of(node: &Node) -> Result<MergeQueueSettings, RepoConfigProblem> {
+    let fields = mapping(node, "merge_queue_not_a_mapping")?;
+    let mut settings = MergeQueueSettings::default();
+    for field in &fields {
+        match field.key {
+            "doc_lint_strict" => {
+                settings.doc_lint_strict =
+                    match text(field.value, field.line, "doc_lint_strict_invalid")? {
+                        "true" => true,
+                        "false" => false,
+                        _ => return Err(problem(field.line, "doc_lint_strict_invalid")),
+                    };
+            }
+            _ => return Err(problem(field.line, "unknown_key")),
+        }
+    }
+    Ok(settings)
 }
 
 fn specs_of(node: &Node) -> Result<Vec<SpecEntry>, RepoConfigProblem> {

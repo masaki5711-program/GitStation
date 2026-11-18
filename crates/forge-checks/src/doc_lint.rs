@@ -271,7 +271,7 @@ pub fn assess_doc_lint(tree: &DocTree) -> Result<forge_db::checks::NewCheckRun, 
 }
 
 /// Whether `rule` is lowered to a warning while `migration` is in force.
-fn lowered(migration: Option<&str>, rule: &str) -> bool {
+pub(crate) fn lowered(migration: Option<&str>, rule: &str) -> bool {
     migration.is_some() && rule == LOWERED_RULE
 }
 
@@ -286,7 +286,19 @@ pub fn assess_doc_lint_with(
     tree: &DocTree,
     migration: Option<&str>,
 ) -> Result<forge_db::checks::NewCheckRun, ForgeError> {
-    let reports = lint_tree(tree);
+    assess_doc_lint_reports(tree, &lint_tree(tree), migration, None)
+}
+
+/// [`assess_doc_lint_with`] on `reports`, the lint of `tree` already run
+/// ([`lint_tree`]; the merge queue's train lint compares the same reports
+/// with the base's, plan 18 S1). `preface`: a line of the summary before the
+/// result (after the migration's, which stays first).
+pub(crate) fn assess_doc_lint_reports(
+    tree: &DocTree,
+    reports: &[FileReport],
+    migration: Option<&str>,
+    preface: Option<String>,
+) -> Result<forge_db::checks::NewCheckRun, ForgeError> {
     let warnings: usize = reports
         .iter()
         .map(|r| {
@@ -308,6 +320,7 @@ pub fn assess_doc_lint_with(
              then (repository setting; errors again from the next day, UTC)."
         ));
     }
+    lines.extend(preface);
     let conclusion = if problems == 0 {
         lines.push(format!(
             "No document problem at this commit ({} Markdown file(s) and {} type definition(s) \

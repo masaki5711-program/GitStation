@@ -1526,6 +1526,51 @@ fn review_worker_job_concurrency_is_bounded_by_half_the_write_pool() {
     }
 }
 
+/// `merge_queue.train_lint_budget_ms` (plan 18 S1, ADR-0037 (b)): default
+/// 10000, `0` turns the train lint off, otherwise 100..=60000 (FG-SYS-0002
+/// naming the key).
+#[test]
+fn merge_queue_train_lint_budget_has_a_default_an_off_switch_and_a_range() {
+    use super::MergeQueueConfig;
+    const KEY: &str = "FORGE_MERGE_QUEUE_TRAIN_LINT_BUDGET_MS";
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.merge_queue, MergeQueueConfig::default());
+    assert_eq!(cfg.merge_queue.train_lint_budget_ms, 10_000);
+    assert_eq!(
+        cfg.merge_queue.train_lint_budget(),
+        Some(Duration::from_secs(10))
+    );
+    let off = load(None, &env(&[(KEY, "0")])).expect("off");
+    assert_eq!(off.merge_queue.train_lint_budget(), None);
+    for (value, ms) in [("100", 100), ("60000", 60_000), (" 2500 ", 2_500)] {
+        let cfg = load(None, &env(&[(KEY, value)])).expect(value);
+        assert_eq!(
+            cfg.merge_queue.train_lint_budget(),
+            Some(Duration::from_millis(ms))
+        );
+    }
+    let from_file = file("[merge_queue]\ntrain_lint_budget_ms = 500\n");
+    let cfg = load(Some(from_file.path()), &env(&[])).expect("file");
+    assert_eq!(cfg.merge_queue.train_lint_budget_ms, 500);
+    for (value, reason) in [
+        ("1", "below_min"),
+        ("99", "below_min"),
+        ("60001", "above_max"),
+        ("-1", "invalid"),
+        ("soon", "invalid"),
+    ] {
+        let err = load(None, &env(&[(KEY, value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("merge_queue.train_lint_budget_ms") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+    let err = load(None, &env(&[("FORGE_MERGE_QUEUE_BUDGET", "7")])).expect_err("typo");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}
+
 /// `feed.require_sink_compare` (M3 I1c, plan 11 Q1): `false` by default
 /// and when set so; `true` cannot take effect before the seal sink exists,
 /// so it is refused (`reason=unsupported`), as is any other value.

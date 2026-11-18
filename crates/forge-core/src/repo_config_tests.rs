@@ -92,6 +92,62 @@ fn the_review_section_is_reserved_and_not_read() {
     assert!(c.specs.is_empty());
 }
 
+/// Plan 18 S1 (ADR-0037 (b)): `merge_queue.doc_lint_strict`.
+#[test]
+fn the_merge_queue_section_carries_doc_lint_strict() {
+    assert!(!ok("").merge_queue.doc_lint_strict);
+    assert!(!ok("specs: []\n").merge_queue.doc_lint_strict);
+    assert!(
+        ok("merge_queue:\n  doc_lint_strict: true\n")
+            .merge_queue
+            .doc_lint_strict
+    );
+    assert!(
+        !ok("merge_queue:\n  doc_lint_strict: false\n")
+            .merge_queue
+            .doc_lint_strict
+    );
+    // An empty section is the default; beside `specs:` it changes nothing.
+    assert!(!ok("merge_queue: {}\n").merge_queue.doc_lint_strict);
+    let both = ok("specs:\n  - path: spec/\nmerge_queue:\n  doc_lint_strict: true\n");
+    assert_eq!(both.specs.len(), 1);
+    assert!(both.merge_queue.doc_lint_strict);
+    // Never guessed: anything but the two words is a problem on its line.
+    for (text, line, reason) in [
+        ("merge_queue: true\n", 1, "merge_queue_not_a_mapping"),
+        (
+            "merge_queue:\n  - doc_lint_strict\n",
+            2,
+            "merge_queue_not_a_mapping",
+        ),
+        (
+            "merge_queue:\n  doc_lint_strict: yes\n",
+            2,
+            "doc_lint_strict_invalid",
+        ),
+        (
+            "merge_queue:\n  doc_lint_strict: True\n",
+            2,
+            "doc_lint_strict_invalid",
+        ),
+        (
+            "merge_queue:\n  doc_lint_strict:\n",
+            2,
+            "doc_lint_strict_invalid",
+        ),
+        ("merge_queue:\n  doc_lint_strict: [true]\n", 2, "not_text"),
+        ("merge_queue:\n  strict: true\n", 2, "unknown_key"),
+        (
+            "merge_queue:\n  doc_lint_strict: true\n  doc_lint_strict: false\n",
+            3,
+            "duplicate_key",
+        ),
+    ] {
+        let p = bad(text);
+        assert_eq!((p.line, p.reason), (line, reason), "{text:?}");
+    }
+}
+
 #[test]
 fn scope_patterns_match_requirement_ids() {
     let p = ScopePattern::parse("ZEVA-CFG-*").expect("pattern");

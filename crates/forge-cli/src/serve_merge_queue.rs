@@ -63,9 +63,18 @@ impl QueueTasks {
 /// Start the merge queue's worker under its supervisor.
 pub(crate) fn spawn(queue: Arc<MergeQueue>) -> QueueTasks {
     let (stop, stopped) = watch::channel(false);
+    // Plan 18 S1: `train_lint=off` is `merge_queue.train_lint_budget_ms = 0`
+    // — trains land without the document lint of their tree.
+    let lints = queue.lints_trains();
     tracing::info!(
         lease_s = queue.limits().lease.as_secs(),
         test_timeout_s = queue.limits().test_timeout.as_secs(),
+        train_lint = if lints { "on" } else { "off" },
+        train_lint_budget_ms = if lints {
+            queue.limits().train_lint_budget.as_millis()
+        } else {
+            0
+        },
         "forge.serve.merge_queue_started"
     );
     let supervisor = tokio::spawn(supervise(

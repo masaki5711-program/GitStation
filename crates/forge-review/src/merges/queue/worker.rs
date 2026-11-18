@@ -63,6 +63,7 @@ pub const MERGE_RESULT_MAX_FAILURES: u32 = 3;
 /// settings are read again (the toggle race's test).
 pub type AfterFence = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 use forge_core::merge_queue::{bisected_limit, BatchState, EntryState, Isolation, MAX_REAPS};
+use forge_core::train_lint::TrainDocLint;
 use forge_core::{
     telemetry, CheckConclusion, CheckName, CheckRun, MergeMethod, MergeRequestState, MergeState,
     ObjectId, RefName, RepoId, RequestId,
@@ -83,6 +84,9 @@ use super::super::execute::{is_refusal, Subject};
 use super::super::{account_commit_identity, Merger};
 use super::{decide_queued, train_run, Asked, TrainRuns};
 
+// Plan 18 S1 (ADR-0037 (b)): the document lint of a train before it lands.
+mod train_lint;
+
 /// The bounds of the queue's worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueLimits {
@@ -95,6 +99,10 @@ pub struct QueueLimits {
     pub poll: Duration,
     /// The most changed paths read to find a migration (more: alone).
     pub max_paths: usize,
+    /// The most the document lint of one train may take (plan 18 S1,
+    /// `merge_queue.train_lint_budget_ms`); used when a lint is injected
+    /// ([`MergeQueue::with_train_lint`]).
+    pub train_lint_budget: Duration,
 }
 
 impl Default for QueueLimits {
@@ -104,6 +112,7 @@ impl Default for QueueLimits {
             test_timeout: Duration::from_secs(2 * 3600),
             poll: Duration::from_secs(10),
             max_paths: 5000,
+            train_lint_budget: Duration::from_secs(10),
         }
     }
 }
@@ -118,6 +127,9 @@ struct LandClock {
     locked: Instant,
     /// The step's git processes when the lock was asked for.
     spawns_before: u64,
+    /// The train's document lint before this landing (plan 18 S1; zero
+    /// when none ran: no lint injected, or a recovery).
+    lint: Duration,
 }
 
 impl LandClock {
@@ -126,12 +138,13 @@ impl LandClock {
         (Instant::now(), forge_git::scoped_git_spawns())
     }
 
-    /// The lock is held now.
-    fn locked((asked, spawns_before): (Instant, u64)) -> Self {
+    /// The lock is held now; `lint`: what the train's lint took.
+    fn locked((asked, spawns_before): (Instant, u64), lint: Duration) -> Self {
         Self {
             lock_wait: asked.elapsed(),
             locked: Instant::now(),
             spawns_before,
+            lint,
         }
     }
 }
@@ -159,6 +172,9 @@ pub struct MergeQueue {
     worker: String,
     /// `forge/risk`'s rules on a merge result (M4 close).
     risk: Arc<dyn MergeResultAssessor>,
+    /// The document lint of a train before it lands (plan 18 S1; `None`:
+    /// the gate is off and trains land as before it existed).
+    pub(super) train_lint: Option<Arc<dyn TrainDocLint>>,
     /// Consecutive failed merge result judgements per batch (this worker's;
     /// a worker that takes the queue over counts again from zero).
     failures: Arc<Mutex<HashMap<i64, u32>>>,
@@ -214,10 +230,28 @@ impl MergeQueue {
             limits: QueueLimits::default(),
             worker: worker.into(),
             risk,
+            train_lint: None,
             failures: Arc::new(Mutex::new(HashMap::new())),
             crash_after_cas: false,
             after_fence: None,
         }
+    }
+
+    /// Lint every train's documents before it lands (plan 18 S1, ADR-0037
+    /// (b)): forge-checks' `TrainLint`, within
+    /// [`QueueLimits::train_lint_budget`]. Without it no train is linted
+    /// (the behavior before the gate — `forge serve`'s switch is
+    /// `merge_queue.train_lint_budget_ms = 0`).
+    #[must_use]
+    pub fn with_train_lint(mut self, lint: Arc<dyn TrainDocLint>) -> Self {
+        self.train_lint = Some(lint);
+        self
+    }
+
+    /// Whether trains are linted before they land
+    /// ([`MergeQueue::with_train_lint`]).
+    pub fn lints_trains(&self) -> bool {
+        self.train_lint.is_some()
     }
 
     /// Tests only: see [`AfterFence`].
@@ -864,6 +898,13 @@ impl MergeQueue {
                 if paused {
                     return Ok("paused");
                 }
+                // Plan 18 S1: the documents of the train's tree, before
+                // anything else decides the landing. A train that cannot be
+                // linted does not land.
+                let lint = match self.train_lint_gate(batch, &testing, repo).await? {
+                    train_lint::TrainLintGate::Land(took) => took,
+                    train_lint::TrainLintGate::Ended(outcome) => return Ok(outcome),
+                };
                 // M4 close: the merge result of the auto-merge entries.
                 let judged = self
                     .merge_result(batch, &testing, repo, &claimed.queue.target_branch)
@@ -892,7 +933,7 @@ impl MergeQueue {
                 // No pipeline row at all (no `.forge-ci.yml`): the landing's
                 // decision finds `ci/pipeline` missing if it is required.
                 let run = train_run(id.map(|_| green));
-                self.land(claimed, batch, &testing, repo, run).await
+                self.land(claimed, batch, &testing, repo, run, lint).await
             }
         }
     }
@@ -1346,11 +1387,12 @@ impl MergeQueue {
         testing: &[StoredEntry],
         repo: RepoId,
         run: Option<CheckRun>,
+        lint: Duration,
     ) -> Result<&'static str, ForgeError> {
         let asked = LandClock::asked();
         let mut lock =
             merges::lock_merges(&self.merger.db, repo, self.merger.timeouts.lock_wait).await?;
-        let clock = LandClock::locked(asked);
+        let clock = LandClock::locked(asked, lint);
         let landed = self
             .land_locked(&mut lock, claimed, batch, testing, repo, run, clock)
             .await;
@@ -1777,8 +1819,9 @@ impl MergeQueue {
             size = decided.len(),
             base_sha = batch.base_sha.as_str(),
             train_sha = batch.train_sha.as_str(),
-            // No lint of the train runs yet (plan 18 S1 measures it here).
-            lint_ms = 0_u64,
+            // The train's document lint before the landing (plan 18 S1; 0:
+            // none ran — the gate is off, or a recovery).
+            lint_ms = millis(clock.lint),
             lock_wait_ms = millis(clock.lock_wait),
             // Under the merge lock: the decisions, the compare-and-swap,
             // the records (a recovery: the records that were left).
@@ -1827,7 +1870,8 @@ impl MergeQueue {
             // A landing still runs (its worker holds the lock): later.
             None => return Ok("waiting"),
         };
-        let clock = LandClock::locked(asked);
+        // A recovery lints nothing: the target already moved to the train.
+        let clock = LandClock::locked(asked, Duration::ZERO);
         let settled = self
             .recover_locked(&lock, claimed, batch, &entries, repo, clock)
             .await;
