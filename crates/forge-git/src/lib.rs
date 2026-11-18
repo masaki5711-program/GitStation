@@ -41,6 +41,10 @@
 //!   (M3 X8): the pre-receive hook serve arms per push, the scan of what a
 //!   push brings inside git's quarantine (blob sizes, secrets) and the
 //!   secret patterns.
+//! - [`refs_cache`] keeps, per repository, which branches exist (plan 18
+//!   S8): one shared `for-each-ref` for any number of merge request
+//!   creates, "exists" from the snapshot and "missing" only from git
+//!   ([`browse::Browser::require_branch`]). Names only, never a commit id.
 
 // M4 C14: the git side of the deterministic autofix.
 pub mod autofix;
@@ -69,6 +73,7 @@ pub mod receive_report;
 pub mod receive_request;
 mod redact;
 mod refs;
+pub mod refs_cache;
 pub mod revert;
 pub mod review_changes;
 pub mod review_inputs;
@@ -90,6 +95,7 @@ pub use command::{Git, GitCommand, GitConfig, GitOutput};
 pub use metrics::{counting_spawns, git_spawns, scoped_git_spawns};
 pub use push_check::{Ancestry, CommitList, CommitQuery};
 pub use refs::{MergeQueueRef, PipelineRef, RefChange, RefUpdateResult};
+pub use refs_cache::{BranchAnswer, BranchSnapshot, RefSnapshotCache};
 pub use revision::Revision;
 pub use storage::{Provisioned, Removal, StorageRoot};
 pub use stream::{GitStdin, GitStdout, GitStream, StreamEnded, StreamStats};
