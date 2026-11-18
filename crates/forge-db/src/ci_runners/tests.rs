@@ -1067,3 +1067,329 @@ async fn a_jobs_copy_names_its_pipelines_project_sha_and_repository() {
         .is_none());
     w.t.drop_now().await;
 }
+
+/// Plan 18 S2: every change that makes a CI job claimable tells the
+/// runners waiting on the hub (`NOTIFY forge_jobs, 'ci.job'`), so a long
+/// poll looks long before its safety-net period; a claim tells no one.
+#[tokio::test]
+async fn a_ci_job_made_pending_wakes_the_waiting_runner() {
+    use std::time::{Duration, Instant};
+
+    use crate::wake::{Channel, WakeHub, Woken};
+
+    const SAFETY: Duration = Duration::from_secs(10);
+    const WELL_BEFORE: Duration = Duration::from_secs(3);
+    const QUIET: Duration = Duration::from_millis(300);
+    const POLL: Duration = Duration::from_millis(50);
+    /// How long a wait of up to the safety period took.
+    async fn woken_after(idle: &mut JobWait) -> Duration {
+        let started = Instant::now();
+        idle.wait(SAFETY).await;
+        started.elapsed()
+    }
+
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    let hub = WakeHub::spawn(&w.t.db, &[Channel::Jobs]).expect("hub");
+    let mut connected = hub.subscribe_unseen(Channel::Jobs);
+    assert_eq!(
+        connected.wait(Duration::from_secs(30)).await,
+        Woken::Reconnected
+    );
+    // clone: the handle a server process attaches its hub to
+    let db = w.t.db.clone().with_wake(hub.clone(), SAFETY);
+    let mut idle = JobWait::new(&db, POLL);
+
+    // A planned pipeline.
+    let p = w
+        .pipeline(
+            'b',
+            false,
+            vec![
+                job("build", &[], &[], &[]),
+                job("test", &["build"], &[], &[]),
+            ],
+        )
+        .await;
+    assert!(woken_after(&mut idle).await < WELL_BEFORE);
+    // The claim makes nothing claimable: the wait runs its whole period.
+    let build = lease::claim(&db, r).await.expect("claim").expect("job");
+    let started = Instant::now();
+    idle.wait(QUIET).await;
+    assert!(started.elapsed() >= QUIET);
+    // A job whose needs succeeded.
+    lease::complete(&db, r, build.job_id, build.attempt, JobResult::Succeeded)
+        .await
+        .expect("complete");
+    assert!(woken_after(&mut idle).await < WELL_BEFORE);
+    // A lease the reaper gives back.
+    let test = lease::claim(&db, r).await.expect("claim").expect("job");
+    assert_eq!((test.name.as_str(), test.pipeline.id), ("test", p));
+    idle.wait(QUIET).await;
+    w.exec(&format!(
+        "UPDATE forge.ci_jobs SET lease_until = now() - interval '1 second' WHERE id = {}",
+        test.job_id
+    ))
+    .await;
+    lease::reap(&db).await.expect("reap");
+    assert!(woken_after(&mut idle).await < WELL_BEFORE);
+    // A job of the queue (another payload of the channel) is not for it.
+    w.exec("SELECT pg_catalog.pg_notify('forge_jobs', 'test.a')")
+        .await;
+    let started = Instant::now();
+    idle.wait(QUIET).await;
+    assert!(started.elapsed() >= QUIET);
+
+    // Without a hub the long poll is the plain poll.
+    let mut plain = JobWait::new(&w.t.db, POLL);
+    let started = Instant::now();
+    plain.wait(SAFETY).await;
+    assert!((POLL..WELL_BEFORE).contains(&started.elapsed()));
+    hub.stop(Duration::from_secs(30)).await.expect("stop");
+    w.t.drop_now().await;
+}
+
+/// The `FG-DB-0024` events of a capture.
+fn missed_wakes(logs: &crate::jobs::runner_stop_tests::Captured) -> Vec<serde_json::Value> {
+    logs.failures()
+        .into_iter()
+        .filter(|e| e["fields"]["error_code"] == "FG-DB-0024")
+        .collect()
+}
+
+/// Wait until one wait of `idle` ran its whole safety-net period (a wake
+/// still on its way ends an earlier one).
+async fn a_whole_safety_net(idle: &mut JobWait, safety: std::time::Duration) {
+    for _ in 0..20 {
+        let started = std::time::Instant::now();
+        idle.wait(safety).await;
+        if started.elapsed() >= safety {
+            return;
+        }
+    }
+    panic!("no wait ran the whole safety-net period");
+}
+
+/// Review fix 2: a CI job found by a safety-net look is a missed wake
+/// (`FG-DB-0024`) only when it had been claimable by this runner for the
+/// whole safety period — pending that long (the database's clock) and the
+/// runner unchanged that long. Then it is logged once, with the age.
+#[tokio::test]
+async fn a_safety_net_find_of_a_ci_job_is_a_miss_only_after_the_safety_period() {
+    use std::time::Duration;
+
+    use crate::jobs::runner_stop_tests::Captured;
+    use crate::wake::{Channel, WakeHub, Woken};
+
+    const SAFETY: Duration = Duration::from_secs(2);
+    const POLL: Duration = Duration::from_millis(50);
+    const LONG_AGO: &str = "now() - interval '60 seconds'";
+
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    let hub = WakeHub::spawn(&w.t.db, &[Channel::Jobs]).expect("hub");
+    let mut connected = hub.subscribe_unseen(Channel::Jobs);
+    assert_eq!(
+        connected.wait(Duration::from_secs(30)).await,
+        Woken::Reconnected
+    );
+    // clone: the handle a server process attaches its hub to
+    let db = w.t.db.clone().with_wake(hub.clone(), SAFETY);
+    let mut idle = JobWait::new(&db, POLL);
+    let request_id = rid();
+    let runner_changed =
+        |at: &str| format!("UPDATE forge.ci_runners SET updated_at = {at} WHERE id = {r}");
+    let job_pending_since = |pipeline: i64, at: &str| {
+        format!("UPDATE forge.ci_jobs SET updated_at = {at} WHERE pipeline_id = {pipeline}")
+    };
+
+    // Pending since just now, the runner unchanged for long: found early.
+    let p = w
+        .pipeline('b', false, vec![job("build", &[], &[], &[])])
+        .await;
+    a_whole_safety_net(&mut idle, SAFETY).await;
+    w.exec(&runner_changed(LONG_AGO)).await;
+    w.exec(&job_pending_since(p, "now()")).await;
+    let young = lease::claim(&db, r).await.expect("claim").expect("job");
+    assert!(young.claimable_for < SAFETY, "{:?}", young.claimable_for);
+    idle.claimed(r, &young, &request_id);
+    assert_eq!(missed_wakes(&logs), Vec::<serde_json::Value>::new());
+
+    // Pending for long, the runner changed just now (re-tagged, resumed).
+    let p = w
+        .pipeline('c', false, vec![job("build", &[], &[], &[])])
+        .await;
+    a_whole_safety_net(&mut idle, SAFETY).await;
+    w.exec(&job_pending_since(p, LONG_AGO)).await;
+    w.exec(&runner_changed("now()")).await;
+    let retagged = lease::claim(&db, r).await.expect("claim").expect("job");
+    assert!(
+        retagged.claimable_for < SAFETY,
+        "{:?}",
+        retagged.claimable_for
+    );
+    idle.claimed(r, &retagged, &request_id);
+    assert_eq!(missed_wakes(&logs), Vec::<serde_json::Value>::new());
+
+    // Claimable for longer than the safety period: no wake announced it.
+    let p = w
+        .pipeline('d', false, vec![job("build", &[], &[], &[])])
+        .await;
+    a_whole_safety_net(&mut idle, SAFETY).await;
+    w.exec(&job_pending_since(p, LONG_AGO)).await;
+    w.exec(&runner_changed(LONG_AGO)).await;
+    let old = lease::claim(&db, r).await.expect("claim").expect("job");
+    assert!(
+        old.claimable_for >= Duration::from_secs(60),
+        "{:?}",
+        old.claimable_for
+    );
+    idle.claimed(r, &old, &request_id);
+    let missed = missed_wakes(&logs);
+    assert_eq!(missed.len(), 1, "{missed:?}");
+    assert_eq!(missed[0]["level"], "WARN");
+    let context = missed[0]["fields"]["context"].as_str().unwrap_or_default();
+    for part in [
+        format!("oldest_ready_ms={}", old.claimable_for.as_millis()),
+        format!("safety_poll_ms={}", SAFETY.as_millis()),
+        "kind=ci.job".to_owned(),
+        format!("job_id={}", old.job_id),
+        format!("runner_id={r}"),
+        "suppressed=0".to_owned(),
+    ] {
+        assert!(context.contains(&part), "{part} in {context}");
+    }
+    // The same claim without a safety-net wait before it says nothing
+    // more (the flag is taken), and a job found without a hub never does.
+    idle.claimed(r, &old, &request_id);
+    let mut plain = JobWait::new(&w.t.db, POLL);
+    plain.wait(SAFETY).await;
+    plain.claimed(r, &old, &request_id);
+    assert_eq!(missed_wakes(&logs).len(), 1);
+
+    hub.stop(Duration::from_secs(30)).await.expect("stop");
+    w.t.drop_now().await;
+}
+
+/// Review fix 7: the end of a job wakes the waiting runners only when
+/// something can now be claimed — a job whose needs succeeded (above) or
+/// a freed GPU place; the end of a job nothing waited for wakes no one.
+/// A runner re-tagged or resumed wakes them too.
+#[tokio::test]
+async fn the_end_of_a_job_wakes_runners_only_when_a_job_can_be_claimed() {
+    use std::time::{Duration, Instant};
+
+    use crate::wake::{Channel, WakeHub, Woken};
+
+    const SAFETY: Duration = Duration::from_secs(10);
+    const WELL_BEFORE: Duration = Duration::from_secs(3);
+    const QUIET: Duration = Duration::from_millis(300);
+    const POLL: Duration = Duration::from_millis(50);
+    /// How long a wait of up to `max` took.
+    async fn waited(idle: &mut JobWait, max: Duration) -> Duration {
+        let started = Instant::now();
+        idle.wait(max).await;
+        started.elapsed()
+    }
+
+    let w = world().await;
+    let policy = gpu_policy(w.web.project_id.get());
+    let (r, _) = w.runner("r", &[]).await;
+    let (gpu, _) = w.runner("gpu", &["gpu-eval"]).await;
+    let hub = WakeHub::spawn(&w.t.db, &[Channel::Jobs]).expect("hub");
+    let mut connected = hub.subscribe_unseen(Channel::Jobs);
+    assert_eq!(
+        connected.wait(Duration::from_secs(30)).await,
+        Woken::Reconnected
+    );
+    // clone: the handle a server process attaches its hub to
+    let db = w.t.db.clone().with_wake(hub.clone(), SAFETY);
+    let mut idle = JobWait::new(&db, POLL);
+
+    // A job nothing waits for: neither its end …
+    w.pipeline('b', false, vec![job("solo", &[], &[], &[])])
+        .await;
+    assert!(waited(&mut idle, SAFETY).await < WELL_BEFORE);
+    let solo = lease::claim(&db, r).await.expect("claim").expect("job");
+    lease::complete(&db, r, solo.job_id, solo.attempt, JobResult::Succeeded)
+        .await
+        .expect("complete");
+    assert!(waited(&mut idle, QUIET).await >= QUIET);
+    // … nor its failure by the reaper wakes anyone.
+    w.pipeline('c', false, vec![job("lost", &[], &[], &[])])
+        .await;
+    assert!(waited(&mut idle, SAFETY).await < WELL_BEFORE);
+    let lost = lease::claim(&db, r).await.expect("claim").expect("job");
+    w.exec(&format!(
+        "UPDATE forge.ci_jobs SET lease_losses = 2, lease_until = now() - interval '1 second' \
+         WHERE id = {}",
+        lost.job_id
+    ))
+    .await;
+    let reaped = lease::reap(&db).await.expect("reap").reaped;
+    assert_eq!(reaped[0].outcome, "failed");
+    assert!(waited(&mut idle, QUIET).await >= QUIET);
+
+    // A `gpu-eval` job that ends frees its GPU place: completed …
+    w.pipeline('d', false, vec![job("bench", &[], &["gpu-eval"], &[])])
+        .await;
+    assert!(waited(&mut idle, SAFETY).await < WELL_BEFORE);
+    let bench = lease::claim_with(&db, gpu, &policy)
+        .await
+        .expect("claim")
+        .expect("the bench");
+    assert!(waited(&mut idle, QUIET).await >= QUIET);
+    lease::complete(&db, gpu, bench.job_id, bench.attempt, JobResult::Succeeded)
+        .await
+        .expect("complete");
+    assert!(waited(&mut idle, SAFETY).await < WELL_BEFORE);
+    // … or failed by the reaper.
+    w.pipeline('e', false, vec![job("bench", &[], &["gpu-eval"], &[])])
+        .await;
+    assert!(waited(&mut idle, SAFETY).await < WELL_BEFORE);
+    let bench = lease::claim_with(&db, gpu, &policy)
+        .await
+        .expect("claim")
+        .expect("the bench");
+    assert!(waited(&mut idle, QUIET).await >= QUIET);
+    w.exec(&format!(
+        "UPDATE forge.ci_jobs SET lease_losses = 2, lease_until = now() - interval '1 second' \
+         WHERE id = {}",
+        bench.job_id
+    ))
+    .await;
+    let reaped = lease::reap(&db).await.expect("reap").reaped;
+    assert_eq!(reaped[0].outcome, "failed");
+    assert!(waited(&mut idle, SAFETY).await < WELL_BEFORE);
+
+    // A runner re-tagged or resumed: jobs may be claimable by it now. A
+    // change of its description only, or a pause, is not for the waiters.
+    let change =
+        |enabled: Option<bool>, tags: Option<&[&str]>, description: Option<&str>| RunnerUpdate {
+            enabled,
+            tags: tags.map(|t| t.iter().map(|t| (*t).to_owned()).collect()),
+            description: description.map(str::to_owned),
+        };
+    let admin = ctx(Actor::User(w.alice), "req-runner-change");
+    for (step, wakes) in [
+        (change(None, Some(&["linux"]), None), true),
+        (change(None, None, Some("the build host")), false),
+        (change(Some(false), None, None), false),
+        (change(Some(true), None, None), true),
+    ] {
+        update(&db, &admin, r, &step)
+            .await
+            .expect("update")
+            .expect("runner");
+        if wakes {
+            assert!(waited(&mut idle, SAFETY).await < WELL_BEFORE, "{step:?}");
+        } else {
+            assert!(waited(&mut idle, QUIET).await >= QUIET, "{step:?}");
+        }
+    }
+
+    hub.stop(Duration::from_secs(30)).await.expect("stop");
+    w.t.drop_now().await;
+}

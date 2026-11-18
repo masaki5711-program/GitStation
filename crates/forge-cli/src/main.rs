@@ -47,6 +47,8 @@ mod serve_merge_queue;
 mod serve_merges;
 mod serve_reverts;
 mod state_copy;
+// Plan 18 S2: the wake hub of `serve` and `worker`.
+mod wake;
 mod worker;
 
 #[derive(Parser)]

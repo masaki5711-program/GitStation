@@ -64,7 +64,7 @@ use tokio::sync::watch;
 use crate::runtime::block_on;
 
 mod backoff;
-mod jobs;
+pub(crate) mod jobs;
 // ── D4 MR3b: repository provisioning ──
 pub(crate) mod provision;
 // ── end D4 MR3b ──
@@ -173,6 +173,8 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             .await?
             .with_portal_news(crate::portal::news_policy(cfg)?);
         forge_db::check_schema(&db, &MIGRATOR).await?;
+        // Plan 18 S2: the job runners wait on the process's wake hub.
+        let (db, wake_hub) = crate::wake::attach(db, cfg)?;
         // M3 O3: the database must know the window's time zone.
         forge_db::maintenance::local_minute(&db, &cfg.maintenance.time_zone).await?;
         let (stop, stopped) = watch::channel(false);
@@ -236,6 +238,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             task.abort();
         }
         signal.abort();
+        crate::wake::stop(&wake_hub).await;
         db.close().await;
         tracing::info!("forge.worker.stopped");
         // A failure is logged once by the CLI boundary (main::report).

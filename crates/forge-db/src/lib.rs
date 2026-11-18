@@ -68,6 +68,7 @@ pub mod seal;
 pub mod sequencer;
 // ── C5: event subscribers and DerivedTx (ADR-0016 §6, §7) ──
 pub mod subscribers;
+pub mod wake;
 // ── end C5 ──
 // ── D1: users and namespaces ──
 pub mod namespaces;

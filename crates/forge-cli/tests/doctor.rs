@@ -53,6 +53,8 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    database",
         "ok    db.bootstrap",
         "ok    db.connections",
+        // Plan 18 S2: nothing is waiting in the NOTIFY queue.
+        "ok    db.notify_queue 0.0 % used",
         "ok    schema",
         "ok    outbox.unsequenced_count",
         "ok    outbox.sequencer_lag",

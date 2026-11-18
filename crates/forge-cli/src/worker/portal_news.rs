@@ -138,8 +138,9 @@ pub(crate) fn spawn(
                 }
             }
             let pause = match run_job(&runner, SHUTDOWN_GRACE, stop.clone()).await {
-                Ok(Next::Immediately) => continue,
-                Ok(_) => JOB_POLL_PERIOD,
+                // A job ran, or the idle run waited by itself (plan 18 S2).
+                Ok(Next::Immediately | Next::Waited) => continue,
+                Ok(Next::AfterPeriod) => JOB_POLL_PERIOD,
                 Err(e) => {
                     telemetry::log_failure(
                         &e.with_context("task", "portal_news_runner"),
