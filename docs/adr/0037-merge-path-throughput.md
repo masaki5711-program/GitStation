@@ -229,3 +229,28 @@ impl RefSnapshotCache {
     pub fn invalidate(&self, repo: RepoId);
 }
 ```
+
+## Amendment（2026-11-18、計画 18 S1 の実装）: 列車の doc-lint の関門
+
+S1 で (b) の 1・2 を作った。上の Interface sketch と違うところ、そして sketch が決めていなかったところ:
+
+- **「lint できなかった」は判定ではなく失敗にした**: `lint_train` は `Result<TrainLintVerdict, ForgeError>` を返し、`Unavailable { reason }` は無い。
+  `Err` は必ず `FG-DOC-0002`（`scope=train`、`reason=train_budget` か `read_failed`、元のコードは `cause`）で、キューは `Err` で着地しない。
+  判定の値を 1 つ読み落として着地する、という誤りを型で起こせなくするため（hard contract 2）。
+- `TrainLintInput` に `request_id`（バッチのもの。チェックの記録と info のログに使う）を足した。
+- `TrainLintVerdict::BaseNotClean { problems }` を足した: 厳格なリポジトリで、土台にすでに問題があるとき。どの段も原因ではないので、
+  段を指す `NewProblems` では表せない。列車の MR は全部 `FG-CI-0032`（`reason=doc_lint_base_not_clean`）で外れる。
+- **キーの置き場所**: `merge_queue.train_lint_budget_ms` はサーバーの設定（既定 10000、100〜60000、**0 で関門を切る** = S1 の前の動き）。
+  `merge_queue.doc_lint_strict` はリポジトリの `.forge/repo.yml`（`merge_queue:` の下）で、**列車の土台**の版を読む（MR の中で値を変えても、
+  その MR の着地には効かない）。土台の `.forge/repo.yml` が正しくないときは厳格として扱う（緩めない）。マイグレーションは無い。
+- **対象**: どれかの MR が `.md` か `.forge/doctypes/**` を変えるとき、または厳格なリポジトリ。「`forge/doc-lint` が target の必須チェックのとき」は
+  別には見ていない: 文書も文書型も変えない列車の木は、土台と同じ lint の答えになるので、「増えていない」の判定は変わらない
+  （違いは、その列車の先端に `forge/doc-lint` のチェックが記録されないことだけ）。
+- **いつ動くか**: 列車のパイプラインが緑になった後、マージ結果の危険の判定（M4 の締め）の前。パイプラインのあるリポジトリでは、lint で
+  赤になる列車も先にパイプラインを待つ（S7 で列車を作った手番に動かすときに変える）。
+- **先端の段だけを lint する**（二分のときだけ途中の段を読む）: 同じ列車の中で、ある段が壊した参照を後ろの段が直すと、途中の段の
+  コミット（`main` の first-parent）には壊れた参照が残る。先端がきれいなら着地する、が (b) の決定で、S1 はそのまま。
+- **`forge/doc-lint` のチェック**は列車の**先端の sha だけ**に、lint が対象のときだけ記録する（木の全体の評価 + 先頭に「土台に無い問題は N 件」の
+  行）。途中の段と、文書を変えない列車には無い。負荷試験の `GS_LT_DOC_LINT_MISSING_FATAL` の既定を 0 のままにした理由。
+- 読む上限は head の `forge/doc-lint` より広い（`.md` 20,000 件、64 MiB）。上限に当たると「一部だけの答え」ではなく失敗（`bound`）。
+  S7 の増分の索引までは、毎回、木の全部を読む。
