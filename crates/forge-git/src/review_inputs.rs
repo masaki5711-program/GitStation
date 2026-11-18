@@ -26,7 +26,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use forge_core::merge_paths::{ChangedPath, Incomplete};
+use forge_core::merge_paths::{ChangedPath, Incomplete, SET_BYTES_MAX};
 use forge_core::{ObjectId, RepoId};
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -78,12 +78,41 @@ fn unexpected(subcommand: &'static str, reason: &'static str) -> ForgeError {
 }
 
 /// The NUL-terminated records of `stdout` (a cut last record is dropped
-/// by the caller through `truncated`).
+/// by the caller through `truncated`), read in place: no second list of
+/// the output is built.
 fn records(stdout: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let mut pieces: Vec<&[u8]> = stdout.split(|b| *b == 0).collect();
-    // What follows the final NUL: empty for a complete output.
-    pieces.pop();
-    pieces.into_iter()
+    // What follows the final NUL — empty for a complete output — is not a
+    // record; an output without a NUL has none.
+    let complete = stdout
+        .iter()
+        .rposition(|b| *b == 0)
+        .and_then(|last| stdout.get(..last));
+    complete
+        .into_iter()
+        .flat_map(|bytes| bytes.split(|b| *b == 0))
+}
+
+/// Bytes of one `--raw -z` entry without its path: two modes, two object
+/// ids (sha256 at the longest), a status and two NULs — under 150.
+const RAW_ENTRY_BYTES: usize = 160;
+
+/// Bytes of a `changed_path_entries` listing read at most, whatever the
+/// path cap (plan 18 S4, review: the listing is held in memory, twice per
+/// mergeability check and once per landing, by concurrent jobs).
+const ENTRY_LISTING_CEILING: usize = 4 * 1024 * 1024;
+
+/// Bytes of a `changed_path_entries` listing of at most `max_paths`
+/// entries read at most: the raw fields of `max_paths` entries and
+/// [`SET_BYTES_MAX`] bytes of paths — a set with more path bytes is
+/// incomplete anyway (`PathSet::build` counts every file key against that
+/// budget) — never more than [`ENTRY_LISTING_CEILING`]. About 1.8 MiB at
+/// the default `review.paths_max` (5000); the ceiling only matters near
+/// the largest cap (20 000).
+fn entry_listing_cap(max_paths: usize) -> usize {
+    max_paths
+        .saturating_mul(RAW_ENTRY_BYTES)
+        .saturating_add(SET_BYTES_MAX)
+        .clamp(8192, ENTRY_LISTING_CEILING)
 }
 
 /// One `--raw` line (`:<old mode> <new mode> <old id> <new id> <status>`):
@@ -204,7 +233,10 @@ impl Git {
     /// The entries changed between `base` and `head` — commits or trees —
     /// without rename detection (module docs): `diff-tree --no-renames -r
     /// -z --raw --end-of-options <base> <head>`. `Ok(Err(_))`: the listing
-    /// is not complete (why); `Err`: git failed.
+    /// is not complete (why) — more entries than `max_paths`
+    /// (`too_many`), or more bytes than [`entry_listing_cap`] reads
+    /// (`too_large`: git is stopped there, nothing longer is held);
+    /// `Err`: git failed.
     pub async fn changed_path_entries(
         &self,
         storage: &StorageRoot,
@@ -215,9 +247,6 @@ impl Git {
         timeout: Duration,
     ) -> Result<Result<Vec<ChangedPath>, Incomplete>, ForgeError> {
         let repo = Self::repo_dir(storage, id)?;
-        // One entry: the raw line (two modes, two ids, a status — under
-        // 256 bytes for sha256 ids) and a path of 4 KiB at most.
-        let cap = max_paths.saturating_mul(4097 + 256).max(8192);
         let (output, truncated) = self
             .command("diff-tree")
             .arg("--no-renames")
@@ -228,11 +257,12 @@ impl Git {
             .revision(Revision::object_id(head.as_str())?)
             .repo(&repo)
             .timeout(timeout)
-            .output_truncated(cap)
+            .output_truncated(entry_listing_cap(max_paths))
             .await
             .map_err(|e| e.with_context("repo_id", id.get()))?;
         if truncated {
-            return Ok(Err(Incomplete::TooMany));
+            // Longer than the bound: incomplete, never a shorter list.
+            return Ok(Err(Incomplete::TooLarge));
         }
         let mut entries = Vec::new();
         let mut fields = records(&output.stdout);

@@ -65,14 +65,14 @@
 
 use std::time::{Duration, Instant};
 
-use forge_core::merge_paths::PathSet;
+use forge_core::merge_paths::{Incomplete, PathSet};
 use forge_core::{CheckReason, MergeabilityStatus, ObjectId, RefName, RepoId, RequestId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::review::{self, CheckResult, CheckStart, MergeabilityRequest, Recorded, RefsLock};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::merge_result::MergeRefChange;
-use forge_git::mergeability::{MergeTree, MergeTreeLimits};
+use forge_git::mergeability::{MergeBases, MergeTree, MergeTreeLimits};
 use forge_git::{Git, StorageRoot};
 
 use crate::versions::ACTOR_LABEL;
@@ -244,15 +244,31 @@ impl Mergeability {
     /// off, or git failed — logged, never the check's failure): the merge
     /// request is checked again on every landing. An incomplete set (too
     /// many paths, a global or special path, bytes that are no UTF-8) is
-    /// stored as incomplete, which is checked again as well.
+    /// stored as incomplete, which is checked again as well — and so is
+    /// the set of a head with `several` merge bases (a criss-cross
+    /// history): the merge works from a virtual base, and the diff from
+    /// one of the bases does not say what it changes.
     async fn head_paths(
         &self,
         repo: RepoId,
         (base, head, tip): (&ObjectId, &ObjectId, &ObjectId),
-        tree: Option<&ObjectId>,
+        (tree, several): (Option<&ObjectId>, bool),
         request_id: &RequestId,
     ) -> Option<PathSet> {
         let max = self.paths_max?;
+        if several {
+            tracing::info!(
+                target: "forge_review",
+                event = "forge.review.mergeability_paths_incomplete",
+                request_id = %request_id,
+                repo_id = repo.get(),
+                head_sha = head.as_str(),
+                paths_complete = false,
+                paths = Incomplete::MergeBases.as_str(),
+                "the head's path set is incomplete; the merge request is checked again on every landing"
+            );
+            return Some(PathSet::incomplete());
+        }
         let mut entries = Vec::new();
         let merged = tree.map(|tree| (tip, tree));
         for (from, to) in std::iter::once((base, head)).chain(merged) {
@@ -331,13 +347,18 @@ impl Mergeability {
         let Some(tip) = tip else {
             return done(failed(CheckReason::TargetMissing, Some(head), None));
         };
-        let base = match self
+        // One call answers both questions: the best merge base, and
+        // whether it is the only one (plan 18 S4: `head_paths`).
+        let (base, several) = match self
             .git
-            .merge_base(&self.storage, repo, &tip, head, READ_TIMEOUT)
+            .merge_bases(&self.storage, repo, &tip, head, READ_TIMEOUT)
             .await
         {
-            Ok(Some(base)) => base,
-            Ok(None) => {
+            Ok(MergeBases {
+                best: Some(base),
+                several,
+            }) => (base, several),
+            Ok(MergeBases { best: None, .. }) => {
                 return done(failed(
                     CheckReason::UnrelatedHistories,
                     Some(head),
@@ -355,7 +376,12 @@ impl Mergeability {
         {
             Ok(MergeTree::Clean { tree }) => {
                 let paths = self
-                    .head_paths(repo, (&base, head, &tip), Some(&tree), request_id)
+                    .head_paths(
+                        repo,
+                        (&base, head, &tip),
+                        (Some(&tree), several),
+                        request_id,
+                    )
                     .await;
                 Computed::Done {
                     files: 0,
@@ -377,7 +403,7 @@ impl Mergeability {
             }) => {
                 let (conflicts, cut) = stored_files(&files);
                 let paths = self
-                    .head_paths(repo, (&base, head, &tip), None, request_id)
+                    .head_paths(repo, (&base, head, &tip), (None, several), request_id)
                     .await;
                 Computed::Done {
                     tree: None,
