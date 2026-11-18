@@ -47,6 +47,14 @@ pub struct MergeStatus {
     /// reports `ci/pipeline`; `None` while it is being computed, on a
     /// conflict, or without a version or target.
     pub merge_result_sha: Option<ObjectId>,
+    /// Plan 18 S4: the target tip the stored mergeability result was
+    /// computed against, when the result answers for the head and the live
+    /// tip only because it was **carried forward** over landings whose
+    /// paths cannot interact with the merge request's (`None`: computed
+    /// against the live tip, or not answering for it at all). The decision
+    /// itself is not changed by it — a carried result counts like a
+    /// computed one, and the merge decides again under its locks.
+    pub carried_from_target_sha: Option<ObjectId>,
     pub target_branch: forge_core::RefName,
     /// The method evaluated (asked, or the project's default).
     pub method: MergeMethod,
@@ -289,6 +297,7 @@ impl Review {
             return Ok(MergeStatus {
                 head_sha: None,
                 merge_result_sha: None,
+                carried_from_target_sha: None,
                 target_branch: current.target_branch,
                 method,
                 mergeable: false,
@@ -342,6 +351,18 @@ impl Review {
                     && s.checked_target_sha.as_ref() == Some(tip) =>
             {
                 forge_db::review::merge_result_of_read(&self.db, current.id, &head, tip).await?
+            }
+            _ => None,
+        };
+        // Plan 18 S4: a decision that answers for (head, live tip) because a
+        // landing carried it there says where it was computed.
+        let carried_from = match (&target_tip, stored.as_ref()) {
+            (Some(tip), Some(s))
+                if s.status.is_decided()
+                    && s.checked_head_sha.as_ref() == Some(&head)
+                    && s.checked_target_sha.as_ref() == Some(tip) =>
+            {
+                s.carried_from().cloned() // clone: the status owns its ids
             }
             _ => None,
         };
@@ -420,6 +441,7 @@ impl Review {
         Ok(MergeStatus {
             head_sha: Some(head),
             merge_result_sha: merge_result,
+            carried_from_target_sha: carried_from,
             target_branch: current.target_branch,
             method,
             mergeable: ok,

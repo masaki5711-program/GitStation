@@ -211,6 +211,10 @@ pub struct Merger {
     browser: Option<Browser>,
     timeouts: MergeTimeouts,
     before_update_ref: Option<BeforeUpdateRef>,
+    /// Plan 18 S4: the most paths a landing's record may list
+    /// (`review.paths_max`); `None`: the record says no paths
+    /// (`review.path_filter = false`, or not configured).
+    paths_max: Option<usize>,
 }
 
 impl std::fmt::Debug for Merger {
@@ -230,7 +234,19 @@ impl Merger {
             browser: None,
             timeouts: MergeTimeouts::default(),
             before_update_ref: None,
+            paths_max: None,
         }
+    }
+
+    /// Write what a landing changed into its `repository.pushed` record,
+    /// at most `max` paths (plan 18 S4: `ReviewConfig::path_filter_max`),
+    /// so that the refresh re-checks only the merge requests the landing
+    /// may interact with. `None` (the default): no paths — every open
+    /// merge request of the target is checked again, as before.
+    #[must_use]
+    pub fn with_paths(mut self, max: Option<usize>) -> Self {
+        self.paths_max = max;
+        self
     }
 
     /// The browse cache every ref write invalidates (`forge serve`).

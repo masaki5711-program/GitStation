@@ -48,6 +48,14 @@ pub struct MergeabilityBody {
     pub checked_head_sha: Option<String>,
     #[schema(required = true)]
     pub checked_target_sha: Option<String>,
+    /// Plan 18 S4: the target tip the result was really computed against.
+    /// Differs from `checked_target_sha` when the result was carried
+    /// forward: the landings in between touched no path this merge
+    /// request's change can interact with, so the result was kept and
+    /// re-pointed instead of computed again (`null`: no finished check, or
+    /// one from before this field).
+    #[schema(required = true)]
+    pub computed_target_sha: Option<String>,
     /// UTC, RFC 3339.
     #[schema(required = true)]
     pub checked_at: Option<String>,
@@ -82,6 +90,7 @@ fn mergeability_body(
             head_sha: head,
             checked_head_sha: None,
             checked_target_sha: None,
+            computed_target_sha: None,
             checked_at: None,
             conflicts: Vec::new(),
             conflicts_truncated: false,
@@ -110,6 +119,7 @@ fn mergeability_body(
         head_sha: head,
         checked_head_sha: oid(s.checked_head_sha),
         checked_target_sha: oid(s.checked_target_sha),
+        computed_target_sha: oid(s.computed_target_sha),
         checked_at: s.checked_at,
         conflicts,
         conflicts_truncated,

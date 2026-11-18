@@ -291,6 +291,15 @@ pub struct MergeRequestStatusBody {
     /// computed, on a conflict, or without a version or target.
     #[schema(required = true)]
     pub merge_result_sha: Option<String>,
+    /// Plan 18 S4 (added within `schema_version` 1): the target tip the
+    /// mergeability result was computed against, when it answers for the
+    /// target's current tip only because it was carried forward — every
+    /// landing since touched no path this merge request's change can
+    /// interact with. `null`: computed against the current tip (or no
+    /// result answers for it). The decision is the same either way; the
+    /// merge queue merges the change again before anything lands.
+    #[schema(required = true)]
+    pub carried_from_target_sha: Option<String>,
     /// Without `refs/heads/`.
     pub target_branch: String,
     /// The method evaluated: the project's default.
@@ -338,6 +347,10 @@ pub(super) fn status_body(
         iid,
         head_sha: s.head_sha.as_ref().map(|h| h.as_str().to_owned()),
         merge_result_sha: s.merge_result_sha.as_ref().map(|h| h.as_str().to_owned()),
+        carried_from_target_sha: s
+            .carried_from_target_sha
+            .as_ref()
+            .map(|h| h.as_str().to_owned()),
         target_branch: s
             .target_branch
             .branch()

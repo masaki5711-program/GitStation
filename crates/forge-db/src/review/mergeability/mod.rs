@@ -42,6 +42,12 @@
 //!   `checked_target_sha` only. A new version marks it `unchecked` in the
 //!   version's own transaction ([`request::downgrade_on`]); readers compare
 //!   the pair with the live head and target before trusting a decision.
+//! - **Carry-forward** (`paths.rs`, plan 18 S4, ADR-0037 (c)): the check
+//!   stores the head's changed-path set with its result; a landing whose
+//!   `repository.pushed` payload lists what it changed moves
+//!   `checked_target_sha` of the decided rows it cannot interact with to
+//!   the new tip in one statement, without a job. `computed_target_sha`
+//!   keeps the tip the result was computed against.
 
 use std::time::Duration;
 
@@ -53,11 +59,14 @@ use crate::jobs::{self, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::{query_error, read_query_error, Db};
 
 mod confirm;
+mod paths;
 mod request;
 mod run;
 mod stale;
 
 pub use confirm::{confirm_live, decided_candidates, DecidedRow};
+pub(crate) use paths::{carry_forward_on, settled_on};
+pub use paths::{interacts_sql, recheck_if_carried, stored_paths};
 pub use request::DEFER_MAX;
 pub(crate) use request::{defer_checks_on, downgrade_on, request_check_on};
 pub use request::{
@@ -82,10 +91,27 @@ pub struct StoredMergeability {
     pub check_seq: i64,
     pub checked_head_sha: Option<ObjectId>,
     pub checked_target_sha: Option<ObjectId>,
+    /// Plan 18 S4: the target tip the result was really computed against.
+    /// It differs from `checked_target_sha` exactly when the result was
+    /// carried forward over landings that could not interact with the
+    /// merge request's paths ([`StoredMergeability::carried_from`]).
+    /// `None`: a row checked before the column existed.
+    pub computed_target_sha: Option<ObjectId>,
     /// UTC, RFC 3339.
     pub checked_at: Option<String>,
     pub conflicts: Vec<String>,
     pub conflicts_truncated: bool,
+}
+
+impl StoredMergeability {
+    /// The target tip the result was computed against, when the result was
+    /// carried forward from it (`None`: computed against
+    /// `checked_target_sha` itself).
+    pub fn carried_from(&self) -> Option<&ObjectId> {
+        self.computed_target_sha
+            .as_ref()
+            .filter(|computed| self.checked_target_sha.as_ref() != Some(*computed))
+    }
 }
 
 type StatusRow = (
@@ -97,11 +123,12 @@ type StatusRow = (
     Option<String>,
     Vec<String>,
     bool,
+    Option<String>,
 );
 
 const STATUS_COLUMNS: &str = "status, reason, check_seq, checked_head_sha, checked_target_sha, \
      to_char(checked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), conflicts, \
-     conflicts_truncated";
+     conflicts_truncated, computed_target_sha";
 
 pub(super) fn stored_invalid(reason: &'static str, mr: MergeRequestId) -> ForgeError {
     ForgeError::new(ErrorCode::Internal)
@@ -110,7 +137,7 @@ pub(super) fn stored_invalid(reason: &'static str, mr: MergeRequestId) -> ForgeE
 }
 
 fn parse_row(row: StatusRow, mr: MergeRequestId) -> Result<StoredMergeability, ForgeError> {
-    let (status, reason, check_seq, head, target, checked_at, conflicts, truncated) = row;
+    let (status, reason, check_seq, head, target, checked_at, conflicts, truncated, computed) = row;
     let oid = |raw: Option<String>| {
         raw.map(|r| {
             ObjectId::parse(&r).map_err(|_| stored_invalid("stored_checked_sha_invalid", mr))
@@ -128,6 +155,7 @@ fn parse_row(row: StatusRow, mr: MergeRequestId) -> Result<StoredMergeability, F
         check_seq,
         checked_head_sha: oid(head)?,
         checked_target_sha: oid(target)?,
+        computed_target_sha: oid(computed)?,
         checked_at,
         conflicts,
         conflicts_truncated: truncated,
@@ -276,5 +304,7 @@ pub(super) const ANSWERING: &str = "(g.status IN ('can_be_merged', 'cannot_be_me
      OR (g.status = 'check_failed' AND g.reason IN \
      ('target_missing', 'unrelated_histories', 'no_version')))";
 
+#[cfg(test)]
+mod paths_tests;
 #[cfg(test)]
 mod tests;

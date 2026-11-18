@@ -82,6 +82,18 @@ merge request in place (ADR-0024 §1).
   job's request (a `check_failed` answers the pair only for a deterministic `CheckReason`);
   `version_refs.rs` holds `VersionRefs` / `plan_ref_changes` (re-exported from `versions`). Tests
   `tests/mergeability_git.rs` (`check_maps_git_timeout_and_no_version_to_check_failed`).
+  Plan 18 S4 (ADR-0037 (c)): `Mergeability::with_paths(Option<usize>)` stores the head's
+  changed-path set with a decided result (`Git::changed_path_entries`: merge base → head and, when
+  clean, target tip → merged tree; unreadable → no set, warn
+  `forge.review.mergeability_paths_unread`; incomplete → info
+  `forge.review.mergeability_paths_incomplete`); `Merger::with_paths` makes a landing (the merge
+  job, and the queue once per batch) name its paths in the push record (warn
+  `forge.review.merge_paths_unlisted`, info `forge.review.merge_paths_incomplete`).
+  `MergeStatus::carried_from_target_sha` says a result was carried forward; the decision
+  (`stored_mergeable`) is unchanged. A merge that conflicts (FG-REVIEW-0006, the trial merge or
+  the train) requests a computed check of a carried row (`Merger::recompute_carried`, info
+  `forge.review.mergeability_carried_disproved`). Tests `tests/queue_paths/mod.rs`
+  (`a_carried_mr_that_conflicts_in_the_train_is_removed_with_fg_review_0006`).
 
 - M4 C7 (merge results and required-check freshness, plan 04 M-1 / M-2, ADR-0024 Amendment
   2026-11-11): a stored clean check becomes the merge result — `Git::write_merge_result` (the

@@ -394,6 +394,13 @@ impl MergeQueue {
     ) -> Result<(), ForgeError> {
         if db::remove_queued(&self.merger.db, entry.id, reason, code).await? {
             log_removed(entry, None, reason, code, &entry.request_id);
+            if code == ErrorCode::MergeRequestConflict {
+                // Plan 18 S4: a carried-forward "mergeable" the train just
+                // disproved is replaced by a computed answer.
+                self.merger
+                    .recompute_carried(entry.merge_request, &entry.request_id)
+                    .await;
+            }
         }
         Ok(())
     }
@@ -1763,7 +1770,11 @@ impl MergeQueue {
     }
 
     /// The normal merge record per entry, in train order (ADR-0030 §6.5),
-    /// then the entries `merged` and the batch `landed`.
+    /// then the entries `merged` and the batch `landed`. Plan 18 S4: what
+    /// the batch changed on the target is listed ONCE (base → train) and
+    /// written into every entry's record — the first one the refresh
+    /// handles carries the merge requests the whole batch cannot interact
+    /// with to the train's tip, the others find them settled there.
     async fn record_all(
         &self,
         lock: &MergeLock,
@@ -1772,12 +1783,24 @@ impl MergeQueue {
         repo: RepoId,
         clock: LandClock,
     ) -> Result<(), ForgeError> {
+        let landed = match decided.first() {
+            Some((_, attempt, _)) => {
+                let moved = (&attempt.target_branch, &batch.base_sha, &batch.train_sha);
+                self.merger
+                    .landed_paths(lock, repo, moved, &batch.request_id)
+                    .await
+            }
+            None => None,
+        };
         for (entry, attempt, subject) in decided {
             let executing = StoredMerge {
                 state: MergeState::Executing,
                 ..attempt.clone() // clone: the executing view of the same attempt
             };
-            let report = self.merger.record(lock, &executing, subject, &[]).await?;
+            let report = self
+                .merger
+                .record_with(lock, &executing, subject, &[], landed.as_ref())
+                .await?;
             if !db::entry_merged(&self.merger.db, entry.id).await? {
                 // Review MEDIUM: the merge is recorded (the merge request is
                 // merged) but the entry was not `testing` with its attempt —

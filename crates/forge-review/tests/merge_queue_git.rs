@@ -11,6 +11,7 @@
 //! `forge/risk` rules (M4 close), as `forge serve` wires them.
 
 mod common;
+mod queue_paths;
 mod queue_train_lint;
 
 use std::collections::BTreeSet;

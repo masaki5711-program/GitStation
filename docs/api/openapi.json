@@ -7016,6 +7016,13 @@
               }
             ]
           },
+          "carried_from_target_sha": {
+            "description": "Plan 18 S4 (added within `schema_version` 1): the target tip the\nmergeability result was computed against, when it answers for the\ntarget's current tip only because it was carried forward — every\nlanding since touched no path this merge request's change can\ninteract with. `null`: computed against the current tip (or no\nresult answers for it). The decision is the same either way; the\nmerge queue merges the change again before anything lands.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "checks": {
             "description": "The checks the target's merge rule requires (empty: none).",
             "items": {
@@ -7101,6 +7108,7 @@
           "iid",
           "head_sha",
           "merge_result_sha",
+          "carried_from_target_sha",
           "target_branch",
           "method",
           "mergeable",
@@ -7292,6 +7300,13 @@
               "null"
             ]
           },
+          "computed_target_sha": {
+            "description": "Plan 18 S4: the target tip the result was really computed against.\nDiffers from `checked_target_sha` when the result was carried\nforward: the landings in between touched no path this merge\nrequest's change can interact with, so the result was kept and\nre-pointed instead of computed again (`null`: no finished check, or\none from before this field).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "conflicts": {
             "description": "The conflicted paths (at most 100; `conflicts_truncated` beyond, or\nwhen paths an AI agent is not given were left out).",
             "items": {
@@ -7349,6 +7364,7 @@
           "head_sha",
           "checked_head_sha",
           "checked_target_sha",
+          "computed_target_sha",
           "checked_at",
           "conflicts",
           "conflicts_truncated"

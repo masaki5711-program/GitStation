@@ -11,6 +11,7 @@
 use std::time::Duration;
 
 use forge_auth::{prove, Action, Authorized, MergeRequestCtx, RefProtection};
+use forge_core::merge_paths::{LandedPaths, PathSet};
 use forge_core::{
     MergeMethod, MergeState, ObjectId, PushRecord, PushUpdateKind, PushedRef, RefName, RepoId,
 };
@@ -541,6 +542,10 @@ impl Merger {
                             .with_context("target_sha", target_tip.as_str().to_owned())
                             .with_context("conflict_files", files.len())
                             .with_context("files_truncated", files_truncated);
+                        // Plan 18 S4: a carried-forward "mergeable" this
+                        // merge just disproved is replaced by a computed one.
+                        self.recompute_carried(attempt.merge_request, &attempt.request_id)
+                            .await;
                         return self.refused(attempt, &[MergeState::Queued], refusal).await;
                     }
                     MergeTree::Clean { tree } => {
@@ -903,13 +908,138 @@ impl Merger {
     }
 
     /// Step 8 and 9: the applied line first, then tx2 (under the merge
-    /// lock: the job's or the reconciliation's).
+    /// lock: the job's or the reconciliation's). The record says what the
+    /// attempt's own move of the target changed (plan 18 S4).
     pub(super) async fn record(
         &self,
         lock: &MergeLock,
         attempt: &StoredMerge,
         subject: &Subject,
         scopes: &[String],
+    ) -> Result<MergeReport, ForgeError> {
+        let landed = match (&attempt.expected_old, &attempt.new_sha) {
+            (Some(old), Some(new)) => {
+                let moved = (&attempt.target_branch, old, new);
+                self.landed_paths(lock, subject.repo, moved, &attempt.request_id)
+                    .await
+            }
+            _ => None,
+        };
+        self.record_with(lock, attempt, subject, scopes, landed.as_ref())
+            .await
+    }
+
+    /// Plan 18 S4: a merge (the job's trial merge, or the queue's train)
+    /// found a conflict — `FG-REVIEW-0006` — in a merge request whose
+    /// stored result was carried forward over landings its paths did not
+    /// seem to interact with. The merge is the authority: the carried
+    /// answer is replaced by a computed check (the page stops saying
+    /// "mergeable"). A row that is not carried is left alone — its answer
+    /// is a computed one already, or its own check is on its way. A
+    /// failure here is logged with its code and is not the merge's: the
+    /// change is refused either way, and the next landing or the worker's
+    /// sweep (`sweep_missing_merge_results`) asks again.
+    pub(super) async fn recompute_carried(
+        &self,
+        mr: forge_core::ids::MergeRequestId,
+        request_id: &forge_core::RequestId,
+    ) {
+        // clone: the requested job keeps the merge's request id
+        let asked = review::recheck_if_carried(&self.db, mr, request_id.clone()).await;
+        match asked {
+            Ok(Some(check_seq)) => tracing::info!(
+                target: "forge_review",
+                event = "forge.review.mergeability_carried_disproved",
+                request_id = %request_id,
+                merge_request_id = mr.get(),
+                check_seq,
+                "a carried-forward mergeability result conflicted in the merge; a computed check was requested"
+            ),
+            Ok(None) => {}
+            Err(e) => forge_core::telemetry::log_failure(
+                &e.with_context("operation", "mergeability_recheck_carried")
+                    .with_context("merge_request_id", mr.get()),
+                request_id,
+            ),
+        }
+    }
+
+    /// What moving `target` from `old` to `new` changed, for the record's
+    /// `landed` block (plan 18 S4, forge-core `merge_paths`): one
+    /// `diff-tree --no-renames` through forge-git. `None`: no block — the
+    /// path filter is off, or the paths could not be read (logged; the ref
+    /// has moved already, so the record is never held up or refused for
+    /// it); the refresh then checks every merge request again. A listing
+    /// that is not complete is a block that says so.
+    pub(super) async fn landed_paths(
+        &self,
+        lock: &MergeLock,
+        repo: RepoId,
+        (target, old, new): (&RefName, &ObjectId, &ObjectId),
+        request_id: &forge_core::RequestId,
+    ) -> Option<LandedPaths> {
+        let max = self.paths_max?;
+        let listing = self.timeouts.read.min(lock.left());
+        let listed = if listing.is_zero() {
+            Err(ForgeError::new(ErrorCode::DbQueryFailed)
+                .with_context("reason", "merge_lock_lost")
+                .with_context("detail", "hold_exceeded"))
+        } else {
+            self.git
+                .changed_path_entries(&self.storage, repo, old, new, max, listing)
+                .await
+        };
+        let paths = match listed {
+            Ok(Ok(entries)) => PathSet::build(entries, max),
+            Ok(Err(why)) => Err(why),
+            Err(e) => {
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.review.merge_paths_unlisted",
+                    error_code = e.code().id(),
+                    request_id = %request_id,
+                    repo_id = repo.get(),
+                    target = target.as_str(),
+                    old_sha = old.as_str(),
+                    new_sha = new.as_str(),
+                    "the merge is recorded without its changed paths; every open merge request of the target is checked again"
+                );
+                return None;
+            }
+        };
+        let paths = paths.unwrap_or_else(|why| {
+            tracing::info!(
+                target: "forge_review",
+                event = "forge.review.merge_paths_incomplete",
+                request_id = %request_id,
+                repo_id = repo.get(),
+                target = target.as_str(),
+                old_sha = old.as_str(),
+                new_sha = new.as_str(),
+                paths_complete = false,
+                paths = why.as_str(),
+                "the landing's path set is incomplete; every open merge request of the target is checked again"
+            );
+            PathSet::incomplete()
+        });
+        Some(LandedPaths {
+            target: target.clone(), // clone: the block owns its name
+            old: old.clone(),       // clone: as above
+            new: new.clone(),       // clone: as above
+            paths,
+        })
+    }
+
+    /// [`Merger::record`] with the landed block given: the merge queue
+    /// lists one batch's paths once and records every entry with them
+    /// (`landed`'s tips are the batch's, not the attempt's own).
+    pub(super) async fn record_with(
+        &self,
+        lock: &MergeLock,
+        attempt: &StoredMerge,
+        subject: &Subject,
+        scopes: &[String],
+        landed: Option<&LandedPaths>,
     ) -> Result<MergeReport, ForgeError> {
         let (Some(old), Some(new)) = (&attempt.expected_old, &attempt.new_sha) else {
             return Err(not_prepared(attempt));
@@ -932,7 +1062,7 @@ impl Merger {
         let pushers = self.merge_commit_pushers(lock, attempt, subject, old).await;
         let scopes = (!scopes.is_empty()).then_some(scopes);
         let ctx = requester_ctx(attempt, scopes);
-        match finish_merge(&self.db, &ctx, attempt, &push, pushers.as_deref()).await {
+        match finish_merge(&self.db, &ctx, attempt, &push, pushers.as_deref(), landed).await {
             Ok(MergeFinished::Recorded(_)) => Ok(MergeReport {
                 outcome: "applied",
                 state: MergeState::Applied,

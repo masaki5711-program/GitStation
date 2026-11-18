@@ -5719,6 +5719,16 @@ export interface components {
         /** @description `GET …/status` (the stable contract, `schema_version` 1). */
         MergeRequestStatusBody: {
             approvals: null | components["schemas"]["StatusApprovalsBody"];
+            /**
+             * @description Plan 18 S4 (added within `schema_version` 1): the target tip the
+             *     mergeability result was computed against, when it answers for the
+             *     target's current tip only because it was carried forward — every
+             *     landing since touched no path this merge request's change can
+             *     interact with. `null`: computed against the current tip (or no
+             *     result answers for it). The decision is the same either way; the
+             *     merge queue merges the change again before anything lands.
+             */
+            carried_from_target_sha: string | null;
             /** @description The checks the target's merge rule requires (empty: none). */
             checks: components["schemas"]["StatusCheckBody"][];
             codeowners: components["schemas"]["StatusCodeownersBody"];
@@ -5838,6 +5848,15 @@ export interface components {
             /** @description The head and target tip the last finished check looked at. */
             checked_head_sha: string | null;
             checked_target_sha: string | null;
+            /**
+             * @description Plan 18 S4: the target tip the result was really computed against.
+             *     Differs from `checked_target_sha` when the result was carried
+             *     forward: the landings in between touched no path this merge
+             *     request's change can interact with, so the result was kept and
+             *     re-pointed instead of computed again (`null`: no finished check, or
+             *     one from before this field).
+             */
+            computed_target_sha: string | null;
             /**
              * @description The conflicted paths (at most 100; `conflicts_truncated` beyond, or
              *     when paths an AI agent is not given were left out).

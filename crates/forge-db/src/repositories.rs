@@ -955,6 +955,9 @@ async fn record(
         repository_id: repo,
         updates: push.sorted_updates(),
         replayed_from: replay.map(|(_, who)| who),
+        // A push says nothing about paths: every open merge request of a
+        // pushed target is checked again (plan 18 S4).
+        landed: None,
     };
     let event_type = details
         .event_type()

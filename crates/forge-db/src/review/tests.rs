@@ -371,6 +371,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     target: oid('b').ok(),
                     conflicts: Vec::new(),
                     conflicts_truncated: false,
+                    paths: None,
                 };
                 let origin = RequestId::parse("req-setup").expect("id");
                 if let Some(first) = setup {
@@ -522,9 +523,10 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                         total_commits_partial: false,
                     }],
                 };
-                let done = merges::finish_merge(&t.db, &ctx(&request), &attempt, &push, Some(&[]))
-                    .await
-                    .expect("finish");
+                let done =
+                    merges::finish_merge(&t.db, &ctx(&request), &attempt, &push, Some(&[]), None)
+                        .await
+                        .expect("finish");
                 assert!(matches!(done, merges::MergeFinished::Recorded(_)));
                 let again = merges::finish_merge(
                     &t.db,
@@ -532,6 +534,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     &attempt,
                     &push,
                     Some(&[]),
+                    None,
                 )
                 .await
                 .expect("again");
