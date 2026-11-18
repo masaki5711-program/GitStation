@@ -161,7 +161,8 @@
 | FG-DB-0024 | WakeupMissed | warn | new | `job-queue-backlog` |
 | FG-CI-0032 | MergeQueueDocLintFailed | info | new | `merge-queue` |
 | FG-DOC-0002 | (incomplete lint) | — | 文脈 `scope=train`、`reason=train_budget\|read_failed` を記す | `merge-queue` |
-| FG-CI-0024 | MergeQueueStalled | alert | 診断に `doc_lint_unavailable` を足す | `merge-queue` |
+| FG-CI-0024 | MergeQueueStalled | alert | 診断に `doc_lint_unavailable` を足す（Amendment: 3 回目のエントリーの理由にもなる） | `merge-queue` |
+| FG-REPO-0024 | (repo.yml invalid) | — | Amendment: 文脈 `reason=doc_lint_repo_config_invalid`（キューの除外、warn）を記す | `merge-queue` |
 | FG-CI-0013 | (required check stale) | — | 文脈 `hint=merge_queue` を記す | `merge-blocked` |
 | FG-REVIEW-0006 | (conflict) | — | 診断に「持ち越した行」を足す | `merge-request-mergeability` |
 
@@ -260,7 +261,25 @@ S1 で (b) の 1・2 を作った。上の Interface sketch と違うところ�
   段を指す `NewProblems` では表せない。列車の MR は全部 `FG-CI-0032`（`reason=doc_lint_base_not_clean`）で外れる。
 - **キーの置き場所**: `merge_queue.train_lint_budget_ms` はサーバーの設定（既定 10000、100〜60000、**0 で関門を切る** = S1 の前の動き）。
   `merge_queue.doc_lint_strict` はリポジトリの `.forge/repo.yml`（`merge_queue:` の下）で、**列車の土台**の版を読む（MR の中で値を変えても、
-  その MR の着地には効かない）。土台の `.forge/repo.yml` が正しくないときは厳格として扱う（緩めない）。マイグレーションは無い。
+  その MR の着地には効かない）。マイグレーションは無い。
+- **土台の `.forge/repo.yml` が正しくないとき**（レビューの後で変えた）: はじめは「厳格として扱う」だけだったが、土台に古い問題が
+  あると `.forge/repo.yml` を**直す MR まで** `doc_lint_base_not_clean` で外れ、リポジトリが詰まった。そこで、土台が正しくないときだけ
+  **列車の先端**の `.forge/repo.yml` で決める: 正しければその値（直す MR は着地できる）、無ければ厳格でない、やはり正しくなければ厳格。
+  土台が正しく読める限り土台の値だけを使う、は変えない（列車の MR は自分の列車の規則を緩められない）。両方で正しくなく、土台の問題が
+  残るときは `TrainLintVerdict::RepoConfigInvalid { problems, config }`（足した値）で、列車の MR は全部 **`FG-REPO-0024`**
+  （`reason=doc_lint_repo_config_invalid`、warn、`config_line` / `config_reason`）で外れる。「あなたの文書が壊れている」とは読めない
+  ようにするため、`FG-CI-0032` とは別のコードと理由にした。
+- **lint できずに 3 回目で外れる MR の理由**（レビューの後で変えた）: コードは `FG-CI-0024` のまま、エントリーの理由を `stalled` ではなく
+  `doc_lint_unavailable` にした（`stalled` は「試験が期限までに終わらなかった」で、原因を隠す）。その `entry_removed` に lint の
+  `lint_reason` / `cause` / `bound` / `budget_ms` を付ける。forge-db は変えていない（3 回目の MR を `BatchEnd.removed` に名指しで入れる）。
+  自動マージは `doc_lint_unavailable` を `stopped`（`not_assessed`、`merge_queue_doc_lint_unavailable`）、`doc_lint_repo_config_invalid` を
+  `held`（`merge_queue_repo_config_invalid`）にする（`stalled` のままだと入れ直して同じ 3 回を繰り返す）。
+- **ログの重さ**: `FG-CI-0032` の除外はカタログ（info）のとおり info。warn は設定が原因の除外（`FG-REPO-0024`）と 3 回目の `FG-CI-0024` だけ。
+  対象でない列車は debug の `train_lint_skipped`（関門を切っているときは何も出ない）。`lint_ms` は関門が答えを待った時間で、対象でない
+  列車でも 0 ではない（`.forge/repo.yml` の読み取りと変わったパスの一覧）。
+- **予算は「待つのをやめる」だけ**（既知の制限）: 木の lint は blocking のスレッドの上の 1 回の `forge_doc::lint::lint` で、途中で
+  止める点が無い（forge-doc は純粋なまま）。時間切れのあとも走り切り、結果は捨てる。読む上限が 1 本の大きさを抑え、MR は 3 回で
+  外れるので、残る本数は限られる。取り消しの旗は入れていない（S7 の増分の索引で木の全部を読まなくなるときに見直す）。
 - **対象**: どれかの MR が `.md` か `.forge/doctypes/**` を変えるとき、または厳格なリポジトリ。「`forge/doc-lint` が target の必須チェックのとき」は
   別には見ていない: 文書も文書型も変えない列車の木は、土台と同じ lint の答えになるので、「増えていない」の判定は変わらない
   （違いは、その列車の先端に `forge/doc-lint` のチェックが記録されないことだけ）。
