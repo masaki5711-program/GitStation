@@ -31,6 +31,12 @@ M4 C9（ADR-0017 Amendment 2026-11-13、計画 04 M-5 / M-6）の自動マージ
      `detail` が forge/risk の規則か必須チェックの名前。`gstn checks list --project <id> --sha <head>` で forge/risk の根拠を読む。
    - `waiting` は止まっていない（`risk_pending`、`draft`、`approvals_missing`、`protected_path`、`conflict` など）。条件がそろえば進む。
    - `held reason=dequeued_by_person`: 人がキューから外した版。新しい push か、人の「準備ができたらマージ」で進む。
+   - `stopped reason=merge_queue_doc_lint_failed`（`program_breakage`、`detail=forge/doc-lint`。計画 18 S1）: その MR だけでは
+     forge/doc-lint が通ったが、列車の木（前に並ぶ MR と合わせた結果）で文書の問題が増え、キューから外れた（`FG-CI-0032`、
+     `reason=doc_lint_failed`）。同じ版は自動では入れ直さない。作者が直して push する。Runbook `merge-queue` の「列車の doc-lint」。
+   - `held reason=merge_queue_doc_lint_base`: 厳格なリポジトリ（`.forge/repo.yml` の `merge_queue.doc_lint_strict`）で、target に
+     すでに文書の問題がある（`FG-CI-0032`、`reason=doc_lint_base_not_clean`）。この MR は原因ではない。target がきれいになった後、
+     新しい push か人の「準備ができたらマージ」で進む。Runbook `merge-queue`。
    - `held reason=full_auto_not_allowed`: プロジェクトは `full` だが、インスタンスの `merge.allow_full_auto` が外れている
      （実効は `reserve`）。キューにあった自動マージのエントリーは `reason=full_auto_not_allowed` で外れている。人がマージするか、
      管理者が許可を戻す。

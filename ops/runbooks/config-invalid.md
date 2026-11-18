@@ -60,6 +60,10 @@
      - `config_key=review.worker_job_concurrency`（`forge worker` が同時に動かすジョブの数）: `below_min`（0）、`above_max`（17 以上。16 まで）、
        `above_half_write_pool`（`database.write_max_connections` の半分より多い。プールを広げるか値を下げる）、`invalid`（整数でない）。
        未設定なら 4（書き込みのプールの半分が 4 より小さければその数）。`FORGE_REVIEW_WORKER_JOB_CONCURRENCY` か設定ファイルの `[review] worker_job_concurrency`
+     - `config_key=merge_queue.train_lint_budget_ms`（計画 18 S1。着地の前の列車の doc-lint 1 回の上限、ミリ秒。Runbook `merge-queue`）: `below_min`
+       （1〜99。100 から）、`above_max`（60001 以上。60000 まで）、`invalid`（整数でない）。未設定なら 10000。**0 は「列車の lint を切る」**
+       （誤りではない。起動のログ `forge.serve.merge_queue_started` に `train_lint=off`）。`FORGE_MERGE_QUEUE_TRAIN_LINT_BUDGET_MS` か設定ファイルの
+       `[merge_queue] train_lint_budget_ms`。リポジトリごとの `merge_queue.doc_lint_strict` はここではなく、リポジトリの `.forge/repo.yml`
      - `config_key=maintenance.*`（M3 O3。リポジトリの保守、Runbook `repo-maintenance`。`FORGE_MAINTENANCE_…` か設定ファイルの `[maintenance]`）:
        `interval_days`（1〜90、既定 7）、`window_start` / `window_end`（`HH:MM`、既定 02:00 / 05:00。同じ値は `empty_window`）、
        `window_time_zone`（IANA の名前、既定 `Asia/Tokyo`。形が違えば `invalid`、DB が知らない名前は worker の起動で `unknown`）、
