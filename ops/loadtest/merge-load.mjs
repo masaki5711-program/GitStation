@@ -6,16 +6,25 @@
 //   c  system code: K MRs through the merge queue with a tiny CI; some break
 //      the combined build only together with another MR (semantic conflict)
 //   d  P parallel git pushes to different branches, then clone timing
+//   a-burst  documents: N MRs created at once (no waves); the drain rate
+//   e  soak: --count merges at --rate per minute with --burst minutes; samples
+//      the backlog, the DB size and the repository size; says if the backlog grows
+//   spawn-bench  local only (no server, no token): per-call time of
+//      `git rev-parse HEAD` and `git merge-tree --write-tree` on this host
 //   sample  forge CPU/memory, PG connections, job backlog, free memory every 10 s
 //
-// Usage (Git Bash, from the worktree root):
+// Usage (Git Bash or a Linux shell, from the worktree root):
 //   GS_LT_TOKEN_FILE=<file with one fgp_ token> GS_LT_WORK=<scratch dir> \
-//     node ops/loadtest/merge-load.mjs <a|b|c|d|sample> [--n 200] [--burst 50] [--tag run1]
+//     node ops/loadtest/merge-load.mjs <a|a-burst|b|c|d|e|sample> [--n 200] [--burst 50] [--tag run1]
+//   GS_LT_WORK=<scratch dir> node ops/loadtest/merge-load.mjs spawn-bench [--n 100]
 // Results: $GS_LT_OUT/<scenario>-<tag>.json (+ .jsonl event logs).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { performance } from 'node:perf_hooks';
 import * as L from './lib.mjs';
 import * as D from './docs-fixture.mjs';
 
@@ -30,15 +39,29 @@ const TAG = opt('tag', new Date().toISOString().slice(0, 16).replace(/[:T]/g, ''
 const GROUP = opt('group', 'loadtest');
 const WORK = process.env.GS_LT_WORK ?? path.join(L.OUT, 'work');
 const PG = process.env.GS_LT_PG_CONTAINER ?? 'gs-m3-test-gs-test-pg-1';
+// GS_LT_PSQL_DIRECT=1: `psql` of this host with the libpq environment
+// (PGHOST, PGPORT, PGUSER, PGPASSFILE) instead of `docker exec` (a Linux host)
+const PSQL_DIRECT = process.env.GS_LT_PSQL_DIRECT === '1';
+const PG_DB = process.env.GS_LT_PG_DB ?? 'forge';
+// every session of the load test is read-only: a write fails in PostgreSQL
+const READ_ONLY = '-c default_transaction_read_only=on';
+// GS_LT_STORAGE_ROOT: forge's `storage.root` when it is on this host (the size of a repository)
+const STORAGE_ROOT = process.env.GS_LT_STORAGE_ROOT ?? null;
 const STOP_FILE = path.join(L.OUT, 'STOP');
 const MIN_FREE_GB = Number(process.env.GS_LT_MIN_FREE_GB ?? 3);
 fs.mkdirSync(WORK, { recursive: true });
 
-/** Read-only SQL against the test database (superuser inside the container). */
+/** Read-only SQL against the test database (superuser inside the container, or `psql` of this host). */
 async function sql(q) {
-  const r = await pexec('docker', ['exec', PG, 'psql', '-U', 'postgres', '-d', 'forge', '-AtF', '\t', '-c', q], {
-    timeout: 30000, maxBuffer: 32 << 20,
-  });
+  const query = ['-v', 'ON_ERROR_STOP=1', '-AtF', '\t', '-c', q];
+  const r = PSQL_DIRECT
+    ? await pexec('psql', ['-X', '-d', PG_DB, ...query], {
+      timeout: 60000, maxBuffer: 64 << 20,
+      env: { ...process.env, PGOPTIONS: `${process.env.PGOPTIONS ?? ''} ${READ_ONLY}`.trim() },
+    })
+    : await pexec('docker', ['exec', '-e', `PGOPTIONS=${READ_ONLY}`, PG, 'psql', '-X', '-U', 'postgres', '-d', PG_DB, ...query], {
+      timeout: 60000, maxBuffer: 64 << 20,
+    });
   return r.stdout.trim() ? r.stdout.trim().split('\n').map((l) => l.split('\t')) : [];
 }
 const stopRequested = () => fs.existsSync(STOP_FILE);
@@ -50,10 +73,28 @@ function abortIfStopped() {
 }
 const iso = (ms) => new Date(ms).toISOString();
 const secs = (a, b) => (Date.parse(b) - Date.parse(a)) / 1000;
+const round1 = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'number' ? Math.round(v * 10) / 10 : v]));
+const mean = (xs) => (xs.length ? xs.reduce((a, x) => a + x, 0) / xs.length : null);
 
 // ---------------------------------------------------------------- sampler
+/** Free memory and the forge processes on Linux, as the lines the sampler reads. */
+function procfsLines() {
+  const lines = [`free|${os.freemem() / 1024}`];
+  for (const pid of fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
+    try {
+      if (fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim() !== 'forge') continue;
+      const role = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').includes('worker') ? 'worker' : 'serve';
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      // after "(comm) ": state is field 3, utime 14, stime 15 (clock ticks, 100 per second)
+      const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      const rssKb = Number(fs.readFileSync(`/proc/${pid}/status`, 'utf8').match(/^VmRSS:\s+(\d+) kB/m)?.[1] ?? 0);
+      lines.push(`${pid}|${role}|${(Number(f[11]) + Number(f[12])) / 100}|${rssKb * 1024}`);
+    } catch { /* the process ended between the listing and the read */ }
+  }
+  return lines.join('\n');
+}
 async function sampleOnce(prev) {
-  const ps = await pexec('powershell', ['-NoProfile', '-Command',
+  const ps = process.platform !== 'win32' ? { stdout: procfsLines() } : await pexec('powershell', ['-NoProfile', '-Command',
     "$o=Get-CimInstance Win32_OperatingSystem; $p=Get-CimInstance Win32_Process -Filter \"name='forge.exe'\" | ForEach-Object { $g=Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; if($g){ '{0}|{1}|{2}|{3}' -f $_.ProcessId,($(if($_.CommandLine -match ' worker'){'worker'}else{'serve'})),$g.CPU,$g.WorkingSet64 } }; 'free|' + $o.FreePhysicalMemory; $p"],
   { timeout: 30000 });
   const out = { t: new Date().toISOString(), procs: {} };
@@ -69,7 +110,7 @@ async function sampleOnce(prev) {
         cpu_pct: p && dt ? Math.round(((cpu - p.cpu_s) / dt) * 1000) / 10 : null };
     }
   }
-  const conn = await sql("select coalesce(state,'?'), count(*) from pg_stat_activity where datname='forge' group by 1");
+  const conn = await sql("select coalesce(state,'?'), count(*) from pg_stat_activity where datname=current_database() group by 1");
   out.pg = Object.fromEntries(conn.map(([s, c]) => [s, Number(c)]));
   out.pg_total = conn.reduce((a, [, c]) => a + Number(c), 0);
   const jobs = await sql("select state, count(*) from forge.jobs where state not in ('succeeded') group by 1");
@@ -222,6 +263,27 @@ async function queueFacts(p) {
     auto_merge: am.map(([iid, state, reason, code, cls]) => ({ iid: +iid, state, reason, error_code: code || null, class: cls || null })),
   };
 }
+/** Per-batch durations from the batches' own timestamps (created to finished; seconds). */
+function batchDurations(batches) {
+  const done = batches.filter((b) => b.finished);
+  const dur = (b) => secs(b.created, b.finished);
+  const grouped = (rows, key) => {
+    const g = {};
+    for (const b of rows) (g[key(b)] ??= []).push(dur(b));
+    return Object.fromEntries(Object.entries(g).map(([k, v]) => [k, round1(L.stats(v))]));
+  };
+  const landed = done.filter((b) => b.state === 'landed');
+  // one batch at a time per queue: from one batch's end to the next one's row
+  const gaps = [];
+  for (let i = 1; i < batches.length; i++) if (batches[i - 1].finished) gaps.push(secs(batches[i - 1].finished, batches[i].created));
+  return {
+    all_s: round1(L.stats(done.map(dur))),
+    by_state_s: grouped(done, (b) => b.state),
+    landed_by_size_s: grouped(landed, (b) => b.size),
+    landed_per_item_s: round1(L.stats(landed.map((b) => dur(b) / b.size))),
+    gap_to_next_batch_s: round1(L.stats(gaps)),
+  };
+}
 function summarize(recs, facts) {
   const byIid = new Map(recs.filter((r) => r.iid).map((r) => [r.iid, r]));
   const firstEntry = new Map();
@@ -238,6 +300,13 @@ function summarize(recs, facts) {
   }
   const firstCreate = Math.min(...recs.map((r) => Date.parse(r.t_create)));
   const lastMerged = mergedTimes.length ? Math.max(...mergedTimes) : null;
+  // the drain: merges per minute from the last create (its answer) to the last merge
+  const lastCreate = Math.max(...recs.map((r) => Date.parse(r.t_create) + r.create_ms));
+  const drained = mergedTimes.filter((t) => t > lastCreate).length;
+  const drain = lastMerged && lastMerged > lastCreate
+    ? { last_create: iso(lastCreate), last_merged: iso(lastMerged), drain_s: Math.round((lastMerged - lastCreate) / 100) / 10,
+      merged_after_last_create: drained, per_min: Math.round((drained / ((lastMerged - lastCreate) / 60000)) * 10) / 10 }
+    : null;
   const perMinute = {};
   for (const t of mergedTimes) { const k = Math.floor((t - firstCreate) / 60000); perMinute[k] = (perMinute[k] ?? 0) + 1; }
   const codes = {};
@@ -248,7 +317,7 @@ function summarize(recs, facts) {
   for (const a of facts.auto_merge) bump(a.error_code && `auto_merge:${a.error_code}:${a.reason}`);
   const batchSizes = {};
   for (const b of facts.batches) batchSizes[`${b.size}:${b.state}`] = (batchSizes[`${b.size}:${b.state}`] ?? 0) + 1;
-  const round = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'number' ? Math.round(v * 10) / 10 : v]));
+  const round = round1;
   return {
     mrs: recs.length,
     merged: mergedTimes.length,
@@ -258,11 +327,12 @@ function summarize(recs, facts) {
     enqueued_by_person: facts.entries.filter((e) => byIid.has(e.iid) && e.credential_kind !== 'auto_merge' && e.enqueued_by === 1).length,
     span_s: lastMerged ? Math.round((lastMerged - firstCreate) / 100) / 10 : null,
     throughput_per_min: lastMerged ? Math.round((mergedTimes.length / ((lastMerged - firstCreate) / 60000)) * 10) / 10 : null,
+    drain,
     merged_per_minute: perMinute,
     create_ms: round(L.stats(recs.map((r) => r.create_ms))),
     enqueue_ms: round(L.stats(recs.filter((r) => r.enqueue_ms_all).flatMap((r) => r.enqueue_ms_all))),
     enqueue_final: recs.filter((r) => r.enqueue_attempts).reduce((a, r) => { const k = r.enqueue_error ?? 'ok'; a[k] = (a[k] ?? 0) + 1; return a; }, {}),
-    batches: { count: facts.batches.length, by_size_state: batchSizes },
+    batches: { count: facts.batches.length, by_size_state: batchSizes, duration: batchDurations(facts.batches) },
     entries: { count: facts.entries.length, by_state: facts.entries.reduce((a, e) => ((a[e.state] = (a[e.state] ?? 0) + 1), a), {}) },
     error_codes: codes,
   };
@@ -284,15 +354,64 @@ async function gitShow(p, ref, file) {
   await L.gitOk(p.dir, ['fetch', '-q', L.repoUrl(GROUP, p.name), `+refs/heads/main:refs/remotes/origin/main`]);
   return (await L.gitOk(p.dir, ['show', `origin/main:${file}`])).stdout;
 }
+/**
+ * What must hold on `main` after every scenario (handoff 2026-11-17, plan 18
+ * §1): no conflict marker in main's tree, no push pipeline on a first-parent
+ * commit that did not succeed, and (documents) `forge/doc-lint` success on
+ * every first-parent commit — not only the tip. A commit without a check run
+ * of its own is `missing`; `missing_merged_head_success` counts those whose
+ * merged head (second parent) has a success.
+ */
+async function mainIntegrity(p, { docLint }) {
+  await L.gitOk(p.dir, ['fetch', '-q', L.repoUrl(GROUP, p.name), '+refs/heads/main:refs/remotes/origin/main']);
+  const line = (await L.gitOk(p.dir, ['rev-list', '--first-parent', '--parents', 'origin/main'])).stdout.trim().split('\n').map((l) => l.split(' '));
+  // git grep: exit 0 = a match, 1 = none
+  const grep = await L.git(p.dir, ['grep', '-l', '-I', '-E', '^(<<<<<<< |=======$|>>>>>>> )', 'origin/main', '--']);
+  if (!grep.ok && grep.code !== 1) throw new Error(`git grep failed: ${grep.stderr.slice(0, 300)}`);
+  const marked = grep.ok ? grep.stdout.trim().split('\n').map((f) => f.replace(/^origin\/main:/, '')) : [];
+  const pipes = new Map((await sql(`select sha, status from forge.ci_pipelines where project_id=${p.id} and source='push' order by id`)).map(([sha, st]) => [sha, st]));
+  const notGreen = line.filter(([sha]) => pipes.has(sha) && pipes.get(sha) !== 'succeeded').map(([sha]) => ({ sha, status: pipes.get(sha) }));
+  const out = {
+    main_sha: line[0][0], first_parent_commits: line.length,
+    conflict_marker_files: marked,
+    push_pipelines_not_succeeded: notGreen.length, push_pipelines_not_succeeded_first: notGreen.slice(0, 20),
+    ok: marked.length === 0 && notGreen.length === 0,
+  };
+  if (!docLint) return out;
+  const runs = new Map((await sql(`select head_sha, coalesce(conclusion, status) from forge.check_runs where project_id=${p.id} and name='forge/doc-lint'`)).map(([sha, c]) => [sha, c]));
+  const lint = { success: 0, not_success: [], missing: 0, missing_merged_head_success: 0, missing_first: [], tip: runs.get(line[0][0]) ?? null };
+  for (const [sha, , mergedHead] of line) {
+    const own = runs.get(sha);
+    if (own === 'success') lint.success++;
+    else if (own) lint.not_success.push({ sha, conclusion: own });
+    else {
+      lint.missing++;
+      if (mergedHead && runs.get(mergedHead) === 'success') lint.missing_merged_head_success++;
+      if (lint.missing_first.length < 20) lint.missing_first.push(sha);
+    }
+  }
+  lint.every_first_parent_commit_success = lint.success === line.length;
+  lint.not_success_count = lint.not_success.length;
+  lint.not_success = lint.not_success.slice(0, 50);
+  out.doc_lint_first_parent = lint;
+  out.ok = out.ok && lint.every_first_parent_commit_success;
+  return out;
+}
+/** The integrity of main in one line (the lists stay in the result file). */
+const integrityLine = (g) => JSON.stringify({ ...g, push_pipelines_not_succeeded_first: undefined,
+  doc_lint_first_parent: g.doc_lint_first_parent && { ...g.doc_lint_first_parent, not_success: undefined, missing_first: undefined } });
 
-// ---------------------------------------------------------------- A
-async function scenarioA() {
+// ---------------------------------------------------------------- A, A-burst
+/** `a`: waves of --burst MRs, --gap seconds apart. `a-burst`: all --n MRs at once. */
+async function scenarioA({ atOnce = false } = {}) {
+  const key = atOnce ? 'a-burst' : 'a';
   const n = Number(opt('n', 200));
-  const burst = Number(opt('burst', 50));
-  const personFrom = Number(opt('person-from', Math.floor(n / 2))); // MRs >= this index are enqueued by a person too
+  const burst = atOnce ? n : Number(opt('burst', 50));
+  // MRs >= this index are enqueued by a person too (a-burst: none, auto-merge alone drains it)
+  const personFrom = Number(opt('person-from', atOnce ? n : Math.floor(n / 2)));
   const files = { '.forge/doctypes/lt.procedure.yml': D.DOCTYPE };
   for (let i = 1; i <= n; i++) files[D.docPath(i)] = D.doc(i);
-  const p = await seedProject(`docs-a-${TAG}`, files, ['forge/doc-lint']);
+  const p = await seedProject(`docs-${atOnce ? 'ab' : 'a'}-${TAG}`, files, ['forge/doc-lint']);
   console.log(`project ${GROUP}/${p.name} id ${p.id}: ${n} documents, main requires forge/doc-lint`);
   const branches = [];
   for (let i = 1; i <= n; i++) {
@@ -310,7 +429,7 @@ async function scenarioA() {
     recs.push(...got);
     if (i + burst < n) await L.sleep(Number(opt('gap', 30)) * 1000);
   }
-  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: Number(opt('timeout', 3600)) * 1000, label: 'A' });
+  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: Number(opt('timeout', 3600)) * 1000, label: key });
   const facts = await queueFacts(p);
   const lint = await sql(`select c.conclusion, count(*) from forge.check_runs c where c.project_id=${p.id} and c.name='forge/doc-lint' group by 1`);
   // integrity: every document on main carries its revision
@@ -322,10 +441,12 @@ async function scenarioA() {
   }
   const listed = await L.api('GET', `/api/v1/projects/${p.id}/documents`);
   const docsListed = { status: listed.status, count: listed.body?.documents?.length ?? null, ms: Math.round(listed.ms) };
-  const result = { scenario: 'A', tag: TAG, docs_listed_on_main: docsListed, project: `${GROUP}/${p.name}`, project_id: p.id, n, burst, person_from: personFrom,
-    started: iso(t0), settle, summary: summarize(recs, facts), doc_lint_runs: Object.fromEntries(lint), revisions_missing_on_main: missing, facts };
-  L.save(`a-${TAG}.json`, result);
+  const integrity = await mainIntegrity(p, { docLint: true });
+  const result = { scenario: key, tag: TAG, docs_listed_on_main: docsListed, project: `${GROUP}/${p.name}`, project_id: p.id, n, burst, person_from: personFrom,
+    started: iso(t0), settle, summary: summarize(recs, facts), doc_lint_runs: Object.fromEntries(lint), revisions_missing_on_main: missing, integrity, facts };
+  L.save(`${key}-${TAG}.json`, result);
   console.log(JSON.stringify(result.summary, null, 1), 'missing on main:', missing.length);
+  console.log('integrity of main:', integrityLine(integrity));
 }
 
 // ---------------------------------------------------------------- B
@@ -374,12 +495,14 @@ async function scenarioB() {
   // the document as the portal parses it on main (every step block still there)
   const dv = await L.api('GET', `/api/v1/projects/${p.id}/documents/${D.docId(1)}`);
   const docOnMain = { status: dv.status, step_ids: new Set((JSON.stringify(dv.body).match(/"id":"S-\d+"/g) ?? [])).size, expected_steps: steps };
-  const result = { scenario: 'B', tag: TAG, project: `${GROUP}/${p.name}`, project_id: p.id, m, settle,
+  const integrity = await mainIntegrity(p, { docLint: true });
+  const result = { scenario: 'B', tag: TAG, project: `${GROUP}/${p.name}`, project_id: p.id, m, settle, integrity,
     summary: summarize(recs, facts),
     merged_by_kind: recs.reduce((a, r) => { const mr = facts.mrs.find((x) => x.iid === r.iid); const k = `${r.kind}:${mr?.merged_at ? 'merged' : mr?.state}`; a[k] = (a[k] ?? 0) + 1; return a; }, {}),
     lost_edits: lost, conflict_markers_on_main: conflictMarkers, doc_on_main: docOnMain, main_sha: mainSha, main_checks: mainChecks, not_merged_views: views, facts };
   L.save(`b-${TAG}.json`, result);
   console.log(JSON.stringify({ ...result.summary, merged_by_kind: result.merged_by_kind, lost: lost.length, conflictMarkers }, null, 1));
+  console.log('integrity of main:', integrityLine(integrity));
 }
 
 // ---------------------------------------------------------------- C
@@ -457,13 +580,15 @@ async function scenarioC() {
   const breakers = recs.filter((r) => r.breaker).map((r) => ({ iid: r.iid, i: r.i, ...r.breaker,
     merged: !!facts.mrs.find((x) => x.iid === r.iid)?.merged_at, entries: facts.entries.filter((e) => e.iid === r.iid) }));
   const partners = pairs.map(([a]) => ({ i: a, iid: recs.find((r) => r.i === a)?.iid, merged: !!facts.mrs.find((x) => x.iid === recs.find((r) => r.i === a)?.iid)?.merged_at }));
-  const result = { scenario: 'C', tag: TAG, project: `${GROUP}/${p.name}`, project_id: p.id, k, settle,
+  const integrity = await mainIntegrity(p, { docLint: false });
+  const result = { scenario: 'C', tag: TAG, project: `${GROUP}/${p.name}`, project_id: p.id, k, settle, integrity,
     summary: summarize(recs, facts), pipelines_by_source_status: bySource,
     ci_jobs: jobs.map(([s, c, run, wait]) => ({ status: s, count: +c, avg_run_s: +run, avg_wait_s: +wait })),
     main_first_parent_commits: line.length, main_red_push_pipelines: mainRed, main_without_push_pipeline: mainUnknown.length,
     local_check_on_main: localCheck, breakers, partners, facts, pipelines: pipes };
   L.save(`c-${TAG}.json`, result);
   console.log(JSON.stringify({ ...result.summary, bySource, jobs: result.ci_jobs, mainRed: mainRed.length, localCheck, breakers: breakers.map((b) => [b.i, b.merged, b.entries.map((e) => `${e.state}/${e.error_code}/${e.reason}`)]) }, null, 1));
+  console.log('integrity of main:', integrityLine(integrity));
 }
 
 // ---------------------------------------------------------------- D
@@ -525,11 +650,366 @@ async function scenarioD() {
   console.log(JSON.stringify({ ...result, pushes: undefined }, null, 1));
 }
 
+// ---------------------------------------------------------------- E (soak)
+const STEPS = 10; // `::: step` blocks per fixture document
+/** MR number k (1-based) revises one step of one document; (document, step) repeats after docs × STEPS MRs. */
+const soakChange = (k, docs) => ({ k, doc: ((k - 1) % docs) + 1, step: (Math.floor((k - 1) / docs) % STEPS) + 1, branch: `e/m-${k}`, mark: `rev ${TAG} #${k}` });
+/** `text` (a fixture document as it is on main) with the change's step rewritten. */
+function reviseStep(text, c) {
+  const lines = text.split('\n');
+  const at = lines.indexOf(`::: step S-${c.step} role=作業者`);
+  if (at < 0) throw new Error(`${D.docPath(c.doc)}: step S-${c.step} not found on main`);
+  lines[at + 1] = `手順 ${c.step}: 改訂 (${c.mark})。設備 ${c.doc} の部位 ${c.step} を測定器で確かめる。`;
+  return lines.join('\n');
+}
+/** The group's branches: one commit each on top of main as it is now, pushed in one push per 50. */
+async function pushSoakBranches(p, group) {
+  const url = L.repoUrl(GROUP, p.name);
+  await L.gitOk(p.dir, ['fetch', '-q', url, '+refs/heads/main:refs/remotes/origin/main'], { timeoutMs: 120000 });
+  const base = (await L.localGitOk(p.dir, ['rev-parse', '--verify', 'refs/remotes/origin/main'])).stdout.trim();
+  const texts = await L.readBlobs(p.dir, group.map((c) => `${base}:${D.docPath(c.doc)}`));
+  // local refs are reused by every group (refs/lt/slot-N): the clone does not grow by a ref per MR
+  await L.commitOnTop(p.dir, base, group.map((c, j) => ({
+    ref: `refs/lt/slot-${j}`, path: D.docPath(c.doc), text: reviseStep(texts[j], c), message: `${D.docId(c.doc)} S-${c.step} (${c.mark})`,
+  })));
+  for (let i = 0; i < group.length; i += 50) {
+    const refs = group.slice(i, i + 50).map((c, j) => `refs/lt/slot-${i + j}:refs/heads/${c.branch}`);
+    await L.gitOk(p.dir, ['push', '-q', url, ...refs], { timeoutMs: 300000 });
+  }
+}
+/** Bytes and files under `dir` (a bare repository on this host). */
+async function dirBytes(dir) {
+  let bytes = 0;
+  let files = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop();
+    let entries;
+    try { entries = await fs.promises.readdir(d, { withFileTypes: true }); } catch (e) {
+      if (d === dir) throw e;
+      continue; // a directory git removed meanwhile (a temporary pack, gc)
+    }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) stack.push(full);
+      else if (e.isFile()) {
+        try { bytes += (await fs.promises.stat(full)).size; files++; } catch { /* a file git removed meanwhile */ }
+      }
+    }
+  }
+  return { bytes, files };
+}
+/** Where forge keeps repository `id` under its storage root (forge-git `StorageRoot::path_for`). */
+const repoDirOf = (root, id) => path.join(root, 'repos', createHash('sha256').update(String(id)).digest('hex').slice(0, 2), `${id}.git`);
+/** One read of the backlog: merge requests, live queue entries, jobs, the database's size. */
+async function soakCounts(p) {
+  const rows = await sql(`select 'mr', state, count(*)::text from forge.merge_requests where project_id=${p.id} group by 2
+    union all select 'entry', state, count(*)::text from forge.merge_queue_entries where project_id=${p.id} and state in ('queued','testing') group by 2
+    union all select 'job', state, count(*)::text from forge.jobs where state <> 'succeeded' group by 2
+    union all select 'ready', 'count', count(*)::text from forge.jobs where state='queued' and run_after <= now()
+    union all select 'ready', 'oldest_s', coalesce(round(extract(epoch from now() - min(run_after)))::text, '0') from forge.jobs where state='queued' and run_after <= now()
+    union all select 'db', 'bytes', pg_database_size(current_database())::text`);
+  const of = (kind) => Object.fromEntries(rows.filter((r) => r[0] === kind).map((r) => [r[1], Number(r[2])]));
+  const mr = of('mr');
+  const entries = of('entry');
+  const total = Object.values(mr).reduce((a, x) => a + x, 0);
+  return {
+    mrs: total, merged: mr.merged ?? 0, not_merged: total - (mr.merged ?? 0),
+    queue_depth: (entries.queued ?? 0) + (entries.testing ?? 0), queue: entries,
+    jobs: of('job'), jobs_ready: of('ready').count ?? 0, jobs_oldest_ready_s: of('ready').oldest_s ?? 0,
+    db_bytes: of('db').bytes ?? null,
+  };
+}
+const topTables = async () => Object.fromEntries((await sql(`select c.relname, pg_total_relation_size(c.oid) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+  where n.nspname='forge' and c.relkind='r' order by 2 desc limit 15`)).map(([name, bytes]) => [name, Number(bytes)]));
+/** Least-squares slope of y over x (per unit of x); null with fewer than 2 points. */
+function slope(points) {
+  if (points.length < 2) return null;
+  const mx = mean(points.map(([x]) => x));
+  const my = mean(points.map(([, y]) => y));
+  const den = points.reduce((a, [x]) => a + (x - mx) ** 2, 0);
+  return den === 0 ? null : points.reduce((a, [x, y]) => a + (x - mx) * (y - my), 0) / den;
+}
+/**
+ * Does the backlog grow while MRs arrive? Over the samples of the arrival
+ * phase: the mean of the last quarter against the mean of the second quarter
+ * (the first is the warm-up). `grows` = late > 1.5 × early + one minute of
+ * arrivals; null with fewer than 8 samples (a rehearsal checks the code, not this).
+ */
+function backlogTrend(samples, rate) {
+  const trend = (key) => {
+    const pts = samples.filter((x) => typeof x[key] === 'number').map((x) => [x.min, x[key]]);
+    const q = Math.floor(pts.length / 4);
+    const ys = (rows) => rows.map(([, y]) => y);
+    const early = q ? mean(ys(pts.slice(q, 2 * q))) : null;
+    const late = q ? mean(ys(pts.slice(3 * q))) : null;
+    const per = slope(pts);
+    return round1({ samples: pts.length, early_mean: early, late_mean: late, max: pts.length ? Math.max(...ys(pts)) : null,
+      slope_per_min: per === null ? null : Math.round(per * 100) / 100,
+      grows: pts.length >= 8 ? late > 1.5 * early + rate : null });
+  };
+  const out = { not_merged: trend('not_merged'), queue_depth: trend('queue_depth'), jobs_ready: trend('jobs_ready') };
+  const verdicts = Object.values(out).map((t) => t.grows);
+  out.grows = verdicts.includes(null) ? null : verdicts.includes(true);
+  out.rule = 'arrival phase: mean of the last quarter > 1.5 x mean of the second quarter + one minute of arrivals (--rate)';
+  return out;
+}
+async function scenarioE() {
+  const count = Number(opt('count', 10000));
+  const rate = Number(opt('rate', 21)); // MRs per minute, sustained
+  const burstRate = Number(opt('burst', 100)); // MRs in a burst minute (0: no bursts)
+  const burstEvery = Number(opt('burst-every', 30)); // every N-th minute is a burst minute
+  const durationMin = Number(opt('duration', 0)); // stop creating after this many minutes (0: until --count)
+  const docs = Number(opt('docs', 500));
+  const sampleEveryMs = Number(opt('sample-every', 30)) * 1000;
+  const repoSizeEveryMs = Number(opt('repo-size-every', 300)) * 1000;
+  const drainTimeoutMs = Number(opt('timeout', 3600)) * 1000;
+  for (const [name, v, min] of [['count', count, 1], ['rate', rate, 1], ['burst', burstRate, 0], ['burst-every', burstEvery, 1], ['duration', durationMin, 0], ['docs', docs, 1], ['sample-every', sampleEveryMs, 1000]]) {
+    if (!Number.isInteger(v) || v < min) throw new Error(`--${name} must be an integer >= ${min}`);
+  }
+  // a group (one minute of MRs) revises each document at most once
+  if (docs < Math.max(rate, burstRate)) throw new Error('--docs must be at least --rate and --burst');
+  const files = { '.forge/doctypes/lt.procedure.yml': D.DOCTYPE };
+  for (let i = 1; i <= docs; i++) files[D.docPath(i)] = D.doc(i);
+  const p = await seedProject(`docs-e-${TAG}`, files, ['forge/doc-lint']);
+  console.log(`project ${GROUP}/${p.name} id ${p.id}: ${docs} documents; ${count} MRs at ${rate}/min${burstRate ? `, ${burstRate} in every ${burstEvery}th minute` : ''}`);
+  const repoId = Number((await sql(`select id from forge.repositories where project_id=${p.id}`))[0]?.[0]);
+  const repoDir = STORAGE_ROOT && Number.isInteger(repoId) ? repoDirOf(STORAGE_ROOT, repoId) : null;
+  if (!repoDir) console.log('GS_LT_STORAGE_ROOT is not set: the repository size is not sampled');
+  const tablesStart = await topTables();
+
+  const t0 = Date.now();
+  const state = { done: false, stop: null, created: 0, failed: 0, skipped: 0, errors: 0 };
+  const samples = [];
+  const sampleOnceE = async (withRepo) => {
+    const x = { t: new Date().toISOString(), min: Math.round(((Date.now() - t0) / 60000) * 100) / 100, created: state.created, create_failed: state.failed,
+      ...(await soakCounts(p)), free_gb: Math.round((os.freemem() / 2 ** 30) * 100) / 100 };
+    if (withRepo && repoDir) Object.assign(x, await dirBytes(repoDir).then((r) => ({ repo_bytes: r.bytes, repo_files: r.files })));
+    samples.push(x);
+    L.log(`e-${TAG}-samples.jsonl`, x);
+    return x;
+  };
+  // the STOP file (written by the sampler of run-all.sh, by a person, or here on the memory floor)
+  const stopNow = () => {
+    if (!state.stop && stopRequested()) state.stop = fs.readFileSync(STOP_FILE, 'utf8').trim() || 'STOP file';
+    return state.stop !== null;
+  };
+  const pause = async (ms) => { for (const end = Date.now() + ms; Date.now() < end && !state.done && !stopNow();) await L.sleep(Math.min(1000, Math.max(1, end - Date.now()))); };
+  const sampling = (async () => {
+    let lastRepo = 0;
+    while (!state.done) {
+      try {
+        const withRepo = Date.now() - lastRepo >= repoSizeEveryMs;
+        const x = await sampleOnceE(withRepo);
+        if (withRepo) lastRepo = Date.now();
+        if (x.free_gb < MIN_FREE_GB && !stopRequested()) {
+          fs.writeFileSync(STOP_FILE, `free memory ${x.free_gb} GB < ${MIN_FREE_GB} GB at ${x.t}\n`);
+          console.error('free memory below the floor: STOP written');
+        }
+      } catch (e) {
+        L.log(`e-${TAG}-samples.jsonl`, { sample_error: String(e.message).slice(0, 300) });
+      }
+      await pause(sampleEveryMs);
+    }
+  })();
+
+  // ---- arrivals: minute m creates --rate MRs (a burst minute: --burst), evenly spaced
+  const recs = [];
+  const pending = [];
+  let scheduled = 0;
+  let maxLagS = 0;
+  let prepFailures = 0;
+  let failure = null;
+  const createOne = async (c) => {
+    try {
+      const rec = await createMr(p, { name: c.branch, title: `${D.docId(c.doc)} S-${c.step} 改訂` });
+      Object.assign(rec, { k: c.k, doc: c.doc, step: c.step });
+      recs.push(rec);
+      if (rec.iid) state.created++; else state.failed++;
+      L.log(`e-${TAG}.jsonl`, rec);
+    } catch (e) {
+      // never an unhandled rejection: the run goes on and the failure is counted
+      state.errors++;
+      console.error(`MR ${c.k}: ${String(e.message).slice(0, 200)}`);
+    }
+  };
+  for (let m = 0; scheduled < count && (!durationMin || m < durationMin) && !stopNow(); m++) {
+    const startAt = t0 + m * 60000;
+    if (startAt > Date.now()) await pause(startAt - Date.now());
+    else maxLagS = Math.max(maxLagS, (Date.now() - startAt) / 1000);
+    if (stopNow()) break;
+    const burstMinute = burstRate > 0 && (m + 1) % burstEvery === 0;
+    const size = Math.min(burstMinute ? burstRate : rate, count - scheduled);
+    const group = Array.from({ length: size }, (_, j) => soakChange(scheduled + j + 1, docs));
+    scheduled += size;
+    try {
+      await pushSoakBranches(p, group);
+      prepFailures = 0;
+    } catch (e) {
+      // one failed fetch/push skips this minute's MRs; five in a row end the run
+      state.skipped += size;
+      prepFailures++;
+      L.log(`e-${TAG}.jsonl`, { minute: m, skipped: size, prepare_error: String(e.message).slice(0, 300) });
+      console.error(`minute ${m}: branches not pushed, ${size} MRs skipped (${prepFailures} in a row)`);
+      if (prepFailures >= 5) { failure = 'the branches could not be pushed five minutes in a row'; break; }
+      continue;
+    }
+    const gapMs = Math.max(0, startAt + 60000 - Date.now()) / size;
+    for (let j = 0; j < size && !stopNow(); j++) {
+      pending.push(createOne(group[j]));
+      if (j + 1 < size) await L.sleep(gapMs);
+    }
+    if (m % 10 === 0 || burstMinute) console.log(`E minute ${m}${burstMinute ? ' (burst)' : ''}: scheduled ${scheduled}/${count}, created ${state.created}, failed ${state.failed}`);
+  }
+  await Promise.all(pending);
+  const arrivalsEnd = Date.now();
+
+  // ---- drain: until every created MR is merged, or nothing is live and nothing moved for 150 s
+  let settle = { settled: false };
+  let lastMerged = -1;
+  let lastChange = Date.now();
+  let readFailures = 0;
+  while (!stopNow() && !failure) {
+    let c;
+    try {
+      c = await soakCounts(p);
+      readFailures = 0;
+    } catch (e) {
+      // the database did not answer: the result is still written from what is there
+      if (++readFailures >= 10) { failure = `the backlog could not be read ten times in a row: ${String(e.message).slice(0, 200)}`; break; }
+      await pause(5000);
+      continue;
+    }
+    if (c.merged !== lastMerged) { lastMerged = c.merged; lastChange = Date.now(); }
+    const waited = (Date.now() - arrivalsEnd) / 1000;
+    if (c.merged >= state.created) { settle = { settled: true, waited_s: waited }; break; }
+    if (c.queue_depth === 0 && Date.now() - lastChange > 150000) { settle = { settled: true, waited_s: waited, not_merged: state.created - c.merged }; break; }
+    if (Date.now() - arrivalsEnd > drainTimeoutMs) { settle = { settled: false, waited_s: waited, not_merged: state.created - c.merged }; break; }
+    await pause(5000);
+  }
+  state.done = true;
+  await sampling;
+  const last = await sampleOnceE(true).catch(() => samples.at(-1) ?? {});
+
+  // ---- result (also after a STOP: what was measured so far)
+  const facts = await queueFacts(p);
+  const merged = new Set(facts.mrs.filter((x) => x.merged_at).map((x) => x.iid));
+  const integrity = await mainIntegrity(p, { docLint: true });
+  // every merged revision is on main, unless a later merged MR revised the same step again
+  const grep = await L.git(p.dir, ['grep', '-h', '-F', `rev ${TAG} #`, 'origin/main', '--', 'docs/procedures']);
+  if (!grep.ok && grep.code !== 1) throw new Error(`git grep failed: ${grep.stderr.slice(0, 300)}`);
+  const onMain = new Set([...grep.stdout.matchAll(/ #(\d+)\)/g)].map((x) => Number(x[1])));
+  const latest = new Map();
+  for (const r of recs) {
+    if (!merged.has(r.iid)) continue;
+    const key = `${r.doc}/${r.step}`;
+    if (!latest.has(key) || latest.get(key) < r.k) latest.set(key, r.k);
+  }
+  const missing = [...latest.values()].filter((k) => !onMain.has(k)).sort((a, b) => a - b);
+  const first = samples.find((x) => x.db_bytes) ?? last;
+  const repoFirst = samples.find((x) => x.repo_bytes !== undefined);
+  const perMerge = (a, b) => (merged.size ? Math.round((b - a) / merged.size) : null);
+  const tablesEnd = await topTables();
+  const arrivalSamples = samples.filter((x) => Date.parse(x.t) <= arrivalsEnd);
+  const result = {
+    scenario: 'e', tag: TAG, project: `${GROUP}/${p.name}`, project_id: p.id,
+    params: { count, rate, burst: burstRate, burst_every: burstEvery, duration_min: durationMin, docs, sample_every_s: sampleEveryMs / 1000 },
+    started: iso(t0), arrivals_end: iso(arrivalsEnd), arrival_min: Math.round(((arrivalsEnd - t0) / 60000) * 10) / 10,
+    stopped: state.stop, failure, scheduled, created: state.created, create_failed: state.failed, create_errors: state.errors, skipped: state.skipped,
+    max_schedule_lag_s: Math.round(maxLagS * 10) / 10,
+    arrival_rate_per_min: Math.round((state.created / ((arrivalsEnd - t0) / 60000)) * 10) / 10,
+    settle, summary: summarize(recs, facts),
+    backlog: backlogTrend(arrivalSamples, rate),
+    growth: {
+      db_bytes: { start: first.db_bytes, end: last.db_bytes, per_merge: perMerge(first.db_bytes, last.db_bytes) },
+      repo_bytes: repoFirst ? { start: repoFirst.repo_bytes, end: last.repo_bytes, per_merge: perMerge(repoFirst.repo_bytes, last.repo_bytes), files_end: last.repo_files } : null,
+      tables_bytes: Object.fromEntries(Object.entries(tablesEnd).map(([name, bytes]) => [name, { start: tablesStart[name] ?? null, end: bytes }])),
+    },
+    integrity, revisions_missing_on_main: missing, samples, facts,
+  };
+  L.save(`e-${TAG}.json`, result);
+  console.log(JSON.stringify({ ...result, samples: undefined, facts: undefined, integrity: undefined }, null, 1));
+  console.log('integrity of main:', integrityLine(integrity), 'missing on main:', missing.length);
+  if (state.stop) { console.error(`stopped: ${state.stop}`); process.exit(3); }
+  if (failure) { console.error(`failed: ${failure}`); process.exit(1); }
+}
+
+// ---------------------------------------------------------------- spawn-bench
+/**
+ * What one git process costs on this host (plan 18 §2.2 E1, E2): in a
+ * throwaway bare repository under GS_LT_WORK, --n times `git rev-parse HEAD`
+ * and --n times the trial merge forge runs (`git merge-tree --write-tree
+ * --name-only -z <target> <head>`), one after the other. No server, no token.
+ */
+async function spawnBench() {
+  const n = Number(opt('n', 100));
+  const docs = Number(opt('docs', 200));
+  if (!Number.isInteger(n) || n < 1 || !Number.isInteger(docs) || docs < 2) throw new Error('--n and --docs must be integers (n >= 1, docs >= 2)');
+  const root = path.join(WORK, `spawn-bench-${TAG}-${process.pid}`);
+  const work = path.join(root, 'work');
+  const bare = path.join(root, 'bare.git');
+  fs.mkdirSync(work, { recursive: true });
+  try {
+    const version = (await L.localGitOk(root, ['version'])).stdout.trim();
+    // a document repository like scenario A's: main and a branch each revise another document
+    await L.localGitOk(work, ['init', '-q', '-b', 'main']);
+    const write = (i, edits) => {
+      const full = path.join(work, D.docPath(i));
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, D.doc(i, { edits }));
+    };
+    for (let i = 1; i <= docs; i++) write(i, {});
+    await L.localGitOk(work, ['add', '--', 'docs']);
+    await L.localGitOk(work, ['commit', '-qm', 'seed: synthetic spawn-bench content']);
+    await L.localGitOk(work, ['checkout', '-q', '-b', 'side']);
+    write(1, { 3: '手順 3: 改訂（枝）。' });
+    await L.localGitOk(work, ['commit', '-qam', 'side: revise document 1']);
+    await L.localGitOk(work, ['checkout', '-q', 'main']);
+    write(2, { 3: '手順 3: 改訂（main）。' });
+    await L.localGitOk(work, ['commit', '-qam', 'main: revise document 2']);
+    await L.localGitOk(root, ['clone', '-q', '--bare', work, bare]);
+    const target = (await L.localGitOk(bare, ['rev-parse', 'refs/heads/main'])).stdout.trim();
+    const head = (await L.localGitOk(bare, ['rev-parse', 'refs/heads/side'])).stdout.trim();
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+    /** --n runs of `git <argv>` in the bare repository, one at a time: ms per call. */
+    const timed = async (argv) => {
+      const ms = [];
+      for (let i = 0; i < n + 5; i++) {
+        const t = performance.now();
+        await pexec('git', argv, { cwd: bare, env, timeout: 60000 });
+        if (i >= 5) ms.push(performance.now() - t); // the first five warm the file cache
+      }
+      const st = L.stats(ms);
+      const r2 = (v) => Math.round(v * 100) / 100;
+      return { n: st.n, p50_ms: r2(st.p50), p95_ms: r2(st.p95), max_ms: r2(st.max), mean_ms: r2(mean(ms)) };
+    };
+    const revParse = await timed(['rev-parse', 'HEAD']);
+    const mergeTree = await timed(['merge-tree', '--write-tree', '--name-only', '-z', target, head]);
+    const result = {
+      scenario: 'spawn-bench', tag: TAG, at: new Date().toISOString(), platform: process.platform, arch: process.arch, os_release: os.release(),
+      cpus: os.cpus().length, node: process.version, git: version, documents: docs,
+      rev_parse_head: revParse, merge_tree_write_tree: mergeTree,
+      // E1 = one spawn; E2 = the merge-tree work beyond the spawn
+      e1_spawn_ms_p50: revParse.p50_ms, e2_merge_tree_work_ms_p50: Math.round((mergeTree.p50_ms - revParse.p50_ms) * 100) / 100,
+    };
+    L.save(`spawn-bench-${TAG}.json`, result);
+    console.log(JSON.stringify(result, null, 1));
+  } finally {
+    if (opt('keep', null) === null) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+}
+
 // ---------------------------------------------------------------- main
-const run = { a: scenarioA, b: scenarioB, c: scenarioC, d: scenarioD, sample: sampler }[scenario];
+const run = {
+  a: scenarioA, 'a-burst': () => scenarioA({ atOnce: true }), b: scenarioB, c: scenarioC, d: scenarioD, e: scenarioE,
+  'spawn-bench': spawnBench, sample: sampler,
+}[scenario];
 if (!run) {
-  console.error('usage: merge-load.mjs <a|b|c|d|sample> [--n N] [--burst N] [--tag T]');
+  console.error('usage: merge-load.mjs <a|a-burst|b|c|d|e|spawn-bench|sample> [--n N] [--burst N] [--tag T]\n'
+    + '  e: [--count 10000] [--rate 21] [--burst 100] [--burst-every 30] [--duration MIN] [--docs 500] [--sample-every 30]');
   process.exit(2);
 }
 abortIfStopped();
+// everything but the local bench talks to the server: fail now without a token
+if (scenario !== 'spawn-bench') L.requireToken();
 await run();
