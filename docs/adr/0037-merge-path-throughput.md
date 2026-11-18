@@ -229,3 +229,21 @@ impl RefSnapshotCache {
     pub fn invalidate(&self, repo: RepoId);
 }
 ```
+
+## 追記（2026-11-18、計画 18 S8）— (g) の実装: 意図した 2 つの違いと、既知の限界 1 つ
+
+上の Decision (g) の文は変えない。実装（`forge_git::refs_cache`、`Browser::require_branch`、`forge-review` の `require_branches_exist`）は次の 2 点で (g) の文と違う。どちらも意図したもの。
+
+1. **スナップショットはブランチの名前だけを持つ。** `branch_tip -> ObjectId` は持たない（上の Interface sketch の `branch_tip` は実装していない。実際の API は `RefSnapshotCache::branch(repo, 名前, 読む関数) -> BranchAnswer`）。
+   - 理由: 古いかもしれないスナップショットから、sha に依存する判断（MR の head、version、mergeability、マージ）が出ないようにするため。sha を持っていなければ、誤って使う呼び出しは書けない。(g) 3 の「`head_sha` は `prepare` が書き、キャッシュから推測しない」を構造で守る。sha が要る操作（reopen、approve、merge、merge status）は今も生きた ref を読む（`resolve_ref` / `find_ref`、version のジョブ）。
+2. **スナップショットの読み取りの失敗は、リクエストごとの browse の経路に戻らず、その失敗を呼び出しに返す。**（(g) の「キャッシュの充填の失敗 → browse の経路に戻る」とは違う。）
+   - 理由: 読み取りが失敗するのは、リポジトリの browse のスロットが埋まっているとき（`FG-GIT-0004 reason=repo_browse`）か、git が遅い・動かないとき。そのとき待っていた作成が 1 件ずつ browse の経路に戻ると、混んでいるリポジトリへの呼び出しが待っていた数だけ増える（S8 が消したかった 2026-11-17 の F1 の形）。失敗を「ブランチがない」「ある」と答えることもしない。
+   - 待っていた呼び出しの扱い（S8 のレビューの指摘で 2026-11-18 に決めた）: 失敗が**読んだ本人の時間か順番についてのもの**（`FG-GIT-0002` のタイムアウト、`FG-GIT-0004` の混雑）なら、本人だけに返す。待っていた呼び出しはそれを受け取らず、そのうちの 1 件が自分の期限で読み直し、残りはそれを待つ。自分の期限（`BrowseLimits::timeout`、10 s）が過ぎた呼び出しは、自分の `FG-GIT-0002 operation=browse` で終わる。それ以外の失敗（git を起動できない `FG-GIT-0001`、git の異常終了 `FG-GIT-0003`、リポジトリがディスクにない、など。誰が読んでも同じもの）は、待っていた全員に返す。
+   - 上限: 読み取りはリポジトリごとに同時に 1 つのまま（browse のスロットは 1 つ。ゲートは変えていない）。1 つの呼び出しが読むのは高々 1 回で、読んだ呼び出しは答えか登録済みのエラーで必ず終わるので、読み直しの回数は呼び出しの数を超えない。埋まり続けるリポジトリでは、`repo_wait`（5 s）ごとに 1 件が `FG-GIT-0004` で終わり、残りは自分の期限で `FG-GIT-0002` になる。終わらない待ちはない。
+
+既知の限界（古さ）:
+
+- `forge serve` の中の ref の書き込み（push、Web のファイルのコミット、マージ、revert、autofix、version の ref、仕様の公開）は、すべて `Browser::invalidate` を呼ぶ。
+- **他のプロセス**（今は worker のマージ）が書いた・消したブランチは、計画 18 S2 の `forge_refs` のリスナーが `Browser::invalidate` を呼ぶようになるまで、serve からは最長 `refs_ttl`（5 s、読み取りの開始から数える）見えない。作られたブランチは影響を受けない（否定の答えは必ず git で確かめる）。起こりうるのは、消されたブランチへの古い肯定だけ。
+- 古い肯定の見える結果: MR は open で作られるが、version がなく（`prepare` の結果は `source_missing`）、「マージできない」と表示される。データは壊れず、黙って先へ進むこともない。
+- **`forge serve` の外で `refs/heads/` を書く処理を新しく足すときは、このリスナー（`forge_refs` の通知 → `Browser::invalidate`）を必ず一緒に入れる。**
