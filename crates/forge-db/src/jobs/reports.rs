@@ -153,9 +153,37 @@ pub(super) fn report_reaped(job: &ReapedJob) -> Reported {
 }
 
 /// Log what the run reports (a handler failure was logged when it happened).
-pub(super) fn log_outcome(outcome: &Ran, request_id: &RequestId) {
+///
+/// A success and a scheduled retry are `debug` events that carry
+/// `ready_to_claim_ms` — how long the job had been ready (`run_after`)
+/// before this run's claim (plan 18 S0: the wake-up latency of the job
+/// queue). The failure reports keep their shape.
+pub(super) fn log_outcome(
+    outcome: &Ran,
+    job: &ClaimedJob,
+    ready_for: Duration,
+    request_id: &RequestId,
+) {
+    let ready_to_claim_ms = u64::try_from(ready_for.as_millis()).unwrap_or(u64::MAX);
     match outcome {
-        Ran::Succeeded(_) | Ran::Retrying { .. } => {}
+        Ran::Succeeded(_) => tracing::debug!(
+            target: "forge_db",
+            request_id = %request_id,
+            job_id = job.lease.job_id.get(),
+            kind = job.kind.as_str(),
+            attempt = job.lease.attempt,
+            ready_to_claim_ms,
+            "forge.jobs.succeeded"
+        ),
+        Ran::Retrying { retry_in, .. } => tracing::debug!(
+            target: "forge_db",
+            request_id = %request_id,
+            job_id = job.lease.job_id.get(),
+            kind = job.kind.as_str(),
+            retry_in_ms = retry_in.as_millis(),
+            ready_to_claim_ms,
+            "forge.jobs.retry_scheduled"
+        ),
         Ran::Dead { report: e, .. }
         | Ran::Fenced(e)
         | Ran::Released { report: e, .. }

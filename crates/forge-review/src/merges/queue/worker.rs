@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use forge_auth::Action;
 use forge_core::auto_merge::{
@@ -106,6 +106,39 @@ impl Default for QueueLimits {
             max_paths: 5000,
         }
     }
+}
+
+/// What a landing measured before its records, for the
+/// `forge.merge_queue.batch_landed` line (plan 18 S0; log fields only).
+#[derive(Debug, Clone, Copy)]
+struct LandClock {
+    /// Waited for the repository's merge lock.
+    lock_wait: Duration,
+    /// When the lock was held.
+    locked: Instant,
+    /// The step's git processes when the lock was asked for.
+    spawns_before: u64,
+}
+
+impl LandClock {
+    /// Starts when the merge lock is asked for.
+    fn asked() -> (Instant, u64) {
+        (Instant::now(), forge_git::scoped_git_spawns())
+    }
+
+    /// The lock is held now.
+    fn locked((asked, spawns_before): (Instant, u64)) -> Self {
+        Self {
+            lock_wait: asked.elapsed(),
+            locked: Instant::now(),
+            spawns_before,
+        }
+    }
+}
+
+/// Whole milliseconds as a log field.
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// What one tick did (the worker's log and the tests).
@@ -243,7 +276,12 @@ impl MergeQueue {
         else {
             return Ok(None);
         };
-        let stepped = self.step(&claimed).await;
+        // The step's git processes are counted apart from the requests
+        // served at the same time (the `git_spawns` log fields). The count
+        // is the spawns made on this task: work moved to another task and
+        // reads served by a reused `cat-file --batch-command` process are
+        // not in it (`forge_git::counting_spawns`).
+        let stepped = forge_git::counting_spawns(self.step(&claimed)).await;
         let next_in = match &stepped {
             Ok(report) if matches!(report.outcome, "waiting" | "paused" | "idle") => {
                 self.limits.poll
@@ -326,6 +364,7 @@ impl MergeQueue {
     // ── building a batch ──
 
     async fn build(&self, claimed: &Claimed) -> Result<TickReport, ForgeError> {
+        let (started, spawns_before) = (Instant::now(), forge_git::scoped_git_spawns());
         let queue = &claimed.queue;
         let report = |outcome, batch_id| TickReport {
             queue_id: queue.id,
@@ -511,6 +550,9 @@ impl MergeQueue {
             entries = %ids.join(","),
             isolate = members.first().and_then(|(_, _, i)| i.map(Isolation::as_str)),
             pipeline_job = definition,
+            // From the queued entries' read to the batch's row.
+            build_ms = millis(started.elapsed()),
+            git_spawns = forge_git::scoped_git_spawns().saturating_sub(spawns_before),
         );
         Ok(report("built", Some(batch)))
     }
@@ -1305,15 +1347,18 @@ impl MergeQueue {
         repo: RepoId,
         run: Option<CheckRun>,
     ) -> Result<&'static str, ForgeError> {
+        let asked = LandClock::asked();
         let mut lock =
             merges::lock_merges(&self.merger.db, repo, self.merger.timeouts.lock_wait).await?;
+        let clock = LandClock::locked(asked);
         let landed = self
-            .land_locked(&mut lock, claimed, batch, testing, repo, run)
+            .land_locked(&mut lock, claimed, batch, testing, repo, run, clock)
             .await;
         lock.release().await;
         landed
     }
 
+    #[allow(clippy::too_many_arguments)] // the landing's inputs and its clock (log fields)
     async fn land_locked(
         &self,
         lock: &mut MergeLock,
@@ -1322,6 +1367,7 @@ impl MergeQueue {
         testing: &[StoredEntry],
         repo: RepoId,
         run: Option<CheckRun>,
+        clock: LandClock,
     ) -> Result<&'static str, ForgeError> {
         let target = &claimed.queue.target_branch;
         // Review MEDIUM: the emergency stop is read again under the lock.
@@ -1569,7 +1615,7 @@ impl MergeQueue {
                 .with_context("reason", "test_crash_after_cas")
                 .with_context("queue_batch_id", batch.id));
         }
-        self.record_all(lock, batch, &decided, repo).await?;
+        self.record_all(lock, batch, &decided, repo, clock).await?;
         Ok("landed")
     }
 
@@ -1679,6 +1725,7 @@ impl MergeQueue {
         batch: &StoredBatch,
         decided: &[(StoredEntry, StoredMerge, Subject)],
         repo: RepoId,
+        clock: LandClock,
     ) -> Result<(), ForgeError> {
         for (entry, attempt, subject) in decided {
             let executing = StoredMerge {
@@ -1730,6 +1777,13 @@ impl MergeQueue {
             size = decided.len(),
             base_sha = batch.base_sha.as_str(),
             train_sha = batch.train_sha.as_str(),
+            // No lint of the train runs yet (plan 18 S1 measures it here).
+            lint_ms = 0_u64,
+            lock_wait_ms = millis(clock.lock_wait),
+            // Under the merge lock: the decisions, the compare-and-swap,
+            // the records (a recovery: the records that were left).
+            land_ms = millis(clock.locked.elapsed()),
+            git_spawns = forge_git::scoped_git_spawns().saturating_sub(clock.spawns_before),
         );
         Ok(())
     }
@@ -1767,13 +1821,15 @@ impl MergeQueue {
                 )
                 .await;
         };
+        let asked = LandClock::asked();
         let lock = match merges::try_lock_merges(&self.merger.db, repo).await? {
             Some(lock) => lock,
             // A landing still runs (its worker holds the lock): later.
             None => return Ok("waiting"),
         };
+        let clock = LandClock::locked(asked);
         let settled = self
-            .recover_locked(&lock, claimed, batch, &entries, repo)
+            .recover_locked(&lock, claimed, batch, &entries, repo, clock)
             .await;
         lock.release().await;
         settled
@@ -1786,6 +1842,7 @@ impl MergeQueue {
         batch: &StoredBatch,
         entries: &[StoredEntry],
         repo: RepoId,
+        clock: LandClock,
     ) -> Result<&'static str, ForgeError> {
         let tip = self.read_tip(repo, &claimed.queue.target_branch).await?;
         let mut attempts = Vec::new();
@@ -1859,7 +1916,7 @@ impl MergeQueue {
             }
             decided.push((entry.clone(), attempt, subject)); // clone: the record needs it
         }
-        self.record_all(lock, batch, &decided, repo).await?;
+        self.record_all(lock, batch, &decided, repo, clock).await?;
         Ok("recovered")
     }
 }

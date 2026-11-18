@@ -10,10 +10,19 @@ const pexec = promisify(execFile);
 export const BASE = process.env.GS_LT_BASE ?? 'http://127.0.0.1:28080';
 export const GIT_BASE = process.env.GS_LT_GIT_BASE ?? BASE;
 export const USER = process.env.GS_LT_USER ?? 'dora';
-const TOKEN_FILE = process.env.GS_LT_TOKEN_FILE;
-if (!TOKEN_FILE) throw new Error('GS_LT_TOKEN_FILE (a file holding one fgp_ token) is required');
-const TOKEN = readFileSync(TOKEN_FILE, 'utf8').trim();
-if (!/^fgp_[A-Za-z0-9_]+$/.test(TOKEN)) throw new Error('GS_LT_TOKEN_FILE does not hold one fgp_ token');
+let secret = null;
+/** The token and its Basic form, read on first use (`spawn-bench` runs without one). */
+function credentials() {
+  if (secret) return secret;
+  const file = process.env.GS_LT_TOKEN_FILE;
+  if (!file) throw new Error('GS_LT_TOKEN_FILE (a file holding one fgp_ token) is required');
+  const token = readFileSync(file, 'utf8').trim();
+  if (!/^fgp_[A-Za-z0-9_]+$/.test(token)) throw new Error('GS_LT_TOKEN_FILE does not hold one fgp_ token');
+  secret = { token, basic: Buffer.from(`${USER}:${token}`).toString('base64') };
+  return secret;
+}
+/** Fail now, not at the first call, when the token is missing or malformed. */
+export function requireToken() { credentials(); }
 export const OUT = process.env.GS_LT_OUT ?? 'ops/loadtest/.out';
 mkdirSync(OUT, { recursive: true });
 
@@ -22,12 +31,13 @@ export const now = () => Date.now();
 
 /** One API call; returns {status, body, ms, requestId}. Never throws on HTTP errors. */
 export async function api(method, path, body, { timeoutMs = 60000 } = {}) {
+  const { token } = credentials();
   const t0 = performance.now();
   let res;
   try {
     res = await fetch(BASE + path, {
       method,
-      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -48,9 +58,9 @@ export async function apiOk(method, path, body, opts) {
   return r.body;
 }
 
-const basic = Buffer.from(`${USER}:${TOKEN}`).toString('base64');
 /** git with the token as an extra header (never in argv URLs or .git/config). */
 export async function git(cwd, args, { timeoutMs = 300000, env = {} } = {}) {
+  const { basic } = credentials();
   const t0 = performance.now();
   try {
     const r = await pexec('git', ['-c', `http.extraHeader=Authorization: Basic ${basic}`, '-c', 'core.autocrlf=false', '-c', 'user.name=loadtest', '-c', 'user.email=loadtest@example.invalid', ...args], {
@@ -59,13 +69,70 @@ export async function git(cwd, args, { timeoutMs = 300000, env = {} } = {}) {
     });
     return { ok: true, ms: performance.now() - t0, stdout: r.stdout, stderr: r.stderr };
   } catch (e) {
-    return { ok: false, ms: performance.now() - t0, stdout: e.stdout ?? '', stderr: String(e.stderr ?? e.message).replaceAll(basic, '***') };
+    return { ok: false, code: e.code ?? null, ms: performance.now() - t0, stdout: e.stdout ?? '', stderr: String(e.stderr ?? e.message).replaceAll(basic, '***') };
   }
 }
 export async function gitOk(cwd, args, opts) {
   const r = await git(cwd, args, opts);
   if (!r.ok) throw new Error(`git ${args.slice(0, 3).join(' ')} failed: ${r.stderr.slice(0, 600)}`);
   return r;
+}
+
+const LOCAL_GIT = ['-c', 'core.autocrlf=false', '-c', 'user.name=loadtest', '-c', 'user.email=loadtest@example.invalid'];
+/**
+ * git on a local repository only: no credential, optional stdin (`input`),
+ * `encoding: 'buffer'` for raw output. Returns {ok, code, ms, stdout, stderr}.
+ */
+export function localGit(cwd, args, { timeoutMs = 300000, input = null, encoding = 'utf8' } = {}) {
+  const t0 = performance.now();
+  return new Promise((done) => {
+    const child = execFile('git', [...LOCAL_GIT, ...args], {
+      cwd, timeout: timeoutMs, maxBuffer: 256 << 20, encoding,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }, (err, stdout, stderr) => done({ ok: !err, code: err ? err.code ?? null : 0, ms: performance.now() - t0, stdout, stderr: String(stderr ?? '') || String(err?.message ?? '') }));
+    if (input !== null) {
+      // git ending before it read everything shows as its exit code, not here
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    }
+  });
+}
+export async function localGitOk(cwd, args, opts) {
+  const r = await localGit(cwd, args, opts);
+  if (!r.ok) throw new Error(`git ${args.slice(0, 3).join(' ')} failed: ${r.stderr.slice(0, 600)}`);
+  return r;
+}
+/** The blobs `specs` (`<rev>:<path>`) name, as UTF-8 text, in one `cat-file --batch`. */
+export async function readBlobs(cwd, specs) {
+  const out = (await localGitOk(cwd, ['cat-file', '--batch'], { input: specs.map((x) => `${x}\n`).join(''), encoding: 'buffer' })).stdout;
+  const texts = [];
+  let off = 0;
+  for (const spec of specs) {
+    const nl = out.indexOf(0x0a, off);
+    const [, type, size] = nl < 0 ? [] : out.subarray(off, nl).toString('utf8').split(' ');
+    if (type !== 'blob') throw new Error(`${spec} is not a blob in the local clone`);
+    const start = nl + 1;
+    texts.push(out.subarray(start, start + Number(size)).toString('utf8'));
+    off = start + Number(size) + 1;
+  }
+  return texts;
+}
+/**
+ * One commit per change on top of `base`, written by one `fast-import`:
+ * `changes` is [{ref, path, text, message}]; each `ref` is moved to its commit.
+ */
+export async function commitOnTop(cwd, base, changes) {
+  const when = Math.floor(Date.now() / 1000);
+  const parts = [];
+  for (const c of changes) {
+    const message = Buffer.from(`${c.message}\n`);
+    const text = Buffer.from(c.text);
+    parts.push(
+      Buffer.from(`commit ${c.ref}\ncommitter loadtest <loadtest@example.invalid> ${when} +0000\ndata ${message.length}\n`), message,
+      Buffer.from(`\nfrom ${base}\nM 100644 inline ${c.path}\ndata ${text.length}\n`), text, Buffer.from('\n\n'),
+    );
+  }
+  await localGitOk(cwd, ['fast-import', '--quiet', '--force'], { input: Buffer.concat(parts) });
 }
 
 export function pct(arr, p) {

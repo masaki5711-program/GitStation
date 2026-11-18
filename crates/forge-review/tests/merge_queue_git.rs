@@ -2304,3 +2304,125 @@ async fn a_persons_stop_cuts_the_batch_before_the_auto_entry_in_order() {
     assert_eq!(w.state_of(&x).await, forge_core::MergeRequestState::Merged);
     assert!(w.main_has("x.txt") && !w.main_has("a.txt"));
 }
+
+/// JSON log lines written on the installing thread while its guard lives.
+/// One global subscriber writes to a thread-local sink (a thread-local
+/// subscriber would let a callsite first hit by a parallel test stay
+/// cached as "never": the pattern of forge-db `runner_stop_tests`).
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+thread_local! {
+    static SINK: std::cell::RefCell<Option<Captured>> = const { std::cell::RefCell::new(None) };
+}
+
+struct ThreadSink;
+
+impl std::io::Write for ThreadSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        SINK.with(|s| {
+            if let Some(c) = s.borrow().as_ref() {
+                c.0.lock().expect("log buffer").extend_from_slice(buf);
+            }
+        });
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        SINK.with(|s| s.borrow_mut().take());
+    }
+}
+
+impl Captured {
+    fn install(&self) -> CaptureGuard {
+        static GLOBAL: std::sync::Once = std::sync::Once::new();
+        GLOBAL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_max_level(tracing::Level::INFO)
+                .with_writer(|| ThreadSink)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("the only global subscriber");
+        });
+        SINK.with(|s| *s.borrow_mut() = Some(self.clone()));
+        CaptureGuard
+    }
+
+    /// The fields of the captured events named `event`.
+    fn named(&self, event: &str) -> Vec<serde_json::Value> {
+        let bytes = self.0.lock().expect("log buffer").clone();
+        String::from_utf8(bytes)
+            .expect("utf-8 logs")
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("a JSON log line"))
+            .filter(|e| e["fields"]["event"] == event)
+            .map(|e| e["fields"].clone()) // clone: the fields outlive the line
+            .collect()
+    }
+}
+
+/// Plan 18 S0 (measure, no behavior change): the batch's two log lines
+/// carry what its phases cost — the build on `batch_built`; the wait for
+/// the merge lock, the landing under it and the train lint (none runs yet:
+/// 0) on `batch_landed`; each with the git processes the phase started.
+#[tokio::test]
+async fn batch_landed_log_carries_phase_timings() {
+    let mut w = world().await;
+    let mrs = four(&mut w).await;
+    let worker = w.worker("w1");
+    let logs = Captured::default();
+    let started = std::time::Instant::now();
+    let sizes = {
+        let _guard = logs.install();
+        w.drive(&worker, &BTreeSet::new()).await
+    };
+    let wall_ms = u64::try_from(started.elapsed().as_millis()).expect("ms") + 1;
+    assert_eq!(sizes, [4]);
+    assert_outcome(&w, &mrs, &BTreeSet::new()).await;
+
+    let built = logs.named("forge.merge_queue.batch_built");
+    assert_eq!(built.len(), 1, "{built:?}");
+    let built = &built[0];
+    let build_ms = built["build_ms"].as_u64();
+    assert!(
+        build_ms.is_some_and(|ms| (1..=wall_ms).contains(&ms)),
+        "build_ms within the run's {wall_ms} ms: {built}"
+    );
+    // Every member is merged onto the train by git.
+    assert!(
+        built["git_spawns"].as_u64().is_some_and(|n| n >= 4),
+        "git_spawns of the build: {built}"
+    );
+
+    let landed = logs.named("forge.merge_queue.batch_landed");
+    assert_eq!(landed.len(), 1, "{landed:?}");
+    let landed = &landed[0];
+    assert_eq!(landed["size"], 4, "{landed}");
+    assert_eq!(landed["lint_ms"].as_u64(), Some(0), "no train lint yet");
+    let lock_wait_ms = landed["lock_wait_ms"].as_u64();
+    let land_ms = landed["land_ms"].as_u64();
+    assert!(
+        lock_wait_ms.is_some_and(|ms| ms <= wall_ms),
+        "lock_wait_ms: {landed}"
+    );
+    assert!(
+        land_ms.is_some_and(|ms| (1..=wall_ms).contains(&ms)),
+        "land_ms within the run's {wall_ms} ms: {landed}"
+    );
+    // The landing moves the target with git (the compare-and-swap).
+    assert!(
+        landed["git_spawns"].as_u64().is_some_and(|n| n >= 1),
+        "git_spawns of the landing: {landed}"
+    );
+    // The phases of one batch fit in the run that drove it.
+    let phases = build_ms.unwrap_or(0) + lock_wait_ms.unwrap_or(0) + land_ms.unwrap_or(0);
+    assert!(phases <= wall_ms, "{phases} ms of phases in {wall_ms} ms");
+}

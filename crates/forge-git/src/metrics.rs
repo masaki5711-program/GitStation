@@ -4,10 +4,20 @@
 //! event `forge.git.spawn` (target `forge_git::spawn`, with `subcommand`
 //! and `kind`), so the spawns of one request can be counted from its
 //! `request_id` span in the logs.
+//!
+//! [`counting_spawns`] counts the spawns of one piece of work apart from
+//! everything else the process does at the same time (plan 18 S0: the git
+//! processes one merge-queue batch costs, while requests are served).
 
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static SPAWNS: AtomicU64 = AtomicU64::new(0);
+
+tokio::task_local! {
+    /// The spawns of the [`counting_spawns`] scope this task is in.
+    static SCOPED: AtomicU64;
+}
 
 /// git processes started by this process so far (captured, streaming and
 /// the long-lived `cat-file --batch-command` processes alike).
@@ -15,13 +25,68 @@ pub fn git_spawns() -> u64 {
     SPAWNS.load(Ordering::Relaxed)
 }
 
+/// Run `work`, counting the git processes it starts on this task
+/// ([`scoped_git_spawns`] reads the count from inside). A count only: no
+/// effect on the work or on [`git_spawns`].
+///
+/// What the count (the `git_spawns` log field) leaves out:
+/// - work moved to another task (`tokio::spawn`, `spawn_blocking`): the
+///   scope is task-local, so a process started there is not counted;
+/// - a reused long-lived `cat-file --batch-command` process: it counts
+///   once, in the scope that started it, and every later read it serves
+///   adds nothing.
+///
+/// So the field is a lower bound of the git work, exact only for work
+/// that starts every process on the calling task.
+pub async fn counting_spawns<F: Future>(work: F) -> F::Output {
+    SCOPED.scope(AtomicU64::new(0), work).await
+}
+
+/// git processes this task started so far inside its [`counting_spawns`]
+/// scope; 0 outside one. Spawns on the calling task only (see
+/// [`counting_spawns`] for what is left out).
+pub fn scoped_git_spawns() -> u64 {
+    SCOPED
+        .try_with(|n| n.load(Ordering::Relaxed))
+        .unwrap_or_default()
+}
+
 /// Record one started git process.
 pub(crate) fn spawned(subcommand: &'static str, kind: &'static str) {
     SPAWNS.fetch_add(1, Ordering::Relaxed);
+    // Outside a `counting_spawns` scope there is no count to add to.
+    let _counted = SCOPED
+        .try_with(|n| n.fetch_add(1, Ordering::Relaxed))
+        .is_ok();
     tracing::debug!(
         target: "forge_git::spawn",
         subcommand,
         kind,
         "forge.git.spawn"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_scope_counts_the_spawns_of_its_own_task_only() {
+        assert_eq!(scoped_git_spawns(), 0, "outside a scope");
+        let (mine, other) = counting_spawns(async {
+            spawned("rev-parse", "captured");
+            spawned("merge-tree", "captured");
+            // Another piece of work at the same time has its own count.
+            let other = tokio::spawn(counting_spawns(async {
+                spawned("cat-file", "batch");
+                scoped_git_spawns()
+            }))
+            .await
+            .expect("join");
+            (scoped_git_spawns(), other)
+        })
+        .await;
+        assert_eq!((mine, other), (2, 1));
+        assert_eq!(scoped_git_spawns(), 0, "the scope ended");
+    }
 }
