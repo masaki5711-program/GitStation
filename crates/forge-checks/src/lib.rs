@@ -44,6 +44,7 @@ pub mod spec_checks;
 pub mod spec_drift;
 pub mod spec_index;
 pub mod spec_refs;
+pub mod train_lint;
 pub mod validate;
 
 pub use doc_migration::DocLintMigrations;

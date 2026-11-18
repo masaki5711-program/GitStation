@@ -1686,7 +1686,11 @@
       "queued": "di antrean merge; digabung bila pengujian hijau.",
       "queued_warning": "di antrean merge dengan peringatan; digabung bila pengujian hijau.",
       "queued_ai_asset": "di antrean merge dengan peringatan: mengubah aset AI. Digabung bila pengujian hijau.",
-      "queued_by_person": "seseorang memasukkannya ke antrean merge."
+      "queued_by_person": "seseorang memasukkannya ke antrean merge.",
+      "queue_doc_lint": "dihentikan: di antrean merge, dokumen hasil gabungan memiliki masalah baru, misalnya referensi yang putus (forge/doc-lint).",
+      "queue_doc_base": "dokumen di cabang tujuan sudah bermasalah, jadi tidak ada yang digabung sampai diperbaiki (bukan karena perubahan ini).",
+      "queue_doc_unavailable": "dihentikan: pemeriksaan dokumen di antrean merge tidak dapat diselesaikan (dokumen terlalu banyak, atau batas waktu).",
+      "queue_repo_config": ".forge/repo.yml repositori tidak valid, jadi tidak digabung otomatis (bukan karena perubahan ini)."
     },
     "next": {
       "instance_stopped": "Orang tetap dapat menggabungkan; administrator melanjutkannya.",
@@ -1699,7 +1703,11 @@
       "merge_when_ready": "Periksa, lalu tekan \"Gabung saat siap\".",
       "conflict": "Selesaikan bentrok lalu push.",
       "rerun_doc_lint": "Push commit baru untuk menjalankan pemeriksaan lagi; jika mendesak, orang yang sudah memeriksa perubahan dapat menekan \"Gabung saat siap\".",
-      "waiting": "Lihat syarat merge di bawah."
+      "waiting": "Lihat syarat merge di bawah.",
+      "fix_document": "Buka pemeriksaan forge/doc-lint, perbaiki dokumennya, lalu push; berlanjut sendiri.",
+      "after_target_fixed": "Setelah cabang tujuan diperbaiki, tekan \"Gabung saat siap\".",
+      "ask_admin": "Hubungi administrator; setelah itu, tekan \"Gabung saat siap\".",
+      "fix_repo_config": "Perbaiki .forge/repo.yml dulu, lalu tekan \"Gabung saat siap\"."
     }
   },
   "mergeQueue": {
@@ -1713,7 +1721,7 @@
       "queued": "Menunggu di urutan ke-{{position}} antrean merge.",
       "testing": "Sedang diuji di antrean merge. Akan digabung jika lulus.",
       "merged": "Digabung oleh antrean merge.",
-      "removed": "Keluar dari antrean merge ({{why}}). Perbaiki, lalu masukkan lagi."
+      "removed": "Keluar dari antrean merge ({{why}}). {{next}}"
     },
     "reason": {
       "dequeued": "dikeluarkan oleh seseorang",
@@ -1722,7 +1730,18 @@
       "head_changed": "versi baru di-push",
       "stalled": "pengujian tidak selesai tepat waktu",
       "not_open": "merge request ditutup",
-      "other": "tidak lagi memenuhi syarat merge"
+      "other": "tidak lagi memenuhi syarat merge",
+      "doc_lint_failed": "dokumen hasil gabungan memiliki masalah baru, misalnya referensi yang putus",
+      "doc_lint_base_not_clean": "dokumen di cabang tujuan sudah bermasalah; bukan karena perubahan ini",
+      "doc_lint_unavailable": "pemeriksaan dokumen tidak dapat diselesaikan",
+      "doc_lint_repo_config_invalid": ".forge/repo.yml repositori tidak valid; bukan karena perubahan ini"
+    },
+    "next": {
+      "fix": "Perbaiki, lalu masukkan lagi.",
+      "doc_lint_failed": "Buka pemeriksaan forge/doc-lint, perbaiki dokumennya, lalu masukkan lagi.",
+      "doc_lint_base_not_clean": "Tidak ada yang digabung sampai itu diperbaiki; masukkan lagi setelahnya.",
+      "doc_lint_unavailable": "Hubungi administrator (dokumen terlalu banyak, atau batas waktu).",
+      "doc_lint_repo_config_invalid": "Perbaiki berkas itu dulu, lalu masukkan lagi."
     },
     "title": "Antrean merge ({{target}})",
     "subtitle": "Perubahan dalam antrean diuji bersama dan digabung berurutan setelah lulus.",

@@ -574,6 +574,33 @@ fn sticky_removal(reason: &str) -> Option<Verdict> {
         "dequeued" => Some(Verdict::Held {
             reason: "dequeued_by_person",
         }),
+        // Plan 18 S1 (ADR-0037 (b)): the train lint removed this entry —
+        // with what the target holds now, its head breaks a document. The
+        // same head would be removed again, so it waits for a new one.
+        crate::train_lint::FAILED_REASON => Some(Verdict::Stopped(Stop {
+            class: StopClass::ProgramBreakage,
+            reason: "merge_queue_doc_lint_failed",
+            detail: Some(crate::checks::DOC_LINT_CHECK.to_owned()),
+        })),
+        // A strict repository whose target already has document problems:
+        // not this head's fault, and nothing lands until a person cleans
+        // the target — re-enqueueing by itself would only spin.
+        crate::train_lint::BASE_NOT_CLEAN_REASON => Some(Verdict::Held {
+            reason: "merge_queue_doc_lint_base",
+        }),
+        // The same, but strict only because `.forge/repo.yml` is not
+        // valid (`FG-REPO-0024`): the config is what a person repairs.
+        crate::train_lint::REPO_CONFIG_INVALID_REASON => Some(Verdict::Held {
+            reason: "merge_queue_repo_config_invalid",
+        }),
+        // The train could not be linted three times (too many documents,
+        // a time limit, a reading that fails): this head cannot be shown
+        // safe, and enqueueing it again would only repeat the three.
+        crate::train_lint::UNAVAILABLE_REASON => Some(Verdict::Stopped(Stop {
+            class: StopClass::NotAssessed,
+            reason: "merge_queue_doc_lint_unavailable",
+            detail: Some(crate::checks::DOC_LINT_CHECK.to_owned()),
+        })),
         // The merge result could not be judged, again and again: the head
         // cannot be shown safe (review MEDIUM).
         MERGE_RESULT_UNAVAILABLE => Some(Verdict::Stopped(Stop {

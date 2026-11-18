@@ -183,6 +183,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // M4 C8: the merge queue's own outcomes (its landing never runs
         // the merge job).
         | ErrorCode::MergeQueueChecksFailed
+        | ErrorCode::MergeQueueDocLintFailed
         | ErrorCode::MergeQueueStalled
         | ErrorCode::MergeQueueEntryRefused
         // M4 C6: CI secrets and artifacts, never a merge's.

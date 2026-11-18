@@ -72,6 +72,8 @@ pub mod spec_index;
 // ── end M3 X4 ──
 pub mod telemetry;
 pub mod token;
+// Plan 18 S1: the document lint of a merge-queue train (ADR-0037 (b)).
+pub mod train_lint;
 // M4 C3: the runner's and the job's tokens (ADR-0029 §1).
 pub mod ci_token;
 // M4 C6: CI variables (secrets) and their masking (ADR-0029 C6).

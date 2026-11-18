@@ -19,9 +19,10 @@
 #   GS_LT_TOKEN_FILE=… GS_LT_OUT=… GS_LT_WORK=… GS_LT_HTTPS_BASE=https://<host> \
 #   GS_LT_CA_FILE=<ca.crt> TAG=run1 bash ops/loadtest/run-all.sh [a b c d]
 #
-# Scenarios: a b b2 c c2 a2 d (the first run), a-burst, e (the 10,000-merge
-# soak, about 7 h), e-rehearsal (200 merges with the same code), spawn-bench
-# (local only: no server, no token).
+# Scenarios: a b b2 c c2 a2 d (the first run), a-burst, a-xref (pairs that
+# break a reference together: the train lint of plan 18 S1), e (the
+# 10,000-merge soak, about 7 h), e-rehearsal (200 merges with the same code),
+# spawn-bench (local only: no server, no token).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 TAG=${TAG:-run1}
@@ -46,7 +47,10 @@ need() {
 need GS_LT_OUT
 need GS_LT_WORK
 # a first-parent commit of main without its own forge/doc-lint run: reported,
-# not fatal. Plan 18 S1 (the train lints) changes this default to 1.
+# not fatal. The default stays 0 after plan 18 S1: the train lint records its
+# run on the train's last step only (and only when a member changes a
+# document), so the steps before it have no run of their own. a-xref reads
+# every first-parent commit instead.
 export GS_LT_DOC_LINT_MISSING_FATAL=${GS_LT_DOC_LINT_MISSING_FATAL:-0}
 if [ $# -eq 0 ]; then set -- a b c d; fi
 
@@ -56,6 +60,9 @@ scenario_argv() {
     a) argv=(a --n 200 --burst 50 --gap 30 --tag "$TAG") ;;
     # all 200 MRs at once, auto-merge alone drains them (plan 18: the drain rate)
     a-burst) argv=(a-burst --n 200 --tag "$TAG") ;;
+    # 20 pairs that break a reference together + 20 plain revisions, at once
+    # (plan 18 S1: no first-parent commit of main with a broken reference)
+    a-xref) argv=(a-xref --n 20 --tag "$TAG") ;;
     b) argv=(b --n 30 --tag "$TAG") ;;
     # b with a client that retries 503 FG-GIT-0004 (the burst limit found in run1)
     b2) argv=(b --n 30 --retry-busy 10 --tag "${TAG}r") ;;
@@ -76,7 +83,7 @@ scenario_argv() {
 # anything is taken or started (--preflight: the scenario checks itself, exit 2)
 needs_server=0
 for s in "$@"; do
-  scenario_argv "$s" || { echo "unknown scenario: $s (a a2 a-burst b b2 c c2 d e e-rehearsal spawn-bench)" >&2; exit 2; }
+  scenario_argv "$s" || { echo "unknown scenario: $s (a a2 a-burst a-xref b b2 c c2 d e e-rehearsal spawn-bench)" >&2; exit 2; }
   if [ "$s" != spawn-bench ]; then needs_server=1; fi
   node "$here/merge-load.mjs" "${argv[@]}" --preflight >/dev/null || exit 2
 done

@@ -242,6 +242,11 @@ pub const KEYS: &[Key] = &[
         "review.worker_job_concurrency",
         "FORGE_REVIEW_WORKER_JOB_CONCURRENCY",
     ),
+    // Plan 18 S1 (ADR-0037 (b)): the train lint's budget (0: off).
+    number(
+        "merge_queue.train_lint_budget_ms",
+        "FORGE_MERGE_QUEUE_TRAIN_LINT_BUDGET_MS",
+    ),
     // M3 I1c: the feed's seal-sink comparison (ADR-0018 §5; false only in M3).
     boolean(
         "feed.require_sink_compare",

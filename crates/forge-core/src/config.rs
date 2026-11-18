@@ -32,6 +32,8 @@ mod git_pack;
 mod hosting;
 mod keys;
 mod maintenance;
+// Plan 18 S1: `merge_queue.*` (the train lint's budget).
+mod merge_queue;
 // ── M3 O1: `backup.*` ──
 pub mod backup;
 // ── end M3 O1 ──
@@ -67,6 +69,7 @@ pub use git_ssh::GitSshConfig;
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
+pub use merge_queue::MergeQueueConfig;
 pub use mirror::{CredentialProblem, MirrorConfig};
 pub use notify::{valid_mailbox, NotifyConfig, SmtpConfig, SmtpTls};
 pub use portal::PortalConfig;
@@ -95,6 +98,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_FEED_",
     // M3 O3: `maintenance.*`.
     "FORGE_MAINTENANCE_",
+    // Plan 18 S1: `merge_queue.*`.
+    "FORGE_MERGE_QUEUE_",
     // M3 N1: `notify.*`.
     "FORGE_NOTIFY_",
     // M2 MR3 / MR4 (ADR-0021 §12): `web.*` and `auth.oidc.*`.
@@ -200,6 +205,8 @@ pub struct Config {
     pub hosting: HostingConfig,
     /// `review.*` (the mergeability fan-out cap, M3 R2).
     pub review: ReviewConfig,
+    /// `merge_queue.*` (the train lint's budget, plan 18 S1).
+    pub merge_queue: MergeQueueConfig,
     /// `feed.*` (the integrations' event feed, M3 I1c).
     pub feed: FeedConfig,
     /// `maintenance.*` (the repository maintenance, M3 O3).
@@ -476,6 +483,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         git_pack: GitPackConfig::load(get)?,
         hosting: HostingConfig::load(get)?,
         review: ReviewConfig::load(get, write_max_connections)?,
+        merge_queue: MergeQueueConfig::load(get)?,
         feed: FeedConfig::load(get)?,
         maintenance: MaintenanceConfig::load(get)?,
         notify: NotifyConfig::load(get)?,

@@ -11,6 +11,7 @@
 //! `forge/risk` rules (M4 close), as `forge serve` wires them.
 
 mod common;
+mod queue_train_lint;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -257,9 +258,15 @@ impl World {
         let mut all = self.base_files.to_vec();
         all.extend_from_slice(files);
         let head = commit(&self.path, &all, Some(&self.base));
+        self.mr_at(name, &head).await
+    }
+
+    /// Branch `name` at commit `head` and its merge request (checked as
+    /// the worker does), by dave.
+    async fn mr_at(&mut self, name: &str, head: &str) -> StoredMergeRequest {
         plumb(
             &self.path,
-            &["update-ref", &format!("refs/heads/{name}"), &head],
+            &["update-ref", &format!("refs/heads/{name}"), head],
             None,
         );
         self.browser.invalidate(self.repo);
@@ -2346,7 +2353,8 @@ impl Captured {
         GLOBAL.call_once(|| {
             let subscriber = tracing_subscriber::fmt()
                 .json()
-                .with_max_level(tracing::Level::INFO)
+                // Debug: the train lint's skip line (`queue_train_lint`).
+                .with_max_level(tracing::Level::DEBUG)
                 .with_writer(|| ThreadSink)
                 .finish();
             tracing::subscriber::set_global_default(subscriber)
@@ -2356,13 +2364,29 @@ impl Captured {
         CaptureGuard
     }
 
-    /// The fields of the captured events named `event`.
-    fn named(&self, event: &str) -> Vec<serde_json::Value> {
+    /// The captured events as JSON lines.
+    fn lines(&self) -> Vec<serde_json::Value> {
         let bytes = self.0.lock().expect("log buffer").clone();
         String::from_utf8(bytes)
             .expect("utf-8 logs")
             .lines()
             .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("a JSON log line"))
+            .collect()
+    }
+
+    /// The levels of the captured events named `event`, in order.
+    fn levels(&self, event: &str) -> Vec<String> {
+        self.lines()
+            .iter()
+            .filter(|e| e["fields"]["event"] == event)
+            .map(|e| e["level"].as_str().unwrap_or("").to_owned())
+            .collect()
+    }
+
+    /// The fields of the captured events named `event`.
+    fn named(&self, event: &str) -> Vec<serde_json::Value> {
+        self.lines()
+            .iter()
             .filter(|e| e["fields"]["event"] == event)
             .map(|e| e["fields"].clone()) // clone: the fields outlive the line
             .collect()
@@ -2371,8 +2395,10 @@ impl Captured {
 
 /// Plan 18 S0 (measure, no behavior change): the batch's two log lines
 /// carry what its phases cost — the build on `batch_built`; the wait for
-/// the merge lock, the landing under it and the train lint (none runs yet:
-/// 0) on `batch_landed`; each with the git processes the phase started.
+/// the merge lock, the landing under it and the train lint (plan 18 S1:
+/// measured when one is injected — `queue_train_lint` — and 0 for this
+/// worker without one) on `batch_landed`; each with the git processes the
+/// phase started.
 #[tokio::test]
 async fn batch_landed_log_carries_phase_timings() {
     let mut w = world().await;
@@ -2406,7 +2432,11 @@ async fn batch_landed_log_carries_phase_timings() {
     assert_eq!(landed.len(), 1, "{landed:?}");
     let landed = &landed[0];
     assert_eq!(landed["size"], 4, "{landed}");
-    assert_eq!(landed["lint_ms"].as_u64(), Some(0), "no train lint yet");
+    assert_eq!(
+        landed["lint_ms"].as_u64(),
+        Some(0),
+        "no train lint injected: {landed}"
+    );
     let lock_wait_ms = landed["lock_wait_ms"].as_u64();
     let land_ms = landed["land_ms"].as_u64();
     assert!(

@@ -154,11 +154,28 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             smart_http.browse.clone(),  // clone: shares the ref cache
             Arc::new(db.clone()),       // clone: the same Db loads projects
         ));
-        let queue_tasks = crate::serve_merge_queue::spawn(Arc::new(forge_review::MergeQueue::new(
+        let mut queue = forge_review::MergeQueue::new(
             forge_review::Merger::clone(&merger),
             format!("serve-{}", forge_core::RequestId::generate()),
             merge_result_risk,
-        )));
+        );
+        // Plan 18 S1 (ADR-0037 (b)): the documents of a train's tree are
+        // linted before it lands. `merge_queue.train_lint_budget_ms = 0`
+        // injects nothing — the gate is off, logged by the spawn below.
+        if let Some(train_lint_budget) = cfg.merge_queue.train_lint_budget() {
+            queue = queue
+                .with_limits(forge_review::QueueLimits {
+                    train_lint_budget,
+                    ..forge_review::QueueLimits::default()
+                })
+                .with_train_lint(Arc::new(forge_checks::train_lint::TrainLint::new(
+                    db.clone(),                 // clone: the pool handle is shared
+                    smart_http.git.clone(),     // clone: Arc handles
+                    smart_http.storage.clone(), // clone: the root path
+                    smart_http.browse.clone(),  // clone: shares the ref cache
+                )));
+        }
+        let queue_tasks = crate::serve_merge_queue::spawn(Arc::new(queue));
         // M4 C10 (plan 04 M-4): the system's revert drafts after a failed
         // target pipeline write a branch: here, next to the browse cache.
         let revert_tasks = crate::serve_reverts::spawn(

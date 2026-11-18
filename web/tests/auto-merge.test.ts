@@ -53,6 +53,15 @@ describe('stateKind', () => {
     expect(stateKind(state({ state: 'held', reason: 'full_auto_not_allowed' }))).toBe('full_not_allowed');
   });
 
+  it("names the merge queue's document lint and whose problem it is (plan 18 S1)", () => {
+    const stopped = (cls: string, reason: string) => stateKind(state({ state: 'stopped', class: cls, reason }));
+    expect(stopped('program_breakage', 'merge_queue_doc_lint_failed')).toBe('queue_doc_lint');
+    expect(stopped('not_assessed', 'merge_queue_doc_lint_unavailable')).toBe('queue_doc_unavailable');
+    // Not this change's fault: held, never shown as a stop of the change.
+    expect(stateKind(state({ state: 'held', reason: 'merge_queue_doc_lint_base' }))).toBe('queue_doc_base');
+    expect(stateKind(state({ state: 'held', reason: 'merge_queue_repo_config_invalid' }))).toBe('queue_repo_config');
+  });
+
   it('shows nothing when the mode does not act, and the emergency stop first', () => {
     expect(lineKind(mr({ acts: false, auto_merge: state({}) }))).toBeNull();
     expect(lineKind(mr({ stop: 'project', auto_merge: state({}) }))).toBe('project_stopped');
@@ -72,6 +81,10 @@ describe('the line in every language', () => {
     'breakage_risk',
     'not_assessed',
     'merge_result',
+    'queue_doc_lint',
+    'queue_doc_base',
+    'queue_doc_unavailable',
+    'queue_repo_config',
     'full_not_allowed',
     'draft',
     'risk_pending',
@@ -101,5 +114,16 @@ describe('the line in every language', () => {
     }
     expect(whyText(i.t, 'data_loss', 'sql_drop')).toContain('sql_drop');
     if (lng === 'ja') expect(whyText(i.t, 'queued_ai_asset', '')).toContain('AI 資産の変更');
+    // Plan 18 S1: the document lint's lines name the check and the file.
+    expect(whyText(i.t, 'queue_doc_lint', '')).toContain('forge/doc-lint');
+    expect(nextText(i.t, 'queue_doc_lint')).toContain('forge/doc-lint');
+    expect(whyText(i.t, 'queue_repo_config', '')).toContain('.forge/repo.yml');
+    expect(nextText(i.t, 'queue_repo_config')).toContain('.forge/repo.yml');
+    const next = new Set(
+      (['queue_doc_lint', 'queue_doc_base', 'queue_doc_unavailable', 'queue_repo_config'] as const).map((k) =>
+        nextText(i.t, k),
+      ),
+    );
+    expect(next.size).toBe(4);
   });
 });

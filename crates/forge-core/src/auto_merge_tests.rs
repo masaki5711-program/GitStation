@@ -277,6 +277,70 @@ fn what_it_waits_for_is_named_and_removals_by_people_hold_the_head() {
             ..
         })
     ));
+    // Plan 18 S1: the train lint's removals keep the same head away too.
+    let doc_lint = Facts {
+        queue: QueueFacts::Removed {
+            reason: crate::train_lint::FAILED_REASON.to_owned(),
+        },
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&doc_lint),
+        Verdict::Stopped(Stop {
+            class: StopClass::ProgramBreakage,
+            reason: "merge_queue_doc_lint_failed",
+            detail: Some("forge/doc-lint".to_owned()),
+        })
+    );
+    let strict_base = Facts {
+        queue: QueueFacts::Removed {
+            reason: crate::train_lint::BASE_NOT_CLEAN_REASON.to_owned(),
+        },
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&strict_base),
+        Verdict::Held {
+            reason: "merge_queue_doc_lint_base"
+        }
+    );
+    // Strict only because `.forge/repo.yml` is not valid: the config is
+    // named, and it is held for a person as well.
+    let config = Facts {
+        queue: QueueFacts::Removed {
+            reason: crate::train_lint::REPO_CONFIG_INVALID_REASON.to_owned(),
+        },
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&config),
+        Verdict::Held {
+            reason: "merge_queue_repo_config_invalid"
+        }
+    );
+    // Not lintable three times: not assessed, never enqueued again by
+    // itself (a `stalled` removal is — a late test may pass the next time).
+    let unlintable = Facts {
+        queue: QueueFacts::Removed {
+            reason: crate::train_lint::UNAVAILABLE_REASON.to_owned(),
+        },
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&unlintable),
+        Verdict::Stopped(Stop {
+            class: StopClass::NotAssessed,
+            reason: "merge_queue_doc_lint_unavailable",
+            detail: Some("forge/doc-lint".to_owned()),
+        })
+    );
+    let stalled = Facts {
+        queue: QueueFacts::Removed {
+            reason: "stalled".to_owned(),
+        },
+        ..clear_facts()
+    };
+    assert_eq!(decide(&stalled), Verdict::Enqueue { warned: false });
     // Any other removal (a conflict, a new target tip) is decided again.
     let conflict = Facts {
         queue: QueueFacts::Removed {
