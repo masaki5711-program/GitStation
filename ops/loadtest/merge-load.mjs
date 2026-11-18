@@ -7,6 +7,10 @@
 //      the combined build only together with another MR (semantic conflict)
 //   d  P parallel git pushes to different branches, then clone timing
 //   a-burst  documents: N MRs created at once (no waves); the drain rate
+//   a-xref  documents: N pairs of MRs, each green alone, that break a
+//      reference together (one deletes a document, the other cites it), and N
+//      plain revisions; the train's document lint (plan 18 S1) keeps every
+//      first-parent commit of main free of broken references
 //   e  soak: --count merges at --rate per minute with --burst minutes; samples
 //      the backlog, the DB size and the repository size; says if the backlog grows
 //   spawn-bench  local only (no server, no token): per-call time of
@@ -15,7 +19,7 @@
 //
 // Usage (Git Bash or a Linux shell, from the worktree root):
 //   GS_LT_TOKEN_FILE=<file with one fgp_ token> GS_LT_WORK=<scratch dir> \
-//     node ops/loadtest/merge-load.mjs <a|a-burst|b|c|d|e|sample> [--n 200] [--burst 50] [--tag run1]
+//     node ops/loadtest/merge-load.mjs <a|a-burst|a-xref|b|c|d|e|sample> [--n 200] [--burst 50] [--tag run1]
 //   GS_LT_WORK=<scratch dir> node ops/loadtest/merge-load.mjs spawn-bench [--n 100]
 // Results: $GS_LT_OUT/<scenario>-<tag>.json (+ .jsonl event logs).
 //
@@ -44,7 +48,7 @@ const opt = (name, dflt) => {
 // ---------------------------------------------------------------- startup checks
 // Everything here runs before the token is read, a directory is made or a
 // request is sent: a wrong command line ends with exit 2 and nothing started.
-const USAGE = 'usage: merge-load.mjs <a|a-burst|b|c|d|e|spawn-bench|sample> [--n N] [--burst N] [--tag T]\n'
+const USAGE = 'usage: merge-load.mjs <a|a-burst|a-xref|b|c|d|e|spawn-bench|sample> [--n N] [--burst N] [--tag T]\n'
   + '  e: [--count 10000] [--rate 21] [--burst 100] [--burst-every 30] [--duration MIN] [--docs 500] [--sample-every 30]\n'
   + '  --preflight: check the command line and the environment, then exit 0 without running';
 /** A wrong command line or environment: say why and exit 2. */
@@ -57,6 +61,7 @@ const MR_OPTS = { n: 1, gap: 0, timeout: 1, 'retry-busy': 0 };
 const NUMERIC = {
   a: { ...MR_OPTS, burst: 1, 'person-from': 0 },
   'a-burst': { ...MR_OPTS, 'person-from': 0 },
+  'a-xref': { ...MR_OPTS, burst: 1 },
   b: MR_OPTS,
   c: { ...MR_OPTS, burst: 1 },
   d: { n: 1 },
@@ -115,8 +120,11 @@ const STOP_FILE = path.join(L.OUT, 'STOP');
 const MIN_FREE_GB = Number(process.env.GS_LT_MIN_FREE_GB ?? 3);
 if (!/^\d+(\.\d+)?$/.test(process.env.GS_LT_MIN_FREE_GB ?? '3')) usage('GS_LT_MIN_FREE_GB must be a number >= 0 (the memory floor in GB)');
 // GS_LT_DOC_LINT_MISSING_FATAL=1: a first-parent commit of main without a
-// `forge/doc-lint` run of its own fails the integrity check. Off until plan 18
-// S1 lints the train (then run-all.sh turns it on); it is reported either way.
+// `forge/doc-lint` run of its own fails the integrity check. Off by default,
+// also after plan 18 S1: the train lint records its run on the train's last
+// step only (the tree that lands), and only when a member changes a document —
+// the steps before it are first-parent commits without a run of their own.
+// `a-xref` proves those commits by reading them. It is reported either way.
 const DOC_LINT_MISSING_FATAL = flag('GS_LT_DOC_LINT_MISSING_FATAL');
 // a group (one minute of MRs) of the soak revises each document at most once
 if (scenario === 'e' && num('docs', 500) < Math.max(num('rate', 21), num('burst', 100))) usage('--docs must be at least --rate and --burst');
@@ -461,7 +469,8 @@ async function readWhenFinal(read, open, waitMs) {
  * A commit without a check run of its own is `missing`
  * (`missing_merged_head_success` counts those whose merged head, the second
  * parent, has a success). `missing` is always reported; it fails the check
- * only with GS_LT_DOC_LINT_MISSING_FATAL=1 (plan 18 S1 lints the train).
+ * only with GS_LT_DOC_LINT_MISSING_FATAL=1 (the train lint of plan 18 S1
+ * records its run on the train's last step only).
  * `failures` lists what failed; `ok` is `failures` being empty.
  */
 async function mainIntegrity(p, { docLint, waitMs = 300000 }) {
@@ -554,13 +563,56 @@ function offPlanC(recs, merged, pairs) {
   }
   return off;
 }
+/** A reference to a fixture document, `[[LT-0001]]` (the same pattern as a POSIX ERE for `git grep`). */
+const DOC_REF = /\[\[(LT-\d{4})\]\]/g;
+const DOC_REF_ERE = '\\[\\[LT-[0-9]{4}\\]\\]';
+/**
+ * The broken references of one tree of the fixture. `paths`: its files;
+ * `cites`: one `<path>:[[LT-0001]]` line per reference in it. A reference is
+ * broken when the tree has no document of that id. Returns `<path> -> <id>`.
+ */
+function brokenRefs(paths, cites) {
+  const ids = new Set(paths.map((f) => /(LT-\d{4})\.md$/.exec(f)?.[1]).filter(Boolean));
+  const broken = [];
+  for (const line of cites) {
+    const at = line.lastIndexOf(':[[');
+    for (const m of line.slice(at + 1).matchAll(DOC_REF)) if (!ids.has(m[1])) broken.push(`${line.slice(0, Math.max(at, 0))} -> ${m[1]}`);
+  }
+  return broken;
+}
+/** The train lint's removal (plan 18 S1): the entry's code and reason. */
+const LINT_REMOVAL = { code: 'FG-CI-0032', reason: 'doc_lint_failed' };
+/**
+ * Scenario a-xref against its plan: every plain revision merges and is never
+ * removed by the train lint; of each pair (`kind` delete / cite, pair `k`)
+ * exactly one MR merges, and the other one left the queue exactly once with
+ * FG-CI-0032 `doc_lint_failed` — one removal per cause, none anywhere else.
+ */
+function offPlanXref(recs, merged, entries) {
+  const removals = (iid) => entries.filter((e) => e.iid === iid && e.error_code === LINT_REMOVAL.code && e.reason === LINT_REMOVAL.reason).length;
+  const plain = recs.filter((r) => r.kind === 'plain');
+  const off = notMerged(plain, merged).map((x) => `${x} (plain revision) did not merge`);
+  for (const r of plain) if (r.iid && removals(r.iid)) off.push(`!${r.iid} (plain revision) was removed by the train lint`);
+  const pairs = [...new Set(recs.filter((r) => r.kind !== 'plain').map((r) => r.k))].sort((a, b) => a - b);
+  for (const k of pairs) {
+    const both = recs.filter((r) => r.kind !== 'plain' && r.k === k);
+    if (both.length !== 2 || both.some((r) => !r.iid)) continue; // one was not created: counted as a failed create
+    const won = both.filter((r) => merged.has(r.iid));
+    if (won.length !== 1) { off.push(`pair ${k}: ${won.length} merged (exactly one must)`); continue; }
+    const lost = both.find((r) => !merged.has(r.iid));
+    if (removals(lost.iid) !== 1 || removals(won[0].iid) !== 0) {
+      off.push(`pair ${k}: ${removals(lost.iid)} ${LINT_REMOVAL.code} removal(s) of !${lost.iid} (not merged) and ${removals(won[0].iid)} of !${won[0].iid} (merged); exactly one of the MR that did not merge`);
+    }
+  }
+  return off;
+}
 /**
  * Can the result of a run be trusted? `code` is the exit code: 0 = yes;
  * 3 = stopped by the STOP file; 1 = it failed, or the queue never settled (an
  * unfinished run); 4 = it finished, but it must not be read as a pass.
  *   recs          one record per create attempt (`iid` null: not created)
  *   createErrors  creates that threw; skipped: MRs whose branch was not pushed
- *   offPlan       what went against the scenario's plan (`notMerged`, `offPlanB`, `offPlanC`)
+ *   offPlan       what went against the scenario's plan (`notMerged`, `offPlanB`, `offPlanC`, `offPlanXref`)
  *   lost          merged revisions that are not on main
  *   extra         further reasons of the scenario
  */
@@ -661,6 +713,79 @@ async function scenarioA({ atOnce = false } = {}) {
     merged_revisions_missing_on_main: lost, integrity, facts };
   L.save(`${key}-${TAG}.json`, result);
   console.log(JSON.stringify(result.summary, null, 1), 'missing on main:', missing.length);
+  console.log('integrity of main:', integrityLine(integrity));
+  finish(v);
+}
+
+// ---------------------------------------------------------------- A-xref
+/** The broken references of every first-parent commit of main (local git on the fetched history). */
+async function brokenRefsOnMain(p) {
+  await L.gitOk(p.dir, ['fetch', '-q', L.repoUrl(GROUP, p.name), '+refs/heads/main:refs/remotes/origin/main']);
+  const line = (await L.gitOk(p.dir, ['rev-list', '--first-parent', 'origin/main'])).stdout.trim().split('\n');
+  const bad = [];
+  for (const sha of line) {
+    const paths = (await L.gitOk(p.dir, ['ls-tree', '-r', '--name-only', sha, '--', 'docs/procedures'])).stdout.trim().split('\n');
+    // git grep: exit 0 = a match, 1 = none; a line is `<sha>:<path>:<match>`
+    const grep = await L.git(p.dir, ['grep', '-o', '-I', '-E', DOC_REF_ERE, sha, '--', 'docs/procedures']);
+    if (!grep.ok && grep.code !== 1) throw new Error(`git grep failed: ${grep.stderr.slice(0, 300)}`);
+    const cites = grep.ok ? grep.stdout.trim().split('\n').map((l) => l.slice(sha.length + 1)) : [];
+    const broken = brokenRefs(paths, cites);
+    if (broken.length) bad.push({ sha, count: broken.length, broken: broken.slice(0, 20) });
+  }
+  return { first_parent_commits: line.length, commits_with_broken_refs: bad.length, first: bad.slice(0, 20) };
+}
+/**
+ * `a-xref`: --n pairs and --n plain revisions, created --burst at a time.
+ * Pair k: one MR deletes document 3k-2, the other makes document 3k-1 cite
+ * it. Each is green alone (`forge/doc-lint` on its head); together they leave
+ * a broken reference, whichever lands second. Document 3k gets a plain revision.
+ */
+async function scenarioXref() {
+  const n = num('n', 20);
+  const files = { '.forge/doctypes/lt.procedure.yml': D.DOCTYPE };
+  for (let i = 1; i <= 3 * n; i++) files[D.docPath(i)] = D.doc(i);
+  const p = await seedProject(`docs-ax-${TAG}`, files, ['forge/doc-lint']);
+  console.log(`project ${GROUP}/${p.name} id ${p.id}: ${3 * n} documents, ${n} pairs and ${n} plain revisions, main requires forge/doc-lint`);
+  const branches = [];
+  for (let k = 1; k <= n; k++) {
+    const [gone, citing, plain] = [3 * k - 2, 3 * k - 1, 3 * k];
+    branches.push({ name: `x/delete-${k}`, kind: 'delete', k, doc: gone, title: `${D.docId(gone)} 廃止`, files: { [D.docPath(gone)]: null } });
+    branches.push({ name: `x/cite-${k}`, kind: 'cite', k, doc: citing, title: `${D.docId(citing)} 改訂（参照の追加）`,
+      files: { [D.docPath(citing)]: D.doc(citing, { purpose: `この手順書 ${D.docId(citing)} は [[${D.docId(gone)}]] の点検の後に行う（改訂 ${TAG}）。` }) } });
+    branches.push({ name: `x/plain-${k}`, kind: 'plain', k, doc: plain, title: `${D.docId(plain)} 改訂`,
+      files: { [D.docPath(plain)]: D.doc(plain, { edits: { 3: `手順 3: 改訂 ${TAG}。設備 ${plain} の部位 3 を測定器で確かめる。` } }) } });
+  }
+  await makeBranches(p, branches);
+  const t0 = Date.now();
+  // a person asks for every MR too: which MR of a pair comes first is left to the queue
+  const recs = await burstCreate(p, branches, num('burst', branches.length), { enqueueByPerson: true });
+  for (const r of recs) { const b = branches.find((x) => x.name === r.branch); Object.assign(r, { kind: b.kind, k: b.k, doc: b.doc }); }
+  const settle = await waitSettled(p, recs.filter((r) => r.iid).map((r) => r.iid), { timeoutMs: num('timeout', 1800) * 1000, label: 'a-xref' });
+  const facts = await queueFacts(p);
+  const merged = mergedIids(facts);
+  // the proof: no first-parent commit of main has a broken reference
+  const xref = await brokenRefsOnMain(p);
+  // every merged MR's change is on main (a deletion: the document is gone)
+  const onMain = new Set((await L.gitOk(p.dir, ['ls-tree', '-r', '--name-only', 'origin/main', '--', 'docs/procedures'])).stdout.trim().split('\n'));
+  const lost = [];
+  for (const r of recs) {
+    if (!merged.has(r.iid)) continue;
+    const file = D.docPath(r.doc);
+    if (r.kind === 'delete') { if (onMain.has(file)) lost.push(r.iid); continue; }
+    const body = onMain.has(file) ? (await L.gitOk(p.dir, ['show', `origin/main:${file}`])).stdout : '';
+    if (!body.includes(`改訂 ${TAG}`)) lost.push(r.iid);
+  }
+  const integrity = await mainIntegrity(p, { docLint: true });
+  const lintRemovals = facts.entries.filter((e) => e.error_code === LINT_REMOVAL.code);
+  const v = verdict({ settle, integrity, recs, offPlan: offPlanXref(recs, merged, facts.entries), lost: lost.length,
+    extra: xref.commits_with_broken_refs ? [`main: ${xref.commits_with_broken_refs} first-parent commit(s) with a broken reference (the train lint did not stop them)`] : [] });
+  const result = { scenario: 'a-xref', tag: TAG, verdict: v, project: `${GROUP}/${p.name}`, project_id: p.id, pairs: n, started: iso(t0), settle,
+    summary: summarize(recs, facts), broken_refs_on_main: xref,
+    lint_removals: { count: lintRemovals.length, by_reason: lintRemovals.reduce((a, e) => ((a[e.reason] = (a[e.reason] ?? 0) + 1), a), {}), iids: lintRemovals.map((e) => e.iid) },
+    merged_by_kind: recs.reduce((a, r) => { const kk = `${r.kind}:${merged.has(r.iid) ? 'merged' : 'not_merged'}`; a[kk] = (a[kk] ?? 0) + 1; return a; }, {}),
+    merged_revisions_missing_on_main: lost, integrity, facts };
+  L.save(`a-xref-${TAG}.json`, result);
+  console.log(JSON.stringify({ ...result.summary, merged_by_kind: result.merged_by_kind, lint_removals: result.lint_removals.count, broken_refs_on_main: xref.commits_with_broken_refs }, null, 1));
   console.log('integrity of main:', integrityLine(integrity));
   finish(v);
 }
@@ -1246,7 +1371,7 @@ async function spawnBench() {
 
 // ---------------------------------------------------------------- main
 const run = {
-  a: scenarioA, 'a-burst': () => scenarioA({ atOnce: true }), b: scenarioB, c: scenarioC, d: scenarioD, e: scenarioE,
+  a: scenarioA, 'a-burst': () => scenarioA({ atOnce: true }), 'a-xref': scenarioXref, b: scenarioB, c: scenarioC, d: scenarioD, e: scenarioE,
   'spawn-bench': spawnBench, sample: sampler,
 }[scenario];
 if (!run) usage(USAGE);

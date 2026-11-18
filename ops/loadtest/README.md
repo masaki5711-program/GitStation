@@ -16,6 +16,7 @@
 |---|---|---|
 | `a` | 文書 N 本を別々のファイルで MR、波（`--burst` 本ずつ、`--gap` 秒おき）で投入 | 作成→マージの p50/p95、スループット |
 | `a-burst` | 文書 200 本の MR を**一度に**作る（波なし、人のエンキューなし。自動マージだけで流す） | `summary.drain`（最後の作成から最後のマージまでのマージ数/分）、`create_to_merged_s` の p50/p95、`span_s`（全体）、`create_ms`（作成の p95。作成の失敗は `error_codes` の `create:<コード>`） |
+| `a-xref` | 単独では緑で、**組み合わせると参照が壊れる** MR の組を `--n` 組（既定 20）と、ふつうの改訂を同じ数。組 k は「文書 3k−2 を消す MR」と「文書 3k−1 から `[[LT-…]]` でそれを参照する MR」。全部を一度に作り、人もエンキューする（計画 18 S1 の列車の doc-lint の確認） | `broken_refs_on_main`（`main` の first-parent の**全コミット**を手元の git で読み、参照先の無い `[[LT-…]]` を数える。0 が合格）、`lint_removals`（`FG-CI-0032` で外れたエントリー。組ごとに 1 件）、`merged_by_kind` |
 | `b` | 同じ文書への MR（重なる / 重ならない） | 競合の扱い |
 | `c` | 小さな CI + マージキュー、組み合わせでだけ壊れる MR を含む | 列車の本数、原因の特定 |
 | `d` | 並列の push と clone の時間 | push / clone の時間（マージはしない） |
@@ -24,18 +25,18 @@
 
 どのシナリオの結果にも、バッチごとの時間 `summary.batches.duration`（`merge_queue_batches` の作成〜終了。全体、状態ごと、着地したバッチの大きさごと、1 件あたり、次のバッチまでの間）が入る。
 
-### `main` の整合の検査（`a`・`a-burst`・`b`・`c`・`e` の結果の `integrity`）
+### `main` の整合の検査（`a`・`a-burst`・`a-xref`・`b`・`c`・`e` の結果の `integrity`）
 
 - `main` の木に競合の印のあるファイルがない。数えるのは `<<<<<<<` か `>>>>>>>` で始まる行のあるファイルだけ（`=======` だけの行は Markdown の見出しの下線でもあるので、それだけでは数えない）。
 - `main` の first-parent のコミットに、成功していない push パイプラインがない。
 - 文書のシナリオ: `main` の first-parent のコミットに、`success` でない `forge/doc-lint` のチェックがない（先頭だけでなく全部を見る）。**チェックがあって `success` でないものは必ず失敗**にする。
-- 自分のチェックの無いコミットは `missing` に数えて、必ず結果に載せる（`missing_merged_head_success` は、取り込んだ枝の先頭が `success` だった数）。列車の途中のコミットは、列車の doc-lint（計画 18 S1）が入るまで `missing` になるので、**既定では失敗にしない**。`GS_LT_DOC_LINT_MISSING_FATAL=1` で失敗にする。**S1 が入ったら `run-all.sh` の既定を 1 に変える**（そのときから `missing` は欠陥）。
+- 自分のチェックの無いコミットは `missing` に数えて、必ず結果に載せる（`missing_merged_head_success` は、取り込んだ枝の先頭が `success` だった数）。**既定では失敗にしない**（`GS_LT_DOC_LINT_MISSING_FATAL=1` で失敗にする）。計画 18 S1 の列車の doc-lint が入った後も既定は 0 のまま: 列車の lint がチェックを記録するのは**列車の最後の段のコミット（着地する木）だけ**で、しかも列車のどれかの MR が文書（`.md`）か文書型（`.forge/doctypes/**`）を変えたときだけ。列車の途中の段のコミットと、文書を変えない列車の先頭は、自分のチェックを持たないので `missing` のままになる（欠陥ではない）。途中のコミットまで含めた確認は `a-xref` の `broken_refs_on_main` がする。
 - 最後のマージの直後でまだ動いているパイプラインとチェックは、最大 5 分待ってから判定する。待っても終わらないものは成功していないものに数える。
 - `integrity.failures` が失敗の一覧、`integrity.ok` はそれが空であること。`d` はマージをしないので検査しない。
 
 ### 結論（`verdict`）と終了コード
 
-マージをするシナリオ（`a`・`a-burst`・`b`・`c`・`e`）は、**結果のファイルを書いてから**、結果を信じてよいかを `verdict`（`ok` と理由の一覧 `reasons`）に書き、終了コードで返す。理由は標準エラーにも `NOT OK: …` で出る。
+マージをするシナリオ（`a`・`a-burst`・`a-xref`・`b`・`c`・`e`）は、**結果のファイルを書いてから**、結果を信じてよいかを `verdict`（`ok` と理由の一覧 `reasons`）に書き、終了コードで返す。理由は標準エラーにも `NOT OK: …` で出る。
 
 | 終了コード | 意味 |
 |---|---|
@@ -57,6 +58,7 @@
 シナリオの筋書き（**止まるのが正しい MR は理由にしない**）:
 
 - `a`・`a-burst`・`e`: 作った MR はすべてマージされる。
+- `a-xref`: ふつうの改訂はすべてマージされ、列車の lint で外れない。組ごとに**ちょうど 1 本だけ**マージされ、もう 1 本は `FG-CI-0032`（`reason=doc_lint_failed`）で**ちょうど 1 回**キューから外れるのが正しい（先に着地したほうが残る。原因 1 つにつき 1 件）。2 本ともマージされた（= `main` に壊れた参照が入った）、外れた理由が違う、2 回以上外れた、は理由にする。`broken_refs_on_main.commits_with_broken_refs` が 0 でなければ、それも理由にする（列車の lint が切ってある `merge_queue.train_lint_budget_ms = 0` の環境では、ここで 4 になる）。
 - `b`: 重ならない MR はすべてマージされる。重なる MR（どれも手順 1 を書き換える）は**ちょうど 1 本だけ**マージされ、残りは競合で止まるのが正しい（基準の測定では 30 本のうち 16 本がマージ、14 本が停止）。0 本や 2 本以上なら理由にする。
 - `c`: 仕込んだ 3 組（5/8、17/19、30/33）は、組ごとに**ちょうど 1 本だけ**マージされ、もう 1 本がキューから外れるのが正しい（基準は 40 本のうち 37 本）。それ以外の MR はすべてマージされる。`main` の木で `tests/check.sh` が失敗したら理由にする。
 - `d` はマージをしないので `verdict` を持たない（push の失敗は測る対象そのもの。結果の `push_failures`）。
@@ -87,6 +89,7 @@ export GS_LT_HTTPS_BASE=https://<LAN の名前> GS_LT_CA_FILE=<…>/lan-ca.crt  
 export GS_LT_STORAGE_ROOT=<forge.toml の storage.root>                      # e のリポジトリの大きさ（任意）
 TAG=run1 bash ops/loadtest/run-all.sh          # a→b→c→d。1 つだけなら: bash ops/loadtest/run-all.sh c
 TAG=s0 bash ops/loadtest/run-all.sh a a-burst c   # 計画 18 S0 の測定
+TAG=s1 bash ops/loadtest/run-all.sh a-xref        # 計画 18 S1: 組み合わせで壊れる参照が main に入らないこと
 TAG=s0 bash ops/loadtest/run-all.sh e-rehearsal   # e の短い練習: 200 本、約 6 分 + 流し終わるまで
 TAG=s0 bash ops/loadtest/run-all.sh e             # e の本番: 10,000 本、約 7 時間
 ```
@@ -99,7 +102,7 @@ GS_LT_OUT=<…>/out GS_LT_WORK=<…>/w TAG=s0 bash ops/loadtest/run-all.sh spawn
 GS_LT_OUT=<…>/out GS_LT_WORK=<…>/w node ops/loadtest/merge-load.mjs spawn-bench --n 100 --tag s0
 ```
 
-- プロジェクトはグループ `loadtest/` に `docs-a-<TAG>`・`docs-ab-<TAG>`（a-burst）・`docs-b-<TAG>`・`sys-c-<TAG>`・`push-d-<TAG>`・`docs-e-<TAG>` として新しく作る（同じ TAG は使えない。`run-all.sh` の `e-rehearsal` は TAG に `s` を足す）。
+- プロジェクトはグループ `loadtest/` に `docs-a-<TAG>`・`docs-ab-<TAG>`（a-burst）・`docs-ax-<TAG>`（a-xref）・`docs-b-<TAG>`・`sys-c-<TAG>`・`push-d-<TAG>`・`docs-e-<TAG>` として新しく作る（同じ TAG は使えない。`run-all.sh` の `e-rehearsal` は TAG に `s` を足す）。
   `main` は保護（直接の push 禁止）し、必須チェックは文書が `forge/doc-lint`、システムが `ci/pipeline`。自動マージは新しいプロジェクトの既定（`full`）のまま。
 - 結果: `$GS_LT_OUT/<シナリオ>-<TAG>.json`（集計 `summary` と DB から読んだキューの事実 `facts`）、`samples-<TAG>.jsonl`、`e` は `e-<TAG>-samples.jsonl` も。
 - DB は `psql` で**読むだけ**（セッションを `default_transaction_read_only=on` にする。書き込みは PostgreSQL が断る）。書き込みはすべて API と git から。
@@ -160,7 +163,9 @@ TAG=linux1 bash ops/loadtest/run-all.sh e
 | イベント | 項目 |
 |---|---|
 | `forge.merge_queue.batch_built`（info） | `build_ms`（列車を組む時間）、`git_spawns`（その間に起動した git の数） |
-| `forge.merge_queue.batch_landed`（info） | `lock_wait_ms`（マージのロックを待った時間）、`land_ms`（ロックを取ってから着地を記録し終わるまで）、`lint_ms`（列車の lint。S1 が入るまで 0）、`git_spawns`（ロックを頼んでからの git の数） |
+| `forge.merge_queue.batch_landed`（info） | `lock_wait_ms`（マージのロックを待った時間）、`land_ms`（ロックを取ってから着地を記録し終わるまで）、`lint_ms`（着地の前の列車の doc-lint にかかった時間。計画 18 S1 から実測。lint を切ってある・列車が文書を変えない・途中で止まった着地の引き継ぎ、では 0 かそれに近い値）、`git_spawns`（ロックを頼んでからの git の数） |
+| `forge.merge_queue.entry_removed`（warn、`FG-CI-0032`） | 列車の doc-lint で外れた MR: `reason`（`doc_lint_failed` / `doc_lint_base_not_clean`）、`step`（列車の何段目か。原因の MR のときだけ）、`problems`（`rule:path:id` を 20 件まで）、`train_sha` |
+| `forge.merge_queue.train_lint_unavailable`（warn、`FG-DOC-0002`） | 列車を lint できなかった: `scope=train`、`reason`（`train_budget` / `read_failed`）、`cause`、`bound`、`budget_ms` |
 | `forge.jobs.succeeded` / `forge.jobs.retry_scheduled`（**debug**） | `ready_to_claim_ms`（ジョブが実行できるようになった `run_after` から claim まで。DB の時計） |
 
 - `git_spawns` は、その処理を呼んだタスクが起動した git の数。別のタスクへ移した仕事（`tokio::spawn`・`spawn_blocking`）の git と、使い回している `cat-file --batch-command` が答えた読み取りは入らない（プロセスは起動したときに 1 回だけ数える）。git の仕事の**下限**として読む。
