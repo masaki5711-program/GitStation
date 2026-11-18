@@ -1686,7 +1686,11 @@
       "queued": "in the merge queue; it merges when the test is green.",
       "queued_warning": "in the merge queue with a warning; it merges when the test is green.",
       "queued_ai_asset": "in the merge queue with a warning: it changes AI assets. It merges when the test is green.",
-      "queued_by_person": "a person put it in the merge queue."
+      "queued_by_person": "a person put it in the merge queue.",
+      "queue_doc_lint": "stopped: in the merge queue, the documents of the combined result have a new problem, such as a broken reference (forge/doc-lint).",
+      "queue_doc_base": "the documents of the target branch already have problems, so nothing is merged until they are fixed (not caused by this change).",
+      "queue_doc_unavailable": "stopped: the document check of the merge queue could not be completed (too many documents, or a time limit).",
+      "queue_repo_config": "the repository's .forge/repo.yml is invalid, so this is not merged automatically (not caused by this change)."
     },
     "next": {
       "instance_stopped": "People can still merge; an administrator resumes it.",
@@ -1699,7 +1703,11 @@
       "merge_when_ready": "Check it, then press \"Merge when ready\".",
       "conflict": "Resolve the conflict and push.",
       "rerun_doc_lint": "Push a new commit to run the check again; if it is urgent, a person who checked the change can press \"Merge when ready\".",
-      "waiting": "See the merge conditions below."
+      "waiting": "See the merge conditions below.",
+      "fix_document": "Open the forge/doc-lint check, fix the document and push; it continues by itself.",
+      "after_target_fixed": "Once the target branch is fixed, press \"Merge when ready\".",
+      "ask_admin": "Ask an administrator; after that, press \"Merge when ready\".",
+      "fix_repo_config": "Fix .forge/repo.yml first, then press \"Merge when ready\"."
     }
   },
   "mergeQueue": {
@@ -1713,7 +1721,7 @@
       "queued": "Waiting at position {{position}} in the merge queue.",
       "testing": "Being tested in the merge queue. It is merged if it passes.",
       "merged": "Merged by the merge queue.",
-      "removed": "Left the merge queue ({{why}}). Fix it, then add it again."
+      "removed": "Left the merge queue ({{why}}). {{next}}"
     },
     "reason": {
       "dequeued": "removed by a person",
@@ -1722,7 +1730,18 @@
       "head_changed": "a new version was pushed",
       "stalled": "the test did not finish in time",
       "not_open": "the merge request was closed",
-      "other": "it no longer meets the merge conditions"
+      "other": "it no longer meets the merge conditions",
+      "doc_lint_failed": "the documents of the combined result have a new problem, such as a broken reference",
+      "doc_lint_base_not_clean": "the documents of the target branch already have problems; not caused by this change",
+      "doc_lint_unavailable": "the document check could not be completed",
+      "doc_lint_repo_config_invalid": "the repository's .forge/repo.yml is invalid; not caused by this change"
+    },
+    "next": {
+      "fix": "Fix it, then add it again.",
+      "doc_lint_failed": "Open the forge/doc-lint check, fix the document, then add it again.",
+      "doc_lint_base_not_clean": "Nothing lands until they are fixed; add it again after that.",
+      "doc_lint_unavailable": "Ask an administrator (too many documents, or a time limit).",
+      "doc_lint_repo_config_invalid": "Fix that file first, then add it again."
     },
     "title": "Merge queue ({{target}})",
     "subtitle": "Queued changes are tested together and merged in order once they pass.",

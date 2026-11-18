@@ -164,7 +164,10 @@ export function entryLine(t: TFunction, e: QueueEntry): string {
     case 'merged':
       return t('mergeQueue.state.merged');
     default:
-      return t('mergeQueue.state.removed', { why: reasonLabel(t, e.reason) });
+      return t('mergeQueue.state.removed', {
+        why: reasonLabel(t, e.reason),
+        next: reasonNext(t, e.reason),
+      });
   }
 }
 
@@ -183,7 +186,36 @@ export function reasonLabel(t: TFunction, reason: string | null): string {
       return t('mergeQueue.reason.stalled');
     case 'not_open':
       return t('mergeQueue.reason.not_open');
+    // The train's document lint (plan 18 S1): whose problem it is, in words.
+    case 'doc_lint_failed':
+      return t('mergeQueue.reason.doc_lint_failed');
+    case 'doc_lint_base_not_clean':
+      return t('mergeQueue.reason.doc_lint_base_not_clean');
+    case 'doc_lint_unavailable':
+      return t('mergeQueue.reason.doc_lint_unavailable');
+    case 'doc_lint_repo_config_invalid':
+      return t('mergeQueue.reason.doc_lint_repo_config_invalid');
     default:
       return t('mergeQueue.reason.other');
+  }
+}
+
+/**
+ * What to do after the queue removed an entry. "Fix it, then add it again"
+ * is wrong when the change is not the cause (the target's documents, the
+ * repository's config, a check that could not run), so those say who acts.
+ */
+export function reasonNext(t: TFunction, reason: string | null): string {
+  switch (reason) {
+    case 'doc_lint_failed':
+      return t('mergeQueue.next.doc_lint_failed');
+    case 'doc_lint_base_not_clean':
+      return t('mergeQueue.next.doc_lint_base_not_clean');
+    case 'doc_lint_unavailable':
+      return t('mergeQueue.next.doc_lint_unavailable');
+    case 'doc_lint_repo_config_invalid':
+      return t('mergeQueue.next.doc_lint_repo_config_invalid');
+    default:
+      return t('mergeQueue.next.fix');
   }
 }

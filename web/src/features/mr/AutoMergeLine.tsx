@@ -25,6 +25,10 @@ export type LineKind =
   | 'breakage_risk'
   | 'not_assessed'
   | 'merge_result'
+  | 'queue_doc_lint'
+  | 'queue_doc_base'
+  | 'queue_doc_unavailable'
+  | 'queue_repo_config'
   | 'full_not_allowed'
   | 'draft'
   | 'risk_pending'
@@ -56,6 +60,9 @@ export function stateKind(s: AutoMergeState): LineKind {
       if (s.reason === 'merge_result_risk') return 'merge_result';
       // ADR-0030 Amendment 2026-11-17: forge/doc-lint never came (or failed to run).
       if (s.reason === 'doc_lint_missing' || s.reason === 'doc_lint_error') return 'doc_lint_unassessed';
+      // Plan 18 S1: the merge queue's document lint of the combined result.
+      if (s.reason === 'merge_queue_doc_lint_failed') return 'queue_doc_lint';
+      if (s.reason === 'merge_queue_doc_lint_unavailable') return 'queue_doc_unavailable';
       switch (s.class) {
         case 'emergency_stop':
           return s.reason === 'instance_stopped' ? 'instance_stopped' : 'project_stopped';
@@ -73,6 +80,9 @@ export function stateKind(s: AutoMergeState): LineKind {
           return 'not_assessed';
       }
     case 'held':
+      // Plan 18 S1: held for a cause that is not this change.
+      if (s.reason === 'merge_queue_doc_lint_base') return 'queue_doc_base';
+      if (s.reason === 'merge_queue_repo_config_invalid') return 'queue_repo_config';
       return s.reason === 'full_auto_not_allowed' ? 'full_not_allowed' : 'held';
     case 'queued':
       if (s.reason === 'queued_by_person') return 'queued_by_person';
@@ -124,6 +134,14 @@ export function whyText(t: TFunction, kind: LineKind, detail: string): string {
       return t('autoMerge.why.not_assessed');
     case 'merge_result':
       return t('autoMerge.why.merge_result');
+    case 'queue_doc_lint':
+      return t('autoMerge.why.queue_doc_lint');
+    case 'queue_doc_base':
+      return t('autoMerge.why.queue_doc_base');
+    case 'queue_doc_unavailable':
+      return t('autoMerge.why.queue_doc_unavailable');
+    case 'queue_repo_config':
+      return t('autoMerge.why.queue_repo_config');
     case 'full_not_allowed':
       return t('autoMerge.why.full_not_allowed');
     case 'draft':
@@ -191,6 +209,14 @@ export function nextText(t: TFunction, kind: LineKind): string {
       return t('autoMerge.next.conflict');
     case 'doc_lint_unassessed':
       return t('autoMerge.next.rerun_doc_lint');
+    case 'queue_doc_lint':
+      return t('autoMerge.next.fix_document');
+    case 'queue_doc_base':
+      return t('autoMerge.next.after_target_fixed');
+    case 'queue_doc_unavailable':
+      return t('autoMerge.next.ask_admin');
+    case 'queue_repo_config':
+      return t('autoMerge.next.fix_repo_config');
     case 'waiting':
       return t('autoMerge.next.waiting');
   }
@@ -209,6 +235,8 @@ const STOPS: readonly LineKind[] = [
   'not_assessed',
   'merge_result',
   'doc_lint_unassessed',
+  'queue_doc_lint',
+  'queue_doc_unavailable',
 ];
 
 export function AutoMergeLine({ projectId, iid, open }: { projectId: number; iid: number; open: boolean }) {
