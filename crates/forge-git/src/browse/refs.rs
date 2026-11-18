@@ -232,7 +232,7 @@ impl Browser {
 
     /// The refs named exactly by `names` (no cache; used when the cached
     /// list is truncated).
-    async fn query_refs(
+    pub(super) async fn query_refs(
         &self,
         repo: RepoId,
         names: &[RefName],

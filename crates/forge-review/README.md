@@ -31,8 +31,14 @@ row as read just before the transaction — and the transaction refuses to go on
 row it locks is closed with other branches (or was not closed when read), re-reading
 and checking again up to `STALE_ATTEMPTS` (3) times, then `FG-DB-0002
 reason=merge_request_changed_concurrently` (retryable). All through `BranchProbe` (in `forge serve`:
-`forge_git::browse::Browser::resolve_ref` on the full `refs/heads/…` name — the
-browse API's ref list, no new git plumbing). A branch deleted later leaves the
+`forge_git::browse::Browser`). A create and a retarget ask `branch_exists` (plan 18 S8,
+ADR-0037 (g)): `Browser::require_branch`, the repository's branch snapshot — one shared
+`for-each-ref` for any number of concurrent creates, "exists" from the snapshot, "missing"
+only from git; no commit id is read and the create records none (the first version and
+`head_sha` are written by the job `merge_request.refresh`, which reads the live tip; a source
+deleted since the snapshot ends there as `source_missing`). The commands that need a head
+(reopen, approve, merge, merge status) ask `branch_head`: `resolve_ref` on the full
+`refs/heads/…` name — the browse API's ref list. A branch deleted later leaves the
 merge request in place (ADR-0024 §1).
 
 **Public API** (`Review::new(Db, Arc<dyn BranchProbe>)`)
