@@ -273,6 +273,34 @@ fn a_landing_larger_than_the_budget_is_sent_incomplete() {
     assert_eq!(block["changed_dirs"], serde_json::json!([]));
 }
 
+/// Review (MEDIUM): the budget holds on read too. A block larger than
+/// [`LANDED_BUDGET`] that says it is complete — from a writer that does
+/// not keep the budget — is unusable (every merge request is checked
+/// again); one at the budget is read.
+#[test]
+fn a_block_larger_than_the_budget_is_unusable_on_read() {
+    let mut block = landed(set(&["docs/a.md"])).to_value();
+    let many: Vec<String> = (0..2000)
+        .map(|i| format!("documents/section-{i:04}/page-{i:04}.md"))
+        .collect();
+    block["changed_files"] = serde_json::json!(many);
+    assert_eq!(block["paths_complete"], serde_json::json!(true));
+    assert!(block.to_string().len() > LANDED_BUDGET);
+    assert_eq!(
+        LandedPaths::read(&serde_json::json!({ LANDED_KEY: block })),
+        Landed::Unusable("oversized")
+    );
+    // Exactly the budget: what the writer may send is what is read.
+    let mut block = landed(set(&["docs/a.md"])).to_value();
+    let room = LANDED_BUDGET - block.to_string().len();
+    block["changed_files"] = serde_json::json!([format!("docs/a.md{}", "x".repeat(room))]);
+    assert_eq!(block.to_string().len(), LANDED_BUDGET);
+    assert!(matches!(
+        LandedPaths::read(&serde_json::json!({ LANDED_KEY: block })),
+        Landed::Usable(_)
+    ));
+}
+
 /// Path components that collide on purpose: few names, mixed case.
 fn component() -> impl Strategy<Value = String> {
     prop_oneof![

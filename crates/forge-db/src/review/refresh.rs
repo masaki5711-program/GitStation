@@ -40,8 +40,9 @@
 //! (`mergeability::paths`), and only the others are requested. Every other
 //! case is the behaviour above, unchanged: the filter is off, the event
 //! has no block (a direct push, a payload written before the block
-//! existed), the block is incomplete or of another rule version, or its
-//! branch is not one the event moved. One info line per filtered landing
+//! existed), the block is incomplete, of another rule version or larger
+//! than its budget (`merge_paths::LANDED_BUDGET`, enforced on read), or
+//! its branch is not one the event moved. One info line per filtered landing
 //! (`forge.review.mergeability_carried`: `carried`, `settled`,
 //! `rechecked`), one per landing that could not be filtered
 //! (`forge.review.mergeability_paths_unused`, with the reason).

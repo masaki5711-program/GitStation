@@ -101,7 +101,8 @@ pub struct ChangedPath {
 pub enum Incomplete {
     /// More paths than the cap.
     TooMany,
-    /// More than [`SET_BYTES_MAX`] bytes of keys.
+    /// More than [`SET_BYTES_MAX`] bytes of keys, or a listing longer
+    /// than the bytes read of it at most.
     TooLarge,
     /// A path that changes how other paths merge.
     Global,
@@ -113,6 +114,9 @@ pub enum Incomplete {
     NonUtf8,
     /// The listing could not be read.
     Unread,
+    /// The two sides have more than one merge base: the merge works from
+    /// a virtual base, which no single diff describes.
+    MergeBases,
 }
 
 impl Incomplete {
@@ -125,6 +129,7 @@ impl Incomplete {
             Self::Unusual => "unusual_path",
             Self::NonUtf8 => "non_utf8",
             Self::Unread => "unread",
+            Self::MergeBases => "several_merge_bases",
         }
     }
 }
@@ -321,7 +326,7 @@ pub enum Landed {
     /// No block: a direct push, or a payload written before the path sets.
     Absent,
     /// A block that cannot be used, and why (`rule`, `malformed`,
-    /// `incomplete`): every merge request is checked again.
+    /// `incomplete`, `oversized`): every merge request is checked again.
     Unusable(&'static str),
     /// A complete set under the current rule.
     Usable(LandedPaths),
@@ -358,13 +363,20 @@ impl LandedPaths {
         })
     }
 
-    /// The landed block of a `repository.pushed` payload.
+    /// The landed block of a `repository.pushed` payload. The budget
+    /// [`LandedPaths::to_value`] keeps is enforced here as well: a block
+    /// of more than [`LANDED_BUDGET`] serialized bytes — whoever wrote it
+    /// — is `oversized`, so the statement that compares it with every
+    /// candidate row never gets more than the budget's worth of keys.
     pub fn read(payload: &serde_json::Value) -> Landed {
         let Some(block) = payload.get(LANDED_KEY) else {
             return Landed::Absent;
         };
         if block.is_null() {
             return Landed::Absent;
+        }
+        if block.to_string().len() > LANDED_BUDGET {
+            return Landed::Unusable("oversized");
         }
         if block.get("rule").and_then(serde_json::Value::as_u64) != Some(u64::from(RULE_VERSION)) {
             return Landed::Unusable("rule");
