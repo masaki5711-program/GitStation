@@ -2353,7 +2353,8 @@ impl Captured {
         GLOBAL.call_once(|| {
             let subscriber = tracing_subscriber::fmt()
                 .json()
-                .with_max_level(tracing::Level::INFO)
+                // Debug: the train lint's skip line (`queue_train_lint`).
+                .with_max_level(tracing::Level::DEBUG)
                 .with_writer(|| ThreadSink)
                 .finish();
             tracing::subscriber::set_global_default(subscriber)
@@ -2363,13 +2364,29 @@ impl Captured {
         CaptureGuard
     }
 
-    /// The fields of the captured events named `event`.
-    fn named(&self, event: &str) -> Vec<serde_json::Value> {
+    /// The captured events as JSON lines.
+    fn lines(&self) -> Vec<serde_json::Value> {
         let bytes = self.0.lock().expect("log buffer").clone();
         String::from_utf8(bytes)
             .expect("utf-8 logs")
             .lines()
             .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("a JSON log line"))
+            .collect()
+    }
+
+    /// The levels of the captured events named `event`, in order.
+    fn levels(&self, event: &str) -> Vec<String> {
+        self.lines()
+            .iter()
+            .filter(|e| e["fields"]["event"] == event)
+            .map(|e| e["level"].as_str().unwrap_or("").to_owned())
+            .collect()
+    }
+
+    /// The fields of the captured events named `event`.
+    fn named(&self, event: &str) -> Vec<serde_json::Value> {
+        self.lines()
+            .iter()
             .filter(|e| e["fields"]["event"] == event)
             .map(|e| e["fields"].clone()) // clone: the fields outlive the line
             .collect()

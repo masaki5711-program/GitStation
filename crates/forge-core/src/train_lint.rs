@@ -14,12 +14,18 @@
 //! when a train adds none. A problem is the same one when its path, rule
 //! and referenced id are the same (never its line). A repository whose
 //! `.forge/repo.yml` on the base says `merge_queue.doc_lint_strict: true`
-//! must be clean instead: nothing lands while its base has problems.
+//! must be clean instead: nothing lands while its base has problems. A
+//! member of the train never weakens a valid base value. A base whose
+//! file is not valid (`FG-REPO-0024`) is decided by the train's last
+//! step, so the train that repairs the file lands; while both are not
+//! valid the repository is strict, and what stops is told as the config
+//! ([`TrainLintVerdict::RepoConfigInvalid`]), never as the documents.
 //!
 //! A train that cannot be linted never lands: the implementation answers
 //! an error (`FG-DOC-0002` with `scope=train` and `reason`), the queue
-//! abandons the batch and counts it like a reap (`FG-CI-0024` the third
-//! time).
+//! abandons the batch and counts it like a reap; the third time the entry
+//! leaves with `FG-CI-0024` and [`UNAVAILABLE_REASON`] — the document
+//! check could not be completed, no test was late.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -27,6 +33,7 @@ use std::time::Duration;
 
 use forge_errors::ForgeError;
 
+use crate::repo_config::RepoConfigProblem;
 use crate::{ObjectId, ProjectId, RepoId, RequestId};
 
 /// The reason of a batch, and of the entry removed from it, whose train
@@ -37,8 +44,15 @@ pub const FAILED_REASON: &str = "doc_lint_failed";
 /// problem but whose base already has some (`FG-CI-0032`).
 pub const BASE_NOT_CLEAN_REASON: &str = "doc_lint_base_not_clean";
 
+/// The reason of the entries, and of the batch, of a train that adds no
+/// problem while the base has some and `.forge/repo.yml` is not valid on
+/// both the base and the last step (`FG-REPO-0024`): the config is the
+/// cause, not a member's documents.
+pub const REPO_CONFIG_INVALID_REASON: &str = "doc_lint_repo_config_invalid";
+
 /// The reason of a batch abandoned because its train could not be linted
-/// (`FG-DOC-0002 scope=train`).
+/// (`FG-DOC-0002 scope=train`), and of the entry that leaves the third
+/// time (`FG-CI-0024`).
 pub const UNAVAILABLE_REASON: &str = "doc_lint_unavailable";
 
 /// `reason` of `FG-DOC-0002 scope=train`: the lint ran out of its budget.
@@ -140,6 +154,15 @@ pub enum TrainLintVerdict {
     /// lands until the base is clean. `problems`: the ones left (at most
     /// [`MAX_LISTED_PROBLEMS`]).
     BaseNotClean { problems: Vec<TrainLintProblem> },
+    /// As [`Self::BaseNotClean`], but the repository is strict only
+    /// because `.forge/repo.yml` is not valid on the base and on the last
+    /// step (`config`: the base's first broken rule and its line). The
+    /// cause is the config: a train that repairs the file (or leaves no
+    /// problem) lands.
+    RepoConfigInvalid {
+        problems: Vec<TrainLintProblem>,
+        config: RepoConfigProblem,
+    },
 }
 
 /// The answer of a [`TrainDocLint`].

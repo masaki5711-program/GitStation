@@ -127,8 +127,11 @@ struct LandClock {
     locked: Instant,
     /// The step's git processes when the lock was asked for.
     spawns_before: u64,
-    /// The train's document lint before this landing (plan 18 S1; zero
-    /// when none ran: no lint injected, or a recovery).
+    /// The train's document lint before this landing (plan 18 S1): the
+    /// whole time the gate waited for its answer. Zero when nothing was
+    /// asked: no lint injected, or a recovery. For a train the lint does
+    /// not apply to it is the time to find that out (the read of
+    /// `.forge/repo.yml` and the list of the changed paths), not zero.
     lint: Duration,
 }
 
@@ -1820,7 +1823,8 @@ impl MergeQueue {
             base_sha = batch.base_sha.as_str(),
             train_sha = batch.train_sha.as_str(),
             // The train's document lint before the landing (plan 18 S1; 0:
-            // none ran — the gate is off, or a recovery).
+            // nothing was asked — the gate is off, or a recovery; a skipped
+            // train: what it took to find that out).
             lint_ms = millis(clock.lint),
             lock_wait_ms = millis(clock.lock_wait),
             // Under the merge lock: the decisions, the compare-and-swap,

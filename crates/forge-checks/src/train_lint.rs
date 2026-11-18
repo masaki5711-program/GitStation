@@ -9,9 +9,11 @@
 //! tree is read each time (plan 18 S7 makes it incremental).
 //!
 //! 1. **Strict?** `.forge/repo.yml` at the base
-//!    (`merge_queue.doc_lint_strict`). Absent: not strict. A file that
-//!    cannot be read as a valid one (`FG-REPO-0024`) never relaxes the
-//!    rule: strict, logged at info.
+//!    (`merge_queue.doc_lint_strict`). Absent: not strict. A valid base
+//!    is never weakened by a member of the train. A base that is not
+//!    valid (`FG-REPO-0024`) is decided by the last step — the train that
+//!    repairs the file lands; not valid on both: strict, and the verdict
+//!    names the config ([`strict`]).
 //! 2. **Applies?** A strict repository: always. Otherwise only when the
 //!    train changes a `.md` file or a type definition (one `diff-tree`
 //!    between the base and the last step; too many paths to tell: it
@@ -33,16 +35,23 @@
 //! past the caller's budget, `reason=read_failed` with the cause's code
 //! (`cause`) or the bound hit (`bound`) otherwise. The queue never lands a
 //! train on an error.
+//!
+//! **A known limit.** The budget ends the wait, not the work: a tree's
+//! lint runs on a blocking thread ([`lint_at`]) as one call of the pure
+//! `forge_doc::lint::lint`, which has no point to stop at, so a lint whose
+//! budget fired runs to its end and its result is dropped. The bounds of
+//! [`TRAIN_DOC_LIMITS`] cap one such run; a queue takes its next train
+//! only after its poll interval, and an entry leaves after three, so the
+//! runs left behind are few — but they do use CPU (Runbook `merge-queue`).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use forge_core::repo_config::RepoConfigProblem;
 use forge_core::train_lint::{
     TrainDocLint, TrainLintFuture, TrainLintInput, TrainLintProblem, TrainLintVerdict,
     MAX_LISTED_PROBLEMS, REASON_BUDGET, REASON_READ_FAILED,
 };
-use forge_core::{ObjectId, RepoId, RequestId};
+use forge_core::{ObjectId, RepoId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::checks::record_forge_check_run;
 use forge_db::Db;
@@ -56,7 +65,10 @@ use crate::doc_lint::{
     assess_doc_lint_reports, is_document_file, lint_tree, lowered, read_tree, DocLimits, DocTree,
 };
 use crate::spec_checks::{LOOKUP_TIMEOUT, WRITE_TIMEOUT};
-use crate::spec_refs::{read_repo_config, RepoConfigRead};
+
+mod strict;
+
+use strict::{strictness, Strictness};
 
 /// The bounds of one tree's reading for a train: ten times the head's
 /// `.md` files and twice its bytes (the head's run turns `neutral` past
@@ -232,37 +244,6 @@ impl TrainLint {
         }
     }
 
-    /// Step 1 of the module docs.
-    async fn strict(
-        &self,
-        repo: RepoId,
-        base: &ObjectId,
-        request_id: &RequestId,
-    ) -> Result<bool, ForgeError> {
-        let read = read_repo_config(&self.browse, repo, base.as_str())
-            .await
-            .map_err(read_failed)?;
-        Ok(match read {
-            RepoConfigRead::Absent => false,
-            RepoConfigRead::Valid(config) => config.merge_queue.doc_lint_strict,
-            RepoConfigRead::Invalid(RepoConfigProblem { line, reason }) => {
-                tracing::info!(
-                    target: "forge_checks",
-                    event = "forge.train_lint.repo_config_invalid",
-                    error_code = ErrorCode::RepoConfigInvalid.id(),
-                    request_id = %request_id,
-                    repo_id = repo.get(),
-                    base_sha = base.as_str(),
-                    line,
-                    reason,
-                    "the base's .forge/repo.yml is not valid: the train lint treats the \
-                     repository as strict"
-                );
-                true
-            }
-        })
-    }
-
     /// Step 2 of the module docs for a repository that is not strict.
     async fn changes_documents(
         &self,
@@ -323,10 +304,14 @@ impl TrainLint {
                 ForgeError::new(ErrorCode::Internal).with_context("reason", "train_without_steps"),
             ));
         };
-        let strict = self
-            .strict(input.repo, input.base, input.request_id)
-            .await?;
-        if !strict && !self.changes_documents(&input, tip).await? {
+        let strict = strictness(
+            &self.browse,
+            input.repo,
+            (input.base, tip),
+            input.request_id,
+        )
+        .await?;
+        if !strict.is_strict() && !self.changes_documents(&input, tip).await? {
             return Ok(TrainLintVerdict::NotApplicable);
         }
         let migration = within(
@@ -353,12 +338,16 @@ impl TrainLint {
             return Ok(TrainLintVerdict::Clean);
         }
         if new.is_empty() {
-            return Ok(if strict {
-                TrainLintVerdict::BaseNotClean {
+            // Only the base's own problems are left.
+            return Ok(match strict {
+                Strictness::NotStrict => TrainLintVerdict::Clean,
+                Strictness::Strict => TrainLintVerdict::BaseNotClean {
                     problems: listed(at_tip.into_keys().collect()),
-                }
-            } else {
-                TrainLintVerdict::Clean
+                },
+                Strictness::ConfigInvalid(config) => TrainLintVerdict::RepoConfigInvalid {
+                    problems: listed(at_tip.into_keys().collect()),
+                    config,
+                },
             });
         }
         // `earlier[..clean]` add nothing (none: the base itself); step

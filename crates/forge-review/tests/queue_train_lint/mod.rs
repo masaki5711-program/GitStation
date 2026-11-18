@@ -5,7 +5,10 @@
 //! land; the first bad step leaves with `FG-CI-0032` and the rest land in
 //! order; a `main` with old problems still moves; a strict repository does
 //! not; a train that cannot be linted never lands (`FG-DOC-0002
-//! scope=train`, the third time `FG-CI-0024`).
+//! scope=train`, the third time `FG-CI-0024 reason=doc_lint_unavailable`).
+//! `repo_config`: an invalid `.forge/repo.yml` (`FG-REPO-0024`) never
+//! wedges the repository. `edges`: a bad step in the middle, the gate off,
+//! the skip, a bound.
 //!
 //! The documents are in a repository without a CI definition, so a train
 //! is green at once and the lint is what decides.
@@ -20,6 +23,9 @@ use forge_db::checks::{check_runs, StoredCheckRun};
 use forge_errors::ForgeError;
 
 use super::*;
+
+mod edges;
+mod repo_config;
 
 const MANUAL_T: &str = "name: qms.manual\nid_pattern: '^QM-\\d{3}$'\n";
 const QM_001: &str =
@@ -303,11 +309,15 @@ async fn a_train_whose_members_break_a_reference_together_never_lands() {
     assert_eq!(removed["merge_request_id"], cites.id.get(), "{removed}");
     assert_eq!(removed["step"], 2, "{removed}");
     assert_eq!(removed["train_sha"], train.as_str(), "{removed}");
+    assert_eq!(removed["base_sha"], w.base.as_str(), "{removed}");
+    assert!(removed["elapsed_ms"].as_u64().is_some(), "{removed}");
     assert_eq!(
         removed["problems"], "ref_broken:qms/QM-001.md:QM-002",
         "{removed}"
     );
     assert!(removed["request_id"].as_str().is_some(), "{removed}");
+    // An expected outcome, as the catalog says (`severity = "info"`).
+    assert_eq!(logs.levels("forge.merge_queue.entry_removed"), ["INFO"]);
 
     // The evidence: the train's `forge/doc-lint` run, with the file and
     // the line.
@@ -508,6 +518,10 @@ async fn a_strict_repository_does_not_land_while_the_base_has_problems() {
         );
         assert!(line.get("step").is_none(), "no step is the cause: {line}");
     }
+    assert_eq!(
+        logs.levels("forge.merge_queue.entry_removed"),
+        ["INFO", "INFO"]
+    );
 
     // The way out: one merge request that leaves the target clean lands,
     // and the next one lands after it.
@@ -525,15 +539,36 @@ async fn a_strict_repository_does_not_land_while_the_base_has_problems() {
     assert!(w.problems_at(&w.tip("main")).await.is_empty());
 }
 
-/// A train lint whose machinery is down: every call fails.
-struct Unlintable(AtomicUsize);
+/// A train lint that cannot answer: every call fails — a reading that
+/// timed out, or (`bound`) a tree past a bound of the train's reading, as
+/// forge-checks' `TrainLint` says it.
+struct Unlintable {
+    calls: AtomicUsize,
+    bound: Option<&'static str>,
+}
+
+impl Unlintable {
+    fn new(bound: Option<&'static str>) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            bound,
+        })
+    }
+}
 
 impl TrainDocLint for Unlintable {
     fn lint_train<'a>(&'a self, _input: TrainLintInput<'a>) -> TrainLintFuture<'a> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async {
-            Err(ForgeError::new(ErrorCode::RequestTimeout).with_context("operation", "synthetic"))
-        })
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let error = match self.bound {
+            None => {
+                ForgeError::new(ErrorCode::RequestTimeout).with_context("operation", "synthetic")
+            }
+            Some(bound) => ForgeError::new(ErrorCode::DocIndexBounded)
+                .with_context("scope", "train")
+                .with_context("reason", "read_failed")
+                .with_context("bound", bound),
+        };
+        Box::pin(async move { Err(error) })
     }
 }
 
@@ -542,7 +577,7 @@ async fn an_unlintable_train_is_abandoned_and_reaped_on_the_third_time() {
     let mut w = world_with(CLEAN_BASE).await;
     let a = w.doc_mr("fa", &[("qms/QM-003.md", Some(QM_003))]).await;
     w.enqueue(&a).await.expect("enqueue");
-    let lint = Arc::new(Unlintable(AtomicUsize::new(0)));
+    let lint = Unlintable::new(None);
     let worker = w.worker("w1").with_train_lint(lint.clone()); // clone: the test counts its calls
     let logs = Captured::default();
     {
@@ -566,11 +601,12 @@ async fn an_unlintable_train_is_abandoned_and_reaped_on_the_third_time() {
             assert_eq!(w.tip("main"), w.base, "round {round}");
         }
     }
-    assert_eq!(lint.0.load(Ordering::SeqCst), 3, "asked once per train");
-    // The third time the entry leaves for good, as after three reaps.
+    assert_eq!(lint.calls.load(Ordering::SeqCst), 3, "asked once per train");
+    // The third time the entry leaves for good, as after three reaps — and
+    // says what could not be done (never `stalled`: no test was late).
     let entry = w.entry_of(&a).await;
     assert_eq!(entry.state, EntryState::Removed);
-    assert_eq!(entry.reason.as_deref(), Some("stalled"));
+    assert_eq!(entry.reason.as_deref(), Some("doc_lint_unavailable"));
     assert_eq!(
         entry.error_code.as_deref(),
         Some(ErrorCode::MergeQueueStalled.id())
@@ -590,11 +626,23 @@ async fn an_unlintable_train_is_abandoned_and_reaped_on_the_third_time() {
         assert_eq!(line["cause"], "FG-WEB-0002", "{line}");
         assert!(line["request_id"].as_str().is_some(), "{line}");
         assert!(line["batch_id"].as_i64().is_some(), "{line}");
+        assert_eq!(line["base_sha"], w.base.as_str(), "{line}");
+        assert!(line["elapsed_ms"].as_u64().is_some(), "{line}");
+        // What is not known is not logged (never an empty field).
+        assert!(line.get("bound").is_none(), "{line}");
+        assert!(line.get("budget_ms").is_none(), "{line}");
     }
+    // The removal names the document check and carries the lint's cause.
     let removed = logs.named("forge.merge_queue.entry_removed");
     assert_eq!(removed.len(), 1, "{removed:?}");
-    assert_eq!(removed[0]["reason"], "stalled", "{}", removed[0]);
-    assert_eq!(removed[0]["error_code"], "FG-CI-0024", "{}", removed[0]);
+    let removed = &removed[0];
+    assert_eq!(removed["reason"], "doc_lint_unavailable", "{removed}");
+    assert_eq!(removed["error_code"], "FG-CI-0024", "{removed}");
+    assert_eq!(removed["merge_request_id"], a.id.get(), "{removed}");
+    assert_eq!(removed["lint_reason"], "read_failed", "{removed}");
+    assert_eq!(removed["cause"], "FG-WEB-0002", "{removed}");
+    assert!(removed.get("bound").is_none(), "{removed}");
+    assert_eq!(removed["base_sha"], w.base.as_str(), "{removed}");
 
     // The real lint past its budget is the same stop, with its reason.
     let b = w.doc_mr("fb", &[("qms/QM-004.md", Some(QM_004))]).await;
@@ -620,6 +668,8 @@ async fn an_unlintable_train_is_abandoned_and_reaped_on_the_third_time() {
         "{}",
         unavailable[0]
     );
+    assert_eq!(unavailable[0]["budget_ms"], 0, "{}", unavailable[0]);
+    assert!(unavailable[0].get("cause").is_none(), "{}", unavailable[0]);
     assert_eq!(w.tip("main"), w.base);
     assert_eq!(w.entry_of(&b).await.state, EntryState::Queued);
 }

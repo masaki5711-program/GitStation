@@ -7,35 +7,49 @@
 //! injected [`TrainDocLint`] about the train's steps:
 //!
 //! - **not applicable / clean** → the train goes on to land; the time the
-//!   lint took is the landing's `lint_ms`.
+//!   lint took is the landing's `lint_ms` (not applicable: the time to
+//!   find that out, and one debug line,
+//!   `forge.merge_queue.train_lint_skipped`).
 //! - **new problems** → the entry of the first bad step is `removed`
 //!   (`FG-CI-0032 reason=doc_lint_failed`), the batch is `failed`, the
 //!   other entries go back to the queue and are rebuilt in order.
 //! - **the base is not clean** (a strict repository) → every entry is
 //!   `removed` (`FG-CI-0032 reason=doc_lint_base_not_clean`): none of them
 //!   is the cause and none may land.
+//! - **the base is not clean and `.forge/repo.yml` is not valid** → every
+//!   entry is `removed` with the config as the cause (`FG-REPO-0024
+//!   reason=doc_lint_repo_config_invalid`), not their documents.
 //! - **could not be linted** (an error, or no answer within the budget
 //!   and [`GRACE`]) → never a pass: logged once
 //!   (`forge.merge_queue.train_lint_unavailable`, `FG-DOC-0002
 //!   scope=train`), the batch is `abandoned`
 //!   (`reason=doc_lint_unavailable`) and counted like a reaped one — the
-//!   third time an entry is `removed` with `FG-CI-0024`.
+//!   third time an entry is `removed` with `FG-CI-0024
+//!   reason=doc_lint_unavailable` (not `stalled`: its test did finish),
+//!   and that line carries what the lint said.
+//!
+//! The two `FG-CI-0032` removals are expected outcomes of a member's
+//! change and log at info; the other two are not and log at warn.
 //!
 //! No lint injected (`merge_queue.train_lint_budget_ms = 0`): the gate is
-//! off and trains land as before it existed.
+//! off, trains land as before it existed, and nothing is logged per train.
 
 use std::time::{Duration, Instant};
 
 use forge_core::merge_queue::{BatchState, MAX_REAPS};
 use forge_core::train_lint::{
-    self, TrainDocLint, TrainLintInput, TrainLintProblem, TrainLintVerdict, BASE_NOT_CLEAN_REASON,
-    FAILED_REASON, REASON_BUDGET, REASON_READ_FAILED, UNAVAILABLE_REASON,
+    self, TrainDocLint, TrainLintInput, TrainLintVerdict, BASE_NOT_CLEAN_REASON, FAILED_REASON,
+    REASON_BUDGET, REASON_READ_FAILED, REPO_CONFIG_INVALID_REASON, UNAVAILABLE_REASON,
 };
 use forge_core::{ObjectId, RepoId};
 use forge_db::review::merge_queue::{self as db, BatchEnd, StoredBatch, StoredEntry};
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::{log_removed, MergeQueue};
+use super::MergeQueue;
+
+mod lines;
+
+use lines::{Asked, Red, Unavailable};
 
 /// What the worker waits past the lint's own budget before it stops
 /// waiting itself (the implementation bounds its work; this bounds the
@@ -64,13 +78,13 @@ fn unavailable(cause: ForgeError) -> ForgeError {
         .with_source(cause)
 }
 
-/// The value of `key` in `error`'s context (`""`: absent).
-fn context_of<'a>(error: &'a ForgeError, key: &str) -> &'a str {
+/// The value of `key` in `error`'s context.
+fn context_of<'a>(error: &'a ForgeError, key: &str) -> Option<&'a str> {
     error
         .context()
         .iter()
         .find(|(k, _)| *k == key)
-        .map_or("", |(_, v)| v.as_str())
+        .map(|(_, v)| v.as_str())
 }
 
 impl MergeQueue {
@@ -96,11 +110,19 @@ impl MergeQueue {
         }
         let started = Instant::now();
         let verdict = self.ask(lint.as_ref(), batch, &steps, repo).await;
-        let took = started.elapsed();
+        let asked = Asked {
+            batch,
+            repo,
+            took: started.elapsed(),
+        };
+        // Every entry, none of them the cause (the last two verdicts).
+        let all: Vec<(&StoredEntry, Option<usize>)> = testing.iter().map(|e| (e, None)).collect();
         let outcome = match verdict {
-            Ok(TrainLintVerdict::NotApplicable | TrainLintVerdict::Clean) => {
-                return Ok(TrainLintGate::Land(took));
+            Ok(TrainLintVerdict::NotApplicable) => {
+                asked.skipped();
+                return Ok(TrainLintGate::Land(asked.took));
             }
+            Ok(TrainLintVerdict::Clean) => return Ok(TrainLintGate::Land(asked.took)),
             Ok(TrainLintVerdict::NewProblems {
                 first_bad_step,
                 problems,
@@ -111,28 +133,37 @@ impl MergeQueue {
                         .with_context("step", first_bad_step)
                         .with_context("steps", testing.len());
                     return self
-                        .train_unlintable(batch, testing, repo, unavailable(cause))
+                        .train_unlintable(&asked, testing, unavailable(cause))
                         .await
                         .map(TrainLintGate::Ended);
                 };
                 let step = first_bad_step.saturating_add(1);
-                self.train_lint_red(
-                    batch,
-                    &[(entry, Some(step))],
-                    FAILED_REASON,
-                    &problems,
-                    repo,
-                )
-                .await?
-            }
-            Ok(TrainLintVerdict::BaseNotClean { problems }) => {
-                let all: Vec<(&StoredEntry, Option<usize>)> =
-                    testing.iter().map(|e| (e, None)).collect();
-                self.train_lint_red(batch, &all, BASE_NOT_CLEAN_REASON, &problems, repo)
+                let red = Red {
+                    reason: FAILED_REASON,
+                    problems: &problems,
+                    config: None,
+                };
+                self.train_lint_red(&asked, &[(entry, Some(step))], &red)
                     .await?
             }
+            Ok(TrainLintVerdict::BaseNotClean { problems }) => {
+                let red = Red {
+                    reason: BASE_NOT_CLEAN_REASON,
+                    problems: &problems,
+                    config: None,
+                };
+                self.train_lint_red(&asked, &all, &red).await?
+            }
+            Ok(TrainLintVerdict::RepoConfigInvalid { problems, config }) => {
+                let red = Red {
+                    reason: REPO_CONFIG_INVALID_REASON,
+                    problems: &problems,
+                    config: Some(config),
+                };
+                self.train_lint_red(&asked, &all, &red).await?
+            }
             Err(e) => {
-                self.train_unlintable(batch, testing, repo, unavailable(e))
+                self.train_unlintable(&asked, testing, unavailable(e))
                     .await?
             }
         };
@@ -167,103 +198,96 @@ impl MergeQueue {
     }
 
     /// `leaving` (each with its 1-based step when it is the cause) leave
-    /// the queue with `reason` (`FG-CI-0032`); the batch is `failed` and
-    /// its other entries go back in order.
+    /// the queue as `red` says; the batch is `failed` and its other
+    /// entries go back in order.
     async fn train_lint_red(
         &self,
-        batch: &StoredBatch,
+        asked: &Asked<'_>,
         leaving: &[(&StoredEntry, Option<usize>)],
-        reason: &'static str,
-        problems: &[TrainLintProblem],
-        repo: RepoId,
+        red: &Red<'_>,
     ) -> Result<&'static str, ForgeError> {
-        let code = ErrorCode::MergeQueueDocLintFailed;
+        let code = red.code();
         let end = BatchEnd {
             from: BatchState::Testing,
             state: BatchState::Failed,
-            reason: FAILED_REASON,
+            reason: red.batch_reason(),
             error_code: Some(code),
             removed: leaving
                 .iter()
-                .map(|(e, _)| (e.id, reason.to_owned(), code))
+                .map(|(e, _)| (e.id, red.reason.to_owned(), code))
                 .collect(),
             reaped: false,
             batch_limit: None,
         };
-        if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+        if !db::end_batch(&self.merger.db, asked.batch.id, &end).await? {
+            asked.raced(red.reason);
             return Ok("raced");
         }
-        self.retire_train(repo, batch).await;
-        let listed = train_lint::listed(problems);
+        self.retire_train(asked.repo, asked.batch).await;
+        let listed = train_lint::listed(red.problems);
         for (entry, step) in leaving {
-            tracing::warn!(
-                target: "forge_review",
-                event = "forge.merge_queue.entry_removed",
-                error_code = code.id(),
-                request_id = %batch.request_id,
-                queue_id = batch.queue_id,
-                batch_id = batch.id,
-                entry_id = entry.id,
-                merge_request_id = entry.merge_request.get(),
-                reason,
-                train_sha = batch.train_sha.as_str(),
-                step = *step,
-                problems = %listed,
-                "a merge request left the merge queue: the train's document lint"
-            );
+            red.log(asked, entry, *step, &listed);
         }
         Ok("removed")
     }
 
     /// The train could not be linted (`error`: `FG-DOC-0002 scope=train`):
-    /// logged once, the batch abandoned and counted like a reaped one.
+    /// logged once, the batch abandoned and counted like a reaped one. An
+    /// entry this happens to for the third time leaves, and is told that
+    /// the document check could not be completed — `FG-CI-0024` with
+    /// `UNAVAILABLE_REASON`, not `stalled` (its test did finish in time).
     async fn train_unlintable(
         &self,
-        batch: &StoredBatch,
+        asked: &Asked<'_>,
         testing: &[StoredEntry],
-        repo: RepoId,
         error: ForgeError,
     ) -> Result<&'static str, ForgeError> {
+        let batch = asked.batch;
+        let leaving: Vec<&StoredEntry> = testing
+            .iter()
+            .filter(|e| e.reaps + 1 >= MAX_REAPS)
+            .collect();
         let end = BatchEnd {
             from: BatchState::Testing,
             state: BatchState::Abandoned,
             reason: UNAVAILABLE_REASON,
             error_code: Some(ErrorCode::DocIndexBounded),
-            removed: Vec::new(),
+            // Named here, they are removed before the reap's own removal
+            // (`stalled`) looks for them; the others get one more reap.
+            removed: leaving
+                .iter()
+                .map(|e| {
+                    (
+                        e.id,
+                        UNAVAILABLE_REASON.to_owned(),
+                        ErrorCode::MergeQueueStalled,
+                    )
+                })
+                .collect(),
             reaped: true,
             batch_limit: None,
         };
+        // What the lint said: on the batch's line and on each removal's.
+        let lint_reason = context_of(&error, "reason");
+        let cause = context_of(&error, "cause");
+        let bound = context_of(&error, "bound");
+        // Written by `ask` as a number; anything else is not logged.
+        let budget_ms = context_of(&error, "budget_ms").and_then(|ms| ms.parse::<u64>().ok());
         if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+            asked.raced(lint_reason.unwrap_or(UNAVAILABLE_REASON));
             return Ok("raced");
         }
-        self.retire_train(repo, batch).await;
-        let source = std::error::Error::source(&error)
-            .map(ToString::to_string)
-            .unwrap_or_default();
-        tracing::warn!(
-            target: "forge_review",
-            event = "forge.merge_queue.train_lint_unavailable",
-            error_code = error.code().id(),
-            request_id = %batch.request_id,
-            queue_id = batch.queue_id,
-            batch_id = batch.id,
-            train_sha = batch.train_sha.as_str(),
-            scope = "train",
-            reason = context_of(&error, "reason"),
-            cause = context_of(&error, "cause"),
-            bound = context_of(&error, "bound"),
-            budget_ms = context_of(&error, "budget_ms"),
-            source = %source,
-            "the train's document lint could not be completed: the batch does not land"
-        );
-        for entry in testing.iter().filter(|e| e.reaps + 1 >= MAX_REAPS) {
-            log_removed(
-                entry,
-                None,
-                "stalled",
-                ErrorCode::MergeQueueStalled,
-                &batch.request_id,
-            );
+        self.retire_train(asked.repo, batch).await;
+        let said = Unavailable {
+            error: &error,
+            lint_reason,
+            cause,
+            bound,
+            budget_ms,
+        };
+        said.log_batch(asked);
+        for entry in leaving {
+            said.log_removed(asked, entry);
         }
         Ok("reaped")
     }

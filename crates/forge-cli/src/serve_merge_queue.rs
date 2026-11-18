@@ -65,16 +65,13 @@ pub(crate) fn spawn(queue: Arc<MergeQueue>) -> QueueTasks {
     let (stop, stopped) = watch::channel(false);
     // Plan 18 S1: `train_lint=off` is `merge_queue.train_lint_budget_ms = 0`
     // — trains land without the document lint of their tree.
-    let lints = queue.lints_trains();
+    let (train_lint, train_lint_budget_ms) =
+        train_lint_fields(queue.lints_trains(), queue.limits().train_lint_budget);
     tracing::info!(
         lease_s = queue.limits().lease.as_secs(),
         test_timeout_s = queue.limits().test_timeout.as_secs(),
-        train_lint = if lints { "on" } else { "off" },
-        train_lint_budget_ms = if lints {
-            queue.limits().train_lint_budget.as_millis()
-        } else {
-            0
-        },
+        train_lint,
+        train_lint_budget_ms,
         "forge.serve.merge_queue_started"
     );
     let supervisor = tokio::spawn(supervise(
@@ -84,6 +81,16 @@ pub(crate) fn spawn(queue: Arc<MergeQueue>) -> QueueTasks {
         move |s| tokio::spawn(run(Arc::clone(&queue), s)),
     ));
     QueueTasks { stop, supervisor }
+}
+
+/// `train_lint` and `train_lint_budget_ms` of the start line: `off` and 0
+/// when no lint is injected, whatever the limits say.
+fn train_lint_fields(lints: bool, budget: Duration) -> (&'static str, u128) {
+    if lints {
+        ("on", budget.as_millis())
+    } else {
+        ("off", 0)
+    }
 }
 
 /// A failure streak (logged once at its start, then at most every
@@ -156,5 +163,19 @@ mod tests {
         assert_eq!(waits.last().copied(), Some(BACKOFF_MAX));
         // The lease must outlive a tick, or two workers could hold a queue.
         assert!(forge_review::QueueLimits::default().lease > TICK_TIMEOUT);
+    }
+
+    #[test]
+    fn the_start_line_says_whether_trains_are_linted() {
+        // `merge_queue.train_lint_budget_ms = 0`: no lint is injected, and
+        // the line says so whatever budget the limits still carry.
+        assert_eq!(
+            train_lint_fields(false, Duration::from_secs(10)),
+            ("off", 0)
+        );
+        assert_eq!(
+            train_lint_fields(true, Duration::from_secs(10)),
+            ("on", 10_000)
+        );
     }
 }
