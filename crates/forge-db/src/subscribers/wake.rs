@@ -56,7 +56,7 @@ impl Wake {
     /// and waits for the hub's connection — at most the connect bound,
     /// then [`Woken::Connected`]; with the database down it ends as
     /// [`Woken::Polled`] (the hub logs the failure and keeps trying).
-    /// `Err` (`FG-INTERNAL-0001`): no hub could be started.
+    /// `Err` (`FG-SYS-0001`): no hub could be started.
     pub(crate) async fn wait(&mut self, db: &Db, max: Duration) -> Result<Woken, ForgeError> {
         let (listening, max) = match &mut self.listening {
             Some(listening) => (listening, max),
