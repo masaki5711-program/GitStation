@@ -275,3 +275,79 @@ async fn a_dead_job_logs_its_cause_then_fg_db_0006_with_the_origin_request_id() 
     }
     t.drop_now().await;
 }
+
+/// Plan 18 S0: the runner's outcome line carries how long the job had been
+/// ready before its claim (`run_after` to the claim, the database's
+/// clock) — on a success and on a scheduled retry.
+#[tokio::test]
+async fn job_outcome_log_carries_claim_latency() {
+    let t = FreshDb::migrated().await;
+    let line = |logs: &Captured, name: &str| -> Value {
+        let named: Vec<Value> = logs
+            .events()
+            .into_iter()
+            .filter(|e| e["fields"]["message"] == name)
+            .collect();
+        assert_eq!(named.len(), 1, "one {name}: {named:?}");
+        named[0]["fields"].clone() // clone: the fields outlive the line
+    };
+
+    // Ready for 3 s when the runner claims it.
+    let waited = queued(&t, &new_job("test.a", None, 3, T)).await;
+    t.exec_superuser(&format!(
+        "UPDATE forge.jobs SET run_after = now() - interval '3 seconds' WHERE id = {}",
+        waited.get()
+    ))
+    .await;
+    let r = runner(&t, "test.a", Arc::new(|_| Box::pin(async { Ok(()) })));
+    let logs = Captured::default();
+    let ran = {
+        let _guard = logs.install();
+        r.run_once().await.expect("run")
+    };
+    assert!(
+        matches!(ran, Some(Ran::Succeeded(j)) if j == waited),
+        "{ran:?}"
+    );
+    let succeeded = line(&logs, "forge.jobs.succeeded");
+    assert_eq!(succeeded["job_id"], waited.get(), "{succeeded}");
+    assert!(
+        succeeded["ready_to_claim_ms"]
+            .as_u64()
+            .is_some_and(|ms| (3_000..60_000).contains(&ms)),
+        "ready for 3 s before the claim: {succeeded}"
+    );
+
+    // Claimed as soon as it is queued; its run fails and is retried.
+    let failing = queued(&t, &new_job("test.b", None, 3, T)).await;
+    let r = runner(
+        &t,
+        "test.b",
+        Arc::new(|_| {
+            Box::pin(async {
+                Err(JobFailure::retry(
+                    ForgeError::new(ErrorCode::DbQueryFailed)
+                        .with_context("reason", "lock_timeout"),
+                ))
+            })
+        }),
+    );
+    let logs = Captured::default();
+    let ran = {
+        let _guard = logs.install();
+        r.run_once().await.expect("run")
+    };
+    assert!(
+        matches!(ran, Some(Ran::Retrying { job_id, .. }) if job_id == failing),
+        "{ran:?}"
+    );
+    let retried = line(&logs, "forge.jobs.retry_scheduled");
+    assert_eq!(retried["job_id"], failing.get(), "{retried}");
+    assert!(
+        retried["ready_to_claim_ms"]
+            .as_u64()
+            .is_some_and(|ms| ms < 60_000),
+        "the wait of a job claimed at once: {retried}"
+    );
+    t.drop_now().await;
+}

@@ -87,7 +87,7 @@ pub mod version;
 mod want_check;
 
 pub use command::{Git, GitCommand, GitConfig, GitOutput};
-pub use metrics::git_spawns;
+pub use metrics::{counting_spawns, git_spawns, scoped_git_spawns};
 pub use push_check::{Ancestry, CommitList, CommitQuery};
 pub use refs::{MergeQueueRef, PipelineRef, RefChange, RefUpdateResult};
 pub use revision::Revision;

@@ -184,7 +184,7 @@ pub(crate) async fn supersede_queued_on(
     .map_err(|e| query_error("jobs.supersede_queued", e))
 }
 
-type ClaimRow = (i64, String, String, i32, i32, i32, String, Option<i64>);
+type ClaimRow = (i64, String, String, i32, i32, i32, String, Option<i64>, i64);
 
 /// Claim the next ready job of one of `kinds` (none: nothing is claimed),
 /// in [`priority_sql`] order.
@@ -205,6 +205,21 @@ pub async fn claim_excluding(
     kinds: &[JobKind],
     busy: &[String],
 ) -> Result<Option<ClaimedJob>, ForgeError> {
+    Ok(claim_timed(db, worker, kinds, busy)
+        .await?
+        .map(|(job, _ready_for)| job))
+}
+
+/// [`claim_excluding`] with how long the job had been ready: from its
+/// `run_after` (what the claim treats as ready — the enqueue, the end of a
+/// backoff, a release, the place a superseded job held) to this claim, on
+/// the database's clock. Plan 18 S0: the runner's `ready_to_claim_ms`.
+pub(crate) async fn claim_timed(
+    db: &Db,
+    worker: &WorkerId,
+    kinds: &[JobKind],
+    busy: &[String],
+) -> Result<Option<(ClaimedJob, Duration)>, ForgeError> {
     if kinds.is_empty() {
         return Ok(None);
     }
@@ -303,16 +318,19 @@ pub(crate) async fn claim_on(
     worker: &WorkerId,
     kinds: &[JobKind],
 ) -> Result<Option<ClaimedJob>, ForgeError> {
-    claim_on_excluding(conn, worker, kinds, &[]).await
+    Ok(claim_on_excluding(conn, worker, kinds, &[])
+        .await?
+        .map(|(job, _ready_for)| job))
 }
 
-/// [`claim_on`] passing over the ordering keys in `busy`.
+/// [`claim_on`] passing over the ordering keys in `busy`; with how long
+/// the job had been ready ([`claim_timed`]).
 pub(crate) async fn claim_on_excluding(
     conn: &mut PgConnection,
     worker: &WorkerId,
     kinds: &[JobKind],
     busy: &[String],
-) -> Result<Option<ClaimedJob>, ForgeError> {
+) -> Result<Option<(ClaimedJob, Duration)>, ForgeError> {
     let kinds: Vec<&str> = kinds.iter().map(JobKind::as_str).collect();
     let sql = format!(
         "WITH next AS ( \
@@ -328,7 +346,8 @@ pub(crate) async fn claim_on_excluding(
                     + pg_catalog.make_interval(secs => (j.timeout_ms + $3) / 1000.0) \
            FROM next WHERE j.id = next.id \
          RETURNING j.id, j.kind, j.payload::text, j.attempts, j.max_attempts, j.timeout_ms, \
-                   j.origin_request_id, j.origin_event_seq",
+                   j.origin_request_id, j.origin_event_seq, \
+                   (EXTRACT(epoch FROM pg_catalog.now() - j.run_after) * 1000)::bigint",
         priority = priority_sql(),
     );
     let row: Option<ClaimRow> = sqlx::query_as(&sql)
@@ -339,7 +358,8 @@ pub(crate) async fn claim_on_excluding(
         .fetch_optional(&mut *conn)
         .await
         .map_err(|e| query_error("jobs.claim", e))?;
-    let Some((id, kind, payload, attempt, max_attempts, timeout_ms, origin, seq)) = row else {
+    let Some((id, kind, payload, attempt, max_attempts, timeout_ms, origin, seq, ready_ms)) = row
+    else {
         return Ok(None);
     };
     let corrupt = |what: &'static str| {
@@ -357,7 +377,9 @@ pub(crate) async fn claim_on_excluding(
         .ok()
         .and_then(|ms| JobTimeout::new(Duration::from_millis(ms)))
         .ok_or_else(|| corrupt("timeout_ms"))?;
-    Ok(Some(ClaimedJob {
+    // The claim takes `run_after <= now()`: never negative.
+    let ready_for = Duration::from_millis(u64::try_from(ready_ms).unwrap_or(0));
+    let job = ClaimedJob {
         lease: Lease {
             job_id: JobId::new(id),
             worker_id: worker.clone(), // clone: the lease owns its fence key
@@ -369,7 +391,8 @@ pub(crate) async fn claim_on_excluding(
         timeout,
         origin_request_id: origin,
         origin_event_seq: seq,
-    }))
+    };
+    Ok(Some((job, ready_for)))
 }
 
 /// `FG-DB-0007 reason=fenced`: the lease is no longer this worker's.

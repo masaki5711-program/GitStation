@@ -71,7 +71,9 @@ pub use queue::{
     claim, claim_excluding, complete, enqueue, fail, ordering_key, reap, release,
     PRIORITY_AGING_SECS, REAP_BATCH,
 };
-pub(crate) use queue::{enqueue_after_on, enqueue_on, enqueue_superseding_on, supersede_queued_on};
+pub(crate) use queue::{
+    claim_timed, enqueue_after_on, enqueue_on, enqueue_superseding_on, supersede_queued_on,
+};
 pub use reports::{Ran, Reported};
 pub use runner::{JobFuture, JobHandler, JobRunner, ABORT_WAIT, RELEASE_TIMEOUT};
 
@@ -313,6 +315,8 @@ pub fn backoff(attempt: i32) -> Duration {
 
 #[cfg(test)]
 mod boundary_tests;
+#[cfg(test)]
+mod claim_bench_tests;
 #[cfg(test)]
 mod doctor_tests;
 #[cfg(test)]

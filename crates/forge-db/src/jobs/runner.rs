@@ -43,7 +43,7 @@ use super::reports::{
     dead_lettered, finished, job_error, log_outcome, report_reaped, with_job_context, Ran, Reported,
 };
 use super::{
-    claim_excluding, complete, fail, ordering_key, reap, release, ClaimedJob, Completed, Failed,
+    claim_timed, complete, fail, ordering_key, reap, release, ClaimedJob, Completed, Failed,
     JobFailure, JobKind, Retry, WorkerId,
 };
 use crate::Db;
@@ -268,16 +268,17 @@ impl JobRunner {
         stop: impl Future<Output = ()>,
         grace: Duration,
     ) -> Result<Option<Ran>, ForgeError> {
-        let (job, slot, claimed_at) = {
+        let (job, slot, claimed_at, ready_for) = {
             // One claim at a time: a cap or an ordering key is decided and
             // taken together.
             let _gate = self.gate.lock().await;
             let (kinds, busy) = self.claimable();
-            let Some(job) = claim_excluding(&self.db, &self.worker, &kinds, &busy).await? else {
+            let Some((job, ready_for)) = claim_timed(&self.db, &self.worker, &kinds, &busy).await?
+            else {
                 return Ok(None);
             };
             let slot = Slot::take(&self.in_flight, &job);
-            (job, slot, tokio::time::Instant::now())
+            (job, slot, tokio::time::Instant::now(), ready_for)
         };
         let request_id = job.request_id();
         let settled = match self.execute(&job, stop, grace).await {
@@ -291,7 +292,7 @@ impl JobRunner {
             job_id: job.lease.job_id,
             error: with_job_context(e, &job),
         });
-        log_outcome(&outcome, &request_id);
+        log_outcome(&outcome, &job, ready_for, &request_id);
         if let Ran::LeftLeased { .. } = &outcome {
             // The old handler may still run: its ordering key (and its
             // kind's place) stays taken until its lease ends, when the
@@ -373,17 +374,8 @@ impl JobRunner {
 
     async fn complete(&self, job: &ClaimedJob) -> Result<Ran, ForgeError> {
         Ok(match complete(&self.db, job).await? {
-            Completed::Applied => {
-                tracing::debug!(
-                    target: "forge_db",
-                    request_id = %job.request_id(),
-                    job_id = job.lease.job_id.get(),
-                    kind = job.kind.as_str(),
-                    attempt = job.lease.attempt,
-                    "forge.jobs.succeeded"
-                );
-                Ran::Succeeded(job.lease.job_id)
-            }
+            // Logged with the outcome (`reports::log_outcome`).
+            Completed::Applied => Ran::Succeeded(job.lease.job_id),
             Completed::Fenced(e) => Ran::Fenced(e),
         })
     }
@@ -403,21 +395,12 @@ impl JobRunner {
         telemetry::log_failure(&error, &job.request_id());
         let failure = JobFailure { error, retry };
         Ok(match fail(&self.db, job, &failure).await? {
-            Failed::Retrying { retry_in } => {
-                tracing::debug!(
-                    target: "forge_db",
-                    request_id = %job.request_id(),
-                    job_id = job_id.get(),
-                    kind = job.kind.as_str(),
-                    retry_in_ms = retry_in.as_millis(),
-                    "forge.jobs.retry_scheduled"
-                );
-                Ran::Retrying {
-                    job_id,
-                    failure: failure.error,
-                    retry_in,
-                }
-            }
+            // The schedule is logged with the outcome (`reports::log_outcome`).
+            Failed::Retrying { retry_in } => Ran::Retrying {
+                job_id,
+                failure: failure.error,
+                retry_in,
+            },
             Failed::Dead => {
                 let reason = match failure.retry {
                     Retry::Never => "permanent_failure",
