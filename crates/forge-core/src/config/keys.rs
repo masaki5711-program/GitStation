@@ -242,6 +242,8 @@ pub const KEYS: &[Key] = &[
         "review.worker_job_concurrency",
         "FORGE_REVIEW_WORKER_JOB_CONCURRENCY",
     ),
+    // Plan 18 S2 (ADR-0037 (a)): the idle job runner's safety-net period.
+    number("jobs.safety_poll_ms", "FORGE_JOBS_SAFETY_POLL_MS"),
     // Plan 18 S1 (ADR-0037 (b)): the train lint's budget (0: off).
     number(
         "merge_queue.train_lint_budget_ms",
