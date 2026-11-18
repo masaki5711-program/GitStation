@@ -27,14 +27,24 @@ pub fn git_spawns() -> u64 {
 
 /// Run `work`, counting the git processes it starts on this task
 /// ([`scoped_git_spawns`] reads the count from inside). A count only: no
-/// effect on the work or on [`git_spawns`]. Work moved to another task
-/// (`tokio::spawn`) is not counted.
+/// effect on the work or on [`git_spawns`].
+///
+/// What the count (the `git_spawns` log field) leaves out:
+/// - work moved to another task (`tokio::spawn`, `spawn_blocking`): the
+///   scope is task-local, so a process started there is not counted;
+/// - a reused long-lived `cat-file --batch-command` process: it counts
+///   once, in the scope that started it, and every later read it serves
+///   adds nothing.
+///
+/// So the field is a lower bound of the git work, exact only for work
+/// that starts every process on the calling task.
 pub async fn counting_spawns<F: Future>(work: F) -> F::Output {
     SCOPED.scope(AtomicU64::new(0), work).await
 }
 
 /// git processes this task started so far inside its [`counting_spawns`]
-/// scope; 0 outside one.
+/// scope; 0 outside one. Spawns on the calling task only (see
+/// [`counting_spawns`] for what is left out).
 pub fn scoped_git_spawns() -> u64 {
     SCOPED
         .try_with(|n| n.load(Ordering::Relaxed))

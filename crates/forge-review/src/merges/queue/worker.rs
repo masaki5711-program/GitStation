@@ -277,7 +277,10 @@ impl MergeQueue {
             return Ok(None);
         };
         // The step's git processes are counted apart from the requests
-        // served at the same time (the `git_spawns` log fields).
+        // served at the same time (the `git_spawns` log fields). The count
+        // is the spawns made on this task: work moved to another task and
+        // reads served by a reused `cat-file --batch-command` process are
+        // not in it (`forge_git::counting_spawns`).
         let stepped = forge_git::counting_spawns(self.step(&claimed)).await;
         let next_in = match &stepped {
             Ok(report) if matches!(report.outcome, "waiting" | "paused" | "idle") => {
