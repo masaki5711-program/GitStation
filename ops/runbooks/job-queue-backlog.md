@@ -48,6 +48,8 @@
 ロングポーリングを起こす。通知は合図にすぎない: 起きた側は必ず DB を読み直し、通知がなくても `jobs.safety_poll_ms`（既定 10 秒）ごとに
 自分で確かめる。だから取りこぼしても仕事は失われず、最長で保険の周期 1 回ぶん遅れるだけ。FG-DB-0024 はその遅れが起きた印。
 
+0. `channel=forge_merge_queue` なら、ジョブではなくマージキューの手番の取りこぼし（plan 18 S3）。`queue_id`、`outcome`、`worker_id` の
+   読み方と戻し方は Runbook `merge-queue.md` の「起床と安全網」。下の手順 2（LISTEN の接続）は同じ。
 1. ログの `context` を読む: `channel`（`forge_jobs`）、`kind`、`job_id`、`worker_id`（ランナーのロングポーリングなら `kind=ci.job` と `runner_id`）、
    `oldest_ready_ms`（見つけた仕事が実行可能になってからの時間。ランナーなら、そのランナーが取れるようになってからの時間）、
    `safety_poll_ms`、`suppressed`。1 分に 1 回までしか出ない。`suppressed` は、前の 1 件の後に出さなかった取りこぼしの数。

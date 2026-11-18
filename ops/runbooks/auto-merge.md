@@ -11,7 +11,8 @@ M4 C9（ADR-0017 Amendment 2026-11-13、計画 04 M-5 / M-6）の自動マージ
 - `forge serve` のログに `FG-REVIEW-0027` AutoMergeEmergencyStopped（warn、`forge.auto_merge.emergency_stop`）: 誰かが緊急停止を
   入れた（`scope=project|instance`、`user_id`）。
 - `forge serve` のログに `FG-SYS-0005` ServeFailed（`operation=auto_merge_tick`、`reason=auto_merge_tick_timeout` など）が
-  1 分に 1 回まで続く。
+  1 分に 1 回まで続く。`woken_by`（`sweep` / `events` / `named` / `poll`）が、何で起きたときの失敗か。
+- 「チェックが緑になったのに、列に入るまで 30 秒かかる」という問い合わせ（下の「起床と見回り」）。
 - 利用者から「full のプロジェクトなのに自動でマージされない」「止まった理由がわからない」と問い合わせがあった。
 - `FG-REVIEW-0032` AutoMergeFullNotAllowed（info）: Owner が `full` を選ぼうとしたが、インスタンスの `merge.allow_full_auto` が
   外れている（M4 の締め、ADR-0017 Amendment 2026-11-17）。`forge doctor` の `review.auto_merge` が warn（`full` のプロジェクトの数）。
@@ -67,7 +68,30 @@ M4 C9（ADR-0017 Amendment 2026-11-13、計画 04 M-5 / M-6）の自動マージ
 5. 監査: `auto_merge.mode_changed` / `auto_merge.stopped` / `auto_merge.resumed` / `auto_merge.allow_full_auto_changed`
    （誰がいつ）、`merge_queue.auto_enqueued`（actor system）。
 
+## 起床と見回り（計画 18 S3）
+
+自動マージの worker は、5 秒ごとに 50 件を見るのをやめた。次の 3 つで起きる。どれも合図にすぎず、判定は必ず表と git を読み直す。
+
+| 起きるきっかけ | 判定するもの | `woken_by` |
+|---|---|---|
+| 順序づけられたイベント（`NOTIFY forge_events_sequenced`） | イベントが名指しする MR だけ（MR 自身のイベント、その head かマージ結果の `check.completed`）。同時に 4 件まで | `events` |
+| 「マージできる」と答えたマージ可能性の確認（`NOTIFY forge_auto_merge`、MR の id） | その MR | `named` |
+| 見回り（`auto_merge.safety_poll_ms`、既定 30000、100〜300000。聞き手がつながり直したときも） | 自動マージが扱う MR の全部、古く見た順 | `sweep` |
+| LISTEN の接続が無い・切れている間（5 秒ごと。計画 18 より前の動き） | 古く見た順に `batch` 件 | `poll` |
+
+- **見回りでしか気づかない変化**（最長 30 秒）: プロジェクトの `merge.auto` の変更、緊急停止とその解除、インスタンスの
+  `merge.allow_full_auto`、`forge/doc-lint` の待ちの時間切れ。チェックの完了や承認はイベントで起きるので、ふつうは 1 秒以内。
+- 起動のログ `forge.serve.auto_merge_started` に `safety_poll_ms`。
+- 見回りが遅れても `FG-DB-0024` は出ない（キューの手番とジョブだけが出す）。通知が届いているかは、LISTEN の接続の失敗
+  （`FG-DB-0001` / `FG-DB-0002` の `operation=wake_listen`、`FG-SYS-0001` の `task=wake_hub`）と、順序づけの失敗で見る
+  （Runbook `job-queue-backlog` の「起床の通知の取りこぼし」、`db-unavailable`）。
+- 「緑になってから列に入るまでが毎回 30 秒前後」なら、イベントの起床が届いていない。上の接続の失敗を探し、無ければ開発者
+  （Claude のセッション）に渡す（MR の id、チェックが終わった時刻、`forge.merge_queue.enqueued by=auto_merge` の時刻）。
+
 ## Mitigate（変更は人の承認のあと）
+
+- **通知に頼らずに動かす**: サーバーの設定を `auto_merge.safety_poll_ms = 5000`（`FORGE_AUTO_MERGE_SAFETY_POLL_MS`。計画 18 より前の
+  間隔）にして `forge serve` を再起動する。**人の承認が要る**（ロールバック: 設定を元の値に戻して再起動する）。
 
 - **すぐ止める**: プロジェクトは `POST /api/v1/projects/{id}/auto-merge/stop`（Maintainer 以上、プロジェクトの設定の画面の
   「自動マージを緊急停止」）、全体は `POST /api/v1/admin/auto-merge/stop`（管理者）。キューにある自動マージの MR は待ち（バッチに
@@ -95,5 +119,5 @@ M4 C9（ADR-0017 Amendment 2026-11-13、計画 04 M-5 / M-6）の自動マージ
 ## 関連
 
 - ADR-0017（Amendment 2026-10-30・2026-11-03・2026-11-12・2026-11-13・2026-11-17）、ADR-0030（マージキュー、Amendment
-  2026-11-17）、Runbook `merge-queue`、
+  2026-11-17）、ADR-0037（計画 18 S3 の追記: 起床と見回り）、Runbook `merge-queue`、`config-invalid`（`auto_merge.safety_poll_ms`）、
   `merge-blocked`、計画 04 M-5 / M-6。
