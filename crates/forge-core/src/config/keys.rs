@@ -244,6 +244,21 @@ pub const KEYS: &[Key] = &[
     ),
     // Plan 18 S2 (ADR-0037 (a)): the idle job runner's safety-net period.
     number("jobs.safety_poll_ms", "FORGE_JOBS_SAFETY_POLL_MS"),
+    // Plan 18 S3 (ADR-0037 (a)): how the merge queue's turns and the
+    // auto-merge worker wait when no notification wakes them.
+    number(
+        "merge_queue.safety_poll_ms",
+        "FORGE_MERGE_QUEUE_SAFETY_POLL_MS",
+    ),
+    number(
+        "merge_queue.waiting_safety_poll_ms",
+        "FORGE_MERGE_QUEUE_WAITING_SAFETY_POLL_MS",
+    ),
+    number("merge_queue.workers", "FORGE_MERGE_QUEUE_WORKERS"),
+    number(
+        "auto_merge.safety_poll_ms",
+        "FORGE_AUTO_MERGE_SAFETY_POLL_MS",
+    ),
     // Plan 18 S1 (ADR-0037 (b)): the train lint's budget (0: off).
     number(
         "merge_queue.train_lint_budget_ms",

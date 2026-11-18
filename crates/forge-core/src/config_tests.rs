@@ -1958,6 +1958,136 @@ fn git_pack_caps_have_defaults_file_env_and_rules() {
     }
 }
 
+/// Plan 18 S3: how the merge queue's turns and the auto-merge worker wait
+/// when no notification wakes them. Defaults 30 s (idle), 60 s (waiting
+/// for a pipeline), two turn tasks, 30 s (auto-merge sweep); each key has
+/// a range (FG-SYS-0002 naming the key). The values before plan 18 —
+/// 10 s waiting poll, one turn task, 5 s sweep — are inside the ranges:
+/// the way back.
+#[test]
+fn merge_queue_and_auto_merge_waits_have_defaults_and_ranges() {
+    use super::{AutoMergeConfig, MergeQueueConfig};
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.merge_queue, MergeQueueConfig::default());
+    assert_eq!(cfg.auto_merge, AutoMergeConfig::default());
+    assert_eq!(cfg.merge_queue.safety_poll(), Duration::from_secs(30));
+    assert_eq!(
+        cfg.merge_queue.waiting_safety_poll(),
+        Duration::from_secs(60)
+    );
+    assert_eq!(cfg.merge_queue.workers, 2);
+    assert_eq!(cfg.auto_merge.safety_poll(), Duration::from_secs(30));
+
+    let before_plan_18 = load(
+        None,
+        &env(&[
+            ("FORGE_MERGE_QUEUE_SAFETY_POLL_MS", " 2000 "),
+            ("FORGE_MERGE_QUEUE_WAITING_SAFETY_POLL_MS", "10000"),
+            ("FORGE_MERGE_QUEUE_WORKERS", "1"),
+            ("FORGE_AUTO_MERGE_SAFETY_POLL_MS", "5000"),
+        ]),
+    )
+    .expect("the values before plan 18");
+    assert_eq!(
+        before_plan_18.merge_queue.safety_poll(),
+        Duration::from_secs(2)
+    );
+    assert_eq!(
+        before_plan_18.merge_queue.waiting_safety_poll(),
+        Duration::from_secs(10)
+    );
+    assert_eq!(before_plan_18.merge_queue.workers, 1);
+    assert_eq!(
+        before_plan_18.auto_merge.safety_poll(),
+        Duration::from_secs(5)
+    );
+
+    let from_file = file(
+        "[merge_queue]\nsafety_poll_ms = 500\nwaiting_safety_poll_ms = 700\nworkers = 8\n\
+         [auto_merge]\nsafety_poll_ms = 300000\n",
+    );
+    let cfg = load(Some(from_file.path()), &env(&[])).expect("file");
+    assert_eq!(cfg.merge_queue.safety_poll_ms, 500);
+    assert_eq!(cfg.merge_queue.waiting_safety_poll_ms, 700);
+    assert_eq!(cfg.merge_queue.workers, 8);
+    assert_eq!(cfg.auto_merge.safety_poll_ms, 300_000);
+    // The train lint's budget is untouched by the new keys.
+    assert_eq!(cfg.merge_queue.train_lint_budget_ms, 10_000);
+
+    for (env_key, key, value, reason) in [
+        (
+            "FORGE_MERGE_QUEUE_SAFETY_POLL_MS",
+            "merge_queue.safety_poll_ms",
+            "99",
+            "below_min",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_SAFETY_POLL_MS",
+            "merge_queue.safety_poll_ms",
+            "300001",
+            "above_max",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_WAITING_SAFETY_POLL_MS",
+            "merge_queue.waiting_safety_poll_ms",
+            "0",
+            "below_min",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_WAITING_SAFETY_POLL_MS",
+            "merge_queue.waiting_safety_poll_ms",
+            "600001",
+            "above_max",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_WORKERS",
+            "merge_queue.workers",
+            "0",
+            "below_min",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_WORKERS",
+            "merge_queue.workers",
+            "9",
+            "above_max",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_WORKERS",
+            "merge_queue.workers",
+            "two",
+            "invalid",
+        ),
+        (
+            "FORGE_AUTO_MERGE_SAFETY_POLL_MS",
+            "auto_merge.safety_poll_ms",
+            "99",
+            "below_min",
+        ),
+        (
+            "FORGE_AUTO_MERGE_SAFETY_POLL_MS",
+            "auto_merge.safety_poll_ms",
+            "300001",
+            "above_max",
+        ),
+        (
+            "FORGE_AUTO_MERGE_SAFETY_POLL_MS",
+            "auto_merge.safety_poll_ms",
+            "-1",
+            "invalid",
+        ),
+    ] {
+        let err = load(None, &env(&[(env_key, value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{key}={value}");
+        let text = err.to_string();
+        assert!(
+            text.contains(key) && text.contains(reason),
+            "{key}={value}: {text}"
+        );
+    }
+    let err = load(None, &env(&[("FORGE_AUTO_MERGE_POLL", "7")])).expect_err("typo");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}
+
 /// `jobs.safety_poll_ms` (plan 18 S2, ADR-0037 (a)): default 10000,
 /// 100..=60000 (FG-SYS-0002 naming the key). 1000 is the poll period
 /// before plan 18 — the way back.

@@ -63,6 +63,15 @@
      - `config_key=jobs.safety_poll_ms`（計画 18 S2。暇なジョブ実行が通知なしでも自分で見に行く間隔、ミリ秒。Runbook `job-queue-backlog`）: `below_min`
        （0〜99。100 から）、`above_max`（60001 以上。60000 まで）、`invalid`（整数でない）。未設定なら 10000。**1000 にすると計画 18 より前と同じ
        「1 秒ごとに見る」動きに戻る**（通知が来なくても遅くならない）。`FORGE_JOBS_SAFETY_POLL_MS` か設定ファイルの `[jobs] safety_poll_ms`
+     - `config_key=merge_queue.safety_poll_ms` / `merge_queue.waiting_safety_poll_ms` / `merge_queue.workers`（計画 18 S3。マージキューの
+       手番の待ちと数。Runbook `merge-queue` の「起床と安全網」）: `below_min`、`above_max`、`invalid`（整数でない）。
+       `safety_poll_ms` は 100〜300000（未設定なら 30000）、`waiting_safety_poll_ms` は 100〜600000（未設定なら 60000）、`workers` は
+       1〜8（未設定なら 2）。**2000 / 10000 / 1 にすると計画 18 より前の間隔と 1 本の手番に戻る**。`FORGE_MERGE_QUEUE_SAFETY_POLL_MS` /
+       `FORGE_MERGE_QUEUE_WAITING_SAFETY_POLL_MS` / `FORGE_MERGE_QUEUE_WORKERS` か設定ファイルの `[merge_queue]`
+     - `config_key=auto_merge.safety_poll_ms`（計画 18 S3。自動マージが全部の MR を自分で見回る間隔、ミリ秒。Runbook `auto-merge` の
+       「起床と見回り」）: `below_min`（0〜99。100 から）、`above_max`（300001 以上。300000 まで）、`invalid`（整数でない）。未設定なら
+       30000。**5000 にすると計画 18 より前の「5 秒ごと」に戻る**。`FORGE_AUTO_MERGE_SAFETY_POLL_MS` か設定ファイルの
+       `[auto_merge] safety_poll_ms`
      - `config_key=merge_queue.train_lint_budget_ms`（計画 18 S1。着地の前の列車の doc-lint 1 回の上限、ミリ秒。Runbook `merge-queue`）: `below_min`
        （1〜99。100 から）、`above_max`（60001 以上。60000 まで）、`invalid`（整数でない）。未設定なら 10000。**0 は「列車の lint を切る」**
        （誤りではない。起動のログ `forge.serve.merge_queue_started` に `train_lint=off`）。`FORGE_MERGE_QUEUE_TRAIN_LINT_BUDGET_MS` か設定ファイルの

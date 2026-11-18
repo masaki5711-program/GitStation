@@ -32,6 +32,8 @@ mod git_pack;
 mod hosting;
 mod keys;
 mod maintenance;
+// Plan 18 S3: `auto_merge.*` (the auto-merge worker's safety-net period).
+mod auto_merge;
 // Plan 18 S2: `jobs.*` (the idle job runner's safety-net period).
 mod jobs;
 // Plan 18 S1: `merge_queue.*` (the train lint's budget).
@@ -60,6 +62,7 @@ pub use api::ApiConfig;
 pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use auth::{AuthConfig, OidcClaimsSource, OidcConfig, OidcSigningAlg};
+pub use auto_merge::AutoMergeConfig;
 pub use backup::{BackupConfig, BackupKey};
 pub use ci::{CiConfig, GpuEvalPolicy};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
@@ -101,6 +104,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_FEED_",
     // M3 O3: `maintenance.*`.
     "FORGE_MAINTENANCE_",
+    // Plan 18 S3: `auto_merge.*`.
+    "FORGE_AUTO_MERGE_",
     // Plan 18 S2: `jobs.*`.
     "FORGE_JOBS_",
     // Plan 18 S1: `merge_queue.*`.
@@ -212,8 +217,11 @@ pub struct Config {
     pub review: ReviewConfig,
     /// `jobs.*` (the idle job runner's safety-net period, plan 18 S2).
     pub jobs: JobsConfig,
-    /// `merge_queue.*` (the train lint's budget, plan 18 S1).
+    /// `merge_queue.*` (the train lint's budget, plan 18 S1; how the
+    /// queue's turns wait, plan 18 S3).
     pub merge_queue: MergeQueueConfig,
+    /// `auto_merge.*` (the auto-merge worker's safety-net period, plan 18 S3).
+    pub auto_merge: AutoMergeConfig,
     /// `feed.*` (the integrations' event feed, M3 I1c).
     pub feed: FeedConfig,
     /// `maintenance.*` (the repository maintenance, M3 O3).
@@ -492,6 +500,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         review: ReviewConfig::load(get, write_max_connections)?,
         jobs: JobsConfig::load(get)?,
         merge_queue: MergeQueueConfig::load(get)?,
+        auto_merge: AutoMergeConfig::load(get)?,
         feed: FeedConfig::load(get)?,
         maintenance: MaintenanceConfig::load(get)?,
         notify: NotifyConfig::load(get)?,
