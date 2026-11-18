@@ -44,6 +44,8 @@
 //! and otherwise fails the job at once ([`fail_claimed`], FG-CI-0017) —
 //! never a silent drop.
 
+use std::time::Duration;
+
 use forge_core::ci_token::{CiToken, CiTokenKind};
 use forge_core::config::GpuEvalPolicy;
 use forge_errors::{ErrorCode, ForgeError};
@@ -51,6 +53,7 @@ use sqlx::PgConnection;
 
 use super::{revoke_job_tokens, token_failed, Revocation};
 use crate::pipelines::{pipeline_of, PipelineRow, StoredPipeline, PIPELINE_COLUMNS};
+use crate::wake::{notify_on, Channel, CI_JOB};
 use crate::{query_error, read_query_error, Db};
 
 /// Runner tags that make a runner exclusive (plan 17 P17-1, ADR-0029
@@ -109,6 +112,11 @@ pub struct Claimed {
     pub requested_secrets: Vec<String>,
     pub lease_until: String,
     pub token_expires_at: String,
+    /// How long the job had been claimable by this runner when it was
+    /// claimed (the database's clock): since it became `pending`, or since
+    /// the runner was last changed (re-tagged, resumed), whichever is
+    /// later. What `JobWait::claimed` compares with the safety period.
+    pub claimable_for: Duration,
     pub token: CiToken,
 }
 
@@ -225,14 +233,15 @@ pub async fn claim_with(
                 .begin()
                 .await
                 .map_err(|e| query_error(QUERY, e))?;
-            let tags: Option<Vec<String>> = sqlx::query_scalar(
-                "SELECT tags FROM forge.ci_runners WHERE id = $1 AND enabled FOR SHARE",
+            let known: Option<(Vec<String>, i64)> = sqlx::query_as(
+                "SELECT tags, (EXTRACT(epoch FROM now() - updated_at) * 1000)::bigint \
+                 FROM forge.ci_runners WHERE id = $1 AND enabled FOR SHARE",
             )
             .bind(runner)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| query_error(QUERY, e))?;
-            let Some(tags) = tags else {
+            let Some((tags, runner_unchanged_ms)) = known else {
                 tx.rollback().await.map_err(|e| query_error(QUERY, e))?;
                 return Ok(None);
             };
@@ -245,8 +254,10 @@ pub async fn claim_with(
                 .await
                 .map_err(|e| query_error(QUERY, e))?;
             }
-            let picked: Option<(i64, i64)> = sqlx::query_as(
-                "SELECT j.id, j.pipeline_id FROM forge.ci_jobs j \
+            let picked: Option<(i64, i64, i64)> = sqlx::query_as(
+                "SELECT j.id, j.pipeline_id, \
+                   (EXTRACT(epoch FROM now() - j.updated_at) * 1000)::bigint \
+                 FROM forge.ci_jobs j \
                  JOIN forge.ci_pipelines p ON p.id = j.pipeline_id \
                  JOIN forge.projects pr ON pr.id = j.project_id \
                  JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = pr.id \
@@ -268,10 +279,14 @@ pub async fn claim_with(
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| query_error(QUERY, e))?;
-            let Some((job, pipeline_id)) = picked else {
+            let Some((job, pipeline_id, pending_ms)) = picked else {
                 tx.rollback().await.map_err(|e| query_error(QUERY, e))?;
                 return Ok(None);
             };
+            // Every change to `pending` sets `updated_at`, and nothing
+            // touches a row that stays pending; a runner's change (tags,
+            // enabled) sets its own.
+            let claimable_ms = pending_ms.min(runner_unchanged_ms);
             let row: ClaimRow = sqlx::query_as(&format!(
                 "UPDATE forge.ci_jobs SET status = 'running', runner_id = $2, \
                    lease_until = now() + make_interval(secs => $3), started_at = now(), \
@@ -319,10 +334,10 @@ pub async fn claim_with(
             .await
             .map_err(|e| query_error(QUERY, e))?;
             tx.commit().await.map_err(|e| query_error(QUERY, e))?;
-            Ok(Some((row, pipeline, expires)))
+            Ok(Some((row, pipeline, expires, claimable_ms)))
         })
         .await?;
-    let Some((row, pipeline, token_expires_at)) = claimed else {
+    let Some((row, pipeline, token_expires_at, claimable_ms)) = claimed else {
         return Ok(None);
     };
     let (job_id, attempt, name, stage, image, timeout_s, tags, secrets, lease_until) = row;
@@ -345,6 +360,8 @@ pub async fn claim_with(
         pipeline,
         lease_until,
         token_expires_at,
+        // A clock that stepped back reads as "just now".
+        claimable_for: Duration::from_millis(u64::try_from(claimable_ms).unwrap_or(0)),
         token,
     }))
 }
@@ -610,15 +627,17 @@ async fn finish(
                 return Err(lease_lost(job, runner, "complete").with_context("attempt", attempt));
             }
         };
-        sqlx::query(
+        let gpu_job: bool = sqlx::query_scalar(
             "UPDATE forge.ci_jobs SET status = $2, runner_id = NULL, lease_until = NULL, \
                error_code = coalesce($3, error_code), \
-               finished_at = coalesce(finished_at, now()), updated_at = now() WHERE id = $1",
+               finished_at = coalesce(finished_at, now()), updated_at = now() WHERE id = $1 \
+             RETURNING $4 = ANY(tags)",
         )
         .bind(job)
         .bind(status)
         .bind(error_code.filter(|_| status != "canceled"))
-        .execute(&mut *tx)
+        .bind(GPU_EVAL_TAG)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| query_error(QUERY, e))?;
         let why = if status == "canceled" {
@@ -628,6 +647,12 @@ async fn finish(
         };
         revoke_job_tokens(&mut tx, &[job], why).await?;
         let pipeline_status = settle_pipeline(&mut tx, pipeline).await?;
+        if gpu_job && status != "canceled" {
+            // Plan 18 S2: a running `gpu-eval` job ended — its GPU place is
+            // free and a job that waited for it can be claimed. (The place
+            // of a cancelled job was freed, and announced, by the cancel.)
+            notify_on(&mut tx, Channel::Jobs, CI_JOB).await?;
+        }
         tx.commit().await.map_err(|e| query_error(QUERY, e))?;
         Ok(Completed {
             job_id: job,
@@ -663,6 +688,11 @@ async fn lock_pipeline(c: &mut PgConnection, pipeline: i64) -> Result<(), ForgeE
 /// `running` pipeline takes its jobs' state. A manual job still waiting for
 /// a person (M4 C12) counts for nothing: nothing waits for it, and the
 /// pipeline finishes on its other jobs. Returns the pipeline status.
+///
+/// Plan 18 S2: the waiting runners are told (`NOTIFY forge_jobs, 'ci.job'`,
+/// delivered at the commit) only when a job became `pending` here — the
+/// end of a job nothing waited for wakes no long poll. A GPU place the
+/// ended job held is the caller's to announce (it knows the job).
 pub(crate) async fn settle_pipeline(
     c: &mut PgConnection,
     pipeline: i64,
@@ -686,7 +716,7 @@ pub(crate) async fn settle_pipeline(
             break;
         }
     }
-    sqlx::query(
+    let made_pending = sqlx::query(
         "UPDATE forge.ci_jobs j SET status = 'pending', updated_at = now() \
          WHERE j.pipeline_id = $1 AND j.status = 'created' AND NOT EXISTS ( \
            SELECT 1 FROM forge.ci_jobs n WHERE n.pipeline_id = $1 \
@@ -695,7 +725,11 @@ pub(crate) async fn settle_pipeline(
     .bind(pipeline)
     .execute(&mut *c)
     .await
-    .map_err(|e| query_error(QUERY, e))?;
+    .map_err(|e| query_error(QUERY, e))?
+    .rows_affected();
+    if made_pending > 0 {
+        notify_on(&mut *c, Channel::Jobs, CI_JOB).await?;
+    }
     sqlx::query(
         "UPDATE forge.ci_pipelines p SET status = s.next, updated_at = now(), \
            finished_at = CASE WHEN s.next = 'running' THEN NULL ELSE now() END \
@@ -811,27 +845,36 @@ async fn reap_one(db: &Db, job: i64, pipeline: i64) -> Result<Option<Reaped>, Fo
         "requeued" => {
             "UPDATE forge.ci_jobs SET status = 'pending', runner_id = NULL, lease_until = NULL, \
                attempt = attempt + 1, lease_losses = $2, started_at = NULL, updated_at = now() \
-             WHERE id = $1"
+             WHERE id = $1 RETURNING $3 = ANY(tags)"
         }
         "failed" => {
             "UPDATE forge.ci_jobs SET status = 'failed', runner_id = NULL, lease_until = NULL, \
                lease_losses = $2, error_code = 'FG-CI-0004', finished_at = now(), \
-               updated_at = now() WHERE id = $1"
+               updated_at = now() WHERE id = $1 RETURNING $3 = ANY(tags)"
         }
         _ => {
             "UPDATE forge.ci_jobs SET runner_id = NULL, lease_until = NULL, lease_losses = $2, \
-               updated_at = now() WHERE id = $1"
+               updated_at = now() WHERE id = $1 RETURNING $3 = ANY(tags)"
         }
     };
-    sqlx::query(sql)
+    let gpu_job: bool = sqlx::query_scalar(sql)
         .bind(job)
         .bind(losses)
-        .execute(&mut *tx)
+        .bind(GPU_EVAL_TAG)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| query_error(QUERY, e))?;
     revoke_job_tokens(&mut tx, &[job], Revocation::LeaseLost).await?;
     if outcome == "failed" {
         settle_pipeline(&mut tx, pipeline).await?;
+        if gpu_job {
+            // Plan 18 S2: the GPU place of the failed job is free.
+            notify_on(&mut tx, Channel::Jobs, CI_JOB).await?;
+        }
+    }
+    if outcome == "requeued" {
+        // Plan 18 S2: pending again; the waiting runners look.
+        notify_on(&mut tx, Channel::Jobs, CI_JOB).await?;
     }
     tx.commit().await.map_err(|e| query_error(QUERY, e))?;
     Ok(Some(Reaped {

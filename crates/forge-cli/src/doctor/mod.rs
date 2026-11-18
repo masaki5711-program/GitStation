@@ -1,7 +1,8 @@
 //! `forge doctor` — read-only checks of everything `forge serve` needs:
 //! configuration, database (reachable, TLS, version, read role), the
 //! bootstrap guards of ADR-0018 (`db.bootstrap`), the connection budget
-//! (`db.connections`), schema, the outbox backlog and sequencer lag
+//! (`db.connections`), the server's NOTIFY queue (`db.notify_queue`, plan
+//! 18 S2), schema, the outbox backlog and sequencer lag
 //! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the audit seal
 //! (`audit.seal_backlog`, `audit.seal_verify`), the job queue
 //! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), the event
@@ -98,9 +99,11 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 43] = [
+const DB_CHECKS: [&str; 44] = [
     "db.bootstrap",
     "db.connections",
+    // Plan 18 S2: FG-DB-0023 (the server's NOTIFY queue).
+    "db.notify_queue",
     "schema",
     "outbox.unsequenced_count",
     "outbox.sequencer_lag",
@@ -283,6 +286,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         ),
         Err(e) => fail("db.connections", e),
     };
+    let notify_queue = notify_queue_check(db).await;
     let schema = match forge_db::status(db, &MIGRATOR).await {
         Ok(st) => match st.incompatibility() {
             None => ok(
@@ -330,6 +334,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     vec![
         bootstrap,
         connections,
+        notify_queue,
         schema,
         unsequenced,
         lag,
@@ -373,6 +378,21 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         known_hosts,
         portal_news,
     ]
+}
+
+/// `db.notify_queue` (`FG-DB-0023`, plan 18 S2): how full the server's
+/// NOTIFY queue is. It fills while a session that LISTENs stays in a
+/// transaction; full, every transaction that notifies fails at its commit.
+async fn notify_queue_check(db: &Db) -> Check {
+    const NAME: &str = "db.notify_queue";
+    let usage = match forge_db::wake::notify_queue_usage(db).await {
+        Ok(usage) => usage,
+        Err(e) => return fail(NAME, e),
+    };
+    match forge_db::wake::check_notify_queue(usage) {
+        Ok(()) => ok(NAME, &format!("{:.1} % used", usage * 100.0)),
+        Err(e) => fail(NAME, e),
+    }
 }
 
 // ── C6: the job queue ────────────────────────────────────────────────────

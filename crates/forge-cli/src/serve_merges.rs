@@ -43,7 +43,7 @@ use forge_review::Merger;
 use tokio::sync::watch;
 use tokio::task::{JoinError, JoinHandle};
 
-/// How often an idle runner looks for a merge.
+/// How often an idle runner without a wake hub looks for a merge.
 const POLL_PERIOD: Duration = Duration::from_secs(1);
 /// How often stuck attempts are reconciled.
 pub(crate) const RECONCILE_PERIOD: Duration = Duration::from_secs(60);
@@ -278,6 +278,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobDeadLettered
         | ErrorCode::JobLeaseExpired
         | ErrorCode::JobQueueBacklog
+        | ErrorCode::NotifyQueueBacklog
+        | ErrorCode::WakeupMissed
         | ErrorCode::MembershipDataInvalid
         | ErrorCode::CredentialDataInvalid
         | ErrorCode::ProtectedRefDataInvalid
@@ -581,6 +583,16 @@ async fn run_jobs(runner: Arc<JobRunner>, mut stop: watch::Receiver<bool>) {
             Ok(Some(_)) => {
                 streak.reset();
                 continue;
+            }
+            // Plan 18 S2: idle, the runner waits for `NOTIFY forge_jobs`
+            // (a merge was requested) or its safety-net period.
+            Ok(None) if runner.waits_on_wake() => {
+                streak.reset();
+                match crate::worker::jobs::wait_for_work(&runner, &mut stop).await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(e) => streak.fail(e, "merge_runner_wait"),
+                }
             }
             Ok(None) => {
                 streak.reset();

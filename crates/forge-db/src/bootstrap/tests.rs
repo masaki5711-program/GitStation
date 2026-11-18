@@ -523,13 +523,15 @@ fn the_default_pools_fit_the_development_server() {
     let cfg =
         forge_core::config::load(None, &forge_core::config::Env::default()).expect("defaults");
     let budget = ConnectionBudget::new(&cfg.database, 197);
-    assert_eq!(budget.needed, 43);
+    // 2 × (10 + 10) + a LISTEN connection per process + migration +
+    // maintenance.
+    assert_eq!(budget.needed, 44);
     assert!(budget.fits());
     assert!(
-        !ConnectionBudget::new(&cfg.database, 53).fits(),
-        "43 > 80 % of 53"
+        !ConnectionBudget::new(&cfg.database, 54).fits(),
+        "44 > 80 % of 54"
     );
-    assert!(ConnectionBudget::new(&cfg.database, 54).fits());
+    assert!(ConnectionBudget::new(&cfg.database, 55).fits());
 }
 
 #[tokio::test]
@@ -557,7 +559,7 @@ async fn too_many_connections_for_the_server_is_connection_budget() {
     let ok = check_connections(&t.db, &t.app_config(&[]).db)
         .await
         .expect("defaults fit");
-    assert_eq!(ok.needed, 43);
+    assert_eq!(ok.needed, 44);
     t.drop_now().await;
 }
 

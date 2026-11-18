@@ -1,26 +1,25 @@
 //! [`Wake`]: when subscribers should look for work (ADR-0016 §7) — a
 //! `NOTIFY forge_events_sequenced` from the sequencer, or at the latest
-//! after the poll interval. LISTEN runs on its own connection
-//! ([`Db::listen_options`](crate::Db), ADR-0018 §2): a one-connection pool
-//! without lifetime or idle limits, used only by the listener.
+//! after the poll interval.
+//!
+//! Since plan 18 S2 this is a waiter of the process's wake hub
+//! ([`crate::wake::WakeHub`], its `Events` channel): the hub holds the one
+//! LISTEN connection of the process, reconnects it and logs its failures
+//! (`FG-DB-0001` / `FG-DB-0002` with `operation=wake_listen`). On a [`Db`]
+//! without a hub (tests, one-shot commands) the first wait starts a hub of
+//! its own for this channel; it ends when the `Wake` is dropped.
 //!
 //! Notifications sent while the connection is down are lost, so every
 //! (re)connect reports [`Woken::Connected`] and the caller checks the state
-//! at once. A dead link that fires no error (half-open TCP) is found by a
-//! bounded `SELECT 1` on the listener at every poll; the server drops a
-//! dead client by its TCP keepalive.
-//!
-//! `wait` is meant to be awaited to completion; dropping it mid-wait (a
-//! worker abort) drops the listener with it, which is harmless.
+//! at once. While the connection is down a wait ends at the poll interval
+//! ([`Woken::Polled`]): the subscribers keep working, only slower.
 
 use std::time::Duration;
 
 use forge_errors::ForgeError;
-use sqlx::postgres::{PgListener, PgPoolOptions};
 
-use crate::error_map::{connect_error, unavailable};
-use crate::sequencer::CHANNEL;
-use crate::{query_error, Db};
+use crate::wake::{self, Channel, WakeHub, WakeRx};
+use crate::Db;
 
 /// Why [`Wake::wait`] returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,17 +33,18 @@ pub(crate) enum Woken {
     Connected,
 }
 
-#[derive(Default)]
-pub(crate) struct Wake {
-    listener: Option<PgListener>,
+/// The subscription, once the first wait made it.
+#[derive(Debug)]
+struct Listening {
+    rx: WakeRx,
+    /// The hub started for this `Wake` alone (no hub on the `Db`): kept so
+    /// that it lives as long as the subscription.
+    _own: Option<WakeHub>,
 }
 
-impl std::fmt::Debug for Wake {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Wake")
-            .field("listening", &self.listener.is_some())
-            .finish()
-    }
+#[derive(Debug, Default)]
+pub(crate) struct Wake {
+    listening: Option<Listening>,
 }
 
 impl Wake {
@@ -52,67 +52,35 @@ impl Wake {
         Self::default()
     }
 
-    /// Wait at most `max` for a notification. Connecting (first call, or
-    /// after a failure) returns [`Woken::Connected`] at once. A failure
-    /// drops the connection (the next call reconnects) and is returned:
-    /// `FG-DB-0001` for the link, `FG-DB-0002` for a refused statement.
+    /// Wait at most `max` for a notification. The first call subscribes
+    /// and waits for the hub's connection — at most the connect bound,
+    /// then [`Woken::Connected`]; with the database down it ends as
+    /// [`Woken::Polled`] (the hub logs the failure and keeps trying).
+    /// `Err` (`FG-SYS-0001`): no hub could be started.
     pub(crate) async fn wait(&mut self, db: &Db, max: Duration) -> Result<Woken, ForgeError> {
-        let Some(listener) = self.listener.as_mut() else {
-            self.listener = Some(connect(db).await?);
-            return Ok(Woken::Connected);
-        };
-        let round_trip = db.round_trip_timeout();
-        let woken = match tokio::time::timeout(max, listener.try_recv()).await {
-            Ok(Ok(Some(_))) => {
-                // One look covers every notification already received.
-                while listener.next_buffered().is_some() {}
-                Ok(Woken::Notified)
-            }
-            // The connection was lost and re-established (LISTEN included).
-            Ok(Ok(None)) => Ok(Woken::Connected),
-            Ok(Err(e)) => Err(query_error("subscribers.listen_recv", e)),
-            Err(_) => {
-                let ping = sqlx::query("SELECT 1").execute(&mut *listener);
-                match tokio::time::timeout(round_trip, ping).await {
-                    Ok(Ok(_)) => Ok(Woken::Polled),
-                    Ok(Err(e)) => Err(query_error("subscribers.listen_ping", e)),
-                    Err(_) => Err(unavailable(db.target(), "listen_ping_timeout")
-                        .with_context("timeout_ms", round_trip.as_millis())
-                        .with_context("timeout_key", "database.acquire_timeout_ms")),
-                }
+        let (listening, max) = match &mut self.listening {
+            Some(listening) => (listening, max),
+            None => {
+                let (hub, own) = match db.wake() {
+                    // clone: a handle on the shared hub
+                    Some(hub) if hub.listens(Channel::Events) => (hub.clone(), None),
+                    _ => {
+                        let hub = WakeHub::spawn(db, &[Channel::Events])?;
+                        (hub.clone(), Some(hub)) // clone: the handle kept below
+                    }
+                };
+                let listening = self.listening.insert(Listening {
+                    rx: hub.subscribe_unseen(Channel::Events),
+                    _own: own,
+                });
+                let connect = db.round_trip_timeout().saturating_mul(2);
+                (listening, max.max(connect))
             }
         };
-        if woken.is_err() {
-            self.listener = None;
-        }
-        woken
-    }
-}
-
-async fn connect(db: &Db) -> Result<PgListener, ForgeError> {
-    let round_trip = db.round_trip_timeout();
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .min_connections(0)
-        .acquire_timeout(round_trip)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        // clone: the listener's own pool keeps its options
-        .connect_lazy_with(db.listen_options().clone());
-    let listen = async {
-        let mut listener = PgListener::connect_with(&pool)
-            .await
-            .map_err(|e| connect_error(db.target(), e))?;
-        listener
-            .listen(CHANNEL)
-            .await
-            .map_err(|e| query_error("subscribers.listen", e))?;
-        Ok(listener)
-    };
-    match tokio::time::timeout(round_trip.saturating_mul(2), listen).await {
-        Ok(result) => result,
-        Err(_) => Err(unavailable(db.target(), "listen_timeout")
-            .with_context("timeout_ms", round_trip.saturating_mul(2).as_millis())
-            .with_context("timeout_key", "database.acquire_timeout_ms")),
+        Ok(match listening.rx.wait(max).await {
+            wake::Woken::Notified(_) => Woken::Notified,
+            wake::Woken::SafetyNet => Woken::Polled,
+            wake::Woken::Reconnected => Woken::Connected,
+        })
     }
 }

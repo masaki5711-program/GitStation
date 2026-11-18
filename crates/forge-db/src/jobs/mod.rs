@@ -41,6 +41,19 @@
 //! idempotent or fenced by `lease.attempt`. Backoff after a failure or an
 //! expired lease: 10 s × 2^(attempt − 1), capped at 1 h.
 //!
+//! **Waking (plan 18 S2, ADR-0037 (a)):** every statement that makes a job
+//! claimable or schedules it (enqueue, release, the backoff of a failure
+//! or of a reap) sends `NOTIFY forge_jobs, <kind>` in its own transaction
+//! (a rolled-back enqueue wakes no one), and an idle runner on a [`Db`] with a
+//! wake hub ([`crate::wake::WakeHub`]) waits for it
+//! ([`JobRunner::wait_for_work`]) instead of polling every second. The
+//! notification is a hint: the claim reads the queue, and the runner looks
+//! by itself every `jobs.safety_poll_ms` (10 s) at the latest — every
+//! [`FALLBACK_POLL`] while the LISTEN connection is down. A scheduled job
+//! (`run_after` in the future) starts on time because the wait ends at the
+//! next due time. A job found by the safety net although the listener was
+//! up is `FG-DB-0024 WakeupMissed` (warn, at most once a minute).
+//!
 //! **Bounded parallelism (merge load test 2026-11-17, F2):** `forge worker`
 //! runs its main runner in `review.worker_job_concurrency` slots (default
 //! 4, at most half the write pool); the per-kind caps keep one slow kind
@@ -61,12 +74,14 @@ use forge_core::RequestId;
 use forge_errors::ForgeError;
 
 mod doctor;
+mod idle;
 mod queue;
 mod reports;
 mod runner;
 
 pub use doctor::{health, ExpiredLease, JobsHealth, KindDepth, NewestDead};
 pub use doctor::{DEAD_WINDOW, LEASE_GRACE, QUEUE_DEPTH_ALERT, QUEUE_WAIT_ALERT};
+pub use idle::{DUE_MARGIN, FALLBACK_POLL};
 pub use queue::{
     claim, claim_excluding, complete, enqueue, fail, ordering_key, reap, release,
     PRIORITY_AGING_SECS, REAP_BATCH,
@@ -331,6 +346,8 @@ mod runner_tests;
 mod tests;
 #[cfg(test)]
 mod throughput_tests;
+#[cfg(test)]
+mod wake_tests;
 #[cfg(test)]
 mod unit {
     use super::*;

@@ -292,6 +292,92 @@ S1 で (b) の 1・2 を作った。上の Interface sketch と違うところ�
 - 読む上限は head の `forge/doc-lint` より広い（`.md` 20,000 件、64 MiB）。上限に当たると「一部だけの答え」ではなく失敗（`bound`）。
   S7 の増分の索引までは、毎回、木の全部を読む。
 
+## 追記（2026-11-18、計画 18 S2 の実装）— (a) のうち作ったもの、文との違い、既知の限界、S3 が引き継ぐもの
+
+上の Decision (a) の文は変えない。S2 が作ったのは (a) の 1・2（`forge_jobs` の分）・5（ジョブとランナーの分）・6 で、3・4・7 と
+`forge_merge_queue` / `forge_refs` の送り手は S3 以降。
+
+**作ったもの**
+
+- `forge_db::wake::WakeHub`（`crates/forge-db/src/wake.rs`）: プロセスごとに 1 本の LISTEN の接続（プールの外の専用の接続）で
+  `forge_jobs` / `forge_merge_queue` / `forge_refs` / `forge_events_sequenced` を聞き、プロセス内の待つ側へ配る。
+  `subscribers/wake.rs` はこれに委ねる。接続は上限つきで張り、5 秒ごとの上限つきの読み取りで生死を確かめ、切れたら 250 ms〜5 s の
+  間隔で張り直す。張り直すたびに待つ側は全員 1 回見る（`Woken::Reconnected`）。
+- 書き手は同じトランザクション（同じ文）で `pg_notify('forge_jobs', <種類>)` を送る: ジョブの投入・返却・失敗や回収の後の再試行の予約、
+  CI のジョブが取れるようになる変更（計画されたパイプライン、再試行、手動ジョブの開始、取り消し、回収で戻った貸し出し、
+  ランナーのタグの変更と再開）。ジョブの終わりは、依存先が pending になったときと、動いていた `gpu-eval` のジョブが GPU の枠を
+  空けたときだけ送る（レビューの後で変えた。それまでは終わるたびに送り、待っているランナーを全部起こしていた）。
+  ペイロードはジョブの種類だけ。
+- 待つ側: ジョブの実行役（worker のスロット、レーンの実行役、serve 側のマージと revert の実行役）は、今取れる種類の通知・
+  次の予約されたジョブの期限・`jobs.safety_poll_ms`（既定 10 s）のどれかまで待つ。ランナーのロングポーリングは `ci.job` で起きる。
+  起床は合図にすぎず、起きた側は必ず表を読み直す。
+- 見えるようにしたもの: LISTEN の接続の失敗は `FG-DB-0001` / `FG-DB-0002`（`operation=wake_listen`）。LISTEN のタスクが頼まれずに
+  終わったら `FG-SYS-0001`（`task=wake_hub`、`reason=task_panicked` / `task_ended` / `task_cancelled`）をすぐに出し、5 秒後に
+  起動し直す（その間、待つ側は 1 秒ごとの確認）。`FG-DB-0024` WakeupMissed（warn）と `FG-DB-0023` NotifyQueueBacklog（alert）。
+  どれも、続いている間は 1 分に 1 回まで。
+
+**(a) の文との違い**（どれも意図したもの）
+
+- **切るスイッチは無い。** NOTIFY と LISTEN を止める設定は入れていない。通知が届かないときに計画 18 より前の速さへ戻す手段は
+  `jobs.safety_poll_ms = 1000` だけ（送る側の NOTIFY は残る）。理由: 起床は合図で、状態は表にあるので、切っても正しさは変わらない。
+  スイッチを足すと、試験する組み合わせが倍になる。
+- **`forge_refs` はチャネルを用意しただけで、送り手も聞き手もつないでいない**（下の既知の限界）。`forge_merge_queue` も同じで、S3 が使う。
+- **プロセスごとに接続が 1 本増える。** 接続の予算（ADR-0018、`bootstrap::ConnectionBudget`）は +3 から +4。プールの外なので、
+  `database.max_connections` を増やしても減らしても変わらない。
+- **`FG-DB-0023` は `forge doctor` だけでなく、hub も出す**（レビューの後で足した）。(a) の文は doctor だけだったが、待ち行列が満ちると
+  投入・失敗・返却・パイプラインの確定の COMMIT が全部失敗するので、誰かが doctor を走らせるまで見えないのでは遅い。hub が LISTEN の
+  接続（必ずプライマリ）で 5 秒ごとに `pg_notification_queue_usage()` を読む（接続の生死の確認を兼ねる）。doctor は書き込み用の
+  プールで読む（スタンバイではこの関数は 0 を返す）。
+- **`FG-DB-0024` の `oldest_ready_ms` の意味**: ジョブは「実行可能になってから」。CI のジョブは「そのランナーが取れるようになってから」=
+  pending になってからの時間と、ランナーが最後に変えられてからの時間の短いほう（DB の時計）。どちらも安全網の周期以上のときだけ
+  出す（レビューの後で CI の側に足した。それまでは、タグを変えた・再開したランナーが「取りこぼし」と誤って出していた）。
+  1 分の制限で出さなかった件数は、次の 1 件の `suppressed` に入る。
+
+**既知の限界**
+
+- **起きるたびに、次の期限を書き込み用のプールで 1 回読む**（`jobs::idle::next_due`）。待ちに入る実行役 1 つにつき 1 文で、索引
+  `jobs_ready_kind` の先頭を見るだけ。プロセスで共有するキャッシュは後の最適化。
+- **先の時刻に予約される行（`fail` / `release` / 回収の再試行）もすぐに通知する。** 待っている側が次の期限を読み直すために要る。
+  その起床で取れるものは無いので、空の読み取りが 1 回増える。
+- **取った直後と期限の読み取りの間に期限が来たジョブ**は、期限の読み取りが 1 秒さかのぼって見つける（`jobs::idle::LOOK_BACK`）。
+  見つけたら待ちをすぐ終えてもう 1 回取る。同じジョブで 2 回は終えない（`looked_until`: すでに知らせた一番新しい期限）ので、
+  取れない期限切れのジョブ（順序のキーが使用中、種類が上限）でも空の読み取りは 1 回で、回り続けることはない。
+  もう 1 回取る案ではなくさかのぼる案にした理由: 待つ関数はジョブを実行できず、もう 1 回取る案は待ちに入るたびに空の読み取りを足す。
+  プロセスか DB が 1 秒より長く止まっていた場合は安全網が拾い、`FG-DB-0024` が出る。
+- **`gpu-eval` のジョブの `oldest_ready_ms`** は pending になってからの時間で、GPU の枠が空いてからの時間ではない。枠の空きは通知するので
+  ふつうは問題にならないが、その通知を取りこぼしたときの値は実際より長く出る。ランナーの説明だけの変更でも「変えられてから」の
+  時計は戻る（取りこぼしを出さない側に倒れる）。
+- **hub のタスクが終わり続ける場合**は、5 秒ごとに起動し直し、ログは 1 分に 1 回。その間は 1 秒ごとの確認なので仕事は止まらないが、
+  自分では直らない（原因は欠陥）。`forge doctor` は別のプロセスなので、hub の状態は doctor には出ない。ログで見る。
+- **知らないチャネルの通知は捨てる**（ログなし）。聞いているチャネルは自分で LISTEN したものだけなので、届くのは欠陥のときだけ。
+- カタログの 2 つのコードの `retryable` と、`FG-DB-0024` の `http_status` は、他の「ログだけのコード」と同じ値のままにしてある
+  （利用者には返らない）。
+- **トランザクション単位のプーラーを通すと LISTEN は働かない。NOTIFY は COMMIT を直列にする。** 運用の注意は
+  `ops/runbooks/db-unavailable.md` の「notify queue」と `crates/forge-db/README.md`。
+- **`forge_refs` の送り手と聞き手が無いので、S8 の「古い肯定」の限界はそのまま残る**（上の S8 の追記: 他のプロセスが消したブランチが、
+  serve から最長 `refs_ttl` = 5 s 見える）。つなぐ段は、次の書き手の全部で、ref を書いたトランザクション（か、その直後）に
+  `forge_refs` を送り、serve の聞き手が `Browser::invalidate(repo)` を呼ぶこと。S2 の時点で見つけた書き手（`invalidate` を呼ぶ場所）:
+  - `forge-web/src/routes/git_push.rs`（push の後の 2 か所）、`forge-web/src/routes/file_commit.rs`（Web のファイルのコミット）
+  - `forge-review/src/merges/execute.rs`（2 か所）、`merges/mod.rs`、`merges/reconcile.rs`、`merges/source.rs`、
+    `merges/queue/worker.rs`（2 か所。**worker のプロセスで動く**: 今の限界の出どころ）
+  - `forge-review/src/revert.rs`（3 か所）、`autofix.rs`（2 か所）、`version_refs.rs`
+  - `forge-pipelines/src/spec_publish.rs`、`forge-checks/src/risk.rs`
+  - キャッシュの側は `forge-git/src/browse/mod.rs` の `Browser::invalidate`。forge-git は forge-db に依存しないので、聞き手は
+    forge-web（か機能クレート）に置き、hub の `subscribe(Channel::Refs)` から `invalidate` を呼ぶ。
+
+**S3 が引き継ぐもの**
+
+- hub はもう `forge_merge_queue` と `forge_events_sequenced` を聞いている。S3 は送り手（entry の入れる・外す・再開、列車の
+  パイプラインの終わり）に `wake::notify_on(conn, Channel::MergeQueue, <キューの id>)` を同じトランザクションで足し、待つ側は
+  `Db::wake()` の `subscribe(Channel::MergeQueue)` と `WakeRx::wait` / `wait_matching` を使う。プロセス内の起床は `WakeHub::nudge`。
+- 決まり: 通知は id だけ（ペイロードは 255 バイトまで）。起きた側は必ず表を読む。待ちは必ず有限（安全網の周期）。hub が無い・
+  接続が切れているとき（`WakeHub::is_live` が false）は自分の短い確認に戻る。`Woken::Reconnected` では全件を見る。
+- 取りこぼしを出すとき（`WakeHub::missed`）は、ジョブと同じ規則にする: 安全網の周期を丸ごと待った後に見つけ、**その仕事が安全網の
+  周期以上前から取れる状態だった**ときだけ。年齢は DB の時計で測り、`oldest_ready_ms` に入れる。
+- 送る条件は「何かが取れるようになったとき」に絞る（起床 1 回が、待っている全員の読み取り 1 回になる）。
+- 安全網の設定（キューの idle 30 s、`waiting` 60 s、自動マージ 30 s）と `merge_queue.workers` は S3。ジョブの側は
+  `jobs.safety_poll_ms` だけ。
+
 ## Amendment（2026-11-18、計画 18 S4 の実装）: 変更パスを見た再計算と持ち越し
 
 S4 で (c) を作った。上の Decision (c) の文は変えない。文と違うところ、(c) が決めていなかったところ、残る限界:

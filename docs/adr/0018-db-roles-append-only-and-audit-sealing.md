@@ -69,7 +69,8 @@ URL の `options=` を拒否し、`error_map` は SQLSTATE `25006` を再試行�
 - **誤った経路の書き込みのエラー**: `ReadPool` の上で起きた `25006` と、どの接続でも `42501` は、再試行しない `FG-DB-0002 reason=write_on_read_pool` / `reason=permission_denied`
   にする（不具合の印。今の `25006 → FG-DB-0001 read_only` は書き込みのプールの上だけに残す。スタンバイへの接続のため）。
 - **接続の予算**: 既定はプロセスごとに書き込み 10・読み取り 10（`database.write_max_connections`・`database.read_max_connections`）。
-  合計 = `(serve + worker) × (書き込み + 読み取り) + LISTEN 1 + マイグレーション 1 + 保守 1`。既定で 2 × 20 + 3 = 43。
+  合計 = `(serve + worker) × (書き込み + 読み取り) + LISTEN 2 + マイグレーション 1 + 保守 1`。既定で 2 × 20 + 4 = 44
+  （LISTEN はプロセスごとに 1 本: plan 18 S2 の wake hub。それまでは worker の 1 本だけで、合計は 43 だった）。
   `forge doctor db.connections` がこの合計を `max_connections - superuser_reserved_connections` の 80 % 以下か確かめる。
 - **`ReadPool` と `forge_ro` は事故の防止**であって、迂回の防止ではない（同じプロセスが書き込みの資格情報を持ち、`RESET ROLE` で外せる）。迂回の防止は、ゲートと ADR-0016 の遅延制約トリガーが担う。
 

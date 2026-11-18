@@ -46,7 +46,10 @@ pub struct ClaimGrant {
 /// timeout `forge serve` never goes under: test
 /// `the_long_poll_ends_before_the_request_timeout`).
 pub const LONG_POLL_MAX: Duration = Duration::from_secs(20);
-/// How often a waiting claim looks again.
+/// How often a waiting claim looks again without the wake hub (no hub on
+/// the `Db`, or its LISTEN connection is down). With it, the claim waits
+/// for `NOTIFY forge_jobs, 'ci.job'` and looks by itself every
+/// `jobs.safety_poll_ms` (plan 18 S2, `forge_db::ci_runners::JobWait`).
 pub const POLL_INTERVAL: Duration = Duration::from_millis(1000);
 /// `FG-CI-0005` is logged at most this often.
 pub const NO_RUNNER_LOG_EVERY: Duration = Duration::from_secs(600);
@@ -166,8 +169,12 @@ impl Pipelines {
         require(proof.action(), Action::RunnerJobRequest)?;
         let runner = runner_of(proof.principal(), Action::RunnerJobRequest)?;
         let deadline = Instant::now() + wait.min(LONG_POLL_MAX);
+        // Subscribed before the first claim: a job made pending after it
+        // ends the first wait.
+        let mut idle = db::JobWait::new(&self.db, POLL_INTERVAL);
         loop {
             if let Some(claimed) = lease::claim_with(&self.db, runner, &self.gpu_eval).await? {
+                idle.claimed(runner, &claimed, request_id);
                 let secrets = match self.release_secrets(&claimed).await {
                     Ok(secrets) => secrets,
                     // Cancelled between the claim and the release: nothing
@@ -200,7 +207,7 @@ impl Pipelines {
             if left.is_zero() {
                 return Ok(None);
             }
-            tokio::time::sleep(left.min(POLL_INTERVAL)).await;
+            idle.wait(left).await;
         }
     }
 

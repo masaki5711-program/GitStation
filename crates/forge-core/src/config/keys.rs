@@ -245,6 +245,8 @@ pub const KEYS: &[Key] = &[
     // Plan 18 S4 (ADR-0037 (c)): the path-aware mergeability and its cap.
     boolean("review.path_filter", "FORGE_REVIEW_PATH_FILTER"),
     number("review.paths_max", "FORGE_REVIEW_PATHS_MAX"),
+    // Plan 18 S2 (ADR-0037 (a)): the idle job runner's safety-net period.
+    number("jobs.safety_poll_ms", "FORGE_JOBS_SAFETY_POLL_MS"),
     // Plan 18 S1 (ADR-0037 (b)): the train lint's budget (0: off).
     number(
         "merge_queue.train_lint_budget_ms",

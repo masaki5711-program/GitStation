@@ -20,6 +20,9 @@
 //! ([`revoke_project_job_tokens`], obligation 1).
 
 pub mod lease;
+mod wait;
+
+pub use wait::JobWait;
 
 use forge_core::ci_token::{CiToken, CiTokenKind};
 use forge_core::pipeline::RunnerChange;
@@ -278,6 +281,15 @@ pub async fn update(
                     .map_err(|e| query_error(QUERY, e))
             })
             .await?;
+        if enabled_change == Some(true) || tags_change.is_some() {
+            // Plan 18 S2: jobs that waited for these tags, or for the
+            // runner to be resumed, are claimable now — its long poll
+            // looks (delivered at the commit).
+            tx.step(|c| async move {
+                crate::wake::notify_on(c, crate::wake::Channel::Jobs, crate::wake::CI_JOB).await
+            })
+            .await?;
+        }
         let audit = RunnerChange::Updated {
             runner: id,
             enabled: enabled_change,

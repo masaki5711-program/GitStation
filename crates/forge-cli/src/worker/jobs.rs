@@ -1,7 +1,16 @@
 //! The job tasks of `forge worker` (ADR-0016 §7): the job runner (claims
-//! a job for the kinds with a registered handler, every second while idle,
-//! at once again after a job) and the reaper (every 30 s, also once at
-//! startup so leases left by a crashed worker are ended early).
+//! a job for the kinds with a registered handler, at once again after a
+//! job) and the reaper (every 30 s, also once at startup so leases left by
+//! a crashed worker are ended early).
+//!
+//! **Idle** (plan 18 S2): a run that found nothing waits for a wake of the
+//! process's hub — `NOTIFY forge_jobs, <kind>` from the statement that
+//! made a job claimable — or the due time of the next scheduled job, and
+//! looks by itself every `jobs.safety_poll_ms` (10 s) at the latest, every
+//! second while the LISTEN connection is down
+//! (`forge_db::jobs::JobRunner::wait_for_work`). The wake is a hint: the
+//! claim reads the queue. On a `Db` without a hub the run sleeps
+//! [`JOB_POLL_PERIOD`] instead, as before plan 18.
 //!
 //! **Slots** (merge load test 2026-11-17, F2): the runner runs in
 //! `review.worker_job_concurrency` slots (default 4) — one supervised task
@@ -57,7 +66,8 @@ use super::spec_publish::SpecPublishHandler;
 use super::supervise::Next;
 use super::work_items::RelinkHandler;
 
-/// How often an idle runner looks for a ready job.
+/// How often an idle runner without a wake hub looks for a ready job; also
+/// the base of a failing runner's backoff.
 pub(crate) const JOB_POLL_PERIOD: Duration = Duration::from_secs(1);
 /// How often expired leases are reaped (ADR-0016 §7).
 pub(crate) const REAP_PERIOD: Duration = Duration::from_secs(30);
@@ -140,12 +150,15 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
 }
 
 /// One run of the job runner: one job (or none); a shutdown request gives
-/// the job in progress `grace`, then releases it.
+/// the job in progress `grace`, then releases it. A run that found nothing
+/// waits for work before it returns (module docs), until a stop is
+/// requested.
 pub(crate) async fn run_job(
     jobs: &JobRunner,
     grace: Duration,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<Next, ForgeError> {
+    let mut idle = shutdown.clone(); // clone: the idle wait watches the signal too
     let stop = async move {
         // The watch guard is dropped inside this statement, never held
         // across an await. A closed channel without a request never stops
@@ -166,8 +179,30 @@ pub(crate) async fn run_job(
             | Ran::LeftLeased { .. }
             | Ran::Unrecorded { .. },
         ) => Next::Immediately,
+        None if jobs.waits_on_wake() => {
+            // Stopped or not: the task loop looks at the signal (and
+            // reports a closed channel) before the next run.
+            wait_for_work(jobs, &mut idle).await?;
+            Next::Waited
+        }
         None => Next::AfterPeriod,
     })
+}
+
+/// The idle wait of a runner on the wake hub
+/// (`forge_db::jobs::JobRunner::wait_for_work`). `Ok(false)`: ended early
+/// by a stop request or a closed stop channel — the caller must not look
+/// again without checking it. `Err`: the next due time could not be read
+/// (the caller backs off).
+pub(crate) async fn wait_for_work(
+    jobs: &JobRunner,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<bool, ForgeError> {
+    tokio::select! {
+        waited = jobs.wait_for_work() => waited.map(|()| true),
+        // The watch guard is dropped with this arm, before any await.
+        _ = stop.wait_for(|stop| *stop) => Ok(false),
+    }
 }
 
 /// One run of the reaper (it logs every expired lease itself).

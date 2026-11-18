@@ -126,6 +126,9 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             .await?
             .with_portal_news(crate::portal::news_policy(cfg)?);
         forge_db::check_schema(&db, &MIGRATOR).await?;
+        // Plan 18 S2: the job runners and the runner long poll of this
+        // process wait on its wake hub (attached before the first clone).
+        let (db, wake_hub) = crate::wake::attach(db, cfg)?;
         // Pushes load their protection snapshot from, and are recorded in,
         // the database (forge-web reads both through forge-core traits).
         let smart_http = smart_http
@@ -465,6 +468,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 &forge_core::RequestId::generate(),
             );
         }
+        crate::wake::stop(&wake_hub).await;
         db.close().await;
         served?;
         tracing::info!("forge.serve.stopped");

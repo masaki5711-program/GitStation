@@ -44,10 +44,10 @@ GitStation は PostgreSQL **16 以上**を使う（16 未満は起動時に拒�
 
 forge の各プロセス（`serve`、`worker`）は、書き込み用と読み取り用の 2 つのプールを持つ（`database.write_max_connections` /
 `database.read_max_connections`、例の設定では 5 / 5）。`forge doctor` の `db.connections` は
-`(write + read) × 2 + 3` が **サーバーの使える接続（`max_connections − superuser_reserved_connections`）の 80 % 以下**であることを確かめ、
+`(write + read) × 2 + 4`（プールの外に、`serve` と `worker` が 1 本ずつ持つ LISTEN の接続、マイグレーション、保守）が **サーバーの使える接続（`max_connections − superuser_reserved_connections`）の 80 % 以下**であることを確かめ、
 超えると `FG-SYS-0002 reason=connection_budget`。
 
-- 例の設定: (5 + 5) × 2 + 3 = 23 → 使える接続が 29 以上 → `max_connections = 40`（予約 3 を引いて 37）。
+- 例の設定: (5 + 5) × 2 + 4 = 24 → 使える接続が 30 以上 → `max_connections = 40`（予約 3 を引いて 37）。
   残りは `forge backup`、`forgectl`、pgBackRest、`psql` の分。
 - プールを大きくするときは `max_connections` も合わせて上げる（1 接続あたり数 MB のメモリを使う）。
 
@@ -57,8 +57,8 @@ forge の各プロセス（`serve`、`worker`）は、書き込み用と読み�
 2. **ロール**: `01-cluster-roles.sql` が `forge_owner`・`forge_migrator`・`forge_seq`・`forge_purge`・`forge_app`・`forge_ro`・`forge_maint`・`forge_audit`
    を作る。ロールはクラスター全体のもの。同じ名前が既にあれば止まる（runbook db-bootstrap 手順 1）。PFS 側に同名が無いことを先に確かめる。
 3. **接続の上限**: `db.connections` は**クラスター全体の** `max_connections` で判定する。PFS が実際に使っている接続数は数えないので、
-   PFS の最大の使用量 + GitStation の 23 + 余裕 が `max_connections` に収まることを PFS チームと確かめる。足りなければプールを
-   3 / 3（(3+3)×2+3 = 15）に下げる。
+   PFS の最大の使用量 + GitStation の 24 + 余裕 が `max_connections` に収まることを PFS チームと確かめる。足りなければプールを
+   3 / 3（(3+3)×2+4 = 16）に下げる。
 4. **pg_hba.conf**: `forge_app`・`forge_migrator`・`forge_maint` を `forge` DB にだけ、`scram-sha-256` で許す。
    ```
    host  forge  forge_app,forge_migrator,forge_maint  127.0.0.1/32  scram-sha-256

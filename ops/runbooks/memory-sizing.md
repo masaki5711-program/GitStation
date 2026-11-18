@@ -97,7 +97,7 @@ git は **2.38 以上**が前提（`gc --cruft`、`pack.writeBitmapLookupTable`�
 | `shared_buffers` | 256MB | DB はメタデータだけ（リポジトリの中身はディスク） |
 | `work_mem` | 4MB | ソート・ハッシュ 1 つごと |
 | `maintenance_work_mem` | 64MB | |
-| `max_connections` | 40 | forge の接続 =（`database.write_max_connections` + `read_max_connections`）× 2 + 3。例の 5 / 5 で 23 |
+| `max_connections` | 40 | forge の接続 =（`database.write_max_connections` + `read_max_connections`）× 2 + 4。例の 5 / 5 で 24 |
 
 PFS のクラスターに相乗りするときは、PostgreSQL の分は PFS 側の見積もりに入る（設定は PFS チームのもの）。
 

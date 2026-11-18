@@ -327,6 +327,7 @@ tls_root_cert = "<INTERNAL_CA_PEM>"
 | `review.check_run_retention_days` | `FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS` | チェックの実行（と注釈）を `updated_at` からこの日数で消す（開いている MR の今の head は残す。30〜3650。Runbook `checks-reporting` の E） | 任意 | 180 |
 | `review.worker_job_concurrency` | `FORGE_REVIEW_WORKER_JOB_CONCURRENCY` | `forge worker` が同時に動かすジョブの数（1〜16、`database.write_max_connections` の半分まで。種類ごとの上限もある。負荷試験 2026-11-17 F2） | 任意 | 4（書き込みのプールの半分が 4 より小さければその数） |
 | `review.path_filter` / `paths_max` | `FORGE_REVIEW_PATH_FILTER` / `FORGE_REVIEW_PATHS_MAX` | 着地のたびに、着地したパスと重なりうる MR だけマージできるかを確かめ直し、残りは結果を持ち越す（計画 18 S4。`false` で止めると着地ごとに全件を確かめ直す）／変更パスの集合の上限（1〜20000。超えた変更は常に確かめ直す。Runbook `merge-request-mergeability`） | 任意 | true / 5000 |
+| `jobs.safety_poll_ms` | `FORGE_JOBS_SAFETY_POLL_MS` | 暇なジョブ実行が通知（`forge_jobs`）なしでも自分で見に行く間隔、ミリ秒（100〜60000。計画 18 S2）。1000 にすると計画 18 より前の「1 秒ごと」に戻る | 任意 | 10000 |
 | `maintenance.interval_days` / `window_start` / `window_end` / `window_time_zone` / `prune_grace_hours` / `step_timeout_secs` / `fsck_interval_days` / `batch_max` / `refs_warn` | `FORGE_MAINTENANCE_…` | リポジトリの保守（M3 O3、Runbook `repo-maintenance`）: 間隔・夜の窓・猶予（24 時間以上）・1 手順の時間切れ・全体の fsck の間隔・同時に生きている保守のジョブ・ref の数の warn | 任意 | 7 / 02:00 / 05:00 / Asia/Tokyo / 48 / 1800 / 30 / 10 / 100000 |
 | `notify.enabled` | `FORGE_NOTIFY_ENABLED` | メールの通知（M3 N1、Runbook `notification-email`）。`true` でだけ購読者とメールのランナーが動く。社内の SMTP の事実は未定（計画 11 Q6）なので、下の鍵がすべて設定になっている | 任意 | false |
 | `notify.smtp_host` / `smtp_port` / `smtp_tls` / `smtp_ca_file` | `FORGE_NOTIFY_SMTP_…` | 中継の名前・ポート・保護（`none` / `starttls`（必須）/ `tls`）・検証する根の PEM（`starttls` / `tls` では必須。OS の保管庫は使わない）。試験環境は mailpit `127.0.0.1:28025`（`smtp_tls = none`） | `notify.enabled` なら host が必須 | — / 587・465・25 / starttls / — |
@@ -367,7 +368,7 @@ $FORGE --config <CONF_DIR>/forge.toml doctor --json     # 機械向け
 - **初回の `db migrate` は stderr に約 230 行の JSON ログ（`level":"WARN"`、`forge_audit.ddl_audit: CREATE TABLE (…) recorded` など）を出す**。DDL を監査表に記録した通知で、**異常ではない**。
   終わりは stdout の `<host:port>/<db>: applied …` と終了コード 0。2 回目は `up to date` で、ログは出ない。慌てて止めない。
 - `db status --check` の期待: `pending -` / `unknown -` / `modified -` / `dirty -` / `serve compatible`。
-- `doctor` の主な項目: `database` `db.bootstrap` `db.connections` `outbox.*` `audit.seal_*` `jobs.*` `subscribers.*` `users.administration` `repositories.provisioning` `repositories.storage` `storage` `auth.oidc` `web.ui`。
+- `doctor` の主な項目: `database` `db.bootstrap` `db.connections` `db.notify_queue` `outbox.*` `audit.seal_*` `jobs.*` `subscribers.*` `users.administration` `repositories.provisioning` `repositories.storage` `storage` `auth.oidc` `web.ui`。
   初回に `auth.oidc` を設定していなければ warn（黙って無効にはしない）。`users.administration` は管理者がいないと警告になる（§3.6 の `bootstrap-admin` の後に ok になる。予行演習で確認）。
   最初の `doctor`（管理者を作る前、OIDC 無し）の期待は **ok が多数、warn は `users.administration` と `auth.oidc` の 2 件だけ、FAIL 0、終了コード 0**。
   `outbox.sequencer_lag` は worker を起動するまで `worker not observed (no heartbeat yet)`、起動後は `heartbeat … ms ago`。`audit.seal_*` の `audit sequencing off` は現行ビルドの既定の表示で、異常ではない。

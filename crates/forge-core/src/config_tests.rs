@@ -2011,3 +2011,45 @@ fn git_pack_caps_have_defaults_file_env_and_rules() {
         assert_invalid(&err, key, reason);
     }
 }
+
+/// `jobs.safety_poll_ms` (plan 18 S2, ADR-0037 (a)): default 10000,
+/// 100..=60000 (FG-SYS-0002 naming the key). 1000 is the poll period
+/// before plan 18 — the way back.
+#[test]
+fn jobs_safety_poll_has_a_default_and_a_range() {
+    use super::JobsConfig;
+    const KEY: &str = "FORGE_JOBS_SAFETY_POLL_MS";
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.jobs, JobsConfig::default());
+    assert_eq!(cfg.jobs.safety_poll_ms, 10_000);
+    assert_eq!(cfg.jobs.safety_poll(), Duration::from_secs(10));
+    for (value, ms) in [
+        ("100", 100),
+        ("1000", 1_000),
+        ("60000", 60_000),
+        (" 2500 ", 2_500),
+    ] {
+        let cfg = load(None, &env(&[(KEY, value)])).expect(value);
+        assert_eq!(cfg.jobs.safety_poll(), Duration::from_millis(ms));
+    }
+    let from_file = file("[jobs]\nsafety_poll_ms = 500\n");
+    let cfg = load(Some(from_file.path()), &env(&[])).expect("file");
+    assert_eq!(cfg.jobs.safety_poll_ms, 500);
+    for (value, reason) in [
+        ("0", "below_min"),
+        ("99", "below_min"),
+        ("60001", "above_max"),
+        ("-1", "invalid"),
+        ("soon", "invalid"),
+    ] {
+        let err = load(None, &env(&[(KEY, value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("jobs.safety_poll_ms") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+    let err = load(None, &env(&[("FORGE_JOBS_POLL", "7")])).expect_err("typo");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}

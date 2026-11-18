@@ -9,7 +9,9 @@
 //! A successful run may ask for the next one at once ([`Next::Immediately`],
 //! e.g. the sequencer after a full batch); at most [`MAX_IMMEDIATE`] runs in
 //! a row skip the period, then one period is waited, so a task that always
-//! has more work cannot spin.
+//! has more work cannot spin. A run that waited by itself for its next
+//! work ([`Next::Waited`], the job runners on the wake hub) starts the next
+//! one at once: its own wait is the pause.
 
 use std::time::Duration;
 
@@ -29,6 +31,11 @@ pub(crate) enum Next {
     AfterPeriod,
     /// At once: the run left work behind (bounded by [`MAX_IMMEDIATE`]).
     Immediately,
+    /// At once: the run found nothing and waited by itself until another
+    /// look is worth it (a wake, a due time or its safety-net period —
+    /// `forge_db::jobs::JobRunner::wait_for_work`). Not counted against
+    /// [`MAX_IMMEDIATE`]: the wait was the pause.
+    Waited,
 }
 
 /// What makes two failures "the same" for logging: the code and the context
@@ -109,6 +116,10 @@ impl Backoff {
             Next::Immediately | Next::AfterPeriod => {
                 self.immediate = 0;
                 self.period
+            }
+            Next::Waited => {
+                self.immediate = 0;
+                Duration::ZERO
             }
         };
         Decision {
@@ -271,5 +282,23 @@ mod tests {
         let s = sig(ErrorCode::DbUnavailable, "connect_refused");
         assert_eq!(b.failure(s, now).delay, Duration::from_millis(400));
         assert_eq!(b.success(Next::Immediately).delay, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_run_that_waited_by_itself_is_followed_at_once_and_is_no_spin() {
+        let mut b = Backoff::new(PERIOD, MAX);
+        // However often: the wait inside the run was the pause.
+        for _ in 0..=MAX_IMMEDIATE * 2 {
+            assert_eq!(b.success(Next::Waited).delay, Duration::ZERO);
+        }
+        // And it ends a streak of immediate runs (the queue was empty).
+        for _ in 0..MAX_IMMEDIATE {
+            assert_eq!(b.success(Next::Immediately).delay, Duration::ZERO);
+        }
+        assert_eq!(b.success(Next::Waited).delay, Duration::ZERO);
+        for _ in 0..MAX_IMMEDIATE {
+            assert_eq!(b.success(Next::Immediately).delay, Duration::ZERO);
+        }
+        assert_eq!(b.success(Next::Immediately).delay, PERIOD);
     }
 }
