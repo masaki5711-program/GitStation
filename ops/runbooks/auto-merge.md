@@ -37,6 +37,13 @@ M4 C9（ADR-0017 Amendment 2026-11-13、計画 04 M-5 / M-6）の自動マージ
    - `held reason=merge_queue_doc_lint_base`: 厳格なリポジトリ（`.forge/repo.yml` の `merge_queue.doc_lint_strict`）で、target に
      すでに文書の問題がある（`FG-CI-0032`、`reason=doc_lint_base_not_clean`）。この MR は原因ではない。target がきれいになった後、
      新しい push か人の「準備ができたらマージ」で進む。Runbook `merge-queue`。
+   - `held reason=merge_queue_repo_config_invalid`: 上と同じだが、厳格になっているのは target の `.forge/repo.yml` が**正しくない**
+     から（`FG-REPO-0024`、`reason=doc_lint_repo_config_invalid`）。この MR は原因ではない。`.forge/repo.yml` を直す MR が着地した後、
+     新しい push か人の「準備ができたらマージ」で進む。Runbook `merge-queue` の「`.forge/repo.yml` が正しくない」。
+   - `stopped reason=merge_queue_doc_lint_unavailable`（`not_assessed`、`detail=forge/doc-lint`）: 列車の doc-lint を 3 回終えられず
+     （文書が多すぎる、時間切れ、読み取りの失敗）、キューから外れた（`FG-CI-0024`、`reason=doc_lint_unavailable`）。安全と示せないので、
+     同じ版は自動では入れ直さない（以前は `stalled` として入れ直し、同じ 3 回を繰り返していた）。管理者が原因を直した後、新しい push か
+     人の「準備ができたらマージ」で進む。Runbook `merge-queue` の「列車の doc-lint」。
    - `held reason=full_auto_not_allowed`: プロジェクトは `full` だが、インスタンスの `merge.allow_full_auto` が外れている
      （実効は `reserve`）。キューにあった自動マージのエントリーは `reason=full_auto_not_allowed` で外れている。人がマージするか、
      管理者が許可を戻す。
