@@ -9,10 +9,16 @@
 //!   it. Those read git (`browse` / `merge`).
 //! - **Single flight.** At most one read per repository runs at a time.
 //!   Callers that arrive while it runs wait for it; the caller that
-//!   started it (the leader) runs it in its own request. A leader that is
-//!   cancelled wakes its waiters, and one of them reads instead; a read
-//!   that failed fails every caller waiting for it (its own error, never
-//!   "missing", never "present") and is not kept.
+//!   started it (the leader) runs it in its own request, on its own
+//!   deadline. A leader that is cancelled wakes its waiters, and one of
+//!   them reads instead.
+//! - **A failed read** is never "missing", never "present", and is not
+//!   kept. A failure of the leader's own — out of its time, refused for
+//!   its place in a queue — stays with the leader: its waiters wake and
+//!   one of them reads, on its own deadline. A caller reads at most once,
+//!   so there are never more reads than callers and never two at once.
+//!   Any other failure is the same for whoever reads, and fails every
+//!   caller waiting for the read (`failure.rs`).
 //! - **Positives from the snapshot, negatives from git.** "The branch
 //!   exists" is answered from a snapshot whose read began less than `ttl`
 //!   ago. Any other answer is given only from a read that began *after*
@@ -32,8 +38,6 @@
 //! No I/O here: the read is the caller's closure (`browse/branches.rs`).
 
 use std::collections::HashMap;
-use std::error::Error as StdError;
-use std::fmt;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -43,8 +47,10 @@ use forge_errors::ForgeError;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
+mod failure;
 mod snapshot;
 
+use failure::{is_readers_own, shared_error};
 pub use snapshot::{BranchAnswer, BranchSnapshot};
 
 /// What one read delivered to everyone waiting for it.
@@ -93,7 +99,7 @@ struct Flight {
     read: u64,
     at: Instant,
     /// `None` until the read is over; closed with `None` when its leader
-    /// went away.
+    /// went away or failed on its own account.
     rx: watch::Receiver<Option<Outcome>>,
 }
 
@@ -116,9 +122,10 @@ enum Step {
     Lead(Lead),
 }
 
-/// The leader's side of a read. Dropped without [`Lead::finish`] (the
-/// leader was cancelled or its read panicked): the read is unregistered
-/// and its waiters wake with nothing, to read themselves.
+/// The leader's side of a read. Dropped with no outcome published (the
+/// leader was cancelled, its read panicked, or failed on the leader's own
+/// account): the read is unregistered and its waiters wake with nothing,
+/// to read themselves.
 struct Lead {
     shared: Arc<Shared>,
     repo: RepoId,
@@ -191,13 +198,19 @@ impl Shared {
 }
 
 impl Lead {
-    /// Publish the read's outcome to its waiters, keep a snapshot, and
-    /// hand the leader its own copy.
+    /// The read is over: publish its outcome to the waiters, keep a
+    /// snapshot, and hand the leader its own copy. A failure of the
+    /// leader's own (`failure.rs`) is not an outcome of the read: it goes
+    /// to the leader alone, and this `Lead` drops with nothing published.
     fn finish(
         self,
         result: Result<BranchSnapshot, ForgeError>,
     ) -> Result<Arc<BranchSnapshot>, ForgeError> {
-        let outcome: Outcome = result.map(Arc::new).map_err(Arc::new);
+        let outcome: Outcome = match result {
+            Ok(snapshot) => Ok(Arc::new(snapshot)),
+            Err(own) if is_readers_own(&own) => return Err(own),
+            Err(shared) => Err(Arc::new(shared)),
+        };
         self.shared
             .settle(self.repo, self.read, self.at, outcome.as_ref().ok());
         // No receiver left is fine: nobody waited.
@@ -210,8 +223,8 @@ impl Lead {
 
 impl Drop for Lead {
     fn drop(&mut self) {
-        // After `finish` this finds nothing to do; without it, it is what
-        // wakes the waiters (the sender closes with no outcome).
+        // After `finish` published an outcome: nothing to do. Otherwise
+        // this wakes the waiters (unregister, then the sender closes).
         if self.tx.borrow().is_none() {
             self.shared.settle(self.repo, self.read, self.at, None);
         }
@@ -251,11 +264,13 @@ impl RefSnapshotCache {
     /// What is known about the branch `full` (a full `refs/heads/…` name)
     /// of `repo`. `load` reads the repository's branches; it runs at most
     /// once per call, in this future, and only when this caller is the one
-    /// to read (see the module docs). `Err`: the read this caller ran or
-    /// waited for failed (that read's error).
+    /// to read (see the module docs). `Err`: the read this caller ran
+    /// failed, or the read it waited for failed for a reason that is not
+    /// its leader's own (that read's error).
     ///
     /// The caller bounds the wait (its operation's deadline): a waiter
-    /// waits as long as the read it joined takes.
+    /// waits for the read it joined and, when that one ends with no
+    /// outcome, for the next (or reads itself).
     pub async fn branch<L, F>(
         &self,
         repo: RepoId,
@@ -290,7 +305,8 @@ impl RefSnapshotCache {
                         continue;
                     }
                     let snapshot = match outcome {
-                        // Its leader went away: read (or wait) again.
+                        // Its leader went away or failed on its own
+                        // account: read (or wait) again.
                         None => continue,
                         Some(Err(e)) => return Err(shared_error(&e)),
                         Some(Ok(snapshot)) => snapshot,
@@ -376,39 +392,6 @@ async fn settled(rx: &mut watch::Receiver<Option<Outcome>>) -> Option<Outcome> {
     match rx.wait_for(Option::is_some).await {
         Ok(outcome) => outcome.clone(), // clone: out of the channel's lock
         Err(_closed) => None,
-    }
-}
-
-/// One caller's copy of a read's error: the same code and context, and
-/// the original's cause chain for the log.
-fn shared_error(original: &Arc<ForgeError>) -> ForgeError {
-    let mut copy = ForgeError::new(original.code());
-    for &(key, ref value) in original.context() {
-        copy = copy.with_context(key, value);
-    }
-    if StdError::source(original.as_ref()).is_some() {
-        copy = copy.with_source(SharedCause(Arc::clone(original)));
-    }
-    copy
-}
-
-/// The cause of a shared error: displays as, and chains to, the original
-/// error's own cause.
-#[derive(Debug)]
-struct SharedCause(Arc<ForgeError>);
-
-impl fmt::Display for SharedCause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match StdError::source(self.0.as_ref()) {
-            Some(cause) => write!(f, "{cause}"),
-            None => Ok(()),
-        }
-    }
-}
-
-impl StdError for SharedCause {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        StdError::source(self.0.as_ref()).and_then(|cause| cause.source())
     }
 }
 

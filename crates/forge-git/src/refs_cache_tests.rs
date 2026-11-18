@@ -4,7 +4,7 @@
 //! on tokio's paused clock and one thread: nothing depends on the
 //! machine's speed.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,7 +15,24 @@ use tokio::task::JoinHandle;
 
 use super::{BranchAnswer, BranchSnapshot, RefSnapshotCache};
 
+/// What a failed read does to who ran it and who waited for it.
+#[path = "refs_cache_failure_tests.rs"]
+mod failures;
+
 const TTL: Duration = Duration::from_secs(5);
+
+/// How long a failing read takes to fail (a wait in a queue, a git that
+/// hangs), on the paused clock.
+const FAILS_AFTER: Duration = Duration::from_secs(5);
+
+/// Which reads of the fake fail (decided when a read begins).
+#[derive(Debug, Clone, Copy)]
+enum Fail {
+    Never,
+    /// The next read only.
+    Once(ErrorCode),
+    Always(ErrorCode),
+}
 
 /// The repository as git would show it: its branches, how many reads
 /// began, whether a read is held back and whether it fails.
@@ -24,7 +41,7 @@ struct FakeGit {
     branches: Arc<Mutex<Vec<&'static str>>>,
     reads: Arc<AtomicUsize>,
     open: Arc<watch::Sender<bool>>,
-    fail: Arc<AtomicBool>,
+    fail: Arc<Mutex<Fail>>,
 }
 
 impl FakeGit {
@@ -33,7 +50,7 @@ impl FakeGit {
             branches: Arc::new(Mutex::new(branches.to_vec())),
             reads: Arc::new(AtomicUsize::new(0)),
             open: Arc::new(watch::channel(true).0),
-            fail: Arc::new(AtomicBool::new(false)),
+            fail: Arc::new(Mutex::new(Fail::Never)),
         }
     }
 
@@ -50,22 +67,39 @@ impl FakeGit {
         self.reads.load(Ordering::SeqCst)
     }
 
+    fn fail(&self, fail: Fail) {
+        *self.fail.lock().unwrap() = fail;
+    }
+
     fn set(&self, branches: &[&'static str]) {
         *self.branches.lock().unwrap() = branches.to_vec();
     }
 
     /// One read: the branches as they are when it begins (the oldest
-    /// answer a real read could give), delivered when it is let go.
+    /// answer a real read could give), delivered when it is let go. A
+    /// failing read fails `FAILS_AFTER` later, held back or not.
     async fn load(&self) -> Result<BranchSnapshot, ForgeError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         let seen = self.branches.lock().unwrap().clone();
-        let mut open = self.open.subscribe();
-        open.wait_for(|open| *open).await.expect("the fake lives");
-        if self.fail.load(Ordering::SeqCst) {
-            return Err(ForgeError::new(ErrorCode::GitBusy)
-                .with_context("reason", "repo_browse")
+        let failing = {
+            let mut fail = self.fail.lock().unwrap();
+            match *fail {
+                Fail::Never => None,
+                Fail::Once(code) => {
+                    *fail = Fail::Never;
+                    Some(code)
+                }
+                Fail::Always(code) => Some(code),
+            }
+        };
+        if let Some(code) = failing {
+            tokio::time::sleep(FAILS_AFTER).await;
+            return Err(ForgeError::new(code)
+                .with_context("reason", "synthetic")
                 .with_source(std::io::Error::other("synthetic cause")));
         }
+        let mut open = self.open.subscribe();
+        open.wait_for(|open| *open).await.expect("the fake lives");
         Ok(snapshot(&seen))
     }
 }
@@ -195,32 +229,6 @@ async fn a_cancelled_leader_wakes_its_waiters() {
     assert_eq!(git.reads(), 2);
     assert_eq!(ask(&cache, &git, "main").await, BranchAnswer::Commit);
     assert_eq!(git.reads(), 2, "and the snapshot is kept");
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_failed_read_fails_everyone_waiting_and_is_not_kept() {
-    let cache = RefSnapshotCache::new(TTL, 16);
-    let git = FakeGit::with(&["main"]);
-    git.hold();
-    git.fail.store(true, Ordering::SeqCst);
-    let asks: Vec<_> = (0..5).map(|_| asking(&cache, &git, "main")).collect();
-    parked().await;
-    git.release();
-    for ask in asks {
-        let err = ask.await.unwrap().expect_err("the read failed");
-        assert_eq!(err.code(), ErrorCode::GitBusy);
-        assert_eq!(
-            err.to_string(),
-            "FG-GIT-0004 reason=repo_browse: synthetic cause",
-            "the read's own error, with its cause, for the leader and every waiter"
-        );
-    }
-    assert_eq!(git.reads(), 1);
-    assert_eq!(cache.repos(), 0, "a failure is not kept");
-
-    git.fail.store(false, Ordering::SeqCst);
-    assert_eq!(ask(&cache, &git, "main").await, BranchAnswer::Commit);
-    assert_eq!(git.reads(), 2, "the next question reads again");
 }
 
 #[tokio::test(start_paused = true)]

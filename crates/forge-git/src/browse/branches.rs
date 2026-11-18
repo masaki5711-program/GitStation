@@ -7,10 +7,14 @@
 //! - **A miss**: answered only from a read that began after the question
 //!   — a branch pushed after the snapshot is found — shared by everyone
 //!   asking at that moment (one git, one browse slot).
-//! - **A failed read** (no slot within `repo_wait`, a timeout, git not
-//!   startable, the repository not on disk) is that failure for every
-//!   asker waiting for it — `FG-GIT-0004 reason=repo_browse`,
-//!   `FG-GIT-0002`, … — never "missing" and never "exists".
+//! - **A failed read** is never "missing" and never "exists": the asker
+//!   that ran it gets its error. A failure of that asker's own — no slot
+//!   within `repo_wait` (`FG-GIT-0004 reason=repo_browse`), out of time
+//!   (`FG-GIT-0002`) — stops there: the askers that waited for the read
+//!   are not refused with it. One of them reads, on its own deadline, and
+//!   one whose own deadline passes gets its own `FG-GIT-0002
+//!   operation=browse`. Any other failure (git not startable, the
+//!   repository not on disk) is that failure for every asker waiting.
 //! - **More branches than `max_refs`** (or than the output cap): a name
 //!   the snapshot does not have is asked of git by its exact name.
 //!
@@ -49,8 +53,9 @@ impl Browser {
         let lookup = self
             .branches
             .branch(repo, name.as_str(), || self.load_branches(repo, deadline));
-        // A caller waiting for another caller's read waits no longer than
-        // its own operation may take.
+        // A caller waiting for another caller's read — or for the next
+        // one, after a leader that was refused or ran out of time — waits
+        // no longer than its own operation may take.
         let answer = match tokio::time::timeout_at(deadline.at, lookup).await {
             Ok(answer) => answer?,
             Err(_elapsed) => return Err(deadline.expired()),

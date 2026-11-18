@@ -10,7 +10,7 @@ use forge_core::RefName;
 use forge_errors::ErrorCode;
 
 use super::tests::{blob, commit, fixture, mktree, plumb, reason, update_ref};
-use super::BrowseLimits;
+use super::{BrowseLimits, Deadline};
 
 fn branch(short: &str) -> RefName {
     RefName::parse(&format!("refs/heads/{short}")).expect("branch")
@@ -122,4 +122,56 @@ async fn another_process_ref_write_invalidates_the_cache() {
         .await
         .expect_err("past refs_ttl the snapshot is read again");
     assert_eq!(reason(&err), "ref_not_found");
+}
+
+/// A create that waits for another create's read is not refused with it.
+/// The create that ran the read found the repository's only slot taken
+/// for `repo_wait` and is refused alone; the one that waited reads in its
+/// place, on its own deadline, and is answered once the slot is free.
+#[tokio::test]
+async fn a_create_waiting_on_a_refused_read_reads_itself_and_is_answered() {
+    let f = fixture().await;
+    let c1 = seed(&f.path);
+    update_ref(&f.path, "refs/heads/main", &c1);
+    let b = f.browser(BrowseLimits {
+        max_per_repo: 1,
+        timeout: Duration::from_secs(60),
+        repo_wait: Duration::from_secs(5),
+        ..BrowseLimits::default()
+    });
+    // No git while the slot is held: the waits run on tokio's paused
+    // clock, independent of the machine's speed.
+    tokio::time::pause();
+    let held = b
+        .claim(f.id, Deadline::new(Duration::from_secs(60)))
+        .await
+        .expect("the only slot");
+    let create = || {
+        let b = b.clone(); // clone: one handle per task
+        let id = f.id;
+        tokio::spawn(async move { b.require_branch(id, &branch("main")).await })
+    };
+    let first = create();
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let second = create();
+    tokio::task::yield_now().await;
+
+    // 5 s (`repo_wait`): the first is refused. Only the first.
+    let err = first
+        .await
+        .expect("task")
+        .expect_err("no slot within repo_wait");
+    assert_eq!(err.code(), ErrorCode::GitBusy);
+    assert_eq!(reason(&err), "repo_browse");
+
+    // The second waits for a slot itself, from now. Real time again: it
+    // runs git.
+    tokio::time::resume();
+    drop(held);
+    second
+        .await
+        .expect("task")
+        .expect("the create that waited is answered");
+    assert_eq!(b.users(f.id), 0);
 }
