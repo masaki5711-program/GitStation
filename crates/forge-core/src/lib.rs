@@ -32,6 +32,8 @@ pub mod integration;
 pub mod list_page;
 pub mod merge;
 pub mod merge_conditions;
+/// Plan 18 S4 (ADR-0037 (c)): changed-path sets and `may_interact`.
+pub mod merge_paths;
 pub mod merge_queue;
 pub mod merge_request;
 pub mod merge_results;
@@ -174,6 +176,8 @@ mod event_type_tests;
 mod feed_tests;
 #[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+mod merge_paths_tests;
 #[cfg(test)]
 mod merge_request_tests;
 #[cfg(test)]

@@ -22,6 +22,17 @@
 //! (`reason=above_half_write_pool`): every other worker task needs the
 //! pool too.
 //!
+//! `review.path_filter` (default `true`; `true` or `false`): a landing
+//! re-checks only the open merge requests whose changed paths may interact
+//! with what landed, and carries the result of the others forward to the
+//! new target tip (plan 18 S4, ADR-0037 (c)). `false` is the kill switch:
+//! no path set is computed, stored or sent, and every landing re-checks
+//! every open merge request of the target, as before S4.
+//!
+//! `review.paths_max` (default 5000, 1 ..= 20000): the most files (and
+//! directories) a changed-path set may list. A larger change has an
+//! incomplete set and is always checked again.
+//!
 //! A value outside its range is `FG-SYS-0002` at load time.
 
 use forge_errors::ForgeError;
@@ -31,6 +42,8 @@ use super::{invalid, unsigned};
 const FANOUT_KEY: &str = "review.mergeability_fanout_max";
 const RETENTION_KEY: &str = "review.check_run_retention_days";
 const CONCURRENCY_KEY: &str = "review.worker_job_concurrency";
+const PATH_FILTER_KEY: &str = "review.path_filter";
+const PATHS_MAX_KEY: &str = "review.paths_max";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReviewConfig {
@@ -43,6 +56,11 @@ pub struct ReviewConfig {
     /// is refused there; `Default` and a hand-built value are not checked
     /// against any pool).
     pub worker_job_concurrency: u32,
+    /// `review.path_filter` (`false`: the kill switch of the path-aware
+    /// mergeability).
+    pub path_filter: bool,
+    /// `review.paths_max`.
+    pub paths_max: u32,
 }
 
 impl Default for ReviewConfig {
@@ -51,6 +69,8 @@ impl Default for ReviewConfig {
             mergeability_fanout_max: Self::DEFAULT_MERGEABILITY_FANOUT_MAX,
             check_run_retention_days: Self::DEFAULT_CHECK_RUN_RETENTION_DAYS,
             worker_job_concurrency: Self::DEFAULT_WORKER_JOB_CONCURRENCY,
+            path_filter: Self::DEFAULT_PATH_FILTER,
+            paths_max: Self::DEFAULT_PATHS_MAX,
         }
     }
 }
@@ -64,6 +84,18 @@ impl ReviewConfig {
     pub const MAX_CHECK_RUN_RETENTION_DAYS: u32 = 3650;
     pub const DEFAULT_WORKER_JOB_CONCURRENCY: u32 = 4;
     pub const MAX_WORKER_JOB_CONCURRENCY: u32 = 16;
+    pub const DEFAULT_PATH_FILTER: bool = true;
+    pub const DEFAULT_PATHS_MAX: u32 = 5000;
+    pub const MIN_PATHS_MAX: u32 = 1;
+    /// The table's constraint and `merge_paths::PATHS_MAX_LIMIT`.
+    pub const MAX_PATHS_MAX: u32 = 20_000;
+
+    /// The cap of a changed-path set when the path filter is on; `None`
+    /// when it is off (nothing is computed, stored or sent).
+    pub fn path_filter_max(&self) -> Option<usize> {
+        self.path_filter
+            .then(|| usize::try_from(self.paths_max).unwrap_or(usize::MAX))
+    }
 
     /// `write_max_connections`: `database.write_max_connections` (the
     /// worker's job runs share that pool with its other tasks).
@@ -102,10 +134,25 @@ impl ReviewConfig {
                 n
             }
         };
+        let path_filter = match get(PATH_FILTER_KEY) {
+            None => Self::DEFAULT_PATH_FILTER,
+            Some("true") => true,
+            Some("false") => false,
+            Some(_) => return Err(invalid(PATH_FILTER_KEY, "invalid")),
+        };
+        let paths_max = unsigned(&get, PATHS_MAX_KEY, Self::DEFAULT_PATHS_MAX)?;
+        if paths_max < Self::MIN_PATHS_MAX {
+            return Err(invalid(PATHS_MAX_KEY, "below_min"));
+        }
+        if paths_max > Self::MAX_PATHS_MAX {
+            return Err(invalid(PATHS_MAX_KEY, "above_max"));
+        }
         Ok(Self {
             mergeability_fanout_max: fanout,
             check_run_retention_days: days,
             worker_job_concurrency: concurrency,
+            path_filter,
+            paths_max,
         })
     }
 }

@@ -26,6 +26,7 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
 | `iid` | 整数 | プロジェクトの中の MR の番号 |
 | `head_sha` | 文字列 / null | 今の head。版がまだ無いと null（`reasons` に `mergeability_unknown`） |
 | `merge_result_sha` | 文字列 / null | M4 C7 で追加。head を target の今の先端へマージした結果のコミット（`refs/merge-requests/<iid>/merge`）。MR のパイプラインはこのコミットで動き、`ci/pipeline` をここへ報告する。判定中・衝突・版や target が無いときは null |
+| `carried_from_target_sha` | 文字列 / null | 計画 18 S4 で追加（schema_version 1 のまま足した）。マージできるかの結果が、target の今の先端に対して **計算した** のではなく **持ち越した** ものであるとき、実際に計算した target の先端。null は、今の先端で計算した結果（または、今の先端に答える結果が無い）。下の「持ち越した結果」 |
 | `target_branch` | 文字列 | `refs/heads/` を除いた target |
 | `method` | 文字列 | 評価した方式（`merge_commit` / `squash` / `fast_forward`） |
 | `mergeable` | 真偽 | 止める理由が無い |
@@ -165,6 +166,32 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   **次の手** は衝突などの最初の理由を解くこと。画面は「衝突のないマージ結果ができてから動く」と出す。外部の名前は常に false。
 - target が進むと、前のマージ結果で出た `ci/pipeline` は古くなる。マージの要求は FG-CI-0013（最初の理由のとき）で断られる。**次の手**:
   新しいマージ結果（`merge_result_sha`）で動くパイプラインが終わるのを待つ（失敗なら `gstn pipeline retry`）。
+
+## 持ち越した結果（計画 18 S4、ADR-0037 (c)）
+
+この契約の版は変えずに `carried_from_target_sha` を足した。
+
+- target に何かが着地すると、forge は着地が変えたパスと、開いている MR の head が変えたパスを比べる。**触れ合いえない** MR の結果
+  （`can_be_merged` / `cannot_be_merged`）は計算し直さず、新しい先端に付け替える（持ち越し）。触れ合いうる MR、パスの集合が
+  分からない MR は、これまでどおり計算し直す。
+- `mergeable` と `reasons` の決め方は **変えていない**: 結果が (今の head, target の今の先端) に答えているときだけ数える。持ち越した
+  結果は今の先端に答えるので、計算した結果と同じに数える。`carried_from_target_sha` は「どの先端で計算したか」を言うだけ。
+- 持ち越しは表示とキューに入れる条件のためのもの。マージそのもの（キューの列車、直接のマージのロックの下の試しのマージ）は
+  必ずもう一度マージして確かめる。そこで衝突すれば `FG-REVIEW-0006` で断られ、その MR は計算し直される。
+- 持ち越した結果には、target の今の先端のマージ結果が無い（`merge_result_sha` は null）。必須の `ci/pipeline` があると、理由は
+  `required_check_stale`（前のマージ結果に報告がある）か `required_check_missing` になり、`checks[].waits_for_merge_result` は
+  **false**（衝突などが解けるのを待っているのではない。forge は target が動いただけでは計算し直さない）。**次の手**:
+  マージキューに入れる（`POST …/merge-queue`。この理由では断られない: 列車が今の先端で試す）。直接のマージ
+  （`POST …/merge`）は FG-CI-0013 / FG-REVIEW-0007 で断られるが、その要求が今の先端での計算し直しを積むので、新しい
+  マージ結果（`merge_result_sha`）のパイプラインが終わってからもう一度頼めば通る。画面はこの行で、マージキューを案内する。
+- `carried_from_target_sha` が null でないのは、パスの集合がその結果の判定自身のものであるときだけ（古い版の worker が書いた
+  結果は「計算した結果」として読み、着地のたびに計算し直す）。
+- 持ち越した結果には、今の先端の `merge_result_sha` が無い（null）。必須の `ci/pipeline` があるリポジトリでは、前のマージ結果への
+  報告は `stale: true` のまま（上の「マージ結果と鮮度」）。**次の手**: マージキューに入れる（列車が結合した結果を試す）。直接の
+  マージは、見回りが計算し直して新しいマージ結果のパイプラインが終わるまで FG-CI-0013 で断られる。
+- `GET …/mergeability` の `computed_target_sha` は、結果を実際に計算した先端（`checked_target_sha` と違えば持ち越した結果）。
+- 切り方: サーバーの設定 `review.path_filter = false`（着地のたびに全件を計算し直す、S4 の前の動き。Runbook
+  `merge-request-mergeability`）。
 
 ## マージの設定（`GET` / `PUT /api/v1/projects/{id}/merge-settings`）の `viewer` と同時編集
 

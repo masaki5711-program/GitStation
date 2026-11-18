@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use forge_core::ids::ProjectId;
+use forge_core::merge_paths::LandedPaths;
 use forge_core::{
     AuditDetails, DedupKey, DedupPart, MergeRequestChange, MergeRequestState, MergeState, ObjectId,
     PushRecord, PushedRef, RefName, SourceOutcome,
@@ -351,12 +352,18 @@ fn merge_record(
 /// `range_pushers`: the pushers of the merged range (forge-review), who
 /// with the requester get the merge or squash commit's `push_commits` rows;
 /// `None` (unknown) writes no row (R5 review round 5, fail closed).
+/// `landed` (plan 18 S4): the paths the landing changed on the target, for
+/// the `repository.pushed` event's payload — what lets the refresh
+/// subscriber carry forward the mergeability of the merge requests it
+/// cannot interact with. `None` (the filter is off, or the paths could not
+/// be read): no block, every merge request is checked again.
 pub async fn finish_merge(
     db: &Db,
     ctx: &ChangeContext,
     attempt: &StoredMerge,
     push: &PushRecord,
     range_pushers: Option<&[forge_core::UserId]>,
+    landed: Option<&LandedPaths>,
 ) -> Result<MergeFinished, ForgeError> {
     const ACTION: &str = "merge_request.merged";
     push.check()?;
@@ -489,6 +496,7 @@ pub async fn finish_merge(
             repository_id: push.repository_id,
             updates: push.sorted_updates(),
             replayed_from: None,
+            landed: landed.cloned(),
         };
         let record = merge_record(
             attempt.project_id,
@@ -573,6 +581,8 @@ pub async fn record_source_deleted(
             repository_id: deletion.repo,
             updates: push.sorted_updates(),
             replayed_from: None,
+            // A deleted source branch lands nothing on a target.
+            landed: None,
         };
         let record = merge_record(
             attempt.project_id,

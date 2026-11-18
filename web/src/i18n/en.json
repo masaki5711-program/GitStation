@@ -804,6 +804,7 @@
         "checks": "Waiting for the check result.",
         "checksStale": "The target branch moved. Waiting for the checks on the new merge result.",
         "checksWaitMergeResult": "Waiting for a merge result without conflicts; the pipeline runs on it.",
+        "checksCarried": "The target branch moved without touching this merge request's files, so no new pipeline was started. Add it to the merge queue: the queue tests it on the current target and merges it.",
         "merging": "Waiting for the merge to finish.",
         "maintainer": "Waiting for a maintainer to approve.",
         "retry": "Open this page again in a while. If it stays, tell an administrator.",
@@ -898,6 +899,7 @@
     "conditions": {
       "title": "Merge conditions",
       "met": "Every condition is met.",
+      "carried": "Checked against {{branch}} at {{sha}}. What landed on {{branch}} since then does not touch this merge request's files, so the result was kept. The merge queue merges it again before anything lands.",
       "approvals": "Approvals",
       "ruleProtected": "Protected branch: {{counted}} of {{required}} approvals",
       "rule": "{{name}}: {{counted}} of {{required}} approvals",

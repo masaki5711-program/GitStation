@@ -477,9 +477,12 @@ fn registry_with(
     webhooks: bool,
 ) -> Result<Registry, ForgeError> {
     let registry = Registry::new()
-        .with(Arc::new(forge_db::review::MergeRequestRefresh::new(
-            review.mergeability_fanout_max,
-        )))?
+        // Plan 18 S4: a landing re-checks only the merge requests its paths
+        // may interact with (`review.path_filter`; false: every one).
+        .with(Arc::new(
+            forge_db::review::MergeRequestRefresh::new(review.mergeability_fanout_max)
+                .with_path_filter(review.path_filter),
+        ))?
         .with(Arc::new(forge_db::work_items::WorkItemSync))?
         // M3 X2 (`independent`): every merge request version asks for its
         // `forge/spec-drift` run (the `check.spec_drift` job).

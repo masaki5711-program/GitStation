@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7ddbd56b6ea0b39d96a0a232d2177aab23adcb709d51e352c60433d0a7d0d19a # shrinks to mr = [ChangedPath { path: "b", deleted: false, special: false }], landed = [ChangedPath { path: "b", deleted: false, special: false }]

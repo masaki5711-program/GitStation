@@ -804,6 +804,7 @@
         "checks": "Menunggu hasil pemeriksaan.",
         "checksStale": "Cabang tujuan telah bergerak. Menunggu pemeriksaan pada hasil penggabungan yang baru.",
         "checksWaitMergeResult": "Menunggu hasil penggabungan tanpa konflik; pipeline berjalan di atasnya.",
+        "checksCarried": "Cabang tujuan bergerak tanpa menyentuh berkas merge request ini, jadi tidak ada pipeline baru yang dijalankan. Masukkan ke antrean merge: antrean mengujinya pada cabang tujuan saat ini lalu menggabungkannya.",
         "merging": "Menunggu penggabungan selesai.",
         "maintainer": "Menunggu persetujuan maintainer.",
         "retry": "Buka halaman ini lagi nanti. Jika tetap begini, beri tahu administrator.",
@@ -898,6 +899,7 @@
     "conditions": {
       "title": "Syarat merge",
       "met": "Semua syarat terpenuhi.",
+      "carried": "Diperiksa terhadap {{branch}} pada {{sha}}. Perubahan yang masuk ke {{branch}} sejak itu tidak menyentuh berkas merge request ini, jadi hasilnya tetap dipakai. Antrean merge menggabungkannya sekali lagi sebelum ada yang masuk.",
       "approvals": "Persetujuan",
       "ruleProtected": "Branch terlindungi: {{counted}} dari {{required}} persetujuan",
       "rule": "{{name}}: {{counted}} dari {{required}} persetujuan",

@@ -79,8 +79,46 @@ fn unexpected(subcommand: &'static str, reason: &'static str) -> ForgeError {
         .with_context("reason", reason)
 }
 
-/// Bytes of `merge-base` output read at most (one object id).
+/// Bytes of `merge-base` output read at most (one object id; with
+/// `--all`, about a hundred — more is "several" all the same).
 const MERGE_BASE_OUTPUT_BYTES: usize = 4 * 1024;
+
+/// What `merge-base --all` says about two commits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeBases {
+    /// The best common ancestor — the one [`Git::merge_base`] answers
+    /// (`None`: no common history).
+    pub best: Option<ObjectId>,
+    /// More than one merge base (a criss-cross history): a merge of the
+    /// two works from a virtual base that is none of them.
+    pub several: bool,
+}
+
+/// The output of `merge-base --all`: one id per line, the best first.
+/// `cut`: git was stopped at the cap, so the last line may be a piece of
+/// an id and there are more bases than were read.
+fn merge_bases_of(stdout: &[u8], cut: bool) -> Result<MergeBases, ForgeError> {
+    let text = String::from_utf8_lossy(stdout);
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    // What follows the last newline: empty, or the id git was writing.
+    lines.pop();
+    let mut ids = lines.into_iter().map(str::trim).filter(|l| !l.is_empty());
+    let first = ids
+        .next()
+        .ok_or_else(|| unexpected("merge-base", "unexpected_output"))?;
+    let best = ObjectId::parse(first).map_err(|_| unexpected("merge-base", "unexpected_output"))?;
+    let mut several = cut;
+    for other in ids {
+        if ObjectId::parse(other).is_err() {
+            return Err(unexpected("merge-base", "unexpected_output"));
+        }
+        several = true;
+    }
+    Ok(MergeBases {
+        best: Some(best),
+        several,
+    })
+}
 
 /// The output of `merge-tree --write-tree --name-only -z` that exited 1
 /// (or overflowed: `cut`): the conflicted paths before the empty record.
@@ -202,6 +240,42 @@ impl Git {
         match captured.exit_code {
             Some(0) => one_id(&captured.output.stdout, "merge-base").map(Some),
             Some(1) => Ok(None),
+            Some(_) | None => Err(unexpected("merge-base", "unexpected_output")),
+        }
+    }
+
+    /// Every merge base of `a` and `b` in one call (`merge-base --all`):
+    /// the best one, as [`Self::merge_base`] answers it, and whether there
+    /// are others (plan 18 S4: a head with several merge bases has no
+    /// single diff that describes what its merge changes, so its path set
+    /// is stored as incomplete).
+    pub async fn merge_bases(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        a: &ObjectId,
+        b: &ObjectId,
+        timeout: Duration,
+    ) -> Result<MergeBases, ForgeError> {
+        let repo = storage.existing(id)?;
+        let captured = self
+            .command("merge-base")
+            .arg("--all")
+            .revision(Revision::object_id(a.as_str())?)
+            .revision(Revision::object_id(b.as_str())?)
+            .repo(&repo)
+            .timeout(timeout)
+            .output_accepting(MERGE_BASE_OUTPUT_BYTES, &[0, 1])
+            .await
+            .map_err(|e| e.with_context("repo_id", id.get()))?;
+        match captured.exit_code {
+            Some(0) => merge_bases_of(&captured.output.stdout, false),
+            Some(1) => Ok(MergeBases {
+                best: None,
+                several: false,
+            }),
+            // Stopped at the cap: more bases than the cap holds.
+            None if captured.truncated => merge_bases_of(&captured.output.stdout, true),
             Some(_) | None => Err(unexpected("merge-base", "unexpected_output")),
         }
     }

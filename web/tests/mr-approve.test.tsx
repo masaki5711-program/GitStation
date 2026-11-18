@@ -66,6 +66,31 @@ describe('the conditions panel', () => {
     await open();
     const region = await panel();
     expect(await within(region).findByText('Every condition is met.')).toBeTruthy();
+    // Computed against the target's current tip: no carried-forward label.
+    expect(within(region).queryByTestId('mr-carried')).toBeNull();
+  });
+
+  // Plan 18 S4: a result kept over landings that touch none of its files.
+  it('a carried-forward result says against which tip it was checked and that the queue merges it again', async () => {
+    const carried = { ...status([]), carried_from_target_sha: `c0ffee12${'0'.repeat(32)}` };
+    await open({ [`GET ${MR_API}/3/status`]: () => json(200, carried) });
+    const region = await panel();
+    expect(await within(region).findByText('Every condition is met.')).toBeTruthy();
+    const label = await within(region).findByTestId('mr-carried');
+    expect(label.textContent).toBe(
+      "Checked against main at c0ffee12. What landed on main since then does not touch this merge request's files, so the result was kept. The merge queue merges it again before anything lands.",
+    );
+  });
+
+  it('a carried-forward conflict keeps its reason and the label', async () => {
+    const carried = {
+      ...status([{ reason: 'conflict', detail: null }]),
+      carried_from_target_sha: `c0ffee12${'0'.repeat(32)}`,
+    };
+    await open({ [`GET ${MR_API}/3/status`]: () => json(200, carried) });
+    const region = await panel();
+    expect(await within(region).findAllByRole('listitem')).toHaveLength(1);
+    expect(within(region).getByTestId('mr-carried').textContent).toContain('main at c0ffee12');
   });
 
   it('an unknown reason name is the generic line, not an error', async () => {

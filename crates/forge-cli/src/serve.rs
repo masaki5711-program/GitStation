@@ -144,7 +144,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 smart_http.git.clone(),     // clone: Arc handles
                 smart_http.storage.clone(), // clone: the root path
             )
-            .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
+            .with_browser(smart_http.browse.clone()) // clone: shares the ref cache
+            // Plan 18 S4: a landing's record says what it changed
+            // (`review.path_filter` / `review.paths_max`; off: no paths).
+            .with_paths(cfg.review.path_filter_max()),
         );
         // M4 C8 (ADR-0030 §13): the merge queue's worker, next to the merges
         // (its landing writes the target branches under the same lock). M4

@@ -20,6 +20,7 @@ function status(
     iid: 3,
     head_sha: '2'.repeat(40),
     merge_result_sha: null,
+    carried_from_target_sha: null,
     target_branch: 'main',
     method: 'merge_commit',
     mergeable,
@@ -291,6 +292,26 @@ describe('statusHint / statusTone (U1 review: name what is waited for)', () => {
       checks: [{ ...pipeline, waits_for_merge_result: false }],
     };
     expect(statusHint(ready)).toBe('mr.status.hint.checks');
+  });
+
+  it('a carried result names the merge queue, not a wait that never ends (plan 18 S4)', () => {
+    const carried = (reason: string, detail: string): MergeStatus => ({
+      ...status([{ reason, detail }]),
+      carried_from_target_sha: '3'.repeat(40),
+    });
+    // No merge result exists for the target's tip and none is being made.
+    expect(statusHint(carried('required_check_stale', 'name=ci/pipeline'))).toBe(
+      'mr.status.hint.checksCarried',
+    );
+    expect(statusHint(carried('required_check_missing', 'name=ci/pipeline'))).toBe(
+      'mr.status.hint.checksCarried',
+    );
+    // A check reported on the head is waited for as before ...
+    expect(statusHint(carried('required_check_missing', 'name=lint'))).toBe('mr.status.hint.checks');
+    // ... and so is every result computed for the target's tip.
+    expect(statusHint(status([{ reason: 'required_check_stale', detail: 'name=ci/pipeline' }]))).toBe(
+      'mr.status.hint.checksStale',
+    );
   });
 
   it('a mergeable status has no hint', () => {

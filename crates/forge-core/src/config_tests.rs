@@ -1526,6 +1526,60 @@ fn review_worker_job_concurrency_is_bounded_by_half_the_write_pool() {
     }
 }
 
+/// `review.path_filter` and `review.paths_max` (plan 18 S4, ADR-0037 (c)):
+/// the filter is on by default and `false` is its kill switch; the cap is
+/// 5000 by default, 1..=20000 (FG-SYS-0002 naming the key).
+#[test]
+fn review_path_filter_has_a_kill_switch_and_its_cap_a_range() {
+    const FILTER: &str = "FORGE_REVIEW_PATH_FILTER";
+    const MAX: &str = "FORGE_REVIEW_PATHS_MAX";
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert!(cfg.review.path_filter);
+    assert_eq!(cfg.review.paths_max, 5000);
+    assert_eq!(cfg.review.path_filter_max(), Some(5000));
+    let off = load(None, &env(&[(FILTER, "false")])).expect("off");
+    assert!(!off.review.path_filter);
+    assert_eq!(
+        off.review.path_filter_max(),
+        None,
+        "off: nothing is computed"
+    );
+    let on = load(None, &env(&[(FILTER, "true"), (MAX, "20000")])).expect("on");
+    assert_eq!(on.review.path_filter_max(), Some(20_000));
+    let from_file = file(
+        "[review]
+path_filter = false
+paths_max = 7
+",
+    );
+    let cfg = load(Some(from_file.path()), &env(&[])).expect("file");
+    assert!(!cfg.review.path_filter);
+    assert_eq!(cfg.review.paths_max, 7);
+    for value in ["1", "yes", "TRUE"] {
+        let err = load(None, &env(&[(FILTER, value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("review.path_filter") && text.contains("invalid"),
+            "{value}: {text}"
+        );
+    }
+    for (value, reason) in [
+        ("0", "below_min"),
+        ("20001", "above_max"),
+        ("-1", "invalid"),
+        ("all", "invalid"),
+    ] {
+        let err = load(None, &env(&[(MAX, value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("review.paths_max") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}
+
 /// `merge_queue.train_lint_budget_ms` (plan 18 S1, ADR-0037 (b)): default
 /// 10000, `0` turns the train lint off, otherwise 100..=60000 (FG-SYS-0002
 /// naming the key).

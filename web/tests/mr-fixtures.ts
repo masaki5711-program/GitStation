@@ -42,6 +42,7 @@ export function status(
     iid: 3,
     head_sha: 'b'.repeat(40),
     merge_result_sha: null,
+    carried_from_target_sha: null,
     target_branch: 'main',
     method: 'merge_commit',
     mergeable,
