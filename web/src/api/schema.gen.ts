@@ -5853,8 +5853,8 @@ export interface components {
              *     Differs from `checked_target_sha` when the result was carried
              *     forward: the landings in between touched no path this merge
              *     request's change can interact with, so the result was kept and
-             *     re-pointed instead of computed again (`null`: no finished check, or
-             *     one from before this field).
+             *     re-pointed instead of computed again (`null`: no finished check, a
+             *     check that is waited for, or a result written without this field).
              */
             computed_target_sha: string | null;
             /**
@@ -7372,6 +7372,10 @@ export interface components {
              *     result (`merge_result_sha` null: a conflict, no target, unrelated
              *     histories, or the mergeability check failed or is pending) — its
              *     pipeline waits for one and runs only once the merge is clean.
+             *     Plan 18 S4: `false` when the result was carried forward
+             *     (`carried_from_target_sha`): that merge is clean and nothing is
+             *     waited for — the merge queue tests it, and a direct merge request
+             *     has the merge result of the target's tip computed.
              */
             waits_for_merge_result: boolean;
         };

@@ -86,9 +86,14 @@ impl MergeStatus {
     /// (`forge_core::merge_results::reported_on_merge_results`, i.e.
     /// `ci/pipeline`) while there is no current merge result — a conflict,
     /// no target, unrelated histories, a failed or pending check — so no
-    /// pipeline runs for it until the merge is clean.
+    /// pipeline runs for it until the merge is clean. Never for a result
+    /// carried forward (plan 18 S4, [`MergeStatus::carried_from_target_sha`]):
+    /// that merge is clean, it only has no merge result at the live tip —
+    /// the merge queue tests it, and a direct merge asks for the computed
+    /// check itself.
     pub fn waits_for_merge_result(&self, check: &RequiredCheck) -> bool {
         self.merge_result_sha.is_none()
+            && self.carried_from_target_sha.is_none()
             && forge_core::merge_results::reported_on_merge_results(&check.name)
     }
 }

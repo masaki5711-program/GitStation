@@ -25,6 +25,7 @@ use forge_git::commit::{CommitIdentity, NewCommit};
 use forge_git::mergeability::{MergeTree, MergeTreeLimits};
 use forge_git::{CommitQuery, RefChange};
 
+use super::carried::{self, Recompute};
 use super::evaluate::{blocked, evaluate_merge, MergeClearance, MergeFacts, Mergeable};
 use super::request::head_changed;
 use super::{job_principal, Merger};
@@ -193,7 +194,16 @@ pub(super) fn decide(
         discussions: conditions.discussions,
         work_item_link: conditions.work_item_link,
     };
-    let clearance = evaluate_merge(&facts).map_err(|reasons| blocked(&reasons))?;
+    // Plan 18 S4: marked when a carried row is why the live tip has no
+    // merge result for a required check (`carried`).
+    let clearance = evaluate_merge(&facts).map_err(|reasons| {
+        carried::blocked_at(
+            &reasons,
+            gate.mergeability.as_ref(),
+            &attempt.head_sha,
+            tips.target.as_ref(),
+        )
+    })?;
     let scopes = match &gate.credential.credential {
         forge_db::review::merges::CredentialState::Token { scopes, .. } => {
             scopes.iter().map(|s| s.as_str().to_owned()).collect()
@@ -393,6 +403,7 @@ impl Merger {
                 match gate {
                     Ok(decided) => self.apply(lock, &attempt, subject, &decided).await,
                     Err(refusal) => {
+                        self.recompute_for(&attempt, &refusal).await;
                         self.refused(&attempt, &[MergeState::Prepared], refusal)
                             .await
                     }
@@ -488,7 +499,10 @@ impl Merger {
         match first {
             Ok(GateOutcome::Decided(())) => {}
             Ok(GateOutcome::Moved(state)) => return Ok(MergeReport::of("moved", state)),
-            Err(refusal) => return self.refused_logged(attempt, refusal),
+            Err(refusal) => {
+                self.recompute_for(attempt, &refusal).await;
+                return self.refused_logged(attempt, refusal);
+            }
         }
         let Some(target_tip) = tips.target.clone() else {
             let refusal = blocked(&[super::BlockReason::MergeabilityUnknown])
@@ -606,7 +620,10 @@ impl Merger {
         let decided = match second {
             Ok(GateOutcome::Decided(d)) => d,
             Ok(GateOutcome::Moved(state)) => return Ok(MergeReport::of("moved", state)),
-            Err(refusal) => return self.refused_logged(attempt, refusal),
+            Err(refusal) => {
+                self.recompute_for(attempt, &refusal).await;
+                return self.refused_logged(attempt, refusal);
+            }
         };
         let prepared = StoredMerge {
             state: MergeState::Prepared,
@@ -770,9 +787,10 @@ impl Merger {
         {
             Ok(d) => d,
             Err(refusal) => {
+                self.recompute_for(attempt, &refusal).await;
                 return self
                     .refused(attempt, &[MergeState::Executing], refusal)
-                    .await
+                    .await;
             }
         };
         if let Err(e) = lock.alive().await {
@@ -944,23 +962,24 @@ impl Merger {
         mr: forge_core::ids::MergeRequestId,
         request_id: &forge_core::RequestId,
     ) {
-        // clone: the requested job keeps the merge's request id
-        let asked = review::recheck_if_carried(&self.db, mr, request_id.clone()).await;
-        match asked {
-            Ok(Some(check_seq)) => tracing::info!(
-                target: "forge_review",
-                event = "forge.review.mergeability_carried_disproved",
-                request_id = %request_id,
-                merge_request_id = mr.get(),
-                check_seq,
-                "a carried-forward mergeability result conflicted in the merge; a computed check was requested"
-            ),
-            Ok(None) => {}
-            Err(e) => forge_core::telemetry::log_failure(
-                &e.with_context("operation", "mergeability_recheck_carried")
-                    .with_context("merge_request_id", mr.get()),
-                request_id,
-            ),
+        carried::recompute(&self.db, mr, request_id, Recompute::Conflict).await;
+    }
+
+    /// Plan 18 S4 (review): a gate refused the attempt for a required
+    /// check that reports on the live tip's merge result, and the stored
+    /// mergeability was carried forward — it has no merge result there
+    /// (`carried`). The refusal stands; the computed check that writes the
+    /// merge result (and so starts its pipeline) is requested at once
+    /// instead of at the worker's next sweep. Any other refusal: nothing.
+    async fn recompute_for(&self, attempt: &StoredMerge, refusal: &ForgeError) {
+        if carried::wants_merge_result(refusal) {
+            carried::recompute(
+                &self.db,
+                attempt.merge_request,
+                &attempt.request_id,
+                Recompute::MergeResult,
+            )
+            .await;
         }
     }
 
@@ -979,15 +998,16 @@ impl Merger {
         request_id: &forge_core::RequestId,
     ) -> Option<LandedPaths> {
         let max = self.paths_max?;
-        let listing = self.timeouts.read.min(lock.left());
-        let listed = if listing.is_zero() {
-            Err(ForgeError::new(ErrorCode::DbQueryFailed)
-                .with_context("reason", "merge_lock_lost")
-                .with_context("detail", "hold_exceeded"))
-        } else {
-            self.git
-                .changed_path_entries(&self.storage, repo, old, new, max, listing)
-                .await
+        // A lost hold is what every git call under the lock reports
+        // (`bounded`: FG-DB-0002 `reason=merge_lock_lost`, the registered
+        // code of a lost or expired merge lock).
+        let listed = match self.bounded(self.timeouts.read, lock) {
+            Err(lost) => Err(lost),
+            Ok(listing) => {
+                self.git
+                    .changed_path_entries(&self.storage, repo, old, new, max, listing)
+                    .await
+            }
         };
         let paths = match listed {
             Ok(Ok(entries)) => PathSet::build(entries, max),

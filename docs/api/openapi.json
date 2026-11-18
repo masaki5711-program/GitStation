@@ -7301,7 +7301,7 @@
             ]
           },
           "computed_target_sha": {
-            "description": "Plan 18 S4: the target tip the result was really computed against.\nDiffers from `checked_target_sha` when the result was carried\nforward: the landings in between touched no path this merge\nrequest's change can interact with, so the result was kept and\nre-pointed instead of computed again (`null`: no finished check, or\none from before this field).",
+            "description": "Plan 18 S4: the target tip the result was really computed against.\nDiffers from `checked_target_sha` when the result was carried\nforward: the landings in between touched no path this merge\nrequest's change can interact with, so the result was kept and\nre-pointed instead of computed again (`null`: no finished check, a\ncheck that is waited for, or a result written without this field).",
             "type": [
               "string",
               "null"
@@ -11247,7 +11247,7 @@
             ]
           },
           "waits_for_merge_result": {
-            "description": "M4 C7 review (added within `schema_version` 1): the check is the\nmerge request pipeline's (`ci/pipeline`) and there is no clean merge\nresult (`merge_result_sha` null: a conflict, no target, unrelated\nhistories, or the mergeability check failed or is pending) — its\npipeline waits for one and runs only once the merge is clean.",
+            "description": "M4 C7 review (added within `schema_version` 1): the check is the\nmerge request pipeline's (`ci/pipeline`) and there is no clean merge\nresult (`merge_result_sha` null: a conflict, no target, unrelated\nhistories, or the mergeability check failed or is pending) — its\npipeline waits for one and runs only once the merge is clean.\nPlan 18 S4: `false` when the result was carried forward\n(`carried_from_target_sha`): that merge is clean and nothing is\nwaited for — the merge queue tests it, and a direct merge request\nhas the merge result of the target's tip computed.",
             "type": "boolean"
           }
         },

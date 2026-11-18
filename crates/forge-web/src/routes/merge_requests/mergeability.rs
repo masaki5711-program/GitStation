@@ -52,8 +52,8 @@ pub struct MergeabilityBody {
     /// Differs from `checked_target_sha` when the result was carried
     /// forward: the landings in between touched no path this merge
     /// request's change can interact with, so the result was kept and
-    /// re-pointed instead of computed again (`null`: no finished check, or
-    /// one from before this field).
+    /// re-pointed instead of computed again (`null`: no finished check, a
+    /// check that is waited for, or a result written without this field).
     #[schema(required = true)]
     pub computed_target_sha: Option<String>,
     /// UTC, RFC 3339.

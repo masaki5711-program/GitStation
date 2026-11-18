@@ -8,7 +8,8 @@ use forge_db::review::merges::{self, CredentialRef, NewMerge, StoredMerge};
 use forge_db::review::{self, StoredMergeability};
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::evaluate::{blocked, evaluate_merge, stored_mergeable, BlockReason, MergeFacts};
+use super::carried::{self, Recompute};
+use super::evaluate::{evaluate_merge, stored_mergeable, BlockReason, MergeFacts};
 use crate::{
     account, caller, change_context, loaded, locked, require, shape_mismatch, Review, ReviewRequest,
 };
@@ -94,9 +95,11 @@ impl Review {
     /// made again with the target's protection as stored now, a live
     /// attempt is `FG-REVIEW-0011`, and `evaluate_merge()` must find
     /// nothing (`FG-REVIEW-0007` with every reason; `mergeability_unknown`
-    /// requests a new check so a retry can pass). Then the `queued` attempt
-    /// and its job are written. `credential` is the request's own session
-    /// or token (its id only).
+    /// requests a new check so a retry can pass, and so does a required
+    /// check waiting for the live tip's merge result when the stored
+    /// result was carried forward — plan 18 S4, `carried`). Then the
+    /// `queued` attempt and its job are written. `credential` is the
+    /// request's own session or token (its id only).
     pub async fn request_merge(
         &self,
         request: &ReviewRequest,
@@ -241,7 +244,14 @@ impl Review {
                     {
                         wanted_check.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
-                    blocked(&reasons)
+                    // Plan 18 S4: marked when a carried row is why the
+                    // live tip has no merge result for a required check.
+                    carried::blocked_at(
+                        &reasons,
+                        gate.mergeability.as_ref(),
+                        sha,
+                        target_tip.as_ref(),
+                    )
                 })
             },
             // Review round 1: the default message is frozen at the request
@@ -268,6 +278,23 @@ impl Review {
                     error = %e,
                     "could not request a mergeability check for a blocked merge"
                 );
+            }
+        }
+        if let Err(refusal) = &decided {
+            if carried::wants_merge_result(refusal)
+                && current.state == forge_core::MergeRequestState::Open
+            {
+                // Plan 18 S4: the refusal stands (the required check has no
+                // run on the live tip's merge result), and the computed
+                // check that writes that merge result is asked for now —
+                // not at the worker's next sweep.
+                carried::recompute(
+                    &self.db,
+                    current.id,
+                    &request.request_id,
+                    Recompute::MergeResult,
+                )
+                .await;
             }
         }
         let (stored, ()) =
