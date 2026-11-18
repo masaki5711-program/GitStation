@@ -49,10 +49,15 @@
 自分で確かめる。だから取りこぼしても仕事は失われず、最長で保険の周期 1 回ぶん遅れるだけ。FG-DB-0024 はその遅れが起きた印。
 
 1. ログの `context` を読む: `channel`（`forge_jobs`）、`kind`、`job_id`、`worker_id`（ランナーのロングポーリングなら `kind=ci.job` と `runner_id`）、
-   `oldest_ready_ms`（見つけた仕事が実行可能になってからの時間）、`safety_poll_ms`。1 分に 1 回までしか出ないので、1 件が複数を表すことがある。
+   `oldest_ready_ms`（見つけた仕事が実行可能になってからの時間。ランナーなら、そのランナーが取れるようになってからの時間）、
+   `safety_poll_ms`、`suppressed`。1 分に 1 回までしか出ない。`suppressed` は、前の 1 件の後に出さなかった取りこぼしの数。
 2. 同じ時間帯に LISTEN の接続の失敗があるか: `error_code=FG-DB-0001` / `FG-DB-0002` で `operation=wake_listen`（`query=wake.listen*`）。
    接続が切れている間、実行役は 1 秒ごとの確認に戻る（plan 18 より前と同じ速さ）。つながり直すと `forge.wake.listening`
-   （`backend_pid`、`recovered=true`）が出て、待っている側はすぐに 1 回確かめる。失敗が続くなら `db-unavailable.md`。
+   （`backend_pid`、`recovered=true`）が出て、待っている側はすぐに 1 回確かめる。つながっては切れる接続は 1 つの続く失敗として
+   扱い、ログは 1 分に 1 回（5 秒つながり続けて初めて「直った」と数える）。失敗が続くなら `db-unavailable.md`。
+   `error_code=FG-SYS-0001` で `task=wake_hub`（`reason=task_panicked` / `task_ended` / `task_cancelled`）は、LISTEN のタスク自体が
+   終わった印。5 秒後に自動で起動し直すが、繰り返すなら開発者に渡す（`internal-error.md`）。
+   wake hub の接続がトランザクション単位のプーラーを通っていないかも確かめる（通すと通知は届かない。`db-unavailable.md`）。
 3. `forge doctor` の `db.notify_queue` を見る。`FG-DB-0023` なら `db-unavailable.md` の「notify queue」。
 4. どれでもなく、同じ `kind` で繰り返すなら、通知を送らずにその種類を実行可能にしている経路がある（手で書き換えた行、plan 18 S2 より
    前の版が並んで動いている、通知のない新しい書き込み）。1 回きり（手作業の後、配備の入れ替えの間）なら何もしなくてよい。

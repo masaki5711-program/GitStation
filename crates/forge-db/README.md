@@ -765,7 +765,8 @@ one.
 &Channel::ALL)` is the ONE LISTEN connection of a process (`forge serve`,
 `forge worker`), on a one-connection pool of its own from
 `Db::listen_options` (no statement / idle timeout, server-side TCP
-keepalive, a bounded `SELECT 1` every 5 s) — outside the write and read
+keepalive, a bounded `pg_notification_queue_usage()` read every 5 s: the
+link check and the `FG-DB-0023` sample in one) — outside the write and read
 pools, counted by `bootstrap::ConnectionBudget` (`+ 4`: a LISTEN connection
 per process, migration, maintenance). Channels: `Jobs` (`forge_jobs`,
 payload = job kind, `ci.job` for a CI job), `MergeQueue`
@@ -777,16 +778,38 @@ or `jobs.safety_poll_ms`; one second while the listener is down) and
 `ci_runners::JobWait` (the runner long poll) wait on it. A wake is a hint:
 every waiter reads the database again. Every statement of `jobs::queue`
 that makes a job claimable or schedules it (`enqueue*_on`, `release`, the
-backoff of `fail` / `reap`) and every change that makes a CI job pending
-notifies in its own transaction. Bursts coalesce (one wake per waiter with
+backoff of `fail` / `reap`) and every change that makes a CI job claimable
+(a planned pipeline, a retry, a played manual job, a cancel, a lease the
+reaper gives back, a runner re-tagged or resumed; the end of a job only
+when a dependant became pending or a running `gpu-eval` job freed its GPU
+place) notifies in its own transaction. Bursts coalesce (one wake per waiter with
 the distinct payloads; one idle job run per notification, each successful
-claim pokes the next). A (re)connect wakes every waiter once; a lost link
-is logged (`FG-DB-0001` / `FG-DB-0002`, `operation=wake_listen`) and
-retried with a 250 ms – 5 s backoff. `FG-DB-0024 WakeupMissed` (warn, at
-most once a minute per channel): a safety-net look found work no wake
-announced. `wake::notify_queue_usage` / `check_notify_queue` feed `forge
-doctor` (`db.notify_queue`, `FG-DB-0023 NotifyQueueBacklog` at half
-full). `states` / `check_lag` / `dead_letters` feed `forge doctor`
+claim pokes the next). A scheduled job that became due between a claim and
+the due read (`jobs::idle`, a 1 s look-back) ends the wait once per job.
+A (re)connect wakes every waiter once; a lost link
+is logged (`FG-DB-0001` / `FG-DB-0002`, `operation=wake_listen`: once, on a
+new reason, and every 60 s while it lasts — a link that connects and drops
+is one lasting failure until it stayed up 5 s) and
+retried with a 250 ms – 5 s backoff. The listening task runs under a
+supervisor: a task that ends unasked is `FG-SYS-0001` `task=wake_hub`
+(`reason=task_panicked` / `task_ended` / `task_cancelled`), the waiters
+poll, and it is started again after 5 s. `FG-DB-0024 WakeupMissed` (warn,
+at most once a minute per channel, `suppressed` = the misses not logged
+since the last event): a safety-net look found work that had been ready
+(a CI job: claimable by that runner) for the whole safety period and no
+wake announced. `FG-DB-0023 NotifyQueueBacklog` (alert, at half full): the
+hub samples the queue on its LISTEN connection (logged once, then every
+60 s while it lasts) and `wake::notify_queue_usage` /
+`check_notify_queue` feed `forge doctor` (`db.notify_queue`) on the write
+pool — the primary; a standby always answers 0. **Operating notes**:
+LISTEN does not work through a transaction-mode pooler (PgBouncer
+`pool_mode = transaction` and the like) — the hub's connection must reach
+PostgreSQL directly, or nothing is delivered and `FG-DB-0024` repeats.
+NOTIFY serializes commits: a transaction that notifies takes one
+cluster-wide lock from its COMMIT until it ends, so if enqueue latency
+rises with the write rate, look for commits waiting on that lock
+(`pg_locks`: `locktype = 'object'`, `classid = 1262`, `objid = 0`, not
+granted) and for a filling queue (`FG-DB-0023`). `states` / `check_lag` / `dead_letters` feed `forge doctor`
 (`subscribers.lag`, `subscribers.dead_letters`).
 
 **Service accounts (M3 S0, migration `20261113100000`, ADR-0019 Addendum S0)**:
