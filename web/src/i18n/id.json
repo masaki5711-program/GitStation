@@ -898,6 +898,7 @@
     "conditions": {
       "title": "Syarat merge",
       "met": "Semua syarat terpenuhi.",
+      "carried": "Diperiksa terhadap {{branch}} pada {{sha}}. Perubahan yang masuk ke {{branch}} sejak itu tidak menyentuh berkas merge request ini, jadi hasilnya tetap dipakai. Antrean merge menggabungkannya sekali lagi sebelum ada yang masuk.",
       "approvals": "Persetujuan",
       "ruleProtected": "Branch terlindungi: {{counted}} dari {{required}} persetujuan",
       "rule": "{{name}}: {{counted}} dari {{required}} persetujuan",

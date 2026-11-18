@@ -898,6 +898,7 @@
     "conditions": {
       "title": "マージの条件",
       "met": "すべての条件を満たしています。",
+      "carried": "{{branch}} の {{sha}} の時点で確かめた結果です。その後 {{branch}} に入った変更はこのマージリクエストのファイルに触れていないので、結果をそのまま使っています。何かが入る前に、マージキューがもう一度マージして確かめます。",
       "approvals": "承認",
       "ruleProtected": "保護ブランチ: {{required}} 件のうち {{counted}} 件",
       "rule": "{{name}}: {{required}} 件のうち {{counted}} 件",

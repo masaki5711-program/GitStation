@@ -898,6 +898,7 @@
     "conditions": {
       "title": "Merge conditions",
       "met": "Every condition is met.",
+      "carried": "Checked against {{branch}} at {{sha}}. What landed on {{branch}} since then does not touch this merge request's files, so the result was kept. The merge queue merges it again before anything lands.",
       "approvals": "Approvals",
       "ruleProtected": "Protected branch: {{counted}} of {{required}} approvals",
       "rule": "{{name}}: {{counted}} of {{required}} approvals",
