@@ -134,6 +134,20 @@ pub trait BranchProbe: Send + Sync {
         branch: &'a RefName,
         caller: &'a str,
     ) -> LookupFuture<'a, ObjectId>;
+
+    /// Whether the branch exists, for the commands that need no head
+    /// (create, retarget): the same outcomes as [`Self::branch_head`]
+    /// without the commit. Nothing that depends on a commit id is decided
+    /// from it. The default asks for the head.
+    fn branch_exists<'a>(
+        &'a self,
+        repo: RepoId,
+        branch: &'a RefName,
+        caller: &'a str,
+    ) -> LookupFuture<'a, ()> {
+        let head = self.branch_head(repo, branch, caller);
+        Box::pin(async move { head.await.map(drop) })
+    }
 }
 
 /// The browse API's ref resolution (`resolve_ref` on the full
@@ -152,6 +166,25 @@ impl BranchProbe for forge_git::browse::Browser {
                     .with_context("reason", "resolved_commit_invalid")
                     .with_context("repo_id", repo.get())
             })
+        })
+    }
+
+    /// Plan 18 S8: a branch's existence comes from the repository's branch
+    /// snapshot (`Browser::require_branch`: one `for-each-ref` shared by
+    /// every concurrent create, a miss confirmed with git). Any other name
+    /// keeps the resolution above.
+    fn branch_exists<'a>(
+        &'a self,
+        repo: RepoId,
+        branch: &'a RefName,
+        caller: &'a str,
+    ) -> LookupFuture<'a, ()> {
+        Box::pin(async move {
+            if branch.branch().is_some() {
+                self.require_branch(repo, branch).await
+            } else {
+                self.branch_head(repo, branch, caller).await.map(drop)
+            }
         })
     }
 }
@@ -431,8 +464,29 @@ impl Review {
         self
     }
 
+    /// Each of `names` exists in `repo` (`which` names it in the error).
+    /// Existence only (create, retarget; plan 18 S8): no head is read, so
+    /// nothing here may feed a decision that depends on a commit id.
+    async fn require_branches_exist(
+        &self,
+        project: ProjectId,
+        repo: ProjectRepository,
+        user: UserId,
+        names: &[(&'static str, &RefName)],
+    ) -> Result<(), ForgeError> {
+        let id = ready(project, repo)?;
+        let key = format!("user:{}", user.get());
+        for (which, name) in names {
+            self.branches
+                .branch_exists(id, name, &key)
+                .await
+                .map_err(|e| e.with_context("branch", *which))?;
+        }
+        Ok(())
+    }
+
     /// Each of `names` exists in `repo` (`which` names it in the error);
-    /// their heads, in order.
+    /// their heads, in order, read from git through the browse API.
     async fn require_branches(
         &self,
         project: ProjectId,
@@ -566,7 +620,12 @@ impl Review {
         check_description(&fields.description)?;
         let user = caller(proof)?;
         let wanted = proof.ctx().merge_request();
-        self.require_branches(
+        // Existence only: the head is not read here and not recorded by the
+        // create. The version job (`versions::refresh`, enqueued in the
+        // transaction below) reads the live branch tip and writes the
+        // first version; a source deleted since the snapshot ends there as
+        // `source_missing`.
+        self.require_branches_exist(
             project,
             repo,
             user,
@@ -584,6 +643,9 @@ impl Review {
             target_branch: wanted.target_branch.clone(), // clone: forge-db owns its request
             draft: wanted.draft,
         };
+        // Seam (plan 18 S2): the version job is enqueued inside this
+        // transaction and picked up by the worker's poll; the wake-up
+        // notification is added there, with the job, not here.
         let (stored, ()) = review::open_mr_decided(&self.db, &ctx, project, user, &new, |facts| {
             let fresh = MergeRequestCtx::new(loaded(&facts.project), wanted.clone()); // clone: the fresh context owns it
             proof.reconfirm(account(facts.account), fresh).map(drop)
@@ -619,7 +681,7 @@ impl Review {
         let user = caller(proof)?;
         let edit = proof.ctx().edit();
         if let Some(target) = &edit.target_branch {
-            self.require_branches(project, repo, user, &[("target_branch", target)])
+            self.require_branches_exist(project, repo, user, &[("target_branch", target)])
                 .await?;
         }
         let ctx = change_context(request, proof.principal(), user)?;

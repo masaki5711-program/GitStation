@@ -214,6 +214,23 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
     `invalidate(repo)` (every push; every other ref writer must call it too) drops it and that
     repository's reachability answers (the generation is per repository), and a list loaded across an
     invalidation is not stored.
+  - `require_branch(repo, &RefName) -> Result<(), ForgeError>` (plan 18 S8, ADR-0037 (g),
+    `browse/branches.rs` over `refs_cache::RefSnapshotCache`): "does this branch exist", what a merge
+    request create or retarget asks. Per repository one shared `for-each-ref refs/heads/` (single
+    flight: one git and one `max_per_repo` slot for any number of concurrent askers; a cancelled
+    leader wakes its waiters and one of them reads). "Exists" is answered from the snapshot (no git,
+    no slot) while its read began less than `refs_ttl` (5 s) ago; "missing" / "not a commit"
+    (`FG-REPO-0023`) only from a read that began after the question, so a branch pushed after the
+    snapshot is found with no invalidation. `invalidate(repo)` drops the snapshot and a read in
+    progress is neither kept nor joined by later callers. A ref write this process is not told about
+    (the worker's merge, until plan 18 S2's `forge_refs` listener calls `invalidate`) can leave only a
+    deleted branch answered "exists", for at most `refs_ttl`. A failed read is never "missing" /
+    "exists" and is not kept: the caller that ran it gets its error. `FG-GIT-0002` / `FG-GIT-0004`
+    (that caller's own time, its own place in the queue) stay with it — the callers that waited read
+    again, one at a time, each on its own deadline (its own `FG-GIT-0002 operation=browse` once that
+    passes) — and any other failure goes to everyone waiting on the read. More branches than
+    `max_refs`: a name the snapshot lacks is asked by exact name. The snapshot holds names only —
+    never a commit id; whatever depends on one reads the ref (`resolve_ref`, `find_ref`).
   - `resolve_ref(repo, "<oid | refs/heads/… | refs/tags/… | short>")` and
     `resolve_spec(repo, &segments) -> ResolvedSpec { rev, path }` in ADR-0015's order (40 / 64-hex
     commit id of any case first, then the longest branch, then the longest tag; candidates are

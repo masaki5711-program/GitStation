@@ -45,6 +45,14 @@
 //!   [`BrowseLimits::refs_ttl`] (5 s) and dropped by
 //!   [`Browser::invalidate`] (every push). A list loaded while an
 //!   invalidation happened is not stored.
+//! - **Branch snapshot** (plan 18 S8, `branches.rs`,
+//!   [`crate::refs_cache`]): "does this branch exist" — what a merge
+//!   request create asks — is answered per repository from one shared
+//!   `for-each-ref refs/heads/` (one browse slot for any number of
+//!   concurrent askers), kept for `refs_ttl` and dropped by
+//!   [`Browser::invalidate`]. "Exists" comes from the snapshot; "missing"
+//!   only from a read that began after the question. Names only: no
+//!   commit id is ever answered from it.
 //! - **Object reads** (`objects.rs`): trees, blobs and commit headers are
 //!   read through the repository's long-lived `cat-file --batch-command`
 //!   process ([`crate::batch`], no git start per read) and what is
@@ -63,9 +71,11 @@ use tokio::time::Instant;
 use crate::batch::{BatchConfig, CatFilePool};
 use crate::command::Git;
 use crate::gate::{GatePermit, KeyedGate};
+use crate::refs_cache::RefSnapshotCache;
 use crate::storage::StorageRoot;
 
 mod blame;
+mod branches;
 mod content;
 mod diff;
 mod history;
@@ -235,6 +245,8 @@ pub struct Browser {
     limits: BrowseLimits,
     slots: KeyedGate<RepoId>,
     cache: Arc<RefCache>,
+    /// Which branches exist (`branches.rs`).
+    branches: RefSnapshotCache,
     reach: Arc<reach::ReachCache>,
     /// `None` when `batch_per_repo` is 0.
     batch: Option<CatFilePool>,
@@ -281,11 +293,16 @@ impl Deadline {
     fn left(&self) -> Result<Duration, ForgeError> {
         let rest = self.at.saturating_duration_since(Instant::now());
         if rest.is_zero() {
-            return Err(ForgeError::new(ErrorCode::GitTimeout)
-                .with_context("operation", "browse")
-                .with_context("timeout_ms", self.total.as_millis()));
+            return Err(self.expired());
         }
         Ok(rest)
+    }
+
+    /// `FG-GIT-0002 operation=browse`: the operation ran out of time.
+    fn expired(&self) -> ForgeError {
+        ForgeError::new(ErrorCode::GitTimeout)
+            .with_context("operation", "browse")
+            .with_context("timeout_ms", self.total.as_millis())
     }
 }
 
@@ -362,6 +379,7 @@ impl Browser {
             limits,
             slots: KeyedGate::new(limits.max_per_repo, limits.max_repo_waiters),
             cache: Arc::new(RefCache::default()),
+            branches: RefSnapshotCache::new(limits.refs_ttl, limits.max_cached_repos),
             reach: Arc::new(reach::ReachCache::default()),
         }
     }
@@ -370,8 +388,13 @@ impl Browser {
         &self.limits
     }
 
-    /// Drop `repo`'s cached ref list and reachability answers (a push
-    /// changed its refs; the epoch makes every older answer stale).
+    /// Drop `repo`'s cached ref list, branch snapshot and reachability
+    /// answers (a push changed its refs; the epoch makes every older
+    /// answer stale).
+    ///
+    /// Seam (plan 18 S2): this is what the `forge_refs` listener calls
+    /// for a ref write of another process (the worker's merge). Until
+    /// then such a write is seen after at most `refs_ttl`.
     pub fn invalidate(&self, repo: RepoId) {
         {
             let mut epochs = self
@@ -390,6 +413,7 @@ impl Browser {
                 .unwrap_or_else(PoisonError::into_inner);
             entries.remove(&repo);
         }
+        self.branches.invalidate(repo);
         self.reach.forget(repo);
     }
 
@@ -452,6 +476,9 @@ mod scan_tests;
 
 #[cfg(test)]
 mod slot_tests;
+
+#[cfg(test)]
+mod branch_tests;
 
 #[cfg(test)]
 mod bench_tests;
