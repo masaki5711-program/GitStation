@@ -242,6 +242,9 @@ pub const KEYS: &[Key] = &[
         "review.worker_job_concurrency",
         "FORGE_REVIEW_WORKER_JOB_CONCURRENCY",
     ),
+    // Plan 18 S4 (ADR-0037 (c)): the path-aware mergeability and its cap.
+    boolean("review.path_filter", "FORGE_REVIEW_PATH_FILTER"),
+    number("review.paths_max", "FORGE_REVIEW_PATHS_MAX"),
     // Plan 18 S1 (ADR-0037 (b)): the train lint's budget (0: off).
     number(
         "merge_queue.train_lint_budget_ms",
