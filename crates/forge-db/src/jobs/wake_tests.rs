@@ -1,8 +1,9 @@
 //! Waking the job runners (plan 18 S2): an enqueue is claimed long before
 //! the safety-net period, a rolled-back enqueue wakes no one, a scheduled
 //! job starts at its due time, a runner whose listener is down polls every
-//! second, and a job the safety net found although the listener was up is
-//! FG-DB-0024 — at most once a minute.
+//! second, a job that became due between a claim and the due read is
+//! looked for once, and a job the safety net found although the listener
+//! was up is FG-DB-0024 — at most once a minute.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -270,6 +271,93 @@ async fn a_scheduled_job_starts_at_its_due_time() {
     t.drop_now().await;
 }
 
+/// Review fix 3: a job whose due time passes after the claim that found
+/// nothing and before the wait reads the next due time is announced by no
+/// one and is no longer "due in the future" — the wait ends at once and
+/// the next claim takes it, instead of sleeping the whole safety period.
+/// (The job here is due from the moment it is written, which is after
+/// the claim and before the read: no timing decides the outcome.)
+#[tokio::test]
+async fn a_job_due_between_the_claim_and_the_due_read_is_claimed_at_once() {
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let mut t = FreshDb::migrated().await;
+    let hub = hub_on(&mut t, SAFETY).await;
+    let ran = Arc::new(Notify::new());
+    let r = runner(&t, "test.a", telling(&ran));
+
+    assert!(r.run_once().await.expect("run").is_none());
+    silent_job(&t, "test.a", 0).await;
+    let started = Instant::now();
+    r.wait_for_work().await.expect("wait");
+    let waited = started.elapsed();
+    assert!(
+        waited < WELL_BEFORE,
+        "waited {waited:?} for a job that is due (safety period {SAFETY:?})"
+    );
+    assert!(r.run_once().await.expect("run").is_some());
+    assert_eq!(
+        logs.failures(),
+        Vec::<Value>::new(),
+        "found by the look-back, not by the safety net"
+    );
+    hub.stop(SOON).await.expect("stop");
+    t.drop_now().await;
+}
+
+/// Review fix 3, the bound: the due read offers a job that became due
+/// within the look-back once — the mark it returns excludes the job from
+/// the next read, so a due job that cannot be claimed is one more claim,
+/// not a spin — and never a job that has been due for longer.
+#[tokio::test]
+async fn the_due_read_offers_a_job_that_just_became_due_once() {
+    use super::idle::{next_due, Due, LOOK_BACK};
+
+    let t = FreshDb::migrated().await;
+    let kinds = [kind("test.a")];
+    assert_eq!(next_due(&t.db, &kinds, 0).await.expect("due"), Due::Never);
+    assert_eq!(next_due(&t.db, &[], 0).await.expect("due"), Due::Never);
+
+    // Due for a minute: the claim before the wait saw it (or could not
+    // take it) — not the look-back's.
+    silent_job(&t, "test.a", 60).await;
+    assert_eq!(next_due(&t.db, &kinds, 0).await.expect("due"), Due::Never);
+    // Due in a minute.
+    silent_job(&t, "test.a", -60).await;
+    let Due::In(due) = next_due(&t.db, &kinds, 0).await.expect("due") else {
+        panic!("a scheduled job");
+    };
+    assert!(
+        (Duration::from_secs(50)..=Duration::from_secs(60)).contains(&due),
+        "{due:?}"
+    );
+    // Due since just now: claim now — once.
+    silent_job(&t, "test.a", 0).await;
+    let Due::Passed { until_us } = next_due(&t.db, &kinds, 0).await.expect("due") else {
+        panic!("a job that just became due");
+    };
+    assert!(until_us > 0);
+    assert!(matches!(
+        next_due(&t.db, &kinds, until_us).await.expect("due"),
+        Due::In(_)
+    ));
+    // Another one after it is offered; another kind's never.
+    silent_job(&t, "test.a", 0).await;
+    silent_job(&t, "test.b", 0).await;
+    let Due::Passed { until_us: later } = next_due(&t.db, &kinds, until_us).await.expect("due")
+    else {
+        panic!("the second job");
+    };
+    assert!(later > until_us);
+    // Once the look-back is over, both are the safety net's.
+    tokio::time::sleep(LOOK_BACK + Duration::from_millis(200)).await;
+    assert!(matches!(
+        next_due(&t.db, &kinds, 0).await.expect("due"),
+        Due::In(_)
+    ));
+    t.drop_now().await;
+}
+
 #[tokio::test]
 async fn a_runner_whose_listener_is_down_polls_every_second() {
     let mut t = FreshDb::migrated().await;
@@ -349,6 +437,7 @@ async fn a_safety_net_find_logs_wakeup_missed_once_per_minute() {
         "oldest_ready_ms=",
         "job_id=",
         "worker_id=",
+        "suppressed=0",
     ] {
         assert!(context.contains(part), "{part} in {context}");
     }

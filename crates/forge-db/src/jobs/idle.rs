@@ -22,6 +22,18 @@
 //!   schedules a job (a delayed enqueue, the backoff of a failure or of an
 //!   expired lease) notifies, so a waiter that read the due time earlier
 //!   reads it again.
+//! - **Due between the claim and that read.** A job whose `run_after`
+//!   passed after the claim that found nothing took its snapshot is no
+//!   longer "due in the future" when the due time is read, and nothing
+//!   will announce it. The read therefore also looks back [`LOOK_BACK`]:
+//!   a queued job that became due in that time ends the wait at once
+//!   ([`MIN_WAIT`]) and the caller claims again. Each such job is offered
+//!   once per runner (`looked_until`, the newest due time already handed
+//!   to a claim, the database's clock), so a due job that cannot be
+//!   claimed now — a busy ordering key, a kind at its cap — costs ONE
+//!   claim that finds nothing, never a spin. A job that became due more
+//!   than [`LOOK_BACK`] before the read (a process or a database that
+//!   stood still that long) is the safety net's, and `FG-DB-0024` says so.
 //! - **Listener down** ([`WakeHub::is_live`] false): the wait is at most
 //!   [`FALLBACK_POLL`] — the poll of before plan 18.
 //! - **`FG-DB-0024 WakeupMissed`**: a wait that ran its whole safety-net
@@ -31,7 +43,7 @@
 //!   at its cap frees with the end of a run). The hub logs it at most once
 //!   a minute.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -50,6 +62,23 @@ pub const FALLBACK_POLL: Duration = Duration::from_secs(1);
 pub const DUE_MARGIN: Duration = Duration::from_millis(20);
 /// No wait is shorter (a due time that has just passed).
 const MIN_WAIT: Duration = Duration::from_millis(10);
+/// How far back the due read looks for a job that became due after the
+/// last claim took its snapshot (module docs): far longer than the time
+/// between a claim and the read that follows it.
+pub(super) const LOOK_BACK: Duration = Duration::from_secs(1);
+
+/// What the queue says about the scheduled jobs of a runner's kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Due {
+    /// A job became due within [`LOOK_BACK`] and no claim was told yet:
+    /// claim now. `until_us` is the newest such due time (microseconds of
+    /// the database's epoch).
+    Passed { until_us: i64 },
+    /// The next job is due in this long.
+    In(Duration),
+    /// No scheduled job.
+    Never,
+}
 
 /// The idle wait of one runner, shared by its runs.
 #[derive(Debug)]
@@ -64,6 +93,8 @@ pub(super) struct JobWake {
     after_safety_net: AtomicBool,
     /// The last wake, or the last end of a run.
     quiet_since: Mutex<Instant>,
+    /// The newest due time a wait already ended for ([`Due::Passed`]).
+    looked_until: AtomicI64,
 }
 
 impl JobWake {
@@ -78,6 +109,7 @@ impl JobWake {
             poke: Notify::new(),
             after_safety_net: AtomicBool::new(false),
             quiet_since: Mutex::new(Instant::now()),
+            looked_until: AtomicI64::new(0),
         })
     }
 
@@ -111,9 +143,16 @@ impl JobWake {
         } else {
             self.safety.min(FALLBACK_POLL)
         };
-        let wait = match next_due(db, kinds).await? {
-            Some(due) => period.min(due.saturating_add(DUE_MARGIN)),
-            None => period,
+        let looked_until = self.looked_until.load(Ordering::Relaxed);
+        let wait = match next_due(db, kinds, looked_until).await? {
+            Due::Passed { until_us } => {
+                // The claim that follows this wait is the look at every
+                // job due until then.
+                self.looked_until.fetch_max(until_us, Ordering::Relaxed);
+                MIN_WAIT
+            }
+            Due::In(due) => period.min(due.saturating_add(DUE_MARGIN)),
+            Due::Never => period,
         }
         .max(MIN_WAIT);
         let woken = tokio::select! {
@@ -187,28 +226,46 @@ impl JobWake {
     }
 }
 
-/// How long until the next scheduled job of `kinds` is due (`None`: no
-/// such job).
-async fn next_due(db: &Db, kinds: &[JobKind]) -> Result<Option<Duration>, ForgeError> {
+/// The scheduled jobs of `kinds` ([`Due`]): one that became due within
+/// [`LOOK_BACK`] and after `looked_until_us`, else the time until the
+/// next one is due. One statement, one snapshot, the database's clock.
+pub(super) async fn next_due(
+    db: &Db,
+    kinds: &[JobKind],
+    looked_until_us: i64,
+) -> Result<Due, ForgeError> {
     if kinds.is_empty() {
-        return Ok(None);
+        return Ok(Due::Never);
     }
     let kinds: Vec<&str> = kinds.iter().map(JobKind::as_str).collect();
-    let due_ms: Option<i64> = db
+    let (due_ms, passed_us): (Option<i64>, Option<i64>) = db
         .within("jobs.next_due", async {
-            sqlx::query_scalar(
-                "SELECT (EXTRACT(epoch FROM j.run_after - pg_catalog.now()) * 1000)::bigint \
-                   FROM ONLY forge.jobs AS j \
-                  WHERE j.state = 'queued' AND j.run_after > pg_catalog.now() \
-                    AND j.attempts < j.max_attempts AND j.kind = ANY($1::text[]) \
-                  ORDER BY j.run_after LIMIT 1",
+            sqlx::query_as(
+                "SELECT \
+                   (SELECT (EXTRACT(epoch FROM j.run_after - pg_catalog.now()) * 1000)::bigint \
+                      FROM ONLY forge.jobs AS j \
+                     WHERE j.state = 'queued' AND j.run_after > pg_catalog.now() \
+                       AND j.attempts < j.max_attempts AND j.kind = ANY($1::text[]) \
+                     ORDER BY j.run_after LIMIT 1), \
+                   (SELECT (EXTRACT(epoch FROM j.run_after) * 1000000)::bigint \
+                      FROM ONLY forge.jobs AS j \
+                     WHERE j.state = 'queued' AND j.run_after <= pg_catalog.now() \
+                       AND j.run_after > pg_catalog.now() - pg_catalog.make_interval(secs => $2) \
+                       AND (EXTRACT(epoch FROM j.run_after) * 1000000)::bigint > $3 \
+                       AND j.attempts < j.max_attempts AND j.kind = ANY($1::text[]) \
+                     ORDER BY j.run_after DESC LIMIT 1)",
             )
             .bind(&kinds)
-            .fetch_optional(db.write_pool())
+            .bind(LOOK_BACK.as_secs_f64())
+            .bind(looked_until_us)
+            .fetch_one(db.write_pool())
             .await
             .map_err(|e| query_error("jobs.next_due", e))
         })
         .await?;
-    // Due in the past by the time it is read: as soon as possible.
-    Ok(due_ms.map(|ms| Duration::from_millis(u64::try_from(ms).unwrap_or(0))))
+    Ok(match (passed_us, due_ms) {
+        (Some(until_us), _) => Due::Passed { until_us },
+        (None, Some(ms)) => Due::In(Duration::from_millis(u64::try_from(ms).unwrap_or(0))),
+        (None, None) => Due::Never,
+    })
 }
