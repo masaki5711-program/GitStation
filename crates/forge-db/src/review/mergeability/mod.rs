@@ -47,7 +47,10 @@
 //!   `repository.pushed` payload lists what it changed moves
 //!   `checked_target_sha` of the decided rows it cannot interact with to
 //!   the new tip in one statement, without a job. `computed_target_sha`
-//!   keeps the tip the result was computed against.
+//!   keeps the tip the result was computed against. The set and that tip
+//!   count only on a row that is its **own** (`paths::OWN_SET`): stamped
+//!   by the check that wrote the checked pair, for the current rule
+//!   version.
 
 use std::time::Duration;
 
@@ -57,6 +60,16 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::jobs::{self, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::{query_error, read_query_error, Db};
+
+/// The stamp predicate of a row whose stored path set and
+/// `computed_target_sha` belong to its checked pair, over the row alias
+/// `g` (`paths::OWN_SET` documents it). A macro so that
+/// [`STATUS_COLUMNS`] can be built from it at compile time.
+macro_rules! own_set {
+    () => {
+        "g.paths_head_sha = g.checked_head_sha AND g.paths_seq = g.check_seq"
+    };
+}
 
 mod confirm;
 mod paths;
@@ -95,7 +108,10 @@ pub struct StoredMergeability {
     /// It differs from `checked_target_sha` exactly when the result was
     /// carried forward over landings that could not interact with the
     /// merge request's paths ([`StoredMergeability::carried_from`]).
-    /// `None`: a row checked before the column existed.
+    /// `None`: a row checked before the column existed, a row whose last
+    /// result was stored by a writer that does not know the path columns
+    /// (their stamp is not this result's, `paths::OWN_SET`), or a check
+    /// was requested since — never a tip that belongs to an earlier check.
     pub computed_target_sha: Option<ObjectId>,
     /// UTC, RFC 3339.
     pub checked_at: Option<String>,
@@ -126,9 +142,15 @@ type StatusRow = (
     Option<String>,
 );
 
-const STATUS_COLUMNS: &str = "status, reason, check_seq, checked_head_sha, checked_target_sha, \
-     to_char(checked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), conflicts, \
-     conflicts_truncated, computed_target_sha";
+/// The columns of a [`StatusRow`], over the row alias `g`. The computed
+/// tip is read only from a row that is its own (`paths::OWN_SET`).
+const STATUS_COLUMNS: &str = concat!(
+    "g.status, g.reason, g.check_seq, g.checked_head_sha, g.checked_target_sha, \
+     to_char(g.checked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), g.conflicts, \
+     g.conflicts_truncated, CASE WHEN ",
+    own_set!(),
+    " THEN g.computed_target_sha END"
+);
 
 pub(super) fn stored_invalid(reason: &'static str, mr: MergeRequestId) -> ForgeError {
     ForgeError::new(ErrorCode::Internal)
@@ -172,8 +194,8 @@ pub async fn mergeability(
     let row: Option<StatusRow> = db
         .within(QUERY, async {
             sqlx::query_as(&format!(
-                "SELECT {STATUS_COLUMNS} FROM forge.merge_request_mergeability \
-                 WHERE merge_request_id = $1"
+                "SELECT {STATUS_COLUMNS} FROM forge.merge_request_mergeability g \
+                 WHERE g.merge_request_id = $1"
             ))
             .bind(mr.get())
             .fetch_optional(db.pool().executor())
@@ -192,8 +214,8 @@ pub(crate) async fn mergeability_on(
 ) -> Result<Option<StoredMergeability>, ForgeError> {
     const QUERY: &str = "review.mergeability_on";
     let row: Option<StatusRow> = sqlx::query_as(&format!(
-        "SELECT {STATUS_COLUMNS} FROM forge.merge_request_mergeability \
-         WHERE merge_request_id = $1"
+        "SELECT {STATUS_COLUMNS} FROM forge.merge_request_mergeability g \
+         WHERE g.merge_request_id = $1"
     ))
     .bind(mr.get())
     .fetch_optional(conn)
@@ -217,8 +239,8 @@ pub async fn mergeability_written(
                 .await
                 .map_err(|e| query_error(QUERY, e))?;
             sqlx::query_as(&format!(
-                "SELECT {STATUS_COLUMNS} FROM forge.merge_request_mergeability \
-                 WHERE merge_request_id = $1"
+                "SELECT {STATUS_COLUMNS} FROM forge.merge_request_mergeability g \
+                 WHERE g.merge_request_id = $1"
             ))
             .bind(mr.get())
             .fetch_optional(&mut *conn)

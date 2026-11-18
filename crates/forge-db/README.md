@@ -438,9 +438,16 @@ connection, mapping driver errors to registered codes, migrations
   `forge.review.mergeability_carried` with `carried` / `settled` / `rechecked`; a landing whose
   paths cannot be used logs `forge.review.mergeability_paths_unused`). A row is carried exactly
   when `computed_target_sha <> checked_target_sha` (`StoredMergeability::carried_from`);
-  `recheck_if_carried` replaces a carried answer a merge disproved (FG-REVIEW-0006);
-  `stored_paths` reads the set. Tests `review/mergeability/paths_tests.rs`
-  (`may_interact_matches_its_sql_twin`).
+  `recheck_if_carried` replaces a carried answer a merge disproved (FG-REVIEW-0006) or a
+  direct merge needs computed (its merge result); `stored_paths` reads the set. The set is
+  stamped by the check that wrote it — `paths_head_sha`, `paths_seq` (its `check_seq`),
+  `paths_rule` (`merge_paths::RULE_VERSION`) — and the carry statement, `stored_paths` and
+  the reader of `computed_target_sha` use it only when the stamp is the row's own (`own_set!`:
+  `paths_head_sha = checked_head_sha AND paths_seq = check_seq`) and of the current rule: a
+  result written by a writer that does not know the columns is re-checked, never carried.
+  Tests `review/mergeability/paths_tests.rs` (`may_interact_matches_its_sql_twin`,
+  `a_result_stored_without_the_path_columns_is_rechecked_not_carried`,
+  `a_set_of_another_rule_version_is_rechecked`).
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events

@@ -212,7 +212,8 @@ fn assert_carried(before: &StoredMergeability, after: &StoredMergeability, tip: 
 }
 
 /// The result is not kept: a check was requested (`unchecked`, a new seq),
-/// the checked pair is what the last check saw.
+/// the checked pair is what the last check saw. A row waiting for its
+/// check is not shown as carried.
 fn assert_rechecked(before: &StoredMergeability, after: &StoredMergeability) {
     assert_eq!(after.status, MergeabilityStatus::Unchecked);
     assert_eq!(
@@ -221,7 +222,7 @@ fn assert_rechecked(before: &StoredMergeability, after: &StoredMergeability) {
         "a check was requested"
     );
     assert_eq!(after.checked_target_sha, before.checked_target_sha);
-    assert_eq!(after.carried_from(), before.carried_from());
+    assert_eq!(after.carried_from(), None);
 }
 
 /// Plan 18 S4: a landing whose paths cannot interact with a merge
@@ -527,7 +528,7 @@ async fn two_landings_before_one_refresh_carry_only_what_answers_each_tip() {
     let second_after = row(t, second.id).await;
     assert_eq!(second_after.status, MergeabilityStatus::Unchecked);
     assert_eq!(second_after.checked_target_sha, Some(oid('c')));
-    assert_eq!(second_after.computed_target_sha, Some(oid('b')));
+    assert_eq!(second_after.carried_from(), None, "waiting for its check");
     assert_eq!(second_after.check_seq, before[2].check_seq + 1);
     w.t.drop_now().await;
 }
@@ -578,6 +579,159 @@ async fn a_refresh_that_runs_twice_carries_once() {
     let none = carry_forward_on(&mut conn, p, &other).await.expect("other");
     assert_eq!(none, Vec::<i64>::new());
     drop(conn);
+    w.t.drop_now().await;
+}
+
+/// A finished check of `mr` stored the way the binary before the path
+/// columns stores it (its `record_check` statement, column for column):
+/// the result and the checked pair, nothing of the set, its stamp or the
+/// computed tip.
+async fn checked_the_old_way(t: &FreshDb, mr: MergeRequestId, head: char, target: char) {
+    let seq = request_check(&t.db, mr, rid("req-old"))
+        .await
+        .expect("request")
+        .expect("open");
+    let start = begin_check(&t.db, mr, seq).await.expect("begin");
+    assert!(matches!(start, CheckStart::Check(_)), "{start:?}");
+    t.exec_superuser(&format!(
+        "UPDATE forge.merge_request_mergeability SET status = 'can_be_merged', reason = NULL, \
+         checked_head_sha = '{}', checked_target_sha = '{}', checked_at = now(), \
+         conflicts = '{{}}', conflicts_truncated = false, confirmed_at = now(), \
+         last_decided = COALESCE('can_be_merged', last_decided), updated_at = now() \
+         WHERE merge_request_id = {}",
+        oid(head).as_str(),
+        oid(target).as_str(),
+        mr.get()
+    ))
+    .await;
+}
+
+/// Review (HIGH): a stored path set belongs to the check that wrote it,
+/// not to whatever the row says now. A worker that does not know the path
+/// columns (the binary before them, while serve and worker are restarted
+/// one after the other, or after a rollback) stores a result for a new
+/// head — or for the same head at a later tip — and leaves the set, its
+/// stamp and `computed_target_sha` of the earlier check in the row. Such
+/// a row is neither carried on that set nor shown as carried: the next
+/// landing checks it again.
+#[tokio::test]
+async fn a_result_stored_without_the_path_columns_is_rechecked_not_carried() {
+    let w = world(true).await;
+    let t = &w.t;
+    let moved = w.open("moved").await;
+    let same = w.open("same").await;
+    let own = w.open("own").await;
+    let can = MergeabilityStatus::CanBeMerged;
+    checked(t, moved.id, can, 'b', Some(files(&["src/moved.rs"]))).await;
+    checked(t, same.id, can, 'b', Some(files(&["src/same.rs"]))).await;
+    checked(t, own.id, can, 'b', Some(files(&["src/own.rs"]))).await;
+    let own_before = row(t, own.id).await;
+
+    // A landing touches `same`: it is checked again, the others carried.
+    w.land("l0", ('b', 'c'), Some(files(&["src/same.rs"])))
+        .await;
+    w.drain().await;
+    assert_carried(&own_before, &row(t, own.id).await, 'c', 'b');
+    // The old worker runs that check: head `a` at the new tip `c`. The
+    // set and the computed tip `b` of the earlier check stay in the row.
+    checked_the_old_way(t, same.id, 'a', 'c').await;
+    // `moved` gets a new head, checked by the old worker as well: the
+    // set in the row is the old head's.
+    let done = record_mr_version(&t.db, &system("req-v2-moved"), moved.id, &oid('e'), None)
+        .await
+        .expect("version");
+    assert_eq!(done, VersionOutcome::Added { version: 2 });
+    checked_the_old_way(t, moved.id, 'e', 'c').await;
+
+    let before = [row(t, moved.id).await, row(t, same.id).await];
+    for (stale, head) in before.iter().zip(['e', 'a']) {
+        assert_eq!(stale.status, can);
+        assert_eq!(stale.checked_head_sha, Some(oid(head)));
+        assert_eq!(stale.checked_target_sha, Some(oid('c')));
+        assert_eq!(
+            stale.carried_from(),
+            None,
+            "computed at `c` by a writer that left the earlier tip behind"
+        );
+        assert_eq!(stale.computed_target_sha, None);
+    }
+    for mr in [&moved, &same] {
+        assert_eq!(
+            stored_paths(&t.db, mr.id).await.expect("paths"),
+            None,
+            "the set of an earlier check is unknown"
+        );
+        assert_eq!(
+            recheck_if_carried(&t.db, mr.id, rid("req-not-carried"))
+                .await
+                .expect("recheck"),
+            None,
+            "not a carried row"
+        );
+    }
+
+    // A landing far from every stored set: only the row that is its own
+    // is carried.
+    w.land("l1", ('c', 'd'), Some(files(&["docs/far.md"])))
+        .await;
+    w.drain().await;
+    assert_carried(&own_before, &row(t, own.id).await, 'd', 'b');
+    assert_rechecked(&before[0], &row(t, moved.id).await);
+    assert_rechecked(&before[1], &row(t, same.id).await);
+
+    // The new binary's check makes the row its own again.
+    checked(t, same.id, can, 'd', Some(files(&["src/same.rs"]))).await;
+    let again = row(t, same.id).await;
+    assert_eq!(again.computed_target_sha, Some(oid('d')));
+    assert_eq!(
+        stored_paths(&t.db, same.id).await.expect("paths"),
+        Some(files(&["src/same.rs"]))
+    );
+    w.land("l2", ('d', 'f'), Some(files(&["docs/far.md"])))
+        .await;
+    w.drain().await;
+    assert_carried(&again, &row(t, same.id).await, 'f', 'd');
+    w.t.drop_now().await;
+}
+
+/// Review (MEDIUM): a stored set says which version of the rule it was
+/// built for. A set of another version is unknown — the merge request is
+/// checked again, as the module documentation promises.
+#[tokio::test]
+async fn a_set_of_another_rule_version_is_rechecked() {
+    let w = world(true).await;
+    let t = &w.t;
+    let other = w.open("other").await;
+    let current = w.open("current").await;
+    let can = MergeabilityStatus::CanBeMerged;
+    checked(t, other.id, can, 'b', Some(files(&["src/other.rs"]))).await;
+    checked(t, current.id, can, 'b', Some(files(&["src/current.rs"]))).await;
+    let version: i32 = sqlx::query_scalar(&format!(
+        "SELECT paths_rule FROM forge.merge_request_mergeability WHERE merge_request_id = {}",
+        other.id.get()
+    ))
+    .fetch_one(&mut t.superuser().await)
+    .await
+    .expect("rule");
+    assert_eq!(
+        u32::try_from(version).ok(),
+        Some(forge_core::merge_paths::RULE_VERSION),
+        "the check stores the version with the set"
+    );
+    t.exec_superuser(&format!(
+        "UPDATE forge.merge_request_mergeability SET paths_rule = {} WHERE merge_request_id = {}",
+        version + 1,
+        other.id.get()
+    ))
+    .await;
+    let before = [row(t, other.id).await, row(t, current.id).await];
+    assert_eq!(stored_paths(&t.db, other.id).await.expect("paths"), None);
+
+    w.land("l1", ('b', 'c'), Some(files(&["docs/far.md"])))
+        .await;
+    w.drain().await;
+    assert_rechecked(&before[0], &row(t, other.id).await);
+    assert_carried(&before[1], &row(t, current.id).await, 'c', 'b');
     w.t.drop_now().await;
 }
 
@@ -669,19 +823,72 @@ fn raw() -> impl Strategy<Value = Columns> {
     )
 }
 
+/// The names of the git-backed property
+/// (`forge-git/src/mergeability_path_rule_tests.rs`): prefixes that are
+/// no directory boundary and a case pair.
+fn name() -> impl Strategy<Value = &'static str> {
+    prop_oneof![
+        4 => Just("a"),
+        3 => Just("b"),
+        2 => Just("ab"),
+        2 => Just("A"),
+        1 => Just("c"),
+    ]
+}
+
+fn short_path() -> impl Strategy<Value = String> {
+    prop::collection::vec(name(), 1..4).prop_map(|parts| parts.join("/"))
+}
+
+/// One change as git lists it (`(path, deleted)` entries): a file
+/// written, a file deleted, a file replaced by a directory, a directory
+/// deleted, a rename.
+fn listed_change() -> impl Strategy<Value = Vec<(String, bool)>> {
+    prop_oneof![
+        3 => short_path().prop_map(|p| vec![(p, false)]),
+        2 => short_path().prop_map(|p| vec![(p, true)]),
+        2 => (short_path(), name()).prop_map(|(p, n)| vec![(format!("{p}/{n}"), false), (p, true)]),
+        2 => (short_path(), prop::collection::vec(name(), 1..4)).prop_map(|(dir, names)| {
+            names
+                .into_iter()
+                .map(|n| (format!("{dir}/{n}"), true))
+                .collect()
+        }),
+        2 => (short_path(), short_path()).prop_map(|(from, to)| vec![(from, true), (to, false)]),
+    ]
+}
+
+/// A set built from a few such changes — the sets the git-backed
+/// property decides on, here against the SQL twin.
+fn changed() -> impl Strategy<Value = Columns> {
+    prop::collection::vec(listed_change(), 0..4).prop_map(|changes| {
+        let entries = changes
+            .into_iter()
+            .flatten()
+            .map(|(path, deleted)| ChangedPath {
+                path,
+                deleted,
+                special: false,
+            });
+        columns_of(&PathSet::build(entries, 5000).unwrap_or_else(|_| PathSet::incomplete()))
+    })
+}
+
 fn side() -> impl Strategy<Value = Columns> {
     prop_oneof![
         1 => Just((None, None, None, None)),
         6 => built(),
         4 => raw(),
+        5 => changed(),
     ]
 }
 
 /// Plan 18 S4: the carry-forward statement decides with SQL what
 /// `may_interact` decides in Rust. For every generated pair of sets —
-/// built ones, raw ones, empty lists, nulls, non-boundary prefixes,
-/// trailing slashes, Unicode — the two answers are the same, and the SQL
-/// answer is never NULL.
+/// built ones, raw ones, change sets as git lists them (deletions, a
+/// file replaced by a directory, a directory deleted, a rename), empty
+/// lists, nulls, non-boundary prefixes, trailing slashes, Unicode — the
+/// two answers are the same, and the SQL answer is never NULL.
 #[tokio::test]
 async fn may_interact_matches_its_sql_twin() {
     let t = FreshDb::migrated().await;

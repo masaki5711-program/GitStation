@@ -240,9 +240,13 @@ pub async fn record_check(
             .transpose()?;
         let decided = result.status.is_decided().then_some(result.status);
         // The path set is written with the result it belongs to (one
-        // UPDATE): a stored set is always the checked head's. The target
-        // the result was computed against is kept apart from the checked
-        // one, which a carry-forward moves on (`paths::carry_forward_on`).
+        // UPDATE) and stamped with this check: the head it checked and its
+        // seq (`paths::OWN_SET`), with the version of the rule the set is
+        // for. A writer that does not know these columns leaves a stamp
+        // that is not its result's, so its row is never carried. The
+        // target the result was computed against is kept apart from the
+        // checked one, which a carry-forward moves on
+        // (`paths::carry_forward_on`).
         let paths = result.paths.as_ref();
         tx.step(|c| async move {
             sqlx::query(
@@ -251,7 +255,8 @@ pub async fn record_check(
                  conflicts = $6, conflicts_truncated = $7, confirmed_at = now(), \
                  last_decided = COALESCE($8, last_decided), updated_at = now(), \
                  computed_target_sha = $5, head_files = $9, head_dirs = $10, \
-                 head_deleted_dirs = $11, paths_complete = $12 \
+                 head_deleted_dirs = $11, paths_complete = $12, paths_rule = $13, \
+                 paths_head_sha = $4, paths_seq = $14 \
                  WHERE merge_request_id = $1",
             )
             .bind(mr.get())
@@ -266,6 +271,8 @@ pub async fn record_check(
             .bind(paths.map(PathSet::dirs))
             .bind(paths.map(PathSet::deleted_dirs))
             .bind(paths.map(PathSet::is_complete))
+            .bind(paths.map(|_| super::paths::rule_version()))
+            .bind(seq)
             .execute(c)
             .await
             .map(drop)
