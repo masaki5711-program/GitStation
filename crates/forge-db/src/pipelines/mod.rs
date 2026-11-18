@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, Settle};
 use crate::jobs::{DedupKey, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::projects::{lock_shared, locked_access_facts, ProjectUpdateFacts};
+use crate::wake::{notify_on, Channel, CI_JOB};
 use crate::{query_error, read_query_error, Db};
 
 pub mod subscriber;
@@ -474,6 +475,7 @@ async fn insert(
     let Some(pipeline_id) = inserted else {
         return Ok(None);
     };
+    let mut ready = false;
     for job in jobs {
         let status = if job.manual {
             JobStatus::Manual
@@ -502,6 +504,11 @@ async fn insert(
         .execute(&mut *c)
         .await
         .map_err(|e| query_error(query, e))?;
+        ready |= matches!(status, JobStatus::Pending);
+    }
+    if ready {
+        // Plan 18 S2: the waiting runners look when this commits.
+        notify_on(&mut *c, Channel::Jobs, CI_JOB).await?;
     }
     Ok(Some(pipeline_id))
 }
@@ -1029,6 +1036,9 @@ async fn transition<P>(
                     .execute(&mut *c)
                     .await
                     .map_err(|e| query_error(QUERY, e))?;
+                // Plan 18 S2: a retry makes jobs pending, a cancel may free
+                // a GPU place; the waiting runners look.
+                notify_on(&mut *c, Channel::Jobs, CI_JOB).await?;
                 // M4 C3: a cancelled job's token ends with it (ADR-0029).
                 if transition == Transition::Cancel {
                     sqlx::query(
@@ -1232,6 +1242,8 @@ pub async fn play_job_decided<P>(
             .execute(&mut *c)
             .await
             .map_err(|e| query_error(QUERY, e))?;
+            // Plan 18 S2: the waiting runners look.
+            notify_on(&mut *c, Channel::Jobs, CI_JOB).await?;
             sqlx::query(
                 "UPDATE forge.ci_pipelines SET status = 'running', finished_at = NULL, \
                    updated_at = now() WHERE id = $1 AND status NOT IN ('pending', 'running')",

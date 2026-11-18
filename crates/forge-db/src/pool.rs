@@ -68,6 +68,11 @@ pub struct Db {
     /// (`forge serve` / `forge worker` set it from the configuration;
     /// off by default, so nothing is written to the news outbox).
     portal_news: Option<crate::portal::NewsPolicy>,
+    /// The wake hub of this process and the safety-net period of its job
+    /// runners (plan 18 S2, ADR-0037 (a)); `None`: nothing in this process
+    /// listens — every waiter polls (`forge serve` / `forge worker` attach
+    /// one; the one-shot commands and most tests do not).
+    wake: Option<(crate::wake::WakeHub, Duration)>,
 }
 
 impl Db {
@@ -138,6 +143,7 @@ impl Db {
             ping_timeout: cfg.acquire_timeout,
             op_timeout: cfg.acquire_timeout.saturating_add(cfg.statement_timeout),
             portal_news: None,
+            wake: None,
         })
     }
 
@@ -147,6 +153,26 @@ impl Db {
     pub fn with_portal_news(mut self, policy: Option<crate::portal::NewsPolicy>) -> Self {
         self.portal_news = policy;
         self
+    }
+
+    /// The same pools, with the wake hub of this process
+    /// ([`crate::wake::WakeHub::spawn`]): job runners built from the
+    /// result wait on its `Jobs` channel and look by themselves every
+    /// `jobs_safety_poll` (`jobs.safety_poll_ms`) at the latest.
+    #[must_use]
+    pub fn with_wake(mut self, hub: crate::wake::WakeHub, jobs_safety_poll: Duration) -> Self {
+        self.wake = Some((hub, jobs_safety_poll));
+        self
+    }
+
+    /// The wake hub of this process, when one is attached ([`Db::with_wake`]).
+    pub fn wake(&self) -> Option<&crate::wake::WakeHub> {
+        self.wake.as_ref().map(|(hub, _)| hub)
+    }
+
+    /// The safety-net period of the job runners, with a hub attached.
+    pub(crate) fn jobs_safety_poll(&self) -> Option<Duration> {
+        self.wake.as_ref().map(|(_, safety)| *safety)
     }
 
     /// The news policy when the business changes stage portal news.
@@ -166,7 +192,8 @@ impl Db {
 
     /// The options of the dedicated LISTEN connection (ADR-0018 §2):
     /// forge_app, no statement / idle-in-transaction timeout, server-side
-    /// TCP keepalive. Used by `subscribers::Wake`, inside this crate only.
+    /// TCP keepalive. Used by the wake hub (`wake::WakeHub`), inside this
+    /// crate only.
     pub(crate) fn listen_options(&self) -> &PgConnectOptions {
         &self.listen
     }

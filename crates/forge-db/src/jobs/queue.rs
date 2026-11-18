@@ -3,6 +3,11 @@
 //! [`Db::within`] and on the server by the session's statement and lock
 //! timeouts. All run on the write pool (`forge_app`); `forge_ro` can read
 //! the table but neither claim nor settle a job.
+//!
+//! A statement that makes a job claimable or schedules it (an enqueue, a
+//! hand-back, the backoff of a failure or of an expired lease) sends
+//! `NOTIFY forge_jobs, <kind>` itself (plan 18 S2, `crate::wake`): no extra
+//! round trip, delivered at the commit, never for a rolled-back enqueue.
 
 use std::time::Duration;
 
@@ -13,6 +18,7 @@ use super::{
     ClaimedJob, Completed, Enqueued, Failed, JobFailure, JobId, JobKind, JobTimeout, Lease, NewJob,
     ReapedJob, Retry, WorkerId,
 };
+use crate::wake::Channel;
 use crate::{query_error, Db};
 
 /// At most this many expired leases per [`reap`].
@@ -50,13 +56,18 @@ pub(crate) async fn enqueue_on(
     conn: &mut PgConnection,
     job: &NewJob,
 ) -> Result<Enqueued, ForgeError> {
+    // The NOTIFY is part of the statement (no second round trip): only for
+    // a row really inserted, delivered at the commit of the caller's
+    // transaction, never when it rolls back. The first column is read.
     let id: Option<i64> = sqlx::query_scalar(
-        "INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key, \
-         origin_request_id, origin_event_seq) \
-         VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7) \
-         ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead' \
-         DO NOTHING \
-         RETURNING id",
+        "WITH added AS ( \
+             INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key, \
+                    origin_request_id, origin_event_seq) \
+             VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7) \
+             ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead' \
+             DO NOTHING \
+             RETURNING id, kind) \
+         SELECT a.id, pg_catalog.pg_notify($8, a.kind) FROM added AS a",
     )
     .bind(job.kind.as_str())
     .bind(job.payload.to_string())
@@ -65,6 +76,7 @@ pub(crate) async fn enqueue_on(
     .bind(job.dedup_key.as_ref().map(|k| k.as_str()))
     .bind(job.origin_request_id.as_str())
     .bind(job.origin_event_seq)
+    .bind(Channel::Jobs.name())
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| query_error("jobs.enqueue", e))?;
@@ -78,8 +90,18 @@ pub(crate) async fn enqueue_after_on(
     job: &NewJob,
     delay: Duration,
 ) -> Result<Enqueued, ForgeError> {
+    // Notified at once although it is ready later: an idle runner reads
+    // the next due time when it wakes, so the job starts on time.
     let id: Option<i64> = sqlx::query_scalar(
-        "INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key,          origin_request_id, origin_event_seq, run_after)          VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7,                  pg_catalog.now() + pg_catalog.make_interval(secs => $8))          ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead'          DO NOTHING          RETURNING id",
+        "WITH added AS ( \
+             INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key, \
+                    origin_request_id, origin_event_seq, run_after) \
+             VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7, \
+                    pg_catalog.now() + pg_catalog.make_interval(secs => $8)) \
+             ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead' \
+             DO NOTHING \
+             RETURNING id, kind) \
+         SELECT a.id, pg_catalog.pg_notify($9, a.kind) FROM added AS a",
     )
     .bind(job.kind.as_str())
     .bind(job.payload.to_string())
@@ -89,6 +111,7 @@ pub(crate) async fn enqueue_after_on(
     .bind(job.origin_request_id.as_str())
     .bind(job.origin_event_seq)
     .bind(delay.as_secs_f64())
+    .bind(Channel::Jobs.name())
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| query_error("jobs.enqueue_after", e))?;
@@ -129,8 +152,9 @@ pub(crate) async fn enqueue_superseding_on(
                     LEAST(pg_catalog.now(), (SELECT min(run_after) FROM gone))) \
              ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead' \
              DO NOTHING \
-             RETURNING id) \
-         SELECT (SELECT id FROM added), (SELECT count(*) FROM gone)",
+             RETURNING id, kind) \
+         SELECT (SELECT id FROM added), (SELECT count(*) FROM gone), \
+                (SELECT pg_catalog.pg_notify($9, a.kind) FROM added AS a)",
     )
     .bind(job.kind.as_str())
     .bind(job.payload.to_string())
@@ -140,6 +164,7 @@ pub(crate) async fn enqueue_superseding_on(
     .bind(job.origin_request_id.as_str())
     .bind(job.origin_event_seq)
     .bind(merge_request.to_string())
+    .bind(Channel::Jobs.name())
     .fetch_one(&mut *conn)
     .await
     .map_err(|e| query_error("jobs.enqueue_superseding", e))?;
@@ -458,7 +483,8 @@ pub async fn fail(db: &Db, job: &ClaimedJob, failure: &JobFailure) -> Result<Fai
     let row: Option<(bool, i64)> = db
         .within("jobs.fail", async {
             sqlx::query_as(concat!(
-                "UPDATE ONLY forge.jobs AS j SET \
+                "WITH failed AS ( \
+                 UPDATE ONLY forge.jobs AS j SET \
                     state = CASE WHEN $4 OR j.attempts >= j.max_attempts \
                                  THEN 'dead' ELSE 'queued' END, \
                     run_after = CASE WHEN $4 OR j.attempts >= j.max_attempts THEN j.run_after \
@@ -470,8 +496,12 @@ pub async fn fail(db: &Db, job: &ClaimedJob, failure: &JobFailure) -> Result<Fai
                     lease_until = NULL, last_error_code = $5, last_error = $6::jsonb \
                   WHERE j.id = $1 AND j.state = 'running' AND j.worker_id = $2 \
                     AND j.attempts = $3 \
-                 RETURNING j.state = 'dead', \
-                    (EXTRACT(epoch FROM j.run_after - pg_catalog.now()) * 1000)::bigint"
+                 RETURNING j.kind, j.state = 'dead' AS dead, \
+                    (EXTRACT(epoch FROM j.run_after - pg_catalog.now()) * 1000)::bigint \
+                        AS retry_ms) \
+                 SELECT f.dead, f.retry_ms, \
+                        (SELECT pg_catalog.pg_notify($7, f.kind) WHERE NOT f.dead) \
+                   FROM failed AS f"
             ))
             .bind(lease.job_id.get())
             .bind(lease.worker_id.as_str())
@@ -479,6 +509,8 @@ pub async fn fail(db: &Db, job: &ClaimedJob, failure: &JobFailure) -> Result<Fai
             .bind(never)
             .bind(failure.error.code().id())
             .bind(last_error(&failure.error))
+            // A retry is scheduled: idle runners read the due time again.
+            .bind(Channel::Jobs.name())
             .fetch_optional(db.write_pool())
             .await
             .map_err(|e| query_error("jobs.fail", e))
@@ -508,14 +540,21 @@ pub async fn release(db: &Db, job: &ClaimedJob) -> Result<bool, ForgeError> {
     let lease = &job.lease;
     let done = db
         .within("jobs.release", async {
+            // Ready now: the runners of the other processes are told (one
+            // row per job handed back, so `rows_affected` still counts it).
             sqlx::query(
-                "UPDATE ONLY forge.jobs SET state = 'queued', lease_until = NULL, \
-                        worker_id = NULL, run_after = pg_catalog.now(), attempts = attempts - 1 \
-                  WHERE id = $1 AND state = 'running' AND worker_id = $2 AND attempts = $3",
+                "WITH freed AS ( \
+                     UPDATE ONLY forge.jobs SET state = 'queued', lease_until = NULL, \
+                            worker_id = NULL, run_after = pg_catalog.now(), \
+                            attempts = attempts - 1 \
+                      WHERE id = $1 AND state = 'running' AND worker_id = $2 AND attempts = $3 \
+                     RETURNING kind) \
+                 SELECT pg_catalog.pg_notify($4, f.kind) FROM freed AS f",
             )
             .bind(lease.job_id.get())
             .bind(lease.worker_id.as_str())
             .bind(lease.attempt)
+            .bind(Channel::Jobs.name())
             .execute(db.write_pool())
             .await
             .map_err(|e| query_error("jobs.release", e))
@@ -537,7 +576,8 @@ pub(crate) async fn reap_at_most(db: &Db, limit: i64) -> Result<Vec<ReapedJob>, 
     let rows: Vec<ReapRow> = db
         .within("jobs.reap", async {
             sqlx::query_as(concat!(
-                "UPDATE ONLY forge.jobs AS j SET \
+                "WITH reaped AS ( \
+                 UPDATE ONLY forge.jobs AS j SET \
                     state = CASE WHEN j.attempts >= j.max_attempts THEN 'dead' ELSE 'queued' END, \
                     run_after = CASE WHEN j.attempts >= j.max_attempts THEN j.run_after \
                                 ELSE pg_catalog.now() + pg_catalog.make_interval(secs => ",
@@ -555,9 +595,15 @@ pub(crate) async fn reap_at_most(db: &Db, limit: i64) -> Result<Vec<ReapedJob>, 
                           FOR UPDATE SKIP LOCKED) AS expired \
                   WHERE j.id = expired.id \
                  RETURNING j.id, j.kind, j.worker_id, j.attempts, j.max_attempts, \
-                           j.origin_request_id, j.state = 'dead'"
+                           j.origin_request_id, j.state = 'dead' AS dead) \
+                 SELECT r.id, r.kind, r.worker_id, r.attempts, r.max_attempts, \
+                        r.origin_request_id, r.dead, \
+                        (SELECT pg_catalog.pg_notify($2, r.kind) WHERE NOT r.dead) \
+                   FROM reaped AS r"
             ))
             .bind(limit)
+            // Queued again after a backoff: idle runners read the due time.
+            .bind(Channel::Jobs.name())
             .fetch_all(db.write_pool())
             .await
             .map_err(|e| query_error("jobs.reap", e))

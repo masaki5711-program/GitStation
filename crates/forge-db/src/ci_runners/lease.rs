@@ -51,6 +51,7 @@ use sqlx::PgConnection;
 
 use super::{revoke_job_tokens, token_failed, Revocation};
 use crate::pipelines::{pipeline_of, PipelineRow, StoredPipeline, PIPELINE_COLUMNS};
+use crate::wake::{notify_on, Channel, CI_JOB};
 use crate::{query_error, read_query_error, Db};
 
 /// Runner tags that make a runner exclusive (plan 17 P17-1, ADR-0029
@@ -696,6 +697,9 @@ pub(crate) async fn settle_pipeline(
     .execute(&mut *c)
     .await
     .map_err(|e| query_error(QUERY, e))?;
+    // Plan 18 S2: a job ended — its dependants may be pending and its GPU
+    // place is free; the waiting runners look (delivered at the commit).
+    notify_on(&mut *c, Channel::Jobs, CI_JOB).await?;
     sqlx::query(
         "UPDATE forge.ci_pipelines p SET status = s.next, updated_at = now(), \
            finished_at = CASE WHEN s.next = 'running' THEN NULL ELSE now() END \
@@ -832,6 +836,10 @@ async fn reap_one(db: &Db, job: i64, pipeline: i64) -> Result<Option<Reaped>, Fo
     revoke_job_tokens(&mut tx, &[job], Revocation::LeaseLost).await?;
     if outcome == "failed" {
         settle_pipeline(&mut tx, pipeline).await?;
+    }
+    if outcome == "requeued" {
+        // Plan 18 S2: pending again; the waiting runners look.
+        notify_on(&mut tx, Channel::Jobs, CI_JOB).await?;
     }
     tx.commit().await.map_err(|e| query_error(QUERY, e))?;
     Ok(Some(Reaped {

@@ -20,6 +20,9 @@
 //! ([`revoke_project_job_tokens`], obligation 1).
 
 pub mod lease;
+mod wait;
+
+pub use wait::JobWait;
 
 use forge_core::ci_token::{CiToken, CiTokenKind};
 use forge_core::pipeline::RunnerChange;

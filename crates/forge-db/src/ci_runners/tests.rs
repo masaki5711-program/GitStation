@@ -1067,3 +1067,84 @@ async fn a_jobs_copy_names_its_pipelines_project_sha_and_repository() {
         .is_none());
     w.t.drop_now().await;
 }
+
+/// Plan 18 S2: every change that makes a CI job claimable tells the
+/// runners waiting on the hub (`NOTIFY forge_jobs, 'ci.job'`), so a long
+/// poll looks long before its safety-net period; a claim tells no one.
+#[tokio::test]
+async fn a_ci_job_made_pending_wakes_the_waiting_runner() {
+    use std::time::{Duration, Instant};
+
+    use crate::wake::{Channel, WakeHub, Woken};
+
+    const SAFETY: Duration = Duration::from_secs(10);
+    const WELL_BEFORE: Duration = Duration::from_secs(3);
+    const QUIET: Duration = Duration::from_millis(300);
+    const POLL: Duration = Duration::from_millis(50);
+    /// How long a wait of up to the safety period took.
+    async fn woken_after(idle: &mut JobWait) -> Duration {
+        let started = Instant::now();
+        idle.wait(SAFETY).await;
+        started.elapsed()
+    }
+
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    let hub = WakeHub::spawn(&w.t.db, &[Channel::Jobs]).expect("hub");
+    let mut connected = hub.subscribe_unseen(Channel::Jobs);
+    assert_eq!(
+        connected.wait(Duration::from_secs(30)).await,
+        Woken::Reconnected
+    );
+    // clone: the handle a server process attaches its hub to
+    let db = w.t.db.clone().with_wake(hub.clone(), SAFETY);
+    let mut idle = JobWait::new(&db, POLL);
+
+    // A planned pipeline.
+    let p = w
+        .pipeline(
+            'b',
+            false,
+            vec![
+                job("build", &[], &[], &[]),
+                job("test", &["build"], &[], &[]),
+            ],
+        )
+        .await;
+    assert!(woken_after(&mut idle).await < WELL_BEFORE);
+    // The claim makes nothing claimable: the wait runs its whole period.
+    let build = lease::claim(&db, r).await.expect("claim").expect("job");
+    let started = Instant::now();
+    idle.wait(QUIET).await;
+    assert!(started.elapsed() >= QUIET);
+    // A job whose needs succeeded.
+    lease::complete(&db, r, build.job_id, build.attempt, JobResult::Succeeded)
+        .await
+        .expect("complete");
+    assert!(woken_after(&mut idle).await < WELL_BEFORE);
+    // A lease the reaper gives back.
+    let test = lease::claim(&db, r).await.expect("claim").expect("job");
+    assert_eq!((test.name.as_str(), test.pipeline.id), ("test", p));
+    idle.wait(QUIET).await;
+    w.exec(&format!(
+        "UPDATE forge.ci_jobs SET lease_until = now() - interval '1 second' WHERE id = {}",
+        test.job_id
+    ))
+    .await;
+    lease::reap(&db).await.expect("reap");
+    assert!(woken_after(&mut idle).await < WELL_BEFORE);
+    // A job of the queue (another payload of the channel) is not for it.
+    w.exec("SELECT pg_catalog.pg_notify('forge_jobs', 'test.a')")
+        .await;
+    let started = Instant::now();
+    idle.wait(QUIET).await;
+    assert!(started.elapsed() >= QUIET);
+
+    // Without a hub the long poll is the plain poll.
+    let mut plain = JobWait::new(&w.t.db, POLL);
+    let started = Instant::now();
+    plain.wait(SAFETY).await;
+    assert!((POLL..WELL_BEFORE).contains(&started.elapsed()));
+    hub.stop(Duration::from_secs(30)).await.expect("stop");
+    w.t.drop_now().await;
+}

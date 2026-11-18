@@ -757,10 +757,36 @@ retried with backoff): DB failures, `subscriber_not_registered`,
 CONSTRAINT name is `xf002_unknown`). `Dispatcher` runs
 every registered subscriber for `forge worker` (a round starts no step
 after `ROUND_BUDGET` = 30 s, then `more`) and waits on the crate-private
-`Wake` (LISTEN
-`forge_events_sequenced` on the dedicated connection `Db::listen_options` — no
-statement / idle timeout, server-side TCP keepalive, a bounded `SELECT 1` at
-every 5 s poll). `states` / `check_lag` / `dead_letters` feed `forge doctor`
+`Wake` — since plan 18 S2 a waiter of the wake hub's `Events` channel
+(`forge_events_sequenced`; below), or of a hub of its own on a `Db` without
+one.
+
+**Wake hub (plan 18 S2, ADR-0037 (a); `src/wake.rs`)**: `WakeHub::spawn(&db,
+&Channel::ALL)` is the ONE LISTEN connection of a process (`forge serve`,
+`forge worker`), on a one-connection pool of its own from
+`Db::listen_options` (no statement / idle timeout, server-side TCP
+keepalive, a bounded `SELECT 1` every 5 s) — outside the write and read
+pools, counted by `bootstrap::ConnectionBudget` (`+ 4`: a LISTEN connection
+per process, migration, maintenance). Channels: `Jobs` (`forge_jobs`,
+payload = job kind, `ci.job` for a CI job), `MergeQueue`
+(`forge_merge_queue`, no sender yet — plan 18 S3), `Refs` (`forge_refs`, no
+sender yet), `Events` (`forge_events_sequenced`). `Db::with_wake(hub,
+safety)` attaches it; `JobRunner::wait_for_work` (an idle runner: a
+notification of a kind it can take now, the next `run_after` of its kinds,
+or `jobs.safety_poll_ms`; one second while the listener is down) and
+`ci_runners::JobWait` (the runner long poll) wait on it. A wake is a hint:
+every waiter reads the database again. Every statement of `jobs::queue`
+that makes a job claimable or schedules it (`enqueue*_on`, `release`, the
+backoff of `fail` / `reap`) and every change that makes a CI job pending
+notifies in its own transaction. Bursts coalesce (one wake per waiter with
+the distinct payloads; one idle job run per notification, each successful
+claim pokes the next). A (re)connect wakes every waiter once; a lost link
+is logged (`FG-DB-0001` / `FG-DB-0002`, `operation=wake_listen`) and
+retried with a 250 ms – 5 s backoff. `FG-DB-0024 WakeupMissed` (warn, at
+most once a minute per channel): a safety-net look found work no wake
+announced. `wake::notify_queue_usage` / `check_notify_queue` feed `forge
+doctor` (`db.notify_queue`, `FG-DB-0023 NotifyQueueBacklog` at half
+full). `states` / `check_lag` / `dead_letters` feed `forge doctor`
 (`subscribers.lag`, `subscribers.dead_letters`).
 
 **Service accounts (M3 S0, migration `20261113100000`, ADR-0019 Addendum S0)**:

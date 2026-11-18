@@ -392,9 +392,11 @@ impl Browser {
     /// answers (a push changed its refs; the epoch makes every older
     /// answer stale).
     ///
-    /// Seam (plan 18 S2): this is what the `forge_refs` listener calls
-    /// for a ref write of another process (the worker's merge). Until
-    /// then such a write is seen after at most `refs_ttl`.
+    /// Seam: this is what a `forge_refs` listener will call for a ref
+    /// write of another process (the worker's merge). Since plan 18 S2
+    /// the wake hub offers that channel (`forge_db::wake::Channel::Refs`,
+    /// payload: the repository id), but no ref write sends it and nothing
+    /// listens yet, so such a write is seen after at most `refs_ttl`.
     pub fn invalidate(&self, repo: RepoId) {
         {
             let mut epochs = self

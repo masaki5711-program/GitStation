@@ -6,7 +6,8 @@
 //! `forge worker` does not register the kind.
 //!
 //! One task under the supervisor of `serve_merges` ([`supervise`]): it
-//! claims one job at a time (every [`POLL_PERIOD`] while idle). The
+//! claims one job at a time (idle, it waits for the wake hub's
+//! `forge_jobs` notification; every [`POLL_PERIOD`] without a hub). The
 //! handler: a decision (opened, conflicted, skipped) completes the job and
 //! is logged by `forge_review::Reverter` (`forge.review.revert_drafted`);
 //! a failure that may pass later ([`retryable`]) is retried with the
@@ -166,6 +167,16 @@ async fn run_jobs(runner: Arc<JobRunner>, mut stop: watch::Receiver<bool>) {
             Ok(Some(_)) => {
                 streak = Streak::default();
                 continue;
+            }
+            // Plan 18 S2: idle, the runner waits for `NOTIFY forge_jobs`
+            // (a revert was requested) or its safety-net period.
+            Ok(None) if runner.waits_on_wake() => {
+                streak = Streak::default();
+                match crate::worker::jobs::wait_for_work(&runner, &mut stop).await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(e) => streak.fail(e),
+                }
             }
             Ok(None) => {
                 streak = Streak::default();

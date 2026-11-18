@@ -27,6 +27,10 @@
 //! the handler's task (it cannot be awaited from a drop). The job stays
 //! `running` with its lease; the lease expires and [`super::reap`] queues it
 //! again (or deads it) — never lost, at worst run again.
+//!
+//! Idle (plan 18 S2): on a [`Db`] with a wake hub ([`Db::with_wake`]) a
+//! caller whose run found nothing awaits [`JobRunner::wait_for_work`]
+//! instead of sleeping its own poll period (`super::idle`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -39,6 +43,7 @@ use forge_core::telemetry;
 use forge_errors::{ErrorCode, ForgeError};
 use tokio::task::JoinHandle;
 
+use super::idle::JobWake;
 use super::reports::{
     dead_lettered, finished, job_error, log_outcome, report_reaped, with_job_context, Ran, Reported,
 };
@@ -83,6 +88,8 @@ pub struct JobRunner {
     /// cap and an ordering key are never passed by two claims at once.
     in_flight: Arc<Mutex<InFlight>>,
     gate: tokio::sync::Mutex<()>,
+    /// The idle wait, on a [`Db`] with a wake hub (`super::idle`).
+    wake: Option<Arc<JobWake>>,
 }
 
 /// The jobs of a runner that run now.
@@ -172,7 +179,6 @@ enum Drain {
 impl JobRunner {
     pub fn new(db: Db, worker: WorkerId) -> Self {
         Self {
-            db,
             worker,
             handlers: BTreeMap::new(),
             abort_wait: ABORT_WAIT,
@@ -180,7 +186,47 @@ impl JobRunner {
             caps: BTreeMap::new(),
             in_flight: Arc::new(Mutex::new(InFlight::default())),
             gate: tokio::sync::Mutex::new(()),
+            wake: JobWake::of(&db).map(Arc::new),
+            db,
         }
+    }
+
+    /// This runner waits on the wake hub of its [`Db`]: a caller whose run
+    /// found nothing awaits [`Self::wait_for_work`]. False (no hub
+    /// attached): the caller sleeps its own poll period, as before.
+    pub fn waits_on_wake(&self) -> bool {
+        self.wake.is_some()
+    }
+
+    /// Wait until another claim is worth a try: a `forge_jobs`
+    /// notification for one of this runner's kinds, the due time of its
+    /// next scheduled job, or `jobs.safety_poll_ms` (one second while the
+    /// LISTEN connection is down) — `super::idle`. Returns at once without
+    /// a hub ([`Self::waits_on_wake`]). Cancel-safe.
+    pub async fn wait_for_work(&self) -> Result<(), ForgeError> {
+        match &self.wake {
+            Some(wake) => {
+                let takes_now = |kind: &str| self.takes_now(kind);
+                wake.wait(&self.db, &self.kinds(), takes_now).await
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// A claim could take a job of the kind named `kind` now: it has a
+    /// handler and is under its cap.
+    fn takes_now(&self, kind: &str) -> bool {
+        let held = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.handlers.keys().any(|k| {
+            k.as_str() == kind
+                && self
+                    .caps
+                    .get(k)
+                    .is_none_or(|cap| held.per_kind.get(k).copied().unwrap_or(0) < cap.get())
+        })
     }
 
     /// At most `max` jobs of `kind` run at once in this runner (its runs
@@ -272,11 +318,20 @@ impl JobRunner {
             // One claim at a time: a cap or an ordering key is decided and
             // taken together.
             let _gate = self.gate.lock().await;
+            if let Some(wake) = &self.wake {
+                wake.claim_starts();
+            }
             let (kinds, busy) = self.claimable();
             let Some((job, ready_for)) = claim_timed(&self.db, &self.worker, &kinds, &busy).await?
             else {
+                if let Some(wake) = &self.wake {
+                    wake.found_nothing();
+                }
                 return Ok(None);
             };
+            if let Some(wake) = &self.wake {
+                wake.claimed(&job, ready_for, &self.worker);
+            }
             let slot = Slot::take(&self.in_flight, &job);
             (job, slot, tokio::time::Instant::now(), ready_for)
         };
@@ -298,10 +353,17 @@ impl JobRunner {
             // kind's place) stays taken until its lease ends, when the
             // reaper may hand the job out again (module docs).
             let lease_end = claimed_at + job.timeout.get() + super::LEASE_SLACK;
+            let wake = self.wake.clone(); // clone: the timer outlives this run
             tokio::spawn(async move {
                 tokio::time::sleep_until(lease_end).await;
                 drop(slot);
+                if let Some(wake) = wake {
+                    wake.place_freed();
+                }
             });
+        } else if let Some(wake) = &self.wake {
+            // Before this run's place is given back (the end of the scope).
+            wake.run_ended();
         }
         Ok(Some(outcome))
     }

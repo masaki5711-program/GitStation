@@ -93,7 +93,9 @@ pub async fn check(db: &Db, privileged_members: &[PrivilegedMember]) -> Result<i
 /// The connection budget of ADR-0018 §2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnectionBudget {
-    /// `(serve + worker) × (write + read) + LISTEN + migration + maintenance`.
+    /// `(serve + worker) × (write + read) + LISTEN × 2 + migration +
+    /// maintenance`: each of the two processes holds one LISTEN connection
+    /// (its wake hub, plan 18 S2).
     pub needed: u32,
     /// `max_connections` minus the reserved slots.
     pub usable: u32,
@@ -105,7 +107,7 @@ impl ConnectionBudget {
             .write_max_connections
             .saturating_add(cfg.read_max_connections);
         Self {
-            needed: per_process.saturating_mul(2).saturating_add(3),
+            needed: per_process.saturating_mul(2).saturating_add(4),
             usable,
         }
     }
