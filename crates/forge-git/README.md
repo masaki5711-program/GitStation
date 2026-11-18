@@ -114,6 +114,11 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   head, cap, timeout) -> Option<Vec<ObjectId>>` (`rev-list -n <cap+1>`), `Git::codeowners_file(…,
   commit, max_bytes, timeout) -> CodeownersFile` (`.forge/CODEOWNERS`, else `CODEOWNERS`;
   `ls-tree -z` + `cat-file blob`; `TooLarge` / `NotAFile`). Tests `review_inputs_tests.rs`.
+  Plan 18 S4 (ADR-0037 (c)): `Git::changed_path_entries(…, base, head, max_paths, timeout) ->
+  Result<Vec<ChangedPath>, Incomplete>` (`diff-tree --no-renames -r -z --raw`, commits or trees,
+  no line counts: each path with "gone on the new side" and "a symlink or submodule on either
+  side"; cut output, more than `max_paths` or a non-UTF-8 path is `Incomplete`, never a shorter
+  list) — the input of `forge_core::merge_paths::PathSet`.
   M3 R6 review (`review_changes`): `Git::changed_entries(…, base, head, max_entries, timeout) ->
   ChangeListing` (`diff-tree --no-renames -r -z --raw --numstat`: each entry's old / new mode and
   added / deleted lines, `None` for binary; the approval carry's input). Tests

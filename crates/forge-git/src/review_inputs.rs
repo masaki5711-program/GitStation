@@ -10,6 +10,12 @@
 //!   [`ChangedPaths::TooMany`]; a path that is not UTF-8 is
 //!   [`ChangedPaths::NonUtf8`] (a glob cannot be matched against it: the
 //!   caller fails closed).
+//! - [`Git::changed_path_entries`] (plan 18 S4): the same diff with `--raw` —
+//!   each changed path with whether it is gone on the new side and whether
+//!   either side is a symbolic link or a submodule — as the input of
+//!   forge-core's `merge_paths::PathSet`. A cut output, more than
+//!   `max_paths` entries or a path that is not UTF-8 is an incomplete set
+//!   (`Err(Incomplete)`), never a shorter complete one.
 //! - [`Git::range_commits`]: `rev-list --parents -n <cap+1> --end-of-options
 //!   <head> [^<base>]` — the commits of the range, or `None` when there are
 //!   more than the cap.
@@ -20,6 +26,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use forge_core::merge_paths::{ChangedPath, Incomplete};
 use forge_core::{ObjectId, RepoId};
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -77,6 +84,34 @@ fn records(stdout: &[u8]) -> impl Iterator<Item = &[u8]> {
     // What follows the final NUL: empty for a complete output.
     pieces.pop();
     pieces.into_iter()
+}
+
+/// One `--raw` line (`:<old mode> <new mode> <old id> <new id> <status>`):
+/// (the path is gone on the new side, either side is a symbolic link or a
+/// submodule).
+fn parse_raw(raw: &[u8]) -> Result<(bool, bool), ForgeError> {
+    let bad = || unexpected("diff-tree", "raw_entry_malformed");
+    let line = std::str::from_utf8(raw).map_err(|_| bad())?;
+    let mut parts = line.strip_prefix(':').ok_or_else(bad)?.split(' ');
+    let (Some(old_mode), Some(new_mode), Some(_), Some(_), Some(status), None) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
+        return Err(bad());
+    };
+    let mode = |m: &str| m.len() == 6 && m.bytes().all(|b| b.is_ascii_digit());
+    if !mode(old_mode) || !mode(new_mode) || status.is_empty() {
+        return Err(bad());
+    }
+    let special = |m: &str| m == "120000" || m == "160000";
+    Ok((
+        status.starts_with('D'),
+        special(old_mode) || special(new_mode),
+    ))
 }
 
 impl Git {
@@ -164,6 +199,61 @@ impl Git {
             }
         }
         Ok(ChangedPaths::Complete(paths))
+    }
+
+    /// The entries changed between `base` and `head` — commits or trees —
+    /// without rename detection (module docs): `diff-tree --no-renames -r
+    /// -z --raw --end-of-options <base> <head>`. `Ok(Err(_))`: the listing
+    /// is not complete (why); `Err`: git failed.
+    pub async fn changed_path_entries(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        base: &ObjectId,
+        head: &ObjectId,
+        max_paths: usize,
+        timeout: Duration,
+    ) -> Result<Result<Vec<ChangedPath>, Incomplete>, ForgeError> {
+        let repo = Self::repo_dir(storage, id)?;
+        // One entry: the raw line (two modes, two ids, a status — under
+        // 256 bytes for sha256 ids) and a path of 4 KiB at most.
+        let cap = max_paths.saturating_mul(4097 + 256).max(8192);
+        let (output, truncated) = self
+            .command("diff-tree")
+            .arg("--no-renames")
+            .arg("-r")
+            .arg("-z")
+            .arg("--raw")
+            .revision(Revision::object_id(base.as_str())?)
+            .revision(Revision::object_id(head.as_str())?)
+            .repo(&repo)
+            .timeout(timeout)
+            .output_truncated(cap)
+            .await
+            .map_err(|e| e.with_context("repo_id", id.get()))?;
+        if truncated {
+            return Ok(Err(Incomplete::TooMany));
+        }
+        let mut entries = Vec::new();
+        let mut fields = records(&output.stdout);
+        while let Some(raw) = fields.next() {
+            let Some(path) = fields.next() else {
+                return Err(unexpected("diff-tree", "raw_entry_without_path"));
+            };
+            if entries.len() >= max_paths {
+                return Ok(Err(Incomplete::TooMany));
+            }
+            let (deleted, special) = parse_raw(raw)?;
+            let Ok(path) = std::str::from_utf8(path) else {
+                return Ok(Err(Incomplete::NonUtf8));
+            };
+            entries.push(ChangedPath {
+                path: path.to_owned(),
+                deleted,
+                special,
+            });
+        }
+        Ok(Ok(entries))
     }
 
     /// The commits reachable from `head` and not from `base` (`None`: the

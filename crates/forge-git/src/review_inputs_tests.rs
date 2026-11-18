@@ -166,6 +166,71 @@ async fn deleted_paths_list_only_what_was_removed() {
     assert_eq!(paths, ChangedPaths::Complete(vec!["src/a.rs".to_owned()]));
 }
 
+/// Plan 18 S4: the entries of a diff for the path sets — a deletion is
+/// marked, a symbolic link and a submodule are special, a rename is a
+/// deletion and an addition, and a listing past the cap is incomplete
+/// (never a shorter complete one).
+#[tokio::test]
+async fn changed_path_entries_mark_deletions_and_special_modes() {
+    use forge_core::merge_paths::{ChangedPath, Incomplete};
+    let f = fixture().await;
+    let base = f.commit(
+        &[
+            ("src/a.rs", b"one\n"),
+            ("docs/x.md", b"x\n"),
+            ("keep.txt", b"k\n"),
+        ],
+        None,
+    );
+    let head = f.commit_modes(
+        &[
+            ("src/b.rs", b"one\n", "100644"),
+            ("docs/x.md", b"y\n", "100644"),
+            ("keep.txt", b"k\n", "100644"),
+            ("link", b"keep.txt", "120000"),
+        ],
+        Some(&base),
+    );
+    let entry = |path: &str, deleted: bool, special: bool| ChangedPath {
+        path: path.to_owned(),
+        deleted,
+        special,
+    };
+    let entries = f
+        .git
+        .changed_path_entries(&f.root, f.id, &base, &head, 100, T)
+        .await
+        .expect("diff");
+    assert_eq!(
+        entries,
+        Ok(vec![
+            entry("docs/x.md", false, false),
+            entry("link", false, true),
+            entry("src/a.rs", true, false),
+            entry("src/b.rs", false, false),
+        ])
+    );
+    // The other way round the link is deleted: still special.
+    let back = f
+        .git
+        .changed_path_entries(&f.root, f.id, &head, &base, 100, T)
+        .await
+        .expect("diff");
+    assert!(back.expect("complete").contains(&entry("link", true, true)));
+    let capped = f
+        .git
+        .changed_path_entries(&f.root, f.id, &base, &head, 3, T)
+        .await
+        .expect("diff");
+    assert_eq!(capped, Err(Incomplete::TooMany));
+    let same = f
+        .git
+        .changed_path_entries(&f.root, f.id, &head, &head, 100, T)
+        .await
+        .expect("diff");
+    assert_eq!(same, Ok(Vec::new()));
+}
+
 #[tokio::test]
 async fn range_commits_are_capped() {
     let f = fixture().await;
