@@ -61,7 +61,7 @@
 //!   FG-GIT-0032). Refs never go through it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use forge_core::RepoId;
@@ -251,6 +251,26 @@ pub struct Browser {
     /// `None` when `batch_per_repo` is 0.
     batch: Option<CatFilePool>,
     objects: Arc<objects::ObjectCache>,
+    /// Who hears of this process's ref writes (`forge_refs`).
+    announce: Arc<Announce>,
+}
+
+/// What [`Browser::on_refs_changed`] registered.
+type Told = Box<dyn Fn(RepoId) + Send + Sync>;
+
+/// Who is told about every [`Browser::invalidate`] — the ref writes of
+/// THIS process — so that the process can announce them to the others
+/// (`forge_refs`, plan 18 S3; this crate knows no database). Set once and
+/// shared by every clone of the browser.
+#[derive(Default)]
+struct Announce(OnceLock<Told>);
+
+impl std::fmt::Debug for Announce {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Announce")
+            .field("set", &self.0.get().is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -381,6 +401,7 @@ impl Browser {
             cache: Arc::new(RefCache::default()),
             branches: RefSnapshotCache::new(limits.refs_ttl, limits.max_cached_repos),
             reach: Arc::new(reach::ReachCache::default()),
+            announce: Arc::default(),
         }
     }
 
@@ -388,16 +409,39 @@ impl Browser {
         &self.limits
     }
 
-    /// Drop `repo`'s cached ref list, branch snapshot and reachability
-    /// answers (a push changed its refs; the epoch makes every older
-    /// answer stale).
-    ///
-    /// Seam: this is what a `forge_refs` listener will call for a ref
-    /// write of another process (the worker's merge). Since plan 18 S2
-    /// the wake hub offers that channel (`forge_db::wake::Channel::Refs`,
-    /// payload: the repository id), but no ref write sends it and nothing
-    /// listens yet, so such a write is seen after at most `refs_ttl`.
+    /// THIS process changed `repo`'s refs: drop what is cached about them
+    /// ([`Browser::forget_refs`]) and tell whoever announces this
+    /// process's ref writes ([`Browser::on_refs_changed`]). Every ref
+    /// writer calls this after its write — and nothing else does: to read
+    /// fresh refs, or for a ref write of another process, call
+    /// [`Browser::forget_refs`].
     pub fn invalidate(&self, repo: RepoId) {
+        self.forget_refs(repo);
+        if let Some(told) = self.announce.0.get() {
+            told(repo);
+        }
+    }
+
+    /// Have `told` called with the repository of every
+    /// [`Browser::invalidate`] of this browser and its clones (plan 18
+    /// S3: `forge serve` sends `forge_refs` from it, so the other
+    /// processes drop their caches too). `told` runs on the writer's
+    /// path, also inside a `Drop`: it must not block. Set once — `false`
+    /// when one was set before (that one stays).
+    pub fn on_refs_changed(&self, told: impl Fn(RepoId) + Send + Sync + 'static) -> bool {
+        self.announce.0.set(Box::new(told)).is_ok()
+    }
+
+    /// Drop `repo`'s cached ref list, branch snapshot and reachability
+    /// answers (its refs changed; the epoch makes every older answer
+    /// stale) and tell no one. What the `forge_refs` listener calls for a
+    /// ref write another process announced
+    /// (`forge_db::wake::Channel::Refs`, payload: the repository id) —
+    /// announcing it again would echo between the processes for ever —
+    /// and what a reader calls before a read that must not be older than
+    /// a write it knows of. A ref write nobody announced is seen after at
+    /// most `refs_ttl`.
+    pub fn forget_refs(&self, repo: RepoId) {
         {
             let mut epochs = self
                 .cache

@@ -5,7 +5,7 @@
 //! |---|---|---|---|
 //! | `Jobs` | `forge_jobs` | the job kind (`ci.job` for a CI job a runner may take) | `jobs::enqueue*` / `release` / `fail` / `reap`, the CI job state changes |
 //! | `MergeQueue` | `forge_merge_queue` | the queue id | an entry enqueued, dequeued or resumed; the end of a train's pipeline or of its create job (`review::merge_queue`, plan 18 S3) |
-//! | `Refs` | `forge_refs` | the repository id | nobody yet (see `forge_git::browse::Browser::invalidate`) |
+//! | `Refs` | `forge_refs` | the repository id | [`refs_changed`]: `forge serve`, right after each ref write of its own (`forge_git::browse::Browser::invalidate`, plan 18 S3) |
 //! | `Events` | `forge_events_sequenced` | the last event seq | the sequencer |
 //! | `AutoMerge` | `forge_auto_merge` | the merge request id | a mergeability result that says "can be merged" (`review::mergeability`, plan 18 S3: that result publishes no event unless it is a flip) |
 //!
@@ -68,7 +68,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use forge_core::{telemetry, RequestId};
+use forge_core::{telemetry, RepoId, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::{PgConnectOptions, PgConnection, PgListener, PgPoolOptions};
 use tokio::sync::watch;
@@ -878,6 +878,32 @@ pub(crate) async fn notify_on(
         .await
         .map_err(|e| query_error("wake.notify", e))?;
     Ok(())
+}
+
+const REFS_CHANGED: &str =
+    "SELECT pg_catalog.pg_notify($1, r.id::text) FROM unnest($2::bigint[]) AS r(id)";
+
+/// Tell every process that the refs of `repos` changed (`forge_refs`,
+/// payload: the repository id — plan 18 S3). Sent right after the ref
+/// write and not in a transaction with it: git's refs are not in the
+/// database. One bounded statement on the write pool for any number of
+/// repositories. A failure is the caller's to log and nobody's to retry:
+/// the caches a notification drops age out by themselves (`refs_ttl`).
+pub async fn refs_changed(db: &Db, repos: &[RepoId]) -> Result<(), ForgeError> {
+    if repos.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<i64> = repos.iter().copied().map(RepoId::get).collect();
+    db.within("wake.refs_changed", async {
+        sqlx::query(REFS_CHANGED)
+            .bind(Channel::Refs.name())
+            .bind(&ids)
+            .execute(db.write_pool())
+            .await
+            .map_err(|e| query_error("wake.refs_changed", e))?;
+        Ok(())
+    })
+    .await
 }
 
 const NOTIFY_QUEUE_USAGE: &str = "SELECT pg_catalog.pg_notification_queue_usage()";

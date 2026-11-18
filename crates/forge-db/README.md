@@ -771,7 +771,11 @@ pools, counted by `bootstrap::ConnectionBudget` (`+ 4`: a LISTEN connection
 per process, migration, maintenance). Channels: `Jobs` (`forge_jobs`,
 payload = job kind, `ci.job` for a CI job), `MergeQueue`
 (`forge_merge_queue`, payload = queue id; plan 18 S3, below), `Refs`
-(`forge_refs`, no sender yet), `Events` (`forge_events_sequenced`),
+(`forge_refs`, payload = repository id: `wake::refs_changed`, sent by
+`forge serve` right after each ref write of its own — one bounded
+statement, not transactional with the write and never retried, the
+listeners' caches age out after `refs_ttl`; plan 18 S3), `Events`
+(`forge_events_sequenced`),
 `AutoMerge` (`forge_auto_merge`, payload = merge request id: a
 mergeability check answered "can be merged" — `review/mergeability/run.rs`;
 plan 18 S3). `Db::with_wake(hub,

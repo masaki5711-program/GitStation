@@ -136,6 +136,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             // 2026-11-12: the one-time history import allowance (operator CLI).
             .with_history_imports(Arc::new(db.clone())); // clone: the pool handle is shared
         let push_tasks = smart_http.push_tasks();
+        // Plan 18 S3 (`forge_refs`): the ref writes made through this
+        // browser are announced to the other processes, and theirs drop
+        // its caches (`serve_refs`).
+        let refs_tasks = crate::serve_refs::spawn(&db, &wake_hub, &smart_http.browse);
         // M3 R4 (ADR-0024 §4.2): the merge job runs here, next to the browse
         // cache its ref writes invalidate (`serve_merges`).
         let merger = Arc::new(
@@ -468,6 +472,9 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 &forge_core::RequestId::generate(),
             );
         }
+        // Every ref writer has stopped: what they noted is announced, then
+        // the `forge_refs` tasks end — before the hub and the pools do.
+        refs_tasks.stop(crate::serve_refs::STOP_WAIT).await;
         crate::wake::stop(&wake_hub).await;
         db.close().await;
         served?;

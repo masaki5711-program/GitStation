@@ -488,3 +488,71 @@ S3 より前からの貸し出しをそのまま使う。`merge_queue::claim` �
   それ以外 = すぐ）と、`found_by_the_safety_net` の「何もしなかった」の一覧。
 - 待ちは `QueueTurn::idle` と `AutoMergeWatch::wait` にだけ書く。forge-cli のループに待ちの規則を足さない。
 - 決まりは S2 のまま: 通知は id だけ、起きた側は必ず表を読む、待ちは必ず有限、聞き手が無ければ自分の短い確認に戻る。
+
+## 追記（2026-11-19、計画 18 S3 の最後のコミット）— `forge_refs`: 送り手と聞き手をつないだ。作ったもの、文との違い、既知の限界
+
+S2 の追記の既知の限界「`forge_refs` の送り手と聞き手が無い」を閉じる。どの段の持ち物でもなかったので、S3 の最後に別の
+コミットで入れた。
+
+**調べて分かったこと（S8・S2 の追記の訂正）**
+
+- S8 の追記の「他のプロセス（今は worker のマージ）」と、S2 の追記の「`merges/queue/worker.rs` は worker のプロセスで動く」は
+  事実と違う。マージ・マージキュー・revert・autofix・version refs は **`forge serve` の中**で、serve の `Browser` の複製を
+  持って動く（`forge-cli/src/serve.rs`）。`forge worker` の `Browser` は読むだけで、ref を書くハンドラーは無い。
+- だから、今 serve の外で ref が変わるのは次の 2 つだけ: **もう 1 つの `forge serve`**（入れ替えの間の 2 プロセス、将来の
+  複数台）と、**1 回きりの管理コマンド**（復元、履歴の取り込みなど）。
+- S2 が書き手に数えた `forge-checks/src/risk.rs` と `forge-pipelines/src/spec_publish.rs` は書き手ではなかった。読む前に
+  自分のキャッシュを捨てているだけ。この 2 か所は `Browser::forget_refs`（誰にも知らせない）に変えた。
+
+**作ったもの**
+
+1. **`forge_git::browse::Browser`** を 2 つの入口に分けた。
+   - `invalidate(repo)`: **このプロセスが ref を書いた**。キャッシュを捨て、`on_refs_changed` で登録された関数に知らせる。
+     書き手 15 か所は 1 行も変えていない（今までどおり `invalidate` を呼ぶ）。新しい書き手も `invalidate` を呼べば送られる。
+   - `forget_refs(repo)`: キャッシュを捨てるだけ。**他のプロセスの通知を聞いた側**と、読む前に自分のキャッシュを捨てたい側が呼ぶ。
+     知らせ直さないので、通知がプロセスの間を回り続けることはない。
+   - `on_refs_changed(f) -> bool`: 知らせ先を 1 回だけ登録する（複製は同じ登録を共有する。2 回目は `false`）。forge-git は
+     DB を知らないままにする（依存の向き）。`f` は書き手の経路で動くので、待ってはいけない。
+2. **`forge_db::wake::refs_changed(db, repos)`**: 何個のリポジトリでも 1 文（`pg_notify('forge_refs', id)`）。書き込み用の
+   プールで、`Db::within` の上限つき。
+3. **`forge-cli/src/serve_refs.rs`**（`forge serve` だけ）:
+   - **知らせるタスク**: 書き手は id を集合に入れるだけで、DB を待たない。タスクがまとめて 1 文で送る。失敗は、その失敗の
+     コードと `task=refs_announce` で 1 回（続く間は 1 分に 1 回、回数つき）出し、**送り直さない**。
+   - **聞くタスク**: wake hub の `forge_refs` を待ち、聞いた id ごとに `forget_refs` を呼ぶ。id でないペイロードは捨てる
+     （debug の 1 行）。再接続・安全網では何もしない（下の「安全網」）。
+   - 2 つとも `serve_merges::supervise` の下で動く。頼まれずに終わると `FG-SYS-0005 operation=merge_task_exited`
+     （`task=refs_announce` / `task=refs_listen`）を出して、1〜30 s の間隔でやり直す。
+   - **止め方**: push・マージなど ref の書き手が全部止まった後、hub と DB のプールを閉じる前に止める。知らせるタスクは残りを
+     1 回送ってから終わる。待つのは最長 5 s で、過ぎたら `FG-SYS-0005 operation=refs_task_pending` を出して先へ進む。
+
+**安全網**: 通知で捨てるキャッシュ（ref の一覧、ブランチのスナップショット、到達の答え）は、どれも `refs_ttl`（5 s。設定の
+キーではない定数）で自分から古くなる。だから、通知が届かなくても間違いは最長 5 s で直る。正しさは通知に頼らない。新しい
+エラーコードも、`FG-DB-0024` の報告も足していない（待っている仕事が無いので、「取りこぼした」と言える時点が無い）。
+
+**文との違い**（どれも意図したもの）
+
+1. **送るのは ref を書いたトランザクションの中ではなく、直後。** git の ref は DB の外にあるので、同じトランザクションに
+   できない。書いた後で送れなかった場合は、上の安全網（5 s）が拾う。
+2. **書き手ごとに送る文を書かず、`Browser::invalidate` の 1 か所から送る。** 書き手の半分は同期の文脈（`Drop`、クロージャ）で
+   `invalidate` を呼ぶので、その場で DB を待てない。1 か所にしたので、書き手が送り忘れることもない。
+3. **聞いた側が呼ぶのは `Browser::invalidate` ではなく `forget_refs`。** `invalidate` は知らせ直すので、聞いた側が呼ぶと通知が
+   回り続ける。
+4. **送り手は `forge serve` だけ。** worker には ref の書き手が無い（上の「調べて分かったこと」）。
+
+**既知の限界**
+
+- **書いたプロセスも自分の通知を聞き、その ref をもう 1 回読む**（`for-each-ref` 1 回。答えは変わらない）。
+- **1 回きりの管理コマンドが書いた ref は通知されない**（`Browser` を持たない）。serve からは今までどおり最長 5 s 古く見える。
+- **worker の `Browser` は聞かない。** worker のハンドラーは、必要な所で読む前に `forget_refs` を呼んでいる（今までと同じ）。
+  それ以外の読み取りは最長 5 s 古い。
+- **ref を書くたびに NOTIFY つきの短いトランザクションが 1 つ増える**（NOTIFY は COMMIT を直列にする。
+  `ops/runbooks/db-unavailable.md` の「notify queue」）。push 1 回で 1〜2 回。
+- 256 を超える別々のリポジトリの通知が、聞くタスクの 1 回の起床の間に溜まると、hub は「全部見ろ」（`Reconnected`）を返す。
+  聞くタスクは何もしないので、その分は 5 s の安全網で拾う。
+
+**引き継ぐもの**
+
+- **ref を書く処理を足すときは、書いた後で `Browser::invalidate(repo)` を呼ぶ**（serve の `Browser` の複製で）。それだけで
+  `forge_refs` も送られる。読む前に自分のキャッシュを捨てたいだけなら `forget_refs` を呼ぶ。
+- `forge serve` の外（worker、管理コマンド）で `refs/heads/` を書く処理を足すときは、書いた後で
+  `forge_db::wake::refs_changed` を送る（S8 の追記の決まりの、今の形）。

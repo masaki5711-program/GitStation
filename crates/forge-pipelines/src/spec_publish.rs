@@ -163,8 +163,9 @@ impl SpecPublisher {
         if rules.levels(&request.tag).is_empty() {
             return Ok(not_released(request, request_id, "tag_not_protected"));
         }
-        // The worker's browser may hold the list from before the push.
-        self.browse.invalidate(repo);
+        // The worker's browser may hold the list from before the push. A
+        // reader's refresh, not a ref write: nothing is announced.
+        self.browse.forget_refs(repo);
         let refs = self.browse.refs(repo).await?;
         let Some(entry) = refs.refs.iter().find(|r| r.name == request.tag) else {
             return Ok(not_released(request, request_id, "tag_gone"));
