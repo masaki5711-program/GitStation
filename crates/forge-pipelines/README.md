@@ -11,6 +11,7 @@ M4 C7: MR のパイプラインは head ではなく **マージ結果**（`refs
 | `plan_and_record(&PipelineRequest, &RequestId) -> Outcome` | 下の手順。`NoDefinition`（ファイルが無い: 行を作らない）、`ProjectGone`、`Recorded { created, status, jobs }`（`created.existing`: 再配信で既にあった） |
 | `fail(&PipelineRequest, &RequestId, &cause) -> Result<(), ForgeError>` | ジョブの最後の試行の失敗: `error`（FG-CI-0002）の行を書き、warn で `cause_code` を 1 回記録する。**行を書けなければその誤りを返す**（error で記録。ジョブはそのコードで再試行し、尽きれば dead になって doctor `ci.pipelines` / `jobs.dead` に出る。黙って終わらない） |
 | `list` / `get`（`PipelineRead`） | ルートの proof の上で |
+| `run_merge_request(&ChangeRequest, &Authorized<ProjectCtx>, iid) -> MergePipelineRun`（`PipelineCreate`、計画 18 S5） | `POST …/merge-requests/{iid}/pipeline`: 今の target のマージ結果で MR パイプラインを動かす。`forge_db::review::run_merge_request_pipeline_decided` が変更のトランザクションの中で判定をやり直す。答えは `queued`（積んだ）・`exists`（もう積んである: 何も書かない）・`computing`（今の先端のマージ結果をまず作る判定を、依頼つきで積んだ）。ログ `forge.ci.merge_request_pipeline_asked` |
 | `cancel`（`PipelineCancel`）、`retry`（`PipelineRetry`）、`run_manual`（`PipelineCreate`） | `ChangeRequest`（`request_id` と資格情報の id）とルートの proof を受け、**変更のトランザクションの中で判定をやり直し**（ロックした事実で `authorize()`）、監査の行を同じトランザクションで書く。変更の後のパイプラインを返す（無ければ FG-REPO-0005 `resource=pipeline`） |
 | `MarkMeter` | コミットの機密の印を測る（呼ぶ側が実装する。forge-cli は `forge_checks::confidential` で、FG-AUTH-0022 と同じ規則） |
 | `ai_eval::report_ai_eval_checks(db, store, baselines, request_id)` | 計画 17 P17-2（ADR-0034）: 成果物 `eval-report.json` を宣言したパイプライン（`ci_pipelines.ai_eval_job`）のチェック `forge/ai-eval` を書く worker の 1 回（タスク `ci_ai_eval`）。報告は保存先から（sha256 を確かめる）、基準 `evals/baselines/<models>.json` は `BaselineSource`（browse API）でパイプラインのコミットから。判定は `forge_core::ai_eval`。報告・基準が無い・壊れているときは `error`（FG-AIASSET-0002 / 0003 / 0007）で、成功にしない。読みの一時の失敗は書かずに次の回へ |
@@ -49,6 +50,7 @@ M4 C7: MR のパイプラインは head ではなく **マージ結果**（`refs
 | `pipeline.canceled` | `cancel` | `project_id`、`pipeline_id`、`jobs`（取り消したジョブの数） |
 | `pipeline.retried` | `retry` | `project_id`、`pipeline_id`、`jobs`（やり直すジョブの数） |
 | `pipeline.run_manual` | `run_manual`（行を書いたとき。503 のときは書かない） | `project_id`、`pipeline_id`、`ref`、`sha`、`status` |
+| `pipeline.run_merge_request` | `run_merge_request`（`queued` か `computing` のとき。`exists` と、依頼つきの判定がもう待っているときは書かない） | `project_id`、`merge_request_id`、`iid`、`outcome`、`sha`、`target_sha`、`check_seq` |
 
 `resource_type = 'project'`、行為者はユーザーまたはサービスアカウント（エージェントのトークンはその人 + `credential_id` と実効スコープ）。
 push・MR のマージ結果から作られたパイプラインは人の操作ではないので行を書かない（元の push / MR の監査が既にある）。

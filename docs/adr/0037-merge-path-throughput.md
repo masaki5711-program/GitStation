@@ -523,3 +523,78 @@ S4 の差分を 2 人の評価者（データベース、Rust）が読んだ。�
 - **`recompute_carried` は衝突したときだけ動く**。試しのマージがエラーや時間切れで終わったときは動かさない: そのマージは
   どのみち断られ、次に頼まれたときにまた試しのマージをする。
 - **足した列は読み取り専用のロールから読める**。入っているのはパスの名前だけで、リポジトリを読める人が見られるものと同じ。
+
+## 追記（2026-11-19、計画 18 S5 の実装）— (d) のうち作ったもの、文との違い、既知の限界、S6 が引き継ぐもの
+
+### 作ったもの
+
+1. **MR パイプラインは新しい head のときだけ**。マージ結果の書き込み（`forge_db::review::record_merge_result`）が、どの方針で
+   パイプラインを積むかを引数 `MergeRequestPipeline` で受ける: `OnNewHead`（既定）は、新しい行がその head の **最初の**
+   マージ結果のときだけ積む（同じ head の別の target の行があれば積まない = target の移動）。`OnTargetMove` は新しい行ごと
+   （S5 の前）。`Requested` は人の依頼で、行がもうあっても積む（パイプラインのジョブはその素性で重複を除くので 1 本）。
+   方針を決めるのは `forge_review::Mergeability`（`with_pipeline_on_target_move`、ジョブの依頼の印）。S4 の持ち越しと、直接の
+   マージの拒否が積む計算し直し（`recheck_if_carried`）の新しいマージ結果も、同じ head なのでパイプラインを積まない。
+2. **設定キー `ci.mr_pipeline_on_target_move`**（`FORGE_CI_MR_PIPELINE_ON_TARGET_MOVE`、既定 `false`、`true` / `false` 以外は
+   起動の時の FG-CFG `invalid`）。`CiConfig` が読み、すべてのプロセスが検証するが、**効くのは `forge worker` だけ**（マージ結果を
+   書くのはマージ可能性のジョブだけ。`forge serve` は書かない）。`worker::provision::Storage` → `MergeabilityHandler`。
+3. **直接のマージの答え**: `merges::evaluate::blocked` は FG-CI-0013 に文脈 `hint=merge_queue` を付ける（コードは増やしていない）。
+   forge-web のエラーの本体は、FG-CI-0013 のときだけ、閉じた一覧（`error::HINTS`）の語を `hint` として足す（`reason` の
+   FG-INT-0007 と同じ作り）。OpenAPI の `Error` に省略できる `hint`（enum `merge_queue`）を足した。利用者に見せる文は今までどおり
+   `user_message` と `request_id` だけ。
+4. **今の target でパイプラインを動かす**: 新しいルート `POST /api/v1/projects/{id}/merge-requests/{iid}/pipeline`
+   （`PipelineCreate`、`ProjectCtx`、`202`）。既存の `POST …/pipelines` は使い回さなかった: あれはブランチの先端の手動の実行
+   （`source = manual`、MR の紐づけ無し）で、MR の `ci/pipeline`（マージ結果への報告）にならない。処理は
+   `forge_pipelines::Pipelines::run_merge_request` → `forge_db::review::run_merge_request_pipeline_decided`（`ChangeTx` で
+   `PipelineCreate` をロックした事実で判定し直し、mergeability の行をロックする）。答え: `queued`（今のマージ結果に積んだ）、
+   `exists`（もう積んである。何も書かない）、`computing`（今の先端のマージ結果が無い: 依頼の印 `"pipeline": true` のついた判定の
+   ジョブを積む。その印のついた判定がもう生きていれば同じ `check_seq` を返して何も書かない）。監査の行は `pipeline.run_merge_request`
+   （`queued` と `computing` のときだけ）。権限マトリクスは Action ごとの表なので、`PipelineCreate` の既存の行（`developer_rows!`、
+   許可 6・拒否 9）がこのルートを覆う。ルートの許可・拒否はルートの試験で確かめた。
+5. **依頼の引き継ぎ**: 判定の依頼（`request_check_on`）は、行を進める同じ文で、生きている（queued / running）依頼つきの
+   ジョブがあるかを読み、あれば新しいジョブにも印を付ける。着地・見回り・直接のマージの計算し直しが間に入っても依頼は消えない。
+6. **web**: `ci/pipeline` が必須の target では、直接の「マージ…」を出さず、キューのボタンが主の「準備ができたらマージ」になる
+   （説明の文を `aria-describedby` で結ぶ）。`ci/pipeline` が新しくないときは「いまの取り込み先でパイプラインを動かす」を出し、
+   答えを 1 行の `role=status` で言う。状態の 1 行の `required_check_stale` の次の手は「準備ができたらマージ」か今の target での
+   実行。チェックの行に「`<sha>` 時点」（古ければ「古い取り込み先」）を出す（S4 の追記が S5 に残したもの）。
+   状態の契約には `checks[].target_sha` と `viewer.can_run_pipeline` を schema_version 1 のまま足した。
+
+### 文との違い
+
+- 計画の「ファイル」は `crates/forge-web/src/` に新しいルートを置くとしていた。置き場はマージリクエストのルートの下の新しい
+  ファイル（`routes/merge_requests/pipeline.rs`）にした（`routes/pipelines.rs` は 1100 行を超えている）。
+- 計画は「権限マトリクスの行」を先に書く試験に挙げた。マトリクスは Action ごとで、`PipelineCreate` の行がすでにある
+  （新しい Action は作っていない）ので、行は足していない。代わりにルートの許可（Developer、サービスアカウントの `api` の
+  トークン）と拒否（Reporter・Guest の FG-AUTH-0003、`read_api` のトークンとエージェントの読み取りトークンの FG-AUTH-0002）を
+  ルートの試験 `the_merge_request_pipeline_route_is_decided_as_a_pipeline_run` で確かめた。
+- 新しいコードもマイグレーションも足していない（計画どおり）。拒否は既存の FG-CI-0003（`operation=run_merge_request`、
+  `reason=not_open|no_version|conflict`）と FG-REPO-0005。監査の action の名前に DB の CHECK は無い。
+- `replace_merge_result`（`gc` が消したマージ結果を書き直す）は方針によらずパイプラインを積む: 消えたコミットへの報告は
+  誰も取り出せないコミットのもので、これは着地ごとではなく `gc` の後にしか起きない。
+
+### auto-merge と、キューの無いリポジトリ
+
+forge では、すべてのプロジェクトの target にマージキューがあり、auto-merge はいつもキューに入れる（`AutoMerger::scan` →
+`Review::enqueue_auto`）。だから「キューの無いリポジトリで、`ci/pipeline` が必須の MR の target が動いたら永遠に待つか」には
+「待たない」と答える: `merges/auto.rs` の `blockers()` は `ci/pipeline` の missing / stale を落とし、`PipelineState::of` は新しい
+実行だけを数え、`decide()` が止まるのは `PipelineState::Red` のときだけ。target が動いた MR は stale のまま（`None`）キューに
+入り、列車のパイプラインが着地を決める。挙動の変化は 1 つ: 古いマージ結果で **赤** だった head は、target が動くと stale
+（`None`）になり、1 回キューに入って列車が赤になり、`checks_failed` で外れ、その head は `sticky_removal`
+（`merge_queue_checks_failed`）で止まる。列車 1 本の無駄で、繰り返さず、main は赤にならない。キューを止めているときは今までどおり。
+`merges/auto.rs` は S3 の範囲なので変えていない。
+
+### 既知の限界
+
+- 依頼つきの判定のジョブが dead になった、またはファンアウトの上限で後回しにされた（`defer_checks_on` はジョブを積まずに
+  消す）ときは依頼が消える。画面は古いままボタンを出すので、もう一度押せば足りる。
+- `queued` は mergeability の行が答える先端（`checked_target_sha`）のマージ結果に積む。着地の後、購読側が行を持ち越す・計算し
+  直す前の一瞬（outbox の遅れ）に押すと、一つ前の先端に積むことがある。画面はまた古いと出すので、もう一度押せばよい。
+- 依頼つきのジョブが結果を書いた後、まだ running のうちに次の依頼が来ると、その依頼も印を引き継ぐ（次の先端にもう 1 本）。
+  人が押したときにしか起きず、数は押した回数を超えない。
+
+### S6 が引き継ぐもの
+
+- 合成ハンドラ（`merge_request.prepare`）の「MR パイプラインの判断」は、この方針（`MergeRequestPipeline`）とジョブの印
+  （`pipeline_asked`）をそのまま使う。`prepare` のペイロードにも `"pipeline": true` を通すこと（今の判定のジョブと同じ語、
+  同じ引き継ぎ: `request_check_asking_on`）。
+- `forge.review.merge_result_updated` の `pipeline` / `pipeline_enqueued` が「積まなかった理由」の証拠。証明 `c`（MR パイプライン
+  ≤ 45）の数え方は `SELECT count(*) FROM forge.jobs WHERE kind = 'ci.pipeline_create' AND payload->>'source' = 'merge_request'`。
