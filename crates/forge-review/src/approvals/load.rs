@@ -31,6 +31,27 @@ fn git_reason(e: &ForgeError) -> &'static str {
     }
 }
 
+/// git's answer about the changed paths as the fact.
+fn paths_fact(asker: Asker<'_>, mr: &StoredMergeRequest, paths: ChangedPaths) -> ChangedPathsFact {
+    match paths {
+        ChangedPaths::Complete(paths) => {
+            // R5 re-review round 2: a path longer than a CODEOWNERS line
+            // could hold is never matched; fail closed, once.
+            if let Some(long) = paths.iter().find(|p| p.len() > MAX_PATH_BYTES) {
+                let e = ForgeError::new(ErrorCode::GitOutputTooLarge)
+                    .with_context("reason", "path_too_long")
+                    .with_context("path_bytes", long.len())
+                    .with_context("limit", MAX_PATH_BYTES);
+                warn_unread(asker, mr, "changed_paths", &e);
+                return ChangedPathsFact::Unknown("path_too_long");
+            }
+            ChangedPathsFact::Known(paths)
+        }
+        ChangedPaths::TooMany => ChangedPathsFact::Unknown("too_many_paths"),
+        ChangedPaths::NonUtf8 => ChangedPathsFact::Unknown("non_utf8_path"),
+    }
+}
+
 /// The budget ran out before a call (logged like a git timeout).
 fn spent(asker: Asker<'_>, mr: &StoredMergeRequest, what: &'static str, reason: &'static str) {
     let e = ForgeError::new(ErrorCode::GitTimeout)
@@ -66,7 +87,14 @@ impl ReviewGit {
                 codeowners: CodeownersFact::Invalid(CodeownersError::file("read_failed")),
             });
         };
-        let changed = self.changed(asker, mr, head, tip, budget).await;
+        // Load test 2026-11-19: the merge result the mergeability check
+        // wrote for exactly (head, tip) is the trial merge's tree as a
+        // commit (`refs/merge-requests/<iid>/merge`): its paths against the
+        // tip are the paths the merge changes, without a `merge-tree`.
+        let stored = review::merge_result_of_read(db, mr.id, head, tip).await?;
+        let changed = self
+            .changed(asker, mr, (head, tip), stored.as_ref(), budget)
+            .await;
         let committers = self.committers(db, asker, mr, head, tip, budget).await?;
         let codeowners = self
             .codeowners(db, asker, mr, tip, &changed, budget)
@@ -81,14 +109,54 @@ impl ReviewGit {
     /// The paths the merge changes on the target: the target tip against
     /// the trial merge's tree (R5 review: a criss-cross history has more
     /// than one merge base; the result of the merge is what lands).
+    ///
+    /// `stored`: the merge result recorded for exactly (`head`, `tip`) —
+    /// a commit of the clean trial merge's tree on the tip (the same
+    /// `merge-tree` of the same pair), so its paths against the tip are
+    /// the same paths. Read when given; a read that fails (the commit was
+    /// pruned) falls back to the trial merge, never to "unknown".
     async fn changed(
         &self,
         asker: Asker<'_>,
         mr: &StoredMergeRequest,
-        head: &ObjectId,
-        tip: &ObjectId,
+        (head, tip): (&ObjectId, &ObjectId),
+        stored: Option<&ObjectId>,
         budget: &mut Budget,
     ) -> ChangedPathsFact {
+        if let Some(result) = stored {
+            let timeout = match budget.next() {
+                Ok(t) => t,
+                Err(reason) => {
+                    spent(asker, mr, "changed_paths", reason);
+                    return ChangedPathsFact::Unknown("timeout");
+                }
+            };
+            match self
+                .git
+                .changed_paths(
+                    &self.storage,
+                    asker.repo,
+                    tip,
+                    result,
+                    MAX_CHANGED_PATHS,
+                    timeout,
+                )
+                .await
+            {
+                Ok(paths) => return paths_fact(asker, mr, paths),
+                Err(e) => tracing::info!(
+                    target: "forge_review",
+                    event = "forge.review.merge_result_unread",
+                    error_code = e.code().id(),
+                    request_id = %asker.request_id,
+                    merge_request_id = mr.id.get(),
+                    project_id = asker.project.get(),
+                    result_sha = result.as_str(),
+                    error = %e,
+                    "the stored merge result could not be read; the trial merge is computed instead"
+                ),
+            }
+        }
         let timeout = match budget.next() {
             Ok(t) => t,
             Err(reason) => {
@@ -133,21 +201,7 @@ impl ReviewGit {
             )
             .await
         {
-            Ok(ChangedPaths::Complete(paths)) => {
-                // R5 re-review round 2: a path longer than a CODEOWNERS line
-                // could hold is never matched; fail closed, once.
-                if let Some(long) = paths.iter().find(|p| p.len() > MAX_PATH_BYTES) {
-                    let e = ForgeError::new(ErrorCode::GitOutputTooLarge)
-                        .with_context("reason", "path_too_long")
-                        .with_context("path_bytes", long.len())
-                        .with_context("limit", MAX_PATH_BYTES);
-                    warn_unread(asker, mr, "changed_paths", &e);
-                    return ChangedPathsFact::Unknown("path_too_long");
-                }
-                ChangedPathsFact::Known(paths)
-            }
-            Ok(ChangedPaths::TooMany) => ChangedPathsFact::Unknown("too_many_paths"),
-            Ok(ChangedPaths::NonUtf8) => ChangedPathsFact::Unknown("non_utf8_path"),
+            Ok(paths) => paths_fact(asker, mr, paths),
             Err(e) => {
                 warn_unread(asker, mr, "changed_paths", &e);
                 ChangedPathsFact::Unknown(git_reason(&e))

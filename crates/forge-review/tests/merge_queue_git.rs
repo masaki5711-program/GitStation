@@ -11,6 +11,8 @@
 //! `forge/risk` rules (M4 close), as `forge serve` wires them.
 
 mod common;
+// Load test 2026-11-19 (ADR-0037 addendum): the enqueue's early refusal.
+mod queue_fast;
 mod queue_paths;
 mod queue_train_lint;
 // Plan 18 S3 (ADR-0037 (a)): the queue's and auto-merge's wakes.
