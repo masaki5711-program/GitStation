@@ -212,8 +212,10 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
     fields, tags peeled one level, `default_branch` from `%(HEAD)`, ≤ `max_refs` 5 000 else
     `truncated`); cached per repository for `refs_ttl` (5 s), at most `max_cached_repos` (256);
     `invalidate(repo)` (every push; every other ref writer must call it too) drops it and that
-    repository's reachability answers (the generation is per repository), and a list loaded across an
-    invalidation is not stored.
+    repository's reachability answers (the generation is per repository; the map is bounded: at 4 096
+    repositories it is cleared and one shared floor generation moves past every value it held, so a
+    flood of `forge_refs` ids costs one re-read of the caches, not memory), and a list loaded
+    across an invalidation is not stored.
   - `require_branch(repo, &RefName) -> Result<(), ForgeError>` (plan 18 S8, ADR-0037 (g),
     `browse/branches.rs` over `refs_cache::RefSnapshotCache`): "does this branch exist", what a merge
     request create or retarget asks. Per repository one shared `for-each-ref refs/heads/` (single

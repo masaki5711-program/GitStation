@@ -276,12 +276,50 @@ impl std::fmt::Debug for Announce {
 #[derive(Debug, Default)]
 struct RefCache {
     entries: Mutex<HashMap<RepoId, Cached>>,
-    /// Per repository, bumped by every invalidation of that repository: a
+    /// Per repository, changed by every invalidation of that repository: a
     /// load (ref list, reachability answer) that saw another value at its
-    /// start does not store its result (it may predate a push). One `u64`
-    /// per repository ever invalidated; a push to one repository leaves
-    /// every other repository's caches alone.
-    epochs: Mutex<HashMap<RepoId, u64>>,
+    /// start does not store its result (it may predate a push).
+    epochs: Mutex<Epochs>,
+}
+
+/// The cache generations (see [`RefCache::epochs`]): one per repository
+/// invalidated since the last clear; any other repository has `floor`.
+/// The map is bounded (review of plan 18 S3: any numeric `forge_refs`
+/// payload names a repository): at [`EPOCHS_MAX`] entries it is cleared
+/// and `floor` moves past every value it held, so no load that began
+/// before the clear stores, and every repository's cached answers are
+/// read again once.
+#[derive(Debug, Default)]
+struct Epochs {
+    own: HashMap<RepoId, u64>,
+    floor: u64,
+}
+
+/// The most repositories with their own generation.
+const EPOCHS_MAX: usize = 4096;
+
+impl Epochs {
+    fn of(&self, repo: RepoId) -> u64 {
+        self.own.get(&repo).copied().unwrap_or(self.floor)
+    }
+
+    /// `repo`'s refs changed.
+    fn bump(&mut self, repo: RepoId) {
+        if let Some(epoch) = self.own.get_mut(&repo) {
+            *epoch = epoch.wrapping_add(1);
+            return;
+        }
+        if self.own.len() >= EPOCHS_MAX {
+            // Every value handed out is at most the largest one: past it,
+            // no load of before the clear stores.
+            let top = self.own.values().copied().max().unwrap_or(0);
+            self.floor = self.floor.max(top).wrapping_add(1);
+            self.own.clear();
+        }
+        // Not the floor any load of `repo` read: those read at most it.
+        let next = self.floor.wrapping_add(1);
+        self.own.insert(repo, next);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -448,8 +486,7 @@ impl Browser {
                 .epochs
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            let epoch = epochs.entry(repo).or_insert(0);
-            *epoch = epoch.wrapping_add(1);
+            epochs.bump(repo);
         }
         {
             let mut entries = self
@@ -470,7 +507,18 @@ impl Browser {
             .epochs
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        epochs.get(&repo).copied().unwrap_or(0)
+        epochs.of(repo)
+    }
+
+    /// Repositories with their own cache generation (tests).
+    #[cfg(test)]
+    fn own_epochs(&self) -> usize {
+        self.cache
+            .epochs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .own
+            .len()
     }
 
     /// One of `repo`'s browse slots: at once when one is free, else after

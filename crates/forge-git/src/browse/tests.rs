@@ -530,6 +530,24 @@ async fn the_ref_list_is_cached_until_a_push_invalidates_it() {
         h.c1
     );
 
+    // Review of plan 18 S3: `forge_refs` payloads naming 10 000 other
+    // repositories keep the generations bounded, and the cached
+    // repository's answer is still dropped by its own change.
+    for id in 1_000_000..1_010_000 {
+        b.forget_refs(RepoId::new(id));
+    }
+    assert!(b.own_epochs() <= EPOCHS_MAX, "bounded: {}", b.own_epochs());
+    update_ref(&f.path, "refs/heads/main", &h.c2);
+    b.forget_refs(f.id);
+    assert_eq!(
+        b.resolve_ref(f.id, "main", "user:1")
+            .await
+            .expect("fresh again")
+            .commit,
+        h.c2
+    );
+    update_ref(&f.path, "refs/heads/main", &h.c1);
+
     let short = f.browser(BrowseLimits {
         refs_ttl: Duration::from_millis(1),
         ..BrowseLimits::default()
