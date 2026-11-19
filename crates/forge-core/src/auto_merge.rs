@@ -497,8 +497,9 @@ pub enum QueueFacts {
     None,
     /// A live entry (`auto`: the auto-merge principal's).
     Live { auto: bool },
-    /// The auto-merge principal's entry of this very head left the queue
-    /// with `reason`.
+    /// An entry of this very head left the queue with `reason`: the
+    /// auto-merge principal's entry, or anyone's for a reason of
+    /// [`removal_binds_every_entry`].
     Removed { reason: String },
 }
 
@@ -560,6 +561,26 @@ impl Verdict {
             Self::Stopped(_) => Some("stopped"),
         }
     }
+}
+
+/// Whether a queue removal with `reason` keeps its head away from
+/// auto-merge whoever enqueued the entry (load test 2026-11-19, ADR-0037
+/// addendum): what the head and the target prove — red alone
+/// (`checks_failed`), the train lint's removals — and a person's
+/// `dequeued`, which takes that head out of the queue whether the entry
+/// was the person's own or the auto-merge principal's. The other sticky
+/// reasons (the merge result's risk) are decided for auto-merge entries
+/// only, and stay so.
+pub fn removal_binds_every_entry(reason: &str) -> bool {
+    matches!(
+        reason,
+        "checks_failed"
+            | "dequeued"
+            | crate::train_lint::FAILED_REASON
+            | crate::train_lint::UNAVAILABLE_REASON
+            | crate::train_lint::BASE_NOT_CLEAN_REASON
+            | crate::train_lint::REPO_CONFIG_INVALID_REASON
+    )
 }
 
 /// Queue removals of an auto-merge entry that keep the same head away

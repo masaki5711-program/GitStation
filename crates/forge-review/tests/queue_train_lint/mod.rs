@@ -251,6 +251,53 @@ async fn assert_merged(w: &World, mr: &StoredMergeRequest) {
     assert_eq!(w.state_of(mr).await, forge_core::MergeRequestState::Merged);
 }
 
+/// Load test 2026-11-19 (scenario a-xref): a person's entry the train
+/// lint removed (`doc_lint_failed`, FG-CI-0032) keeps that head away from
+/// auto-merge too — the head and the target prove it, not who enqueued.
+/// Before, auto-merge enqueued the same head again, the train was built
+/// and linted a second time, and only then did auto-merge stop.
+#[tokio::test]
+async fn a_person_entry_removed_by_the_train_lint_stops_auto_merge_on_that_head() {
+    let mut w = world_with(CLEAN_BASE).await;
+    let deletes = w.doc_mr("fa", &[("qms/QM-002.md", None)]).await;
+    let cites = w
+        .doc_mr("fb", &[("qms/QM-001.md", Some(QM_001_CITING_002))])
+        .await;
+    w.enqueue(&deletes).await.expect("enqueue");
+    w.enqueue(&cites).await.expect("enqueue");
+    w.drive(&w.lint_worker("w1"), &BTreeSet::new()).await;
+    assert_merged(&w, &deletes).await;
+    assert_removed_by_the_lint(&w, &cites, "doc_lint_failed").await;
+    // On its own the head is clear and mergeable into the new tip, as
+    // auto-merge sees it: forge/risk and forge/doc-lint succeed.
+    w.checked(cites.id).await;
+    w.risk(&cites, CheckConclusion::Success, "No risk found")
+        .await;
+
+    let report = w.auto().tick().await.expect("tick");
+    assert_eq!(report.queued, 0, "{report:?}");
+    assert!(w.live_entry(&cites).await.is_none(), "not enqueued again");
+    assert_eq!(
+        w.auto_state(&cites).await,
+        Some((
+            "stopped".to_owned(),
+            Some("program_breakage".to_owned()),
+            "merge_queue_doc_lint_failed".to_owned(),
+            Some(DOC_LINT_CHECK.to_owned()),
+        ))
+    );
+    let removals = count(
+        &w.t,
+        &format!(
+            "SELECT count(*) AS n FROM forge.merge_queue_entries WHERE merge_request_id = {} \
+             AND state = 'removed' AND error_code = 'FG-CI-0032'",
+            cites.id.get()
+        ),
+    )
+    .await;
+    assert_eq!(removals, 1, "one FG-CI-0032 removal per not-merged head");
+}
+
 #[tokio::test]
 async fn a_train_whose_members_break_a_reference_together_never_lands() {
     assert_eq!(ErrorCode::MergeQueueDocLintFailed.id(), "FG-CI-0032");

@@ -847,3 +847,31 @@ fn a_doc_lint_still_missing_past_the_limit_stops_with_its_reason() {
         assert_eq!(state.after_waiting(Some(limit * 10), limit), state);
     }
 }
+
+/// Load test 2026-11-19: the removals that bind whoever enqueued are
+/// each a sticky removal (a name in one list and not the other would be
+/// a removal that binds nothing); the merge result's are auto-merge's
+/// only, and a `stalled` train binds no one.
+#[test]
+fn removals_proven_by_head_and_target_bind_every_entry() {
+    for reason in [
+        "checks_failed",
+        "dequeued",
+        crate::train_lint::FAILED_REASON,
+        crate::train_lint::UNAVAILABLE_REASON,
+        crate::train_lint::BASE_NOT_CLEAN_REASON,
+        crate::train_lint::REPO_CONFIG_INVALID_REASON,
+    ] {
+        assert!(removal_binds_every_entry(reason), "{reason}");
+        assert!(sticky_removal(reason).is_some(), "{reason}");
+    }
+    for reason in [
+        MERGE_RESULT_UNAVAILABLE,
+        merge_result_reason(StopClass::ProgramBreakage).as_str(),
+        "stalled",
+        "required_check_missing",
+        "source_moved",
+    ] {
+        assert!(!removal_binds_every_entry(reason), "{reason}");
+    }
+}
