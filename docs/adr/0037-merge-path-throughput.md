@@ -842,3 +842,16 @@ p50 1.2 s かかった。調べ直して 1 点直した: 枝の先端は毎回�
 - 枝の 2 つの先端は並べずに順に読む: 2 つ目は 1 つ目が読んだ ref 一覧のキャッシュから答えるので、並べると冷えた
   キャッシュで `for-each-ref` が 2 回になる。
 - 201 の経路の残りの git（`diff-tree`、`rev-list`、`ls-tree`）は順に走る。並べるのは S6（準備のジョブ）の範囲。
+
+**レビューの後（同じ日）**
+
+- 早い 409 の `reason` が全体の判定と違いうること（上の限界の 1 つ目）は、そのままにした。409 の本文は
+  `error_code`・`user_message`・`request_id` だけで（`forge-web/src/error.rs`）、画面の「止まっている理由」と
+  `queueProves` は `GET …/status` の理由を読む。`gstn` も本文を出すだけ。`reason` を読むのはログだけなので、
+  FG-REVIEW-0007 の `diagnosis`（`errors.toml`）に違いを書き、カタログを作り直した。テスト
+  `the_early_refusal_names_only_the_reasons_the_database_decides` が、同じ状態の全体の評価（状態の読み取り）と早い断りで
+  コードと `user_message` が同じこと、`approvals_missing` が先に来るときだけ `reason` が違うことを確かめる。
+- 早い断りは何も書かない: エントリ・キューの行・監査の行は 0。チェックが緑になった後の同じ enqueue は受け付けられる
+  （`a_running_required_check_refuses_enqueue_without_git`）。
+- `checks_failed` は、人のエントリでも同じ head について止まったままになる（新しい push か、人が自分で入れ直すまで）。
+  自動マージ自身のエントリの今までの決まりと同じ。

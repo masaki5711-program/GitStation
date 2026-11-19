@@ -16,7 +16,7 @@ use super::*;
 impl World {
     /// `main`'s merge rule: `checks` required, discussions resolved
     /// (`talks`), a work item link (`link`).
-    async fn rule(&self, checks: &[&str], talks: bool, link: bool) {
+    async fn rule(&self, approvals: u32, checks: &[&str], talks: bool, link: bool) {
         let checks: Vec<String> = checks.iter().map(|c| format!("'{c}'")).collect();
         self.t
             .commit_audited(
@@ -31,7 +31,7 @@ impl World {
                         "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, \
                          project_id, required_approvals, required_checks, \
                          require_resolved_discussions, require_work_item_link) \
-                         SELECT id, project_id, 0, ARRAY[{}]::text[], {talks}, {link} \
+                         SELECT id, project_id, {approvals}, ARRAY[{}]::text[], {talks}, {link} \
                          FROM forge.protected_refs WHERE project_id = {}",
                         checks.join(","),
                         self.project.get()
@@ -147,7 +147,7 @@ fn pairs(raw: &[(&str, String)]) -> Vec<(String, String)> {
 #[tokio::test]
 async fn a_running_required_check_refuses_enqueue_without_git() {
     let mut w = world_with(DOC_BASE).await;
-    w.rule(&["ci/gates"], false, false).await;
+    w.rule(0, &["ci/gates"], false, false).await;
     let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
     w.head_run(&a, "ci/gates", "in_progress", None).await;
 
@@ -159,14 +159,110 @@ async fn a_running_required_check_refuses_enqueue_without_git() {
         .iter()
         .any(|(k, v)| *k == "reason" && v == "required_check_not_successful"));
     assert_eq!(spawns, 0, "no git process for what the database refuses");
-    assert!(w.live_entry(&a).await.is_none());
+    // The refusal accepted and wrote nothing: no entry in any state, no
+    // queue, no audit row.
+    assert_eq!(entries_of(&w, &a).await, 0, "no queue entry");
+    assert_eq!(
+        count(&w.t, "SELECT count(*) AS n FROM forge.merge_queues",).await,
+        0,
+        "no queue row"
+    );
+    assert_eq!(
+        count(
+            &w.t,
+            "SELECT count(*) AS n FROM forge.audit_log WHERE action LIKE 'merge_queue.%'",
+        )
+        .await,
+        0,
+        "no audit row"
+    );
 
-    // Green now: the full decision accepts the same head (and reads git).
+    // Green now: the same enqueue, retried, is accepted by the full
+    // decision (and reads git).
     w.head_run(&a, "ci/gates", "completed", Some("success"))
         .await;
     let (entry, spawns) = counted(w.enqueue(&a)).await;
-    entry.expect("enqueued");
+    let entry = entry.expect("enqueued");
+    assert!(entry.state.is_live());
     assert!(spawns > 0, "the accepting path still reads git");
+    assert_eq!(entries_of(&w, &a).await, 1, "exactly the one entry");
+}
+
+async fn entries_of(w: &World, mr: &StoredMergeRequest) -> i64 {
+    count(
+        &w.t,
+        &format!(
+            "SELECT count(*) AS n FROM forge.merge_queue_entries WHERE merge_request_id = {}",
+            mr.id.get()
+        ),
+    )
+    .await
+}
+
+/// Review MEDIUM (ADR-0037 addendum, FG-REVIEW-0007's diagnosis): the
+/// same database-only state through the full evaluation (the merge
+/// status: every fact, git's too — here permissive: clean, no CODEOWNERS)
+/// and through the early refusal. Same code, so the same `user_message`;
+/// the early `reason` and `reasons` hold only what the database decides,
+/// so a git-decided reason ranked before it (here `approvals_missing`)
+/// is the full path's `reason` and not the early one's — the documented
+/// difference. Without such a reason both are equal
+/// (`early_refusal_matches_the_full_decision`).
+#[tokio::test]
+async fn the_early_refusal_names_only_the_reasons_the_database_decides() {
+    let mut w = world_with(DOC_BASE).await;
+    w.rule(1, &["ci/gates"], false, false).await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.head_run(&a, "ci/gates", "in_progress", None).await;
+
+    let read = stored_proof(
+        &w.t,
+        &w.review,
+        &session(w.owner),
+        Action::MergeRequestRead,
+        w.project,
+        a.iid,
+        MergeRequestEdit::default(),
+    )
+    .await
+    .expect("read proof");
+    let status = w
+        .review
+        .merge_status(
+            &RequestId::parse("req-status-fa").expect("id"),
+            &read,
+            ready(w.repo),
+            None,
+        )
+        .await
+        .expect("status");
+    let full: Vec<&str> = status.reasons.iter().map(|r| r.as_str()).collect();
+    assert_eq!(full, ["approvals_missing", "required_check_not_successful"]);
+
+    let refused = w.enqueue(&a).await.expect_err("refused early");
+    // The full path's code for these reasons: `required_check_stale` is the
+    // only first reason with another one, and it is not here.
+    assert_eq!(refused.code(), ErrorCode::MergeBlocked);
+    for lang in [
+        forge_errors::Lang::Ja,
+        forge_errors::Lang::En,
+        forge_errors::Lang::Id,
+    ] {
+        assert_eq!(
+            refused.user_message(lang),
+            ErrorCode::MergeBlocked.user_message(lang)
+        );
+    }
+    let ctx = context(&refused);
+    let value = |key: &str| {
+        ctx.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(value("reason"), "required_check_not_successful");
+    assert_eq!(value("reasons"), "required_check_not_successful");
+    assert_ne!(value("reason"), full[0], "the documented difference");
 }
 
 #[tokio::test]
@@ -203,7 +299,8 @@ async fn early_refusal_matches_the_full_decision() {
     )
     .await
     .expect("close proof");
-    w.review
+    let (_outcome, _closed) = w
+        .review
         .close(&request("req-close-fc"), &close)
         .await
         .expect("close");
@@ -223,7 +320,7 @@ async fn early_refusal_matches_the_full_decision() {
 
     // A merge rule with a required check, resolved discussions and a work
     // item link, none of them met (one unresolved discussion).
-    w.rule(&["ci/gates"], true, true).await;
+    w.rule(0, &["ci/gates"], true, true).await;
     let b = w.mr("fb", &[("fb.txt", "x\n")]).await;
     let talk = w
         .mr_proof(&session(w.dev), Action::MergeRequestComment, &b)
