@@ -431,7 +431,8 @@ fn fenced(lease: &Lease, kind: &JobKind, operation: &'static str) -> ForgeError 
         .with_context("attempt", lease.attempt)
 }
 
-/// Plan 18 S3 (ADR-0037 (a)): the CTE `poked` of [`complete`] and [`fail`]
+/// Plan 18 S3 (ADR-0037 (a)): the CTE `poked` of [`complete`], [`fail`] and
+/// [`reap`]
 /// — the job that creates a train's pipeline (`ci.pipeline_create`,
 /// `source = merge_queue`) ended and left no pipeline (the train has no CI
 /// definition after all, or the job is dead): the queue whose batch tests
@@ -650,16 +651,23 @@ pub(crate) async fn reap_at_most(db: &Db, limit: i64) -> Result<Vec<ReapedJob>, 
                           ORDER BY lease_until LIMIT $1 \
                           FOR UPDATE SKIP LOCKED) AS expired \
                   WHERE j.id = expired.id \
-                 RETURNING j.id, j.kind, j.worker_id, j.attempts, j.max_attempts, \
-                           j.origin_request_id, j.state = 'dead' AS dead) \
-                 SELECT r.id, r.kind, r.worker_id, r.attempts, r.max_attempts, \
+                 RETURNING j.id, j.kind, j.payload, j.worker_id, j.attempts, \
+                           j.max_attempts, j.origin_request_id, j.state = 'dead' AS dead), ",
+                // A train's create job that died by its lease: no pipeline
+                // will come (review of plan 18 S3, as in `fail`).
+                train_without_pipeline!("reaped", "$3", " AND d.dead"),
+                " SELECT r.id, r.kind, r.worker_id, r.attempts, r.max_attempts, \
                         r.origin_request_id, r.dead, \
-                        (SELECT pg_catalog.pg_notify($2, r.kind) WHERE NOT r.dead) \
+                        (SELECT pg_catalog.pg_notify($2, r.kind) WHERE NOT r.dead), \
+                        (SELECT pg_catalog.count(pg_catalog.pg_notify($4, p.id::text)) \
+                           FROM poked AS p) \
                    FROM reaped AS r"
             ))
             .bind(limit)
             // Queued again after a backoff: idle runners read the due time.
             .bind(Channel::Jobs.name())
+            .bind(crate::pipelines::PIPELINE_CREATE_JOB)
+            .bind(Channel::MergeQueue.name())
             .fetch_all(db.write_pool())
             .await
             .map_err(|e| query_error("jobs.reap", e))

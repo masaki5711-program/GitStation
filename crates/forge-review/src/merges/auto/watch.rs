@@ -109,10 +109,15 @@ impl AutoMerger {
     }
 
     /// Decide the merge requests the sequenced events after `cursor` name
-    /// (module docs) and move `cursor` past the events read. A failure to
-    /// read them is returned; the cursor then stays where the failure was
-    /// and the sweep covers what was not decided.
-    pub async fn decide_events(&self, cursor: &mut i64) -> Result<AutoMergeReport, ForgeError> {
+    /// (module docs) and move `cursor` past the events read: at most
+    /// `EVENT_READS_MAX` reads of `EVENTS_PER_READ`. `true` with the
+    /// report: more events may be waiting (the watch reads on at once). A
+    /// failure to read them is returned; the cursor then stays where the
+    /// failure was and the sweep covers what was not decided.
+    pub async fn decide_events(
+        &self,
+        cursor: &mut i64,
+    ) -> Result<(AutoMergeReport, bool), ForgeError> {
         let mut report = AutoMergeReport::default();
         for _ in 0..EVENT_READS_MAX {
             let named = db::named_by_events(&self.merger.db, *cursor, EVENTS_PER_READ).await?;
@@ -121,18 +126,22 @@ impl AutoMerger {
             *cursor = named.upto;
             report.add(&self.decide_at_once(named.candidates).await);
             if named.events < EVENTS_PER_READ {
-                break;
+                return Ok((report, false));
             }
         }
-        Ok(report)
+        Ok((report, true))
     }
 
     /// Decide the merge requests `ids` that auto-merge acts on (the
     /// payloads of `forge_auto_merge`; an id it does not act on is
     /// nothing).
     pub async fn decide_named(&self, ids: &[i64]) -> Result<AutoMergeReport, ForgeError> {
-        let due = db::named(&self.merger.db, ids).await?;
-        Ok(self.decide_at_once(due).await)
+        let mut report = AutoMergeReport::default();
+        for slice in ids.chunks(db::NAMED_MAX) {
+            let due = db::named(&self.merger.db, slice).await?;
+            report.add(&self.decide_at_once(due).await);
+        }
+        Ok(report)
     }
 
     /// Look at every merge request auto-merge acts on (module docs: the
@@ -198,6 +207,26 @@ struct Listening {
     named: WakeRx,
 }
 
+/// The most pending wakes one receiver gives up for a sweep.
+const ABSORB_MAX: usize = 4;
+
+impl Listening {
+    /// A sweep: what both receivers hold now is part of it (review of plan
+    /// 18 S3: a reconnect wakes each receiver once; one reconnect is one
+    /// sweep, not two). The sweep reads after these were sent, so it
+    /// covers them.
+    async fn sweep(&mut self) -> AutoMergeWake {
+        for rx in [&mut self.events, &mut self.named] {
+            for _ in 0..ABSORB_MAX {
+                if rx.wait(Duration::ZERO).await == Woken::SafetyNet {
+                    break;
+                }
+            }
+        }
+        AutoMergeWake::Sweep
+    }
+}
+
 /// The auto-merge worker with its wait (module docs). Not shared: one
 /// task owns it.
 #[derive(Debug)]
@@ -207,8 +236,12 @@ pub struct AutoMergeWatch {
     safety: Duration,
     /// `None` without a hub.
     rx: Option<Listening>,
-    /// The sequence number of the last event read.
-    cursor: i64,
+    /// The sequence number of the last event read; `None` until the
+    /// first sweep succeeded (the events before it are the sweep's).
+    cursor: Option<i64>,
+    /// The last read of events stopped at its bound with more waiting:
+    /// the next wait reads on at once.
+    more_events: bool,
     next_sweep: Instant,
     /// The last wait was the fallback poll: sweep when the listener is up.
     polled: bool,
@@ -227,7 +260,8 @@ impl AutoMerger {
             worker: self.clone(), // clone: handles
             safety,
             rx,
-            cursor: 0,
+            cursor: None,
+            more_events: false,
             next_sweep: Instant::now(),
             polled: false,
         }
@@ -270,13 +304,17 @@ impl AutoMergeWatch {
         if self.polled {
             // The listener is back: what was sent meanwhile is lost.
             self.polled = false;
-            return AutoMergeWake::Sweep;
+            return rx.sweep().await;
         }
         let left = self.next_sweep.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return AutoMergeWake::Sweep;
+            return rx.sweep().await;
         }
-        tokio::select! {
+        if self.more_events {
+            self.more_events = false;
+            return AutoMergeWake::Events;
+        }
+        let woken = tokio::select! {
             woken = rx.events.wait(left) => match woken {
                 Woken::Notified(_) => AutoMergeWake::Events,
                 Woken::SafetyNet | Woken::Reconnected => AutoMergeWake::Sweep,
@@ -291,6 +329,12 @@ impl AutoMergeWatch {
                 }
                 Woken::SafetyNet | Woken::Reconnected => AutoMergeWake::Sweep,
             },
+        };
+        match woken {
+            AutoMergeWake::Sweep => rx.sweep().await,
+            other @ (AutoMergeWake::Events | AutoMergeWake::Named(_) | AutoMergeWake::Poll) => {
+                other
+            }
         }
     }
 
@@ -305,11 +349,23 @@ impl AutoMergeWatch {
                 // read after it (deciding twice is harmless).
                 let high = db::events_high(&self.worker.merger.db).await?;
                 let report = self.worker.sweep().await?;
-                self.cursor = high;
+                self.cursor = Some(high);
+                self.more_events = false;
                 self.next_sweep = Instant::now() + self.safety;
                 Ok(report)
             }
-            AutoMergeWake::Events => self.worker.decide_events(&mut self.cursor).await,
+            AutoMergeWake::Events => {
+                let Some(cursor) = self.cursor.as_mut() else {
+                    // No sweep succeeded yet (review of plan 18 S3): the
+                    // history before now is the sweep's, due again soon;
+                    // read only what comes after this.
+                    self.cursor = Some(db::events_high(&self.worker.merger.db).await?);
+                    return Ok(AutoMergeReport::default());
+                };
+                let (report, more) = self.worker.decide_events(cursor).await?;
+                self.more_events = more;
+                Ok(report)
+            }
             AutoMergeWake::Named(ids) => self.worker.decide_named(&ids).await,
             AutoMergeWake::Poll => self.worker.tick().await,
         }

@@ -879,3 +879,120 @@ async fn without_a_listener_auto_merge_polls_by_itself() {
     watch.act(wake).await.expect("tick");
     assert!(w.live_entry(&a).await.is_some(), "decided by the poll");
 }
+
+/// Review of plan 18 S3 (1): a queue one turn released due now is
+/// announced, so another turn in its whole wait (it saw the queue not
+/// due, or leased) claims it without waiting out the period — the
+/// releasing turn may go on to another queue.
+#[tokio::test]
+async fn a_queue_released_due_now_wakes_a_turn_in_its_whole_wait() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    let queue = w.queue_id().await;
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.merge_queues SET next_run_at = now() + interval '10 minutes' \
+          WHERE id = {queue}"
+    ))
+    .await;
+    let (hub, db) = hub_on(&w).await;
+    let q = queue_on(&w, &db, "w", nets());
+    let mut first = q.turn(0);
+    let mut other = q.turn(1);
+    settled(&mut first).await;
+    settled(&mut other).await;
+    let roused = roused_by!(other, {
+        // Due without a word (as if its lease ended), and the first turn
+        // takes it: the batch is built and the queue released due now.
+        w.t.exec_superuser(&format!(
+            "UPDATE forge.merge_queues SET next_run_at = now() WHERE id = {queue}"
+        ))
+        .await;
+        let built = first.tick().await.expect("tick").expect("due");
+        assert_eq!(built.outcome, "built");
+    });
+    assert_eq!(roused, Roused::Wake, "the release announced the queue");
+    hub.stop(SOON).await.expect("stop");
+}
+
+/// Review of plan 18 S3 (6): the train's pipeline-create job dies by its
+/// lease (the worker went away on its last attempt): no pipeline will
+/// come, and the reap tells the queue at once — as `fail` does.
+#[tokio::test]
+async fn a_train_create_job_that_dies_by_its_lease_wakes_the_queue() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    let queue = w.queue_id().await;
+    let (hub, db) = hub_on(&w).await;
+    let mut turn = queue_on(&w, &db, "w", nets()).turn(0);
+    settled(&mut turn).await;
+    assert!(waits_for_its_pipeline(&w, queue).await);
+    w.t.exec_superuser(
+        "UPDATE forge.jobs SET state = 'running', worker_id = 'w-gone', \
+           attempts = max_attempts, lease_until = now() - interval '1 second' \
+         WHERE kind = 'ci.pipeline_create' AND payload ->> 'source' = 'merge_queue'",
+    )
+    .await;
+    let roused = roused_by!(turn, {
+        let reaped = forge_db::jobs::reap(&w.t.db).await.expect("reap");
+        assert!(reaped.iter().any(|j| j.dead), "{reaped:?}");
+    });
+    assert_eq!(roused, Roused::Wake, "the reap announced the queue");
+    hub.stop(SOON).await.expect("stop");
+}
+
+/// Review of plan 18 S3 (9): a sender's stamp during another turn's long
+/// step does not make the queue "ready" from the stamp — it was leased
+/// until the release, so a claim after a whole safety wait reports no
+/// missed wake for it.
+#[tokio::test]
+async fn a_queue_stamped_during_a_long_step_is_ready_from_its_release() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    let queue = w.queue_id().await;
+    let lease = Duration::from_secs(300);
+    let claimed = qdb::claim(&w.t.db, "w-long", lease)
+        .await
+        .expect("claim")
+        .expect("due");
+    // Stamped due by a sender; the step has run for ten seconds since.
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.merge_queues SET next_run_at = now() - interval '10 seconds' \
+          WHERE id = {queue}"
+    ))
+    .await;
+    let _released = qdb::release(&w.t.db, &claimed, Duration::ZERO)
+        .await
+        .expect("release");
+    let again = qdb::claim(&w.t.db, "w-next", lease)
+        .await
+        .expect("claim")
+        .expect("due again");
+    assert!(
+        again.ready_for < Duration::from_secs(2),
+        "ready since the release, not the stamp: {:?}",
+        again.ready_for
+    );
+}
+
+/// Review of plan 18 S3 (4): before a sweep succeeded the watch has no
+/// cursor; told of events, it reads none of the history (the sweep, due
+/// again soon, covers it) and starts after it.
+#[tokio::test]
+async fn auto_merge_reads_no_event_history_before_its_first_sweep() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.risk(&a, CheckConclusion::Success, "No risk found").await;
+    sequencer::run_once(&w.t.db, BatchSize::MAX, AuditSequencing::Skip)
+        .await
+        .expect("sequence");
+    let mut watch = w.auto().watch(Duration::from_secs(30));
+    let report = watch.act(AutoMergeWake::Events).await.expect("events");
+    assert_eq!(report.looked, 0, "nothing read from cursor 0: {report:?}");
+    assert!(w.live_entry(&a).await.is_none());
+    // The cursor is the high-water mark now: nothing newer, nothing read.
+    let report = watch.act(AutoMergeWake::Events).await.expect("events");
+    assert_eq!(report.looked, 0, "{report:?}");
+}

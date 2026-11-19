@@ -355,9 +355,11 @@ impl MergeQueue {
             Ok(_) => Duration::ZERO,
             Err(_) => self.limits.poll.min(RETRY),
         };
+        // Released due now: announced in the release's statement, so a
+        // turn that is in a whole wait (it saw the lease) claims it.
         let released = db::release(&self.merger.db, &claimed, next_in).await;
         let report = stepped?;
-        if !released? {
+        if released? == db::Released::LeaseLost {
             tracing::warn!(
                 target: "forge_review",
                 event = "forge.merge_queue.lease_lost",

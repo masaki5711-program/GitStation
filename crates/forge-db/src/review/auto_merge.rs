@@ -31,7 +31,8 @@ use crate::{query_error, read_query_error, Db};
 // Plan 18 S3 (ADR-0037 (a)): the merge requests an event or a
 // mergeability answer names.
 mod told;
-pub use told::{events_high, named, named_by_events, Named};
+pub(crate) use told::notify_if_acting_on;
+pub use told::{events_high, named, named_by_events, Named, NAMED_MAX};
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
 

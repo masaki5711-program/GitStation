@@ -75,12 +75,14 @@ M4 C9（ADR-0017 Amendment 2026-11-13、計画 04 M-5 / M-6）の自動マージ
 | 起きるきっかけ | 判定するもの | `woken_by` |
 |---|---|---|
 | 順序づけられたイベント（`NOTIFY forge_events_sequenced`） | イベントが名指しする MR だけ（MR 自身のイベント、その head かマージ結果の `check.completed`）。同時に 4 件まで | `events` |
-| 「マージできる」と答えたマージ可能性の確認（`NOTIFY forge_auto_merge`、MR の id） | その MR | `named` |
+| 「マージできる」と答えたマージ可能性の確認（`NOTIFY forge_auto_merge`、MR の id。自動マージが扱う MR — 開いていて head があり、プロジェクトの `merge.auto` が `conditional` / `full`（行が無ければ `full`）— のときだけ送る） | その MR | `named` |
 | 見回り（`auto_merge.safety_poll_ms`、既定 30000、100〜300000。聞き手がつながり直したときも） | 自動マージが扱う MR の全部、古く見た順 | `sweep` |
 | LISTEN の接続が無い・切れている間（5 秒ごと。計画 18 より前の動き） | 古く見た順に `batch` 件 | `poll` |
 
 - **見回りでしか気づかない変化**（最長 30 秒）: プロジェクトの `merge.auto` の変更、緊急停止とその解除、インスタンスの
   `merge.allow_full_auto`、`forge/doc-lint` の待ちの時間切れ。チェックの完了や承認はイベントで起きるので、ふつうは 1 秒以内。
+- 1 回の起床で読むイベントは 200 件 × 10 回まで。残りがあれば待たずに続けて読む（`woken_by=events` が続く）。起動の後、最初の
+  見回りが成功するまではイベントを読まない（それより古いものは見回りが見る）。つながり直し 1 回で見回りは 1 回。
 - 起動のログ `forge.serve.auto_merge_started` に `safety_poll_ms`。
 - 見回りが遅れても `FG-DB-0024` は出ない（キューの手番とジョブだけが出す）。通知が届いているかは、LISTEN の接続の失敗
   （`FG-DB-0001` / `FG-DB-0002` の `operation=wake_listen`、`FG-SYS-0001` の `task=wake_hub`）と、順序づけの失敗で見る

@@ -253,10 +253,10 @@ pub async fn record_check(
             .await
             .map_err(|e| query_error("review.mergeability_store", e))?;
             // Plan 18 S3: no event says "can be merged" unless a conflict
-            // went away, and auto-merge waits for exactly this answer.
+            // went away, and auto-merge waits for exactly this answer —
+            // told only for a merge request auto-merge acts on.
             if result.status == MergeabilityStatus::CanBeMerged {
-                let named = mr.get().to_string();
-                crate::wake::notify_on(c, crate::wake::Channel::AutoMerge, &named).await?;
+                crate::review::auto_merge::notify_if_acting_on(c, mr).await?;
             }
             Ok(())
         })

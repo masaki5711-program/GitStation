@@ -777,7 +777,9 @@ statement, not transactional with the write and never retried, the
 listeners' caches age out after `refs_ttl`; plan 18 S3), `Events`
 (`forge_events_sequenced`),
 `AutoMerge` (`forge_auto_merge`, payload = merge request id: a
-mergeability check answered "can be merged" — `review/mergeability/run.rs`;
+mergeability check answered "can be merged" for a merge request auto-merge
+acts on — `review/mergeability/run.rs` through
+`auto_merge::notify_if_acting_on`, one statement with the `ACTS` filter;
 plan 18 S3). `Db::with_wake(hub,
 safety)` attaches it; `JobRunner::wait_for_work` (an idle runner: a
 notification of a kind it can take now, the next `run_after` of its kinds,
