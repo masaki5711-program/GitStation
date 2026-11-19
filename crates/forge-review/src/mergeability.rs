@@ -47,16 +47,32 @@
 //! decision is logged once at info, an undecided result at warn
 //! (`forge.review.mergeability_checked`, with the stored — capped — paths
 //! and the full count).
+//!
+//! Plan 18 S4 (ADR-0037 (c)): with [`Mergeability::with_paths`] a decided
+//! result is stored with the head's changed-path set (forge-core
+//! `merge_paths`: `diff-tree --no-renames` of merge base → head and, for a
+//! clean result, target tip → merged tree), in the same statement as the
+//! result — so a stored set is always the checked head's. A landing that
+//! says what it changed then carries the result forward to the new tip
+//! where the two sets cannot interact (forge-db `mergeability::paths`),
+//! instead of a check per open merge request. A set that cannot be read is
+//! never the check's failure: the result is stored without one (warn,
+//! `forge.review.mergeability_paths_unread`) and is checked again on every
+//! landing; an incomplete one (too many paths, a `.gitattributes`, a
+//! symlink or submodule, a path that is no UTF-8) is stored as incomplete
+//! (info, `forge.review.mergeability_paths_incomplete`) with the same
+//! effect.
 
 use std::time::{Duration, Instant};
 
+use forge_core::merge_paths::{Incomplete, PathSet};
 use forge_core::{CheckReason, MergeabilityStatus, ObjectId, RefName, RepoId, RequestId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::review::{self, CheckResult, CheckStart, MergeabilityRequest, Recorded, RefsLock};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::merge_result::MergeRefChange;
-use forge_git::mergeability::{MergeTree, MergeTreeLimits};
+use forge_git::mergeability::{MergeBases, MergeTree, MergeTreeLimits};
 use forge_git::{Git, StorageRoot};
 
 use crate::versions::ACTOR_LABEL;
@@ -72,6 +88,9 @@ pub const MAX_STORED_BYTES: usize = 16 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// The merge result's `commit-tree` and its ref update (M4 C7).
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// One listing of the head's changed paths (plan 18 S4). Short: a listing
+/// that does not finish only costs the carry-forward, never the check.
+const PATHS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The time a git step under the refs lock may take: [`WRITE_TIMEOUT`],
 /// cut to what is left of the lock's hold.
@@ -87,6 +106,10 @@ pub struct Mergeability {
     git: Git,
     storage: StorageRoot,
     limits: MergeTreeLimits,
+    /// Plan 18 S4: the most paths a stored set may list
+    /// (`review.paths_max`); `None`: no set is read or stored
+    /// (`review.path_filter = false`, or not configured).
+    paths_max: Option<usize>,
 }
 
 impl std::fmt::Debug for Mergeability {
@@ -173,6 +196,8 @@ fn failed(reason: CheckReason, head: Option<&ObjectId>, target: Option<&ObjectId
         target: target.cloned(), // clone: as above
         conflicts: Vec::new(),
         conflicts_truncated: false,
+        // Nothing decided: nothing a landing could carry forward.
+        paths: None,
     }
 }
 
@@ -190,6 +215,7 @@ impl Mergeability {
             git,
             storage,
             limits: MergeTreeLimits::default(),
+            paths_max: None,
         }
     }
 
@@ -200,8 +226,113 @@ impl Mergeability {
         self
     }
 
+    /// Store the head's changed-path set with each decided result, at most
+    /// `max` paths (plan 18 S4: `ReviewConfig::path_filter_max`). `None`
+    /// (the default): no set — every landing checks the merge request
+    /// again, as before the path filter.
+    #[must_use]
+    pub fn with_paths(mut self, max: Option<usize>) -> Self {
+        self.paths_max = max;
+        self
+    }
+
+    /// The changed-path set of `head` for a decided result (plan 18 S4):
+    /// what the head changed since the merge base, and — for a clean
+    /// result — what its merge changes on the target tip (`tree`: the
+    /// trial merge's tree; a path the merge moved under a directory the
+    /// target renamed shows up only there). `None`: unknown (the filter is
+    /// off, or git failed — logged, never the check's failure): the merge
+    /// request is checked again on every landing. An incomplete set (too
+    /// many paths, a global or special path, bytes that are no UTF-8) is
+    /// stored as incomplete, which is checked again as well — and so is
+    /// the set of a head with `several` merge bases (a criss-cross
+    /// history): the merge works from a virtual base, and the diff from
+    /// one of the bases does not say what it changes.
+    async fn head_paths(
+        &self,
+        repo: RepoId,
+        (base, head, tip): (&ObjectId, &ObjectId, &ObjectId),
+        (tree, several): (Option<&ObjectId>, bool),
+        request_id: &RequestId,
+    ) -> Option<PathSet> {
+        let max = self.paths_max?;
+        if several {
+            tracing::info!(
+                target: "forge_review",
+                event = "forge.review.mergeability_paths_incomplete",
+                request_id = %request_id,
+                repo_id = repo.get(),
+                head_sha = head.as_str(),
+                paths_complete = false,
+                paths = Incomplete::MergeBases.as_str(),
+                "the head's path set is incomplete; the merge request is checked again on every landing"
+            );
+            return Some(PathSet::incomplete());
+        }
+        let mut entries = Vec::new();
+        let merged = tree.map(|tree| (tip, tree));
+        for (from, to) in std::iter::once((base, head)).chain(merged) {
+            let listed = self
+                .git
+                .changed_path_entries(&self.storage, repo, from, to, max, PATHS_TIMEOUT)
+                .await;
+            match listed {
+                Ok(Ok(found)) => entries.extend(found),
+                Ok(Err(why)) => {
+                    tracing::info!(
+                        target: "forge_review",
+                        event = "forge.review.mergeability_paths_incomplete",
+                        request_id = %request_id,
+                        repo_id = repo.get(),
+                        head_sha = head.as_str(),
+                        paths_complete = false,
+                        paths = why.as_str(),
+                        "the head's path set is incomplete; the merge request is checked again on every landing"
+                    );
+                    return Some(PathSet::incomplete());
+                }
+                Err(e) => {
+                    // Not the check's failure: the result is stored without
+                    // a set, which only costs the carry-forward.
+                    tracing::warn!(
+                        target: "forge_review",
+                        event = "forge.review.mergeability_paths_unread",
+                        request_id = %request_id,
+                        error_code = e.code().id(),
+                        repo_id = repo.get(),
+                        head_sha = head.as_str(),
+                        "the head's changed paths could not be read; the merge request is checked again on every landing"
+                    );
+                    return None;
+                }
+            }
+        }
+        match PathSet::build(entries, max) {
+            Ok(set) => Some(set),
+            Err(why) => {
+                tracing::info!(
+                    target: "forge_review",
+                    event = "forge.review.mergeability_paths_incomplete",
+                    request_id = %request_id,
+                    repo_id = repo.get(),
+                    head_sha = head.as_str(),
+                    paths_complete = false,
+                    paths = why.as_str(),
+                    "the head's path set is incomplete; the merge request is checked again on every landing"
+                );
+                Some(PathSet::incomplete())
+            }
+        }
+    }
+
     /// The git part (module docs, step 2) for `head` against `target`.
-    async fn compute(&self, repo: RepoId, head: Option<&ObjectId>, target: &RefName) -> Computed {
+    async fn compute(
+        &self,
+        repo: RepoId,
+        head: Option<&ObjectId>,
+        target: &RefName,
+        request_id: &RequestId,
+    ) -> Computed {
         let Some(head) = head else {
             return done(failed(CheckReason::NoVersion, None, None));
         };
@@ -216,13 +347,18 @@ impl Mergeability {
         let Some(tip) = tip else {
             return done(failed(CheckReason::TargetMissing, Some(head), None));
         };
-        match self
+        // One call answers both questions: the best merge base, and
+        // whether it is the only one (plan 18 S4: `head_paths`).
+        let (base, several) = match self
             .git
-            .merge_base(&self.storage, repo, &tip, head, READ_TIMEOUT)
+            .merge_bases(&self.storage, repo, &tip, head, READ_TIMEOUT)
             .await
         {
-            Ok(Some(_)) => {}
-            Ok(None) => {
+            Ok(MergeBases {
+                best: Some(base),
+                several,
+            }) => (base, several),
+            Ok(MergeBases { best: None, .. }) => {
                 return done(failed(
                     CheckReason::UnrelatedHistories,
                     Some(head),
@@ -232,29 +368,43 @@ impl Mergeability {
             Err(e) => {
                 return Computed::Failed(failed(git_reason(&e), Some(head), Some(&tip)), e);
             }
-        }
+        };
         match self
             .git
             .merge_tree(&self.storage, repo, &tip, head, self.limits)
             .await
         {
-            Ok(MergeTree::Clean { tree }) => Computed::Done {
-                files: 0,
-                tree: Some(tree),
-                result: CheckResult {
-                    status: MergeabilityStatus::CanBeMerged,
-                    reason: None,
-                    head: Some(head.clone()), // clone: the result owns its ids
-                    target: Some(tip),
-                    conflicts: Vec::new(),
-                    conflicts_truncated: false,
-                },
-            },
+            Ok(MergeTree::Clean { tree }) => {
+                let paths = self
+                    .head_paths(
+                        repo,
+                        (&base, head, &tip),
+                        (Some(&tree), several),
+                        request_id,
+                    )
+                    .await;
+                Computed::Done {
+                    files: 0,
+                    tree: Some(tree),
+                    result: CheckResult {
+                        status: MergeabilityStatus::CanBeMerged,
+                        reason: None,
+                        head: Some(head.clone()), // clone: the result owns its ids
+                        target: Some(tip),
+                        conflicts: Vec::new(),
+                        conflicts_truncated: false,
+                        paths,
+                    },
+                }
+            }
             Ok(MergeTree::Conflicted {
                 files,
                 files_truncated,
             }) => {
                 let (conflicts, cut) = stored_files(&files);
+                let paths = self
+                    .head_paths(repo, (&base, head, &tip), (None, several), request_id)
+                    .await;
                 Computed::Done {
                     tree: None,
                     files: files.len(),
@@ -265,6 +415,7 @@ impl Mergeability {
                         target: Some(tip),
                         conflicts,
                         conflicts_truncated: files_truncated || cut,
+                        paths,
                     },
                 }
             }
@@ -311,6 +462,7 @@ pub async fn check(
             target.repository,
             subject.head.as_ref(),
             &subject.target_branch,
+            request_id,
         )
         .await;
     let (result, files, tree, git_error) = match computed {

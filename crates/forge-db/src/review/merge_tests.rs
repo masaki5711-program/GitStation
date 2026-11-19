@@ -604,6 +604,7 @@ async fn a_merge_whose_merge_request_is_no_longer_open_is_failed_not_left_execut
         &attempt,
         &push,
         Some(&[]),
+        None,
     )
     .await
     .expect("finish");

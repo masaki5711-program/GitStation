@@ -11,6 +11,7 @@
 //! `forge/risk` rules (M4 close), as `forge serve` wires them.
 
 mod common;
+mod queue_paths;
 mod queue_train_lint;
 // Plan 18 S3 (ADR-0037 (a)): the queue's and auto-merge's wakes.
 mod queue_wake;

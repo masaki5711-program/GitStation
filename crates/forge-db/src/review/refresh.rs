@@ -31,15 +31,34 @@
 //! reason=target_missing`. A cut list (`refs_truncated`) names no target:
 //! the version jobs it enqueues for every open merge request compare the
 //! stored pair with the current one and request the checks that are stale.
+//!
+//! **Path filter** (plan 18 S4, ADR-0037 (c); `review.path_filter`): a
+//! merge's event says what the landing changed (the payload's `landed`
+//! block, forge-core `merge_paths::LandedPaths`). When that block is
+//! complete, the decided results of the merge requests it cannot interact
+//! with are **carried forward** to the new tip in one statement
+//! (`mergeability::paths`), and only the others are requested. Every other
+//! case is the behaviour above, unchanged: the filter is off, the event
+//! has no block (a direct push, a payload written before the block
+//! existed), the block is incomplete, of another rule version or larger
+//! than its budget (`merge_paths::LANDED_BUDGET`, enforced on read), or
+//! its branch is not one the event moved. One info line per filtered landing
+//! (`forge.review.mergeability_carried`: `carried`, `settled`,
+//! `rechecked`), one per landing that could not be filtered
+//! (`forge.review.mergeability_paths_unused`, with the reason).
+//!
 //! `independent`: an event that keeps failing is quarantined (doctor's
 //! `subscribers.dead_letters` alerts) instead of holding up every later
 //! push.
 
 use forge_core::ids::{MergeRequestId, UserId};
+use forge_core::merge_paths::{Landed, LandedPaths};
 use forge_core::{EventType, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::mergeability::{defer_checks_on, not_checked, request_check_on};
+use super::mergeability::{
+    carry_forward_on, defer_checks_on, not_checked, request_check_on, settled_on,
+};
 use super::versions::{refresh_job, RefreshRequest, RefreshTrigger};
 use crate::jobs::enqueue_on;
 use crate::query_error;
@@ -54,10 +73,12 @@ pub const MAX_REFRESH_FANOUT: i64 = 500;
 pub const REFRESH_SUBSCRIBER: &str = "merge-request-refresh";
 
 /// The subscriber; it holds the mergeability fan-out cap
-/// (`review.mergeability_fanout_max`).
+/// (`review.mergeability_fanout_max`) and whether landings are filtered by
+/// path (`review.path_filter`).
 #[derive(Debug, Clone, Copy)]
 pub struct MergeRequestRefresh {
     mergeability_fanout: u32,
+    path_filter: bool,
 }
 
 impl Default for MergeRequestRefresh {
@@ -72,9 +93,46 @@ impl MergeRequestRefresh {
     pub fn new(mergeability_fanout: u32) -> Self {
         Self {
             mergeability_fanout: mergeability_fanout.max(1),
+            path_filter: forge_core::config::ReviewConfig::DEFAULT_PATH_FILTER,
+        }
+    }
+
+    /// Whether a landing re-checks only the merge requests its paths may
+    /// interact with (`review.path_filter`; `false`: every one, as before
+    /// plan 18 S4).
+    #[must_use]
+    pub fn with_path_filter(mut self, path_filter: bool) -> Self {
+        self.path_filter = path_filter;
+        self
+    }
+
+    /// The landed paths of `event` the filter may use for one of `targets`
+    /// (module docs), or why not (`Err`: the log's `paths` value; `None`:
+    /// nothing to say — the filter is off).
+    fn usable_landing(
+        &self,
+        event: &SourceEvent,
+        targets: &[String],
+    ) -> Result<LandedPaths, Option<&'static str>> {
+        if !self.path_filter {
+            return Err(None);
+        }
+        match LandedPaths::read(&event.payload) {
+            Landed::Absent => Err(Some(NO_LANDED_BLOCK)),
+            Landed::Unusable(reason) => Err(Some(reason)),
+            Landed::Usable(landed) => {
+                if targets.iter().any(|t| t == landed.target.as_str()) {
+                    Ok(landed)
+                } else {
+                    Err(Some("ref_not_moved"))
+                }
+            }
         }
     }
 }
+
+/// The log's `paths` value of an event without a landed block.
+const NO_LANDED_BLOCK: &str = "absent";
 
 fn bad_payload(event: &SourceEvent, field: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::Internal)
@@ -151,17 +209,82 @@ impl MergeRequestRefresh {
         if targets.is_empty() {
             return Ok(());
         }
+        // Plan 18 S4: the results the landing cannot interact with are
+        // kept (carried to the new tip, or already answering for it);
+        // `kept` stays empty whenever the landing cannot be filtered, and
+        // everything below is then what it was before the filter.
+        let mut kept: Vec<i64> = Vec::new();
+        let mut filtered = None;
+        match self.usable_landing(event, targets) {
+            Ok(landed) => {
+                let carried = carry_forward_on(tx.conn(), project, &landed).await?;
+                let settled =
+                    settled_on(tx.conn(), project, landed.target.as_str(), &landed.new).await?;
+                kept.extend(&carried);
+                kept.extend(&settled);
+                kept.sort_unstable();
+                kept.dedup();
+                filtered = Some((carried.len(), kept.len() - carried.len()));
+            }
+            Err(Some(NO_LANDED_BLOCK)) => {
+                // A push to the branch, or a record written before the
+                // landed paths (or by a server with the filter off): as
+                // before plan 18 S4, every merge request is checked again.
+                // The ordinary case of every push, so debug.
+                tracing::debug!(
+                    target: "forge_db",
+                    event = "forge.review.mergeability_paths_unused",
+                    request_id = %event.request_id,
+                    project_id = project.get(),
+                    source_seq = event.seq,
+                    paths_complete = false,
+                    paths = NO_LANDED_BLOCK,
+                    "the event names no landed paths; every open merge request targeting the branch is checked again"
+                );
+            }
+            Err(Some(reason)) => {
+                // Never silent: this landing checks every merge request
+                // again, and says why it could not be filtered.
+                tracing::info!(
+                    target: "forge_db",
+                    event = "forge.review.mergeability_paths_unused",
+                    request_id = %event.request_id,
+                    project_id = project.get(),
+                    source_seq = event.seq,
+                    paths_complete = false,
+                    paths = reason,
+                    "the landed paths cannot be used; every open merge request targeting the branch is checked again"
+                );
+            }
+            Err(None) => {}
+        }
         let cap = i64::from(self.mergeability_fanout);
         let ids: Vec<i64> = sqlx::query_scalar(
             "SELECT id FROM forge.merge_requests WHERE project_id = $1 AND state = 'open' \
-             AND target_branch = ANY($2) ORDER BY updated_at DESC, id LIMIT $3",
+             AND target_branch = ANY($2) AND id <> ALL($4) \
+             ORDER BY updated_at DESC, id LIMIT $3",
         )
         .bind(project.get())
         .bind(targets)
         .bind(cap)
+        .bind(&kept)
         .fetch_all(tx.conn())
         .await
         .map_err(|e| query_error("review.mergeability_targets", e))?;
+        if let Some((carried, settled)) = filtered {
+            tracing::info!(
+                target: "forge_db",
+                event = "forge.review.mergeability_carried",
+                request_id = %event.request_id,
+                project_id = project.get(),
+                source_seq = event.seq,
+                paths_complete = true,
+                carried,
+                settled,
+                rechecked = ids.len(),
+                "a landing's mergeability results were carried forward where its paths cannot interact"
+            );
+        }
         let origin = event.request_id().unwrap_or_else(RequestId::generate);
         for id in &ids {
             request_check_on(
@@ -173,7 +296,10 @@ impl MergeRequestRefresh {
             )
             .await?;
         }
-        let (deferred, skipped) = defer_checks_on(tx.conn(), project, targets, &ids).await?;
+        // The kept ones are neither requested nor marked `unchecked`.
+        let mut handled = ids.clone(); // clone: `ids` is still the enqueued count below
+        handled.extend(&kept);
+        let (deferred, skipped) = defer_checks_on(tx.conn(), project, targets, &handled).await?;
         if deferred > 0 {
             // Never silent: they stay `unchecked` (merge blocked); the
             // worker's sweep requests them, the longest waiting first.

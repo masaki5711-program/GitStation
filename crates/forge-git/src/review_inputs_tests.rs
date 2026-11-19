@@ -166,6 +166,127 @@ async fn deleted_paths_list_only_what_was_removed() {
     assert_eq!(paths, ChangedPaths::Complete(vec!["src/a.rs".to_owned()]));
 }
 
+/// Plan 18 S4: the entries of a diff for the path sets — a deletion is
+/// marked, a symbolic link and a submodule are special, a rename is a
+/// deletion and an addition, and a listing past the cap is incomplete
+/// (never a shorter complete one).
+#[tokio::test]
+async fn changed_path_entries_mark_deletions_and_special_modes() {
+    use forge_core::merge_paths::{ChangedPath, Incomplete};
+    let f = fixture().await;
+    let base = f.commit(
+        &[
+            ("src/a.rs", b"one\n"),
+            ("docs/x.md", b"x\n"),
+            ("keep.txt", b"k\n"),
+        ],
+        None,
+    );
+    let head = f.commit_modes(
+        &[
+            ("src/b.rs", b"one\n", "100644"),
+            ("docs/x.md", b"y\n", "100644"),
+            ("keep.txt", b"k\n", "100644"),
+            ("link", b"keep.txt", "120000"),
+        ],
+        Some(&base),
+    );
+    let entry = |path: &str, deleted: bool, special: bool| ChangedPath {
+        path: path.to_owned(),
+        deleted,
+        special,
+    };
+    let entries = f
+        .git
+        .changed_path_entries(&f.root, f.id, &base, &head, 100, T)
+        .await
+        .expect("diff");
+    assert_eq!(
+        entries,
+        Ok(vec![
+            entry("docs/x.md", false, false),
+            entry("link", false, true),
+            entry("src/a.rs", true, false),
+            entry("src/b.rs", false, false),
+        ])
+    );
+    // The other way round the link is deleted: still special.
+    let back = f
+        .git
+        .changed_path_entries(&f.root, f.id, &head, &base, 100, T)
+        .await
+        .expect("diff");
+    assert!(back.expect("complete").contains(&entry("link", true, true)));
+    let capped = f
+        .git
+        .changed_path_entries(&f.root, f.id, &base, &head, 3, T)
+        .await
+        .expect("diff");
+    assert_eq!(capped, Err(Incomplete::TooMany));
+    let same = f
+        .git
+        .changed_path_entries(&f.root, f.id, &head, &head, 100, T)
+        .await
+        .expect("diff");
+    assert_eq!(same, Ok(Vec::new()));
+}
+
+/// Review (MEDIUM): the listing is read up to a bound that does not grow
+/// with the longest possible path — the raw fields of the capped entries
+/// and one set budget of path bytes, 4 MiB at the most — and a listing
+/// longer than what is read is incomplete (`too_large`), never a shorter
+/// complete one.
+#[tokio::test]
+async fn changed_path_entries_read_a_bounded_listing() {
+    use forge_core::merge_paths::{Incomplete, PATHS_MAX_LIMIT, SET_BYTES_MAX};
+    assert_eq!(entry_listing_cap(0), SET_BYTES_MAX);
+    assert_eq!(entry_listing_cap(5000), 5000 * 160 + SET_BYTES_MAX);
+    assert!(entry_listing_cap(5000) < 2 * 1024 * 1024);
+    assert_eq!(entry_listing_cap(PATHS_MAX_LIMIT), 4 * 1024 * 1024);
+    assert_eq!(entry_listing_cap(usize::MAX), 4 * 1024 * 1024);
+
+    let f = fixture().await;
+    let base = f.commit(&[("keep.txt", b"k\n")], None);
+    let head = f.commit(
+        &[
+            ("keep.txt", b"k\n"),
+            ("docs/a.md", b"a\n"),
+            ("docs/b.md", b"b\n"),
+            ("docs/c.md", b"c\n"),
+        ],
+        Some(&base),
+    );
+    let whole = f
+        .git
+        .changed_path_entries(&f.root, f.id, &base, &head, 100, T)
+        .await
+        .expect("diff");
+    assert_eq!(whole.map(|entries| entries.len()), Ok(3));
+    // A git that stops reading after 150 bytes (one entry and a piece of
+    // the next): the same question is "too large", whatever the path cap.
+    let home = tempfile::tempdir().expect("home");
+    let mut config = GitConfig::new("git", home.path());
+    config.max_output_bytes = 150;
+    let short = Git::new(config);
+    let cut = short
+        .changed_path_entries(&f.root, f.id, &base, &head, 100, T)
+        .await
+        .expect("diff");
+    assert_eq!(cut, Err(Incomplete::TooLarge));
+}
+
+/// The records of a NUL-terminated output, read in place.
+#[test]
+fn records_are_the_nul_terminated_pieces() {
+    let all = |bytes: &'static [u8]| records(bytes).collect::<Vec<_>>();
+    assert_eq!(all(b"a\0bc\0"), [&b"a"[..], &b"bc"[..]]);
+    assert_eq!(all(b"a\0bc\0cut"), [&b"a"[..], &b"bc"[..]]);
+    assert_eq!(all(b"a\0\0"), [&b"a"[..], &b""[..]]);
+    assert_eq!(all(b"\0"), [&b""[..]]);
+    assert!(all(b"").is_empty());
+    assert!(all(b"no terminator").is_empty());
+}
+
 #[tokio::test]
 async fn range_commits_are_capped() {
     let f = fixture().await;

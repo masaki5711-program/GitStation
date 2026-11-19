@@ -11,6 +11,9 @@ use super::*;
 use crate::test_git::{stalled_git, STALL};
 use crate::GitConfig;
 
+#[path = "mergeability_path_rule_tests.rs"]
+mod path_rule;
+
 const T: Duration = Duration::from_secs(20);
 
 struct Fixture {
@@ -311,6 +314,98 @@ async fn unrelated_histories_are_an_error_not_a_clean_merge() {
         .await
         .expect("merge-base");
     assert_eq!(base, None);
+}
+
+/// Plan 18 S4 (review): `merge-base --all` in one call — the best base
+/// first (the one `merge-base` answers), and whether there are others. A
+/// criss-cross history has two; unrelated histories none; the time limit
+/// and a missing object are failures, never "one base".
+#[tokio::test]
+async fn merge_bases_tell_a_criss_cross_history_from_a_single_base() {
+    let f = fixture().await;
+    let h = histories(&f.path);
+    let one = f
+        .git
+        .merge_bases(&f.root, f.id, &h.target, &h.clean, T)
+        .await
+        .expect("merge-base");
+    assert_eq!(
+        one,
+        MergeBases {
+            best: Some(h.base.clone()),
+            several: false,
+        }
+    );
+    // x and y fork from the base; each side then merges the other: the
+    // two merges have x and y as merge bases.
+    let x = commit(&f.path, &[("README", "base\n"), ("x", "x\n")], &[&h.base]);
+    let y = commit(&f.path, &[("README", "base\n"), ("y", "y\n")], &[&h.base]);
+    let both = [("README", "base\n"), ("x", "x\n"), ("y", "y\n")];
+    let left = commit(&f.path, &both, &[&x, &y]);
+    let right = commit(&f.path, &both, &[&y, &x]);
+    let crossed = f
+        .git
+        .merge_bases(&f.root, f.id, &left, &right, T)
+        .await
+        .expect("merge-base");
+    assert!(crossed.several, "{crossed:?}");
+    let best = f
+        .git
+        .merge_base(&f.root, f.id, &left, &right, T)
+        .await
+        .expect("merge-base");
+    assert!(best == Some(x) || best == Some(y), "{best:?}");
+    assert_eq!(crossed.best, best, "the best base is the first listed");
+
+    let orphan = commit(&f.path, &[("elsewhere", "x\n")], &[]);
+    let none = f
+        .git
+        .merge_bases(&f.root, f.id, &h.target, &orphan, T)
+        .await
+        .expect("merge-base");
+    assert_eq!(
+        none,
+        MergeBases {
+            best: None,
+            several: false,
+        }
+    );
+
+    let missing = ObjectId::parse(&"e".repeat(40)).expect("oid");
+    let err = f
+        .git
+        .merge_bases(&f.root, f.id, &h.target, &missing, T)
+        .await
+        .expect_err("missing");
+    assert_eq!(err.code(), ErrorCode::GitProcessFailed, "{err}");
+    let tmp = tempfile::tempdir().expect("tmp");
+    let err = stalled_git(f.home.path(), tmp.path(), None)
+        .merge_bases(&f.root, f.id, &h.target, &h.clean, STALL)
+        .await
+        .expect_err("timeout");
+    assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");
+}
+
+/// A list cut at the cap is "several" with the bases read whole; a cut
+/// before the first id ended, or anything that is not an id, is
+/// unexpected output.
+#[test]
+fn a_cut_list_of_merge_bases_is_several() {
+    let (a, b) = ("a".repeat(40), "b".repeat(40));
+    let whole = merge_bases_of(format!("{a}\n").as_bytes(), false).expect("one");
+    assert_eq!(whole.best, Some(ObjectId::parse(&a).expect("oid")));
+    assert!(!whole.several);
+    let two = merge_bases_of(format!("{a}\n{b}\n").as_bytes(), false).expect("two");
+    assert!(two.several);
+    let cut = merge_bases_of(format!("{a}\n{}", &b[..7]).as_bytes(), true).expect("cut");
+    assert_eq!(cut.best, Some(ObjectId::parse(&a).expect("oid")));
+    assert!(cut.several);
+    for (out, cut) in [(&a[..7], true), ("", false), ("not an id\n", false)] {
+        let err = merge_bases_of(out.as_bytes(), cut).expect_err("unexpected");
+        assert_eq!(err.code(), ErrorCode::GitProcessFailed);
+    }
+    let err = merge_bases_of(format!("{a}\nnot an id\n").as_bytes(), false).expect_err("bad");
+    assert_eq!(err.code(), ErrorCode::GitProcessFailed);
 }
 
 #[tokio::test]

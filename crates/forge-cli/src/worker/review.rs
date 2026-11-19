@@ -132,7 +132,10 @@ impl MergeabilityHandler {
             inner: Arc::new(CheckInner {
                 db: db.clone(), // clone: pool handles
                 // clone: the handler owns its git and storage handles
-                checker: Mergeability::new(storage.git.clone(), storage.root.clone()),
+                // Plan 18 S4: the head's changed paths are stored with the
+                // result (`review.path_filter` / `review.paths_max`).
+                checker: Mergeability::new(storage.git.clone(), storage.root.clone())
+                    .with_paths(storage.merge_paths_max),
             }),
         })
     }

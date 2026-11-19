@@ -127,15 +127,30 @@ export function ConditionsPanel({
 
 function Reasons({ status }: { status: MergeStatus }) {
   const { t } = useTranslation();
-  if (status.mergeable) return <p className={styles.conditionsMet}>{t('mr.conditions.met')}</p>;
+  // Plan 18 S4: the mergeability result answers for the target's current tip
+  // because it was carried forward (what landed since touches none of this
+  // merge request's files). One line says against what it was computed and
+  // that the merge queue merges it again before anything lands.
+  const carried = status.carried_from_target_sha;
   return (
-    <ul className={styles.reasonList} data-testid="mr-conditions">
-      {status.reasons.map((r, i) => {
-        const line = reasonLine(r);
-        // Reasons may repeat (two rules); the position keeps the keys apart.
-        return <li key={`${String(i)}-${r.reason}`}>{t(line.key, line.values)}</li>;
-      })}
-    </ul>
+    <>
+      {status.mergeable ? (
+        <p className={styles.conditionsMet}>{t('mr.conditions.met')}</p>
+      ) : (
+        <ul className={styles.reasonList} data-testid="mr-conditions">
+          {status.reasons.map((r, i) => {
+            const line = reasonLine(r);
+            // Reasons may repeat (two rules); the position keeps the keys apart.
+            return <li key={`${String(i)}-${r.reason}`}>{t(line.key, line.values)}</li>;
+          })}
+        </ul>
+      )}
+      {carried !== null && (
+        <p className={styles.nextHint} data-testid="mr-carried">
+          {t('mr.conditions.carried', { branch: status.target_branch, sha: carried.slice(0, 8) })}
+        </p>
+      )}
+    </>
   );
 }
 

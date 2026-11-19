@@ -12,6 +12,7 @@ use crate::history_import::HistoryImportChange;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::integration::IntegrationChange;
 use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
+use crate::merge_paths::{LandedPaths, LANDED_KEY};
 use crate::merge_queue::MergeQueueChange;
 use crate::merge_request::{MergeRequestChange, MergeRequestVersionChange};
 use crate::mirror::PushMirrorChange;
@@ -244,6 +245,11 @@ pub enum AuditDetails {
         /// The original pusher when the runbook replay recorded it (the
         /// row's actor is then the operator).
         replayed_from: Option<PushReplay>,
+        /// Plan 18 S4 (ADR-0037 (c)): the paths a merge landed on its
+        /// target — in the **event payload only** (`landed`), within the
+        /// event's budget; the audit details never list them. `None`: a
+        /// push, a source branch deletion, or the path filter is off.
+        landed: Option<LandedPaths>,
     },
     // ── M1 phase 8b MR7a ──
     /// `project.updated` (audit-only in M1): which fields changed.
@@ -976,6 +982,7 @@ impl AuditDetails {
                 repository_id,
                 updates,
                 replayed_from,
+                landed: _,
             } => push_json(
                 *project_id,
                 *repository_id,
@@ -1194,13 +1201,27 @@ impl AuditDetails {
                 repository_id,
                 updates,
                 replayed_from,
-            } => push_json(
-                *project_id,
-                *repository_id,
-                updates,
-                *replayed_from,
-                EVENT_BUDGET,
-            ),
+                landed,
+            } => {
+                // The landed block is bounded on its own
+                // (`merge_paths::LANDED_BUDGET`); the refs and commits get
+                // what is left of the event's budget.
+                let block = landed.as_ref().map(LandedPaths::to_value);
+                let reserved = block
+                    .as_ref()
+                    .map_or(0, |b| b.to_string().len() + LANDED_KEY.len() + 4);
+                let mut payload = push_json(
+                    *project_id,
+                    *repository_id,
+                    updates,
+                    *replayed_from,
+                    EVENT_BUDGET.saturating_sub(reserved),
+                );
+                if let (Some(block), Some(fields)) = (block, payload.as_object_mut()) {
+                    fields.insert(LANDED_KEY.to_owned(), block);
+                }
+                payload
+            }
             Self::ProjectMoved {
                 project_id,
                 summary,

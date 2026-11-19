@@ -167,6 +167,17 @@ export function reasonLine(first: StatusReason): BlockedReason {
   }
 }
 
+/** The check the merge request pipeline reports on a merge result. */
+const MERGE_RESULT_CHECK = 'ci/pipeline';
+
+/** Plan 18 S4: the mergeability result was carried over a landing that does
+ * not touch this merge request's files, so no merge result (and no pipeline)
+ * exists for the target's tip and none is on its way. The merge queue tests
+ * it on its train; a direct merge has the result computed first. */
+function carriedPipeline(status: MergeStatus, name: string | undefined): boolean {
+  return status.carried_from_target_sha !== null && name === MERGE_RESULT_CHECK;
+}
+
 /** For a line with nothing to press: what (or who) is waited for, or what
  * to do instead. Null when the line says it all or something can be pressed. */
 export function statusHint(status: MergeStatus): string | null {
@@ -180,11 +191,16 @@ export function statusHint(status: MergeStatus): string | null {
       // M4 C7 review: the merge request pipeline runs only on a clean merge
       // result; without one (conflict, no target, failed check) say so.
       const name = parseDetail(status.reasons[0].detail ?? null).name;
+      if (carriedPipeline(status, name)) return t('mr.status.hint.checksCarried');
       const waits = status.checks.some((c) => c.name === name && c.waits_for_merge_result);
       return waits ? t('mr.status.hint.checksWaitMergeResult') : t('mr.status.hint.checks');
     }
-    case 'required_check_stale':
-      return t('mr.status.hint.checksStale');
+    case 'required_check_stale': {
+      const name = parseDetail(status.reasons[0].detail ?? null).name;
+      return carriedPipeline(status, name)
+        ? t('mr.status.hint.checksCarried')
+        : t('mr.status.hint.checksStale');
+    }
     case 'merge_in_progress':
       return t('mr.status.hint.merging');
     case 'config_change_needs_maintainer_approval':

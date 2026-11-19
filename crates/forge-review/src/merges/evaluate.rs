@@ -488,6 +488,7 @@ mod tests {
             check_seq: 1,
             checked_head_sha: Some(oid('a')),
             checked_target_sha: Some(oid('b')),
+            computed_target_sha: Some(oid('b')),
             checked_at: None,
             conflicts: Vec::new(),
             conflicts_truncated: false,

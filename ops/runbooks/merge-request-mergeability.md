@@ -24,7 +24,10 @@ M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merg
 1. ログを `forge.review.mergeability_not_checked` と、同じ `request_id` の前後の行で読む。`job_failed` ならジョブの実行器が
    原因の失敗を先にその失敗自身の `error_code` で記録している（`kind=merge_request.mergeability`、`job_id`）→ その Runbook
    （`git-process-failed`、`db-unavailable`、`repo-storage` など）。
-2. 行を読む: `SELECT merge_request_id, status, reason, check_seq, checked_head_sha, checked_target_sha, checked_at, updated_at FROM forge.merge_request_mergeability WHERE merge_request_id = <id>;`
+2. 行を読む: `SELECT merge_request_id, status, reason, check_seq, checked_head_sha, checked_target_sha, computed_target_sha, paths_complete, paths_head_sha, paths_seq, paths_rule, checked_at, updated_at FROM forge.merge_request_mergeability WHERE merge_request_id = <id>;`
+   `paths_head_sha = checked_head_sha` かつ `paths_seq = check_seq`（集合はこの行の判定が書いた）で、`computed_target_sha` が
+   `checked_target_sha` と違う行は **持ち越した結果**（下の「着地で持ち越した結果」）。印が合わない行（列を知らない古い
+   worker が書いた、など）は、集合が無いものとして着地のたびに確かめ直される。
 3. ジョブを読む: `SELECT id, state, attempts, last_error_code, last_error, created_at FROM forge.jobs WHERE kind = 'merge_request.mergeability' AND dedup_key LIKE 'mr_mergeability:<id>:%' ORDER BY id DESC LIMIT 5;`
    最新の `check_seq` の鍵（`mr_mergeability:<id>:<check_seq>`）のジョブが `queued` / `running` なら待つだけでよい。
 4. `forge doctor --json` の `review.mergeability`（`checking_stale`、`unchecked_unqueued`、`decided_stale_head`（head が違う決定）、
@@ -87,6 +90,84 @@ M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merg
   `job_failed` / `job_stale` は原因のコードを直す。次の push・target の変更・再オープンで予測し直す。
   `[MUTATING — needs approval]` 予測し直させたいときは、利用者がその MR の target を一度変えて戻す（戻し: 不要）。表を手で書き換えない。
 - **Verify**: `gstn conflicts` の scan が `scanned`、`stale: false`、`scanned_head_sha` が MR の `head_sha` と同じ。
+
+## 着地で持ち越した結果（計画 18 S4、ADR-0037 (c)。関連: FG-REVIEW-0006）
+
+target に MR が着地するたびに、開いている MR を全部確かめ直す代わりに、**着地が変えたパスと触れ合いうる MR だけ** を確かめ直す。
+残りは結果（`can_be_merged` / `cannot_be_merged`）をそのまま新しい先端に付け替える（持ち越し。1 つの UPDATE、git もジョブも無い）。
+
+- **仕組み**
+  - 判定のジョブは、結果と同じ UPDATE で head の変更パスの集合を行に書く（`head_files`、`head_dirs`、`head_deleted_dirs`、
+    `paths_complete`）。一緒に印も書く: `paths_head_sha`（集合を読んだ head）、`paths_seq`（書いた判定の `check_seq`）、
+    `paths_rule`（規則の版。いまは 1）。持ち越しは、印が行自身のもの（`paths_head_sha = checked_head_sha`、`paths_seq =
+    check_seq`）で、規則の版が今のもので、`checked_head_sha` が MR の今の head と同じ、決まった行だけを取る。新しい head が
+    来ると行は `unchecked` に戻り、古い集合は使われない。印の合わない行は確かめ直す側に倒れる。
+  - 着地（キューの列車、通常のマージ）は、動かした範囲のパスを 1 回だけ読み（キューはバッチごとに 1 回）、`repository.pushed` の
+    `landed`（`ref`、`old`、`new`、`paths_complete`、`changed_files`、`changed_dirs`、`deleted_parent_dirs`）に書く。
+    target への直接の push には `landed` が無く、全件を確かめ直す（S4 の前と同じ）。
+  - 購読側 `merge-request-refresh` は、`checked_target_sha` が着地の `old` と同じ行のうち、触れ合いえない行を `new` に付け替える。
+    `computed_target_sha` は動かさない（**実際に計算した先端**）。それ以外の MR は今までどおり確かめ直す。
+- **「触れ合いうる」（確かめ直す）の規則**: どちらかの集合が無い・不完全。同じファイル。片方のファイルがもう片方のディレクトリ
+  （`a` と `a/b`）。片方が何かを消したディレクトリの下を、もう片方が変えた（ディレクトリの削除・改名と、その下への追加。両向き）。
+  パスは大文字と小文字を区別せずに比べる（大文字小文字だけ違う名前は触れ合う）。**不完全** になるのは: 上限（`review.paths_max`、
+  既定 5000）を超えた、一覧が大きすぎる（`too_large`: git の出力が `min(paths_max × 160 + 1 MiB, 4 MiB)` を超えた、キーの合計が
+  1 MiB を超えた）、UTF-8 でないパス、シンボリックリンクかサブモジュール、**全体に効くパス**（どこかの `.gitattributes` /
+  `.gitmodules`、`.forge/` の下、ルートの `.forge-ci.yml` と `CODEOWNERS`）を含む、head と target の merge base が複数ある
+  （`several_merge_bases`: 交差したマージの履歴）、パスを読めなかった。不完全な着地は全件を確かめ直し、不完全な MR は毎回
+  確かめ直す。
+- **持ち越しは表示とキューに入れる条件のためだけ**。マージそのものは必ずもう一度マージする: キューの列車は各 MR を `merge-tree` で
+  積み直し、直接のマージはロックの下で試しのマージをする。そこで衝突した MR は `FG-REVIEW-0006`（キューでは `reason=conflict` で
+  外れる）になり、**何も着地しない**。持ち越した結果が外れたときは、同じ `request_id` で info
+  `forge.review.mergeability_carried_disproved`（`merge_request_id`、`check_seq`）が出て、計算し直しを積む。
+- **Trigger**: `FG-REVIEW-0006` が、MR のページで「マージできる」と出ていた MR に出た。利用者から「触れていないはずの変更で
+  結果が古い」と問い合わせがあった。
+- **Diagnose（読み取りのみ）**
+  1. 上の Diagnose 2 の行を読む。`computed_target_sha ≠ checked_target_sha` なら持ち越した結果。MR のページと
+     `gstn mr status --json` の `carried_from_target_sha` も同じことを言う。
+  2. `FG-REVIEW-0006` の MR がキューで外れたなら、まず **同じ列車の前の MR** と衝突したのかを見る（それは絞り込みの誤りではない。
+     キューに並んだ 2 つの変更が初めて出会うのが列車）: `SELECT id, batch_id, state, reason, error_code FROM forge.merge_queue_entries
+     WHERE merge_request_id = <id> ORDER BY id DESC LIMIT 3;` と同じ `batch_id` の他のエントリー。
+  3. 前の MR が無いのに衝突したなら、絞り込みが「触れ合わない」と誤った。持ち越した着地を探す: worker のログの
+     `forge.review.mergeability_carried`（info。`source_seq`、`carried`、`settled`（先の着地の記録で付け替え済みの数）、
+     `rechecked`）。その `source_seq` のイベントの `landed` と、MR の行の `head_files` / `head_dirs` / `head_deleted_dirs` を
+     比べる: `SELECT payload->'landed' FROM forge.events WHERE seq = <source_seq>;`
+     `SELECT head_files, head_dirs, head_deleted_dirs, paths_complete FROM forge.merge_request_mergeability WHERE merge_request_id = <id>;`
+     （パスの名前が出る。インシデントの記録には件数と該当のパスだけを書く。）この組を開発者（Claude）に渡す — 規則の穴は
+     試験（`may_interact_matches_its_sql_twin` と同じ場所）にしてから直す。
+  4. 絞り込みが効いていないとき（着地のたびに全件を確かめ直している）: `forge.review.mergeability_paths_unused`（info。`paths` =
+     `incomplete`（着地が不完全: 上限・全体に効くパスなど）/ `rule` / `malformed` / `oversized`（`landed` が 16 KiB の
+     予算を超えている。書く側が守る予算を読む側でも確かめる）/ `ref_not_moved`。`landed` が無い記録 —
+     直接の push、S4 より前の記録 — は `absent` で debug）、着地の側の warn
+     `forge.review.merge_paths_unlisted`（着地のパスを読めなかった。`error_code` つき）と info `forge.review.merge_paths_incomplete`
+     （`reason`）、判定の側の info `forge.review.mergeability_paths_incomplete`（`reason`）と warn
+     `forge.review.mergeability_paths_unread`（`error_code` つき。結果は保存され、その MR は毎回確かめ直す）。どれも結果を
+     間違えない側（確かめ直す）に倒れているので、急ぐ必要はない。
+- **知っておくこと**
+  - 持ち越した `can_be_merged` には、新しい先端のマージ結果の ref（`refs/merge-requests/<iid>/merge`）が無い。worker の見回り
+    （`sweep_missing_merge_results`）は、着地が止まって 300 秒たった行を 1 回計算し直す（着地が続く間は持ち越しのたびに時計が戻る）。
+  - 必須の `ci/pipeline` があるリポジトリでは、持ち越した MR の状態は `required_check_stale`（または `required_check_missing`）
+    `name=ci/pipeline` になる。**マージキューには待たずに入れられる**（人も自動マージも。列車が今の先端で試す）。**直接の
+    マージ** は FG-CI-0013（または FG-REVIEW-0007）で断られるが、断ったその場で計算し直しを積む: 同じ `request_id` で info
+    `forge.review.mergeability_carried_recompute_requested`（`merge_request_id`、`check_seq`）。断りのログの
+    文脈には `mergeability=carried` が付く。判定のジョブが今の先端のマージ結果を作り（`forge.review.merge_result_updated`）、
+    その上で MR パイプラインが動く。終われば直接のマージが通る。このログが出たのにマージ結果ができないときは、上の
+    Diagnose 3 のジョブを見る。画面の直接の「マージ」ボタンは、この計算し直し（か見回り）の後に出る。
+  - 持ち越した `cannot_be_merged` は、触れ合う着地か新しい head が来るまで残る（衝突したファイルに触れない着地では直らない、で正しい）。
+  - 文字の正規化（NFC / NFD）はそろえない。同じに見える名前でも別のパスとして比べる（列車が見つける）。大文字小文字は 1 文字ずつ
+    そろえる（`ß` と `SS` は別）。どちらも大文字小文字を区別しないチェックアウトでだけ意味があり、サーバーの git は区別する。
+  - 外れた持ち越しの計算し直し（`…_carried_disproved`）は、試しのマージが **衝突** したときだけ。エラーや時間切れで終わった
+    マージはそのまま断られ、次に頼まれたときにまた試しのマージをする。
+- **Mitigate — 絞り込みを切る**: `[MUTATING — needs approval]` サーバーの設定 `review.path_filter = false`
+  （`FORGE_REVIEW_PATH_FILTER=false` か設定ファイルの `[review] path_filter = false`）を **`forge serve` と `forge worker` の両方** に
+  入れて再起動する（片方だけでも持ち越しは止まる: worker は集合を書かず持ち越さない、serve は `landed` を書かない）。
+  **戻し**: 設定を消して（または `true`）再起動。切った後の行は次の着地で普通に確かめ直される。表は書き換えない。
+  - **切る代償**: S4 の前と同じに戻る。着地のたびに target の開いている MR を全部（`review.mergeability_fanout_max` まで。超えた分は
+    `unchecked` で見回り待ち）確かめ直す。開いている MR が多いリポジトリでは、着地 1 回ごとに MR の数だけ判定のジョブと git の
+    起動が走り、キューの後ろで「確認中」が長くなる（2026-11-17 の負荷試験の形）。正しさは変わらない。
+  - 上限だけを変えるなら `review.paths_max`（1〜20000、既定 5000）。大きくすると行と `landed` が大きくなる（`landed` は 16 KiB を
+    超えると不完全として送る）。
+- **Verify**: 切った後は `forge.review.mergeability_carried` が出なくなり、着地の後に各 MR の `check_seq` が進む。戻した後は、
+  触れ合わない着地で `forge.review.mergeability_carried` の `carried` が 0 より大きい。
 
 ## Escalate
 

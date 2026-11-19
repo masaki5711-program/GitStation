@@ -1,6 +1,7 @@
 //! Running checks (see the module documentation of `mergeability`).
 
 use forge_core::ids::{MergeRequestId, ProjectId};
+use forge_core::merge_paths::PathSet;
 use forge_core::{
     AuditDetails, CheckReason, DedupKey, DedupPart, EventType, MergeRequestChange,
     MergeRequestState, MergeabilityStatus, ObjectId, RefName,
@@ -102,6 +103,11 @@ pub struct CheckResult {
     pub target: Option<ObjectId>,
     pub conflicts: Vec<String>,
     pub conflicts_truncated: bool,
+    /// Plan 18 S4: the changed-path set of `head` (forge-core
+    /// `merge_paths`), stored with the result so that it always belongs to
+    /// the checked head. `None`: unknown (not read, the path filter is
+    /// off) — the merge request is checked again on every landing.
+    pub paths: Option<PathSet>,
 }
 
 /// What [`record_check`] did.
@@ -233,12 +239,24 @@ pub async fn record_check(
             })
             .transpose()?;
         let decided = result.status.is_decided().then_some(result.status);
+        // The path set is written with the result it belongs to (one
+        // UPDATE) and stamped with this check: the head it checked and its
+        // seq (`paths::OWN_SET`), with the version of the rule the set is
+        // for. A writer that does not know these columns leaves a stamp
+        // that is not its result's, so its row is never carried. The
+        // target the result was computed against is kept apart from the
+        // checked one, which a carry-forward moves on
+        // (`paths::carry_forward_on`).
+        let paths = result.paths.as_ref();
         tx.step(|c| async move {
             sqlx::query(
                 "UPDATE forge.merge_request_mergeability SET status = $2, reason = $3, \
                  checked_head_sha = $4, checked_target_sha = $5, checked_at = now(), \
                  conflicts = $6, conflicts_truncated = $7, confirmed_at = now(), \
-                 last_decided = COALESCE($8, last_decided), updated_at = now() \
+                 last_decided = COALESCE($8, last_decided), updated_at = now(), \
+                 computed_target_sha = $5, head_files = $9, head_dirs = $10, \
+                 head_deleted_dirs = $11, paths_complete = $12, paths_rule = $13, \
+                 paths_head_sha = $4, paths_seq = $14 \
                  WHERE merge_request_id = $1",
             )
             .bind(mr.get())
@@ -249,6 +267,12 @@ pub async fn record_check(
             .bind(&result.conflicts)
             .bind(result.conflicts_truncated)
             .bind(decided.map(MergeabilityStatus::as_str))
+            .bind(paths.map(PathSet::files))
+            .bind(paths.map(PathSet::dirs))
+            .bind(paths.map(PathSet::deleted_dirs))
+            .bind(paths.map(PathSet::is_complete))
+            .bind(paths.map(|_| super::paths::rule_version()))
+            .bind(seq)
             .execute(&mut *c)
             .await
             .map_err(|e| query_error("review.mergeability_store", e))?;

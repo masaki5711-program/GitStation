@@ -16,29 +16,29 @@ use crate::subscribers::{self, Progress, Start};
 use crate::test_support::*;
 use crate::users::{self, NewUser};
 
-fn system(request: &str) -> ChangeContext {
+pub(super) fn system(request: &str) -> ChangeContext {
     ChangeContext::new(
         Actor::System,
         RequestId::parse(request).expect("request id"),
     )
 }
 
-fn as_user(user: UserId, request: &str) -> ChangeContext {
+pub(super) fn as_user(user: UserId, request: &str) -> ChangeContext {
     ChangeContext::new(
         Actor::User(user),
         RequestId::parse(request).expect("request id"),
     )
 }
 
-fn oid(c: char) -> ObjectId {
+pub(super) fn oid(c: char) -> ObjectId {
     ObjectId::parse(&c.to_string().repeat(40)).expect("oid")
 }
 
-fn branch(name: &str) -> RefName {
+pub(super) fn branch(name: &str) -> RefName {
     RefName::parse(&format!("refs/heads/{name}")).expect("branch")
 }
 
-async fn web(t: &FreshDb) -> (UserId, CreatedProject) {
+pub(super) async fn web(t: &FreshDb) -> (UserId, CreatedProject) {
     let alice = users::create(
         &t.db,
         &system("req-user-alice"),
@@ -84,7 +84,7 @@ async fn open_to(
 }
 
 /// [`open_to`], then version 1 at head `a` (what every result names).
-async fn open_at_a(
+pub(super) async fn open_at_a(
     t: &FreshDb,
     who: UserId,
     p: ProjectId,
@@ -135,7 +135,7 @@ async fn audit_count(t: &FreshDb, action: &str) -> i64 {
         .expect("count")
 }
 
-fn result(status: MergeabilityStatus, head: char, target: char) -> CheckResult {
+pub(super) fn result(status: MergeabilityStatus, head: char, target: char) -> CheckResult {
     let (reason, conflicts) = match status {
         MergeabilityStatus::CannotBeMerged => {
             (Some(CheckReason::Conflict), vec!["README".to_owned()])
@@ -152,6 +152,7 @@ fn result(status: MergeabilityStatus, head: char, target: char) -> CheckResult {
         target: Some(oid(target)),
         conflicts,
         conflicts_truncated: false,
+        paths: None,
     }
 }
 
@@ -391,7 +392,7 @@ async fn push(t: &FreshDb, user: UserId, request: &str, push: &PushRecord) {
     assert_eq!(done, forge_core::PushRecorded::Recorded);
 }
 
-async fn drain(t: &FreshDb, subscriber: &MergeRequestRefresh) {
+pub(super) async fn drain(t: &FreshDb, subscriber: &MergeRequestRefresh) {
     crate::sequencer::run_once(
         &t.db,
         crate::sequencer::BatchSize::MAX,
@@ -515,7 +516,7 @@ async fn a_target_push_checks_open_merge_requests_up_to_the_fanout_cap() {
 }
 
 /// (merge request id, check_seq) of the QUEUED mergeability jobs.
-async fn queued_checks(t: &FreshDb) -> Vec<(i64, i64)> {
+pub(super) async fn queued_checks(t: &FreshDb) -> Vec<(i64, i64)> {
     let mut jobs: Vec<(i64, i64)> = sqlx::query_as(
         "SELECT (payload ->> 'merge_request_id')::bigint, (payload ->> 'check_seq')::bigint \
          FROM forge.jobs WHERE kind = 'merge_request.mergeability' AND state = 'queued'",

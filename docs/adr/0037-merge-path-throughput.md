@@ -378,6 +378,152 @@ S1 で (b) の 1・2 を作った。上の Interface sketch と違うところ�
 - 安全網の設定（キューの idle 30 s、`waiting` 60 s、自動マージ 30 s）と `merge_queue.workers` は S3。ジョブの側は
   `jobs.safety_poll_ms` だけ。
 
+## Amendment（2026-11-18、計画 18 S4 の実装）: 変更パスを見た再計算と持ち越し
+
+S4 で (c) を作った。上の Decision (c) の文は変えない。文と違うところ、(c) が決めていなかったところ、残る限界:
+
+- **head のパスの集合は、版の段ではなく判定のジョブが書く**（(c) 1 と違う）。結果と同じ 1 つの UPDATE（`record_check`）で書くので、
+  保存された集合は必ず `checked_head_sha` のもの。「集合は古い head のもの」という状態を行の上で作れない。新しい head では行が
+  `unchecked` に戻り、持ち越しは `checked_head_sha = MR の今の head` の決まった行だけを取る。集合の中身は、merge base → head の
+  `diff-tree -z --no-renames` と、衝突のない結果ではさらに target の先端 → マージした木の差分（マージがパスを動かした場合を拾う）。
+- **列を 1 つ足した**: `head_deleted_dirs`（head が何かを消したディレクトリ。すべての祖先）。(c) 3 は着地の側の
+  `deleted_parent_dirs` だけだったが、逆向き（MR がディレクトリを消し・改名し、着地がその下に足す）も確かめ直すために要る。
+  消した側はすべての祖先を持つので、`docs/` の 1 件の削除で `docs/` に触れる MR が全部確かめ直される（広すぎる側に倒した）。
+- **規則（`forge_core::merge_paths::may_interact`、規則の版 1）**。確かめ直すのは: どちらかの集合が無い・不完全。同じファイル。
+  片方のファイルがもう片方のディレクトリ（`a` と `a/b`）。`mr.dirs ∩ landed.deleted_dirs ≠ ∅`、`mr.deleted_dirs ∩ landed.dirs ≠ ∅`。
+  同じディレクトリの下の別のファイルで、どちらも何も消していなければ、触れ合わない。
+- **不完全（= すべてに触れる）**: 上限（`review.paths_max`、既定 5000、1〜20000）を超えた、キーの合計が 1 MiB を超えた、git の出力が
+  切れた、UTF-8 でないパス（`text[]` に入らない）、シンボリックリンク・サブモジュール（どちらかの側の mode が 120000 / 160000）、
+  空・`.`・`..` の要素や NUL、**全体に効くパス**。全体に効くパスは (c) 3 の一覧に `.gitmodules` を足した: どこかの `.gitattributes` /
+  `.gitmodules`、`.forge/**`、ルートの `.forge-ci.yml` と `CODEOWNERS`。着地の側だけでなく **MR の側** にあっても不完全にする。
+  不完全な集合は空の一覧で保存・送信する。読めなかった（git の失敗）は判定の失敗にせず、集合なし（NULL = 確かめ直す）で保存して warn。
+- **大文字と小文字**: パスは `/` で分け、文字ごとに大文字小文字をそろえたキーで比べる（`Docs/A.md` と `docs/a.md` は同じ）。git の
+  マージは区別するが、区別しないファイルシステムのチェックアウトのために、大文字小文字だけの違いを「触れ合う」に倒した。
+  Unicode の正規化（NFC / NFD）は **そろえない**（既知の限界。外れたら列車が見つける）。
+- **SQL の対応物**（`forge_db::review::mergeability::paths::interacts_sql`）は、行の列と、束縛した 4 つの引数（着地のファイル、
+  ディレクトリ、消したディレクトリ、完全か）の上の式で、NULL にならない。試験 `may_interact_matches_its_sql_twin` が、空の配列、
+  NULL、境界でない接頭辞（`a` と `ab`）、末尾の `/`、Unicode、`PathSet::build` を通っていない集合を含めて、Rust と同じ答えを固定する。
+- **持ち越しの文**（1 つの UPDATE、購読側のトランザクション）: 対象は、プロジェクトの、target が着地のブランチの、開いた MR の行のうち、
+  `status ∈ {can_be_merged, cannot_be_merged}`、`checked_head_sha = MR の head_sha`、`checked_target_sha = 着地の old`、対応物が偽。
+  `checked_target_sha := new`、`computed_target_sha := COALESCE(computed_target_sha, checked_target_sha)`、`updated_at := now()`。
+  `old` に答えていない行（遅れた・重複したイベント、持ち越されなかった着地の次の着地）は持ち越さず、今までどおり確かめ直す。
+  すでに (head, new) に答えている行（同じバッチの先のイベントで付け替え済み、など）は「settled」として何もしない。
+  ログ `forge.review.mergeability_carried` に `settled` を足した。
+- **`computed_target_sha`** は、結果を実際に計算した target の先端。`record_check` が毎回 `checked_target_sha` と同じ値を書き、
+  持ち越しは動かさない。**持ち越した行** ⇔ 集合の印が行自身のもの（下のレビュー対応 1）で、かつ
+  `computed_target_sha IS NOT NULL AND computed_target_sha <> checked_target_sha`。
+- **キューのバッチ**: エントリーごとに `repository.pushed` が出るが、どれも **同じ** `landed`（`old` = バッチの土台、`new` = 列車の先端、
+  バッチ全体のパス。`diff-tree` はバッチに 1 回）を持つ。最初のイベントが持ち越し、残りは settled になる。
+- **マージの条件の判定は変えていない**。これまでどおり、保存された結果は `checked_head_sha = head` かつ `checked_target_sha =
+  target の生きた先端` のときだけ数える（`stored_mergeable`）。持ち越しは `checked_target_sha` を進めるので、持ち越した結果は
+  計算した結果と同じに数えられる。足したのは表示用の `carried_from_target_sha`（状態の API）と `computed_target_sha`
+  （mergeability の API）だけ。認可もルートも変えていない。
+- **外れた持ち越しを残さない**（(c) に無かった）: 直接のマージの試しのマージか列車が `FG-REVIEW-0006` を出したとき、行が持ち越した
+  ものなら計算し直しを積む（`recheck_if_carried`、info `forge.review.mergeability_carried_disproved`）。ページが「マージできる」と
+  言い続けない。
+- **停止スイッチ `review.path_filter = false`** は 3 か所を切る: 判定は集合を読まず書かない（列は NULL）、着地は差分を読まず
+  `landed` を書かない、購読側は持ち越さない。S4 の前とまったく同じ動きになる。列が NULL の古い行、`landed` の無い古いイベント
+  （と target への直接の push）も同じ（debug `forge.review.mergeability_paths_unused paths=absent`）。`landed` は 16 KiB まで
+  （超える着地は不完全として送る）。
+- **(c) 5 の表示**: 「N コミット進んだ」の N は出さない（ページの読み取りごとに git の起動が要る）。文は「`<branch>` の `<sha>` の時点で
+  確かめた結果。その後の変更はこの MR のファイルに触れていないので結果をそのまま使っている。何かが入る前にマージキューがもう一度
+  マージして確かめる。」（`mr.conditions.carried`、ja / en / id）で、マージの条件の欄に 1 行。マージ結果の ref と MR パイプラインの
+  「`<sha>` 時点」の表示は S5（MR パイプラインの段）に残した。
+- **マイグレーション** `20261229100200_merge_request_mergeability_paths`: null 可・既定なしの列 8 つ（`head_files`、`head_dirs`、
+  `head_deleted_dirs`、`paths_complete`、`computed_target_sha` と、レビュー対応で足した印 `paths_rule`、`paths_head_sha`、
+  `paths_seq`）。`ALTER TABLE … ADD COLUMN` は ACCESS EXCLUSIVE を取るが、既定の無い
+  null 可の列はカタログの変更だけで表を書き換えないので一瞬。**索引は足さない**: 持ち越しの文は既存の索引で
+  (project, target, open) の MR に絞ってから主キーで行を引き、配列の重なりはその行の上だけで評価する。GIN は毎回の判定の
+  書き込みを重くするだけ。
+- **残る限界**
+  - 持ち越した `can_be_merged` には新しい先端のマージ結果の ref が無い。見回り（`sweep_missing_merge_results`、300 秒）は変えて
+    いないので、着地が止まって 300 秒たつと 1 回計算し直す（着地が続く間は持ち越しが `updated_at` を進める）。必須の `ci/pipeline` が
+    あるリポジトリの直接のマージは FG-CI-0013 で断られるが、断ったその場で計算し直しを積む（下のレビュー対応 3）。キューは
+    列車が試すので影響なし。「target が動いただけでは MR パイプラインを積まない」は S5 が扱う。
+  - 持ち越した `cannot_be_merged` は、触れ合う着地か新しい head まで残る。
+  - git の改名の検出が複数の着地にまたがって初めて成立する形は、消したディレクトリの規則と、マージした木の差分で狭めたが、
+    証明はしていない。外れても悪い `main` にはならず、列車が `FG-REVIEW-0006` で見つける。
+  - 負荷試験のシナリオ `a`（着地 1 回あたりの判定のジョブ ≈ 0）は、この段の中では走らせていない。
+  - merge base が複数ある（交差したマージの）MR は持ち越さない（下のレビュー対応 4）。
+
+## Amendment（2026-11-19、計画 18 S4 のレビュー対応）
+
+S4 の差分を 2 人の評価者（データベース、Rust）が読んだ。「持ち越した行のせいで衝突する変更が入る」経路は見つからなかった
+（列車と直接のマージが必ずもう一度マージする）。直したのは、表示が間違いうる経路と、試験の薄いところ。
+
+1. **集合は、どの判定が書いたかの印を持つ**。これまで「保存された集合は `checked_head_sha` のもの」は、`record_check` が同じ
+   UPDATE で書くという約束でしかなかった。列を知らない書き手（serve と worker を順に入れ替えている間の古い worker、遅れたジョブ、
+   ロールバック）は `checked_head_sha` / `checked_target_sha` だけを書き、集合と `computed_target_sha` は前の判定のまま残る。
+   その行を持ち越すと、古い集合で「マージできる」と出る（入るものは変わらない: 列車が断る）。
+   - 足した列: `paths_head_sha`（集合を読んだ head）、`paths_seq`（集合を書いた判定の `check_seq`）。`record_check` が結果と同じ
+     UPDATE で書く（集合を読めなかったときも印は書く）。**行自身の集合** ⇔ `paths_head_sha = checked_head_sha AND paths_seq =
+     check_seq`（`own_set!`）。持ち越しの文、`stored_paths`、`computed_target_sha` を読む側（`carried_from()`、状態の API）は、
+     どれもこの条件を通す。印の合わない行は「集合が無い」= 確かめ直す、「持ち越した行ではない」。
+   - `paths_seq` はレビューの指示に無かった列。`paths_head_sha` だけでは、古い書き手が **同じ head** を新しい先端で判定し直した
+     とき（target が動いただけの再判定）を見分けられない: 集合は同じ head のものなので持ち越しは安全だが、`computed_target_sha`
+     が前の先端のまま残り、計算した結果が「持ち越した」と表示される。`check_seq` は判定を積むたびに進むので、これで見分ける。
+   - 残る隙間: 新しい書き手が記録した **同じ** `check_seq` を、古い書き手がやり直して上書きする場合（ジョブの再試行が別の
+     プロセスに渡ったとき）。集合は同じ head のものなので持ち越しの判断は変わらず、`computed_target_sha` の表示だけが古いことが
+     ありうる。順に入れ替えている間だけの話。
+   - 判定を待っている行（`unchecked` / `checking`）は、これで `computed_target_sha` が null に読める（`bump_on` が `check_seq` を
+     進めるので印が合わない）。API の `computed_target_sha` は「決まった結果を計算した先端」だけを言う。
+2. **規則の版も行に書く**（`paths_rule`、いまは 1 = `forge_core::merge_paths::RULE_VERSION`）。`landed` は版を持っていたが、行は
+   持っていなかった。持ち越しの文と `stored_paths` は今の版の行だけを使う。規則を変えるときは版を上げれば、古い規則で作った集合は
+   全部「確かめ直す」になる（表の書き換えは要らない）。
+3. **必須の `ci/pipeline` と持ち越した行**。持ち越した行には今の先端のマージ結果が無いので、`ci/pipeline` は `required_check_stale`
+   （前のマージ結果に報告がある）か `required_check_missing` になる。どの判断を止めるかを確かめた:
+   - (a) 人がキューに入れる（`POST …/merge-queue`）— **止まらない**。キューに入れる判断は `ci/pipeline` を列車の結果に置き換えて
+     評価する（`merges/queue/mod.rs` の `TrainRuns` / `deferred_run()`）。mergeability は `stored_mergeable` で、持ち越した行も数える。
+   - (b) 自動マージがキューに入れる — **止まらない**。`merges/auto.rs` の `blockers()` はマージ結果に報告される名前の
+     「無い・古い」を落とし、`PipelineState` は赤のときだけ止める。入れる判断は (a) と同じ評価。
+   - (c) 直接のマージ — **止まる**（FG-CI-0013、または `required_check_missing` の FG-REVIEW-0007）。これは正しい: 直接のマージには
+     列車が無いので、今の先端のマージ結果の上の `ci/pipeline` が要る。問題は、計算し直しが見回り（300 秒、しかも着地のたびに
+     時計が戻る）まで来ないことだった。
+   - 決めたこと: (c) の条件は緩めない。直接のマージ（要求のときと、ロックの下のジョブ）が、**持ち越した行の上で、マージ結果に
+     報告される必須のチェックが無い・古いことを理由に** 断るとき、その場で計算し直しを積む（`merges/carried.rs`、
+     `recheck_if_carried`、info `forge.review.mergeability_carried_recompute_requested`）。判定のジョブが今の先端のマージ結果を
+     作り、`record_merge_result` が MR パイプラインを積む。断りのコードと利用者への文は変えない（「新しいマージ結果での
+     パイプラインが終わるのを待つ」は、積んだので本当になる）。ログの文脈に `mergeability=carried` が付く（ログだけ）。
+   - 状態の API: 持ち越した結果では `checks[].waits_for_merge_result` は false（衝突などを解くのを待っているのではない）。画面は
+     その行で「取り込み先はこの MR のファイルに触れずに進んだので新しいパイプラインは動かしていない。マージキューに入れると
+     今の取り込み先で確かめてからマージする」と出す（`mr.status.hint.checksCarried`、ja / en / id）。
+   - S5 との関係: S5 は「target が動いただけでは MR パイプラインを積まない。直接のマージは FG-CI-0013 `hint=merge_queue`、画面の
+     『マージ』は『準備ができたらマージ』になる」。ここでやったのはその手前の最小の一歩で、持ち越した行はパイプラインを積まず、
+     キューは待たずに入れられ、直接のマージは頼まれたときだけ計算する。`hint=merge_queue` とボタンの付け替えは S5 に残した。
+   - 残る限界: 画面の直接の「マージ」ボタンは `mergeable` のときだけ出るので、必須の `ci/pipeline` がある target の持ち越した MR
+     では出ない（キューのボタンは出る）。直接のマージを API / CLI で頼むか、見回りが計算し直すと出るようになる。
+4. **merge base が複数ある head は持ち越さない**。集合は 1 つの merge base からの差分だが、`merge-tree` は merge base を合成して
+   マージするので、差分に無いパスが結果に効きうる。判定はこれまでの `merge-base` の代わりに `merge-base --all` を 1 回呼び
+   （git の起動は増えない）、2 つ以上なら集合を不完全として保存する（info `forge.review.mergeability_paths_incomplete`
+   `reason=several_merge_bases`）。その MR は着地のたびに確かめ直す。
+5. **パスの一覧を読むメモリーの上限**。`Git::changed_path_entries` の出力の上限は `max_paths × 4353` バイト（上限いっぱいで
+   約 87 MB）だった。`min(max_paths × 160 + 1 MiB, 4 MiB)`（下限 8 KiB）にした: 既定の 5000 で約 1.8 MiB、20000 でも 4 MiB。
+   1 MiB は集合そのものの上限（キーの合計）なので、これを超える一覧はどのみち不完全になる。切れた一覧は不完全
+   （`reason=too_large`）で、エラーではない。レコードは 1 件ずつ切り出し、2 つ目の配列は作らない。
+6. **規則を本物の git で確かめる試験**（`forge-git/src/mergeability_path_rule_tests.rs`）。小さな語彙（`a`、`a/b`、`ab`、
+   大文字小文字、削除、ファイルをディレクトリに置き換え、ディレクトリの削除、改名）から土台の木と 2 つの変更を作り、規則が
+   「触れ合わない」と言ったら、`git merge-tree` が衝突なしで、結果の木が 2 つの変更を順に（どちらの順でも）当てた木と同じである
+   ことを確かめる。64 件、種は固定、失敗は `proptest-regressions/` に残る。SQL の対応物の試験の生成器にも同じ語彙の変更を足した。
+7. **`landed` の予算（16 KiB）は読む側でも確かめる**。超えていれば `oversized` で全件を確かめ直す。持ち越しの文の時間の上限は、
+   書き込みプールの接続の `statement_timeout`（`database.statement_timeout_ms`、既定 15 秒）と `lock_timeout`、その外側の
+   購読側の `handler` の上限（20 秒）。文がロックするのは mergeability の行だけで、`merge_requests.head_sha` はロックなしで読む:
+   版のトランザクションは `head_sha` を進めた **後に** 同じトランザクションで mergeability の行を書く（`downgrade_on`）ので、
+   持ち越しが古い head を読んで先にコミットしても、その行は後から来る版のトランザクションが `unchecked` に戻す。
+8. **索引は足していない**。持ち越しの文の `merge_requests` の絞り込み（プロジェクト、target、開いている）は既存の
+   `merge_requests_one_open`（`(project_id, source_branch, target_branch) WHERE state = 'open'`）か
+   `merge_requests_open_project`（`(project_id, id) WHERE state = 'open'`）が受ける。
+9. 着地のパスを読む間にマージのロックを失ったときのコードは、これまでどおり `FG-DB-0002 reason=merge_lock_lost`
+   （`Merger::bounded` を通すようにした）。ロックの喪失だけの登録済みコードは無い。
+
+### 分かっていて残す限界
+
+- **大文字小文字は 1 文字ずつそろえる**。完全な case folding ではない（`ß` と `SS` は別のキー）。Unicode の正規化（NFC / NFD）も
+  しない。NTFS の短い名前（`PROGRA~1`）を「全体に効くパス」として扱うこともしない。どれも、大文字小文字を区別しない
+  ファイルシステムへのチェックアウトでだけ意味がある。サーバーの git は区別し、入れる前に列車がマージして確かめる。
+- **`recompute_carried` は衝突したときだけ動く**。試しのマージがエラーや時間切れで終わったときは動かさない: そのマージは
+  どのみち断られ、次に頼まれたときにまた試しのマージをする。
+- **足した列は読み取り専用のロールから読める**。入っているのはパスの名前だけで、リポジトリを読める人が見られるものと同じ。
+
 ## 追記（2026-11-19、計画 18 S3 の実装）— (a) の残り（キューと自動マージの起床）: 作ったもの、文との違い、既知の限界、S5/S6 が引き継ぐもの
 
 上の Decision (a) の文は変えない。S3 が作ったのは (a) の 2（`forge_merge_queue` の分）・3・4・5（キューと自動マージの分）・

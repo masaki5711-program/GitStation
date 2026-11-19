@@ -68,6 +68,10 @@ pub(crate) struct Storage {
     /// The forge-owned hooks directory (`core.hooksPath`). None until the
     /// policy hooks exist (M1 phase 10 adds the setting).
     pub(crate) hooks: Option<PathBuf>,
+    /// Plan 18 S4: the most paths the mergeability check stores as a
+    /// head's changed-path set (`review.paths_max`); `None`: no set
+    /// (`review.path_filter = false`, and the tests' default).
+    pub(crate) merge_paths_max: Option<usize>,
 }
 
 impl Storage {
@@ -77,17 +81,22 @@ impl Storage {
     /// Tests: the built-in `git.pack.*` caps.
     #[cfg(test)]
     pub(crate) fn open(root: &std::path::Path) -> Result<Self, ForgeError> {
-        Self::open_with(root, forge_core::config::GitPackConfig::DEFAULT)
+        Self::open_with(root, forge_core::config::GitPackConfig::DEFAULT, None)
     }
 
     /// The configured root with the configured `git.pack.*` memory caps.
     pub(crate) fn from_config(cfg: &forge_core::config::Config) -> Result<Self, ForgeError> {
-        Self::open_with(cfg.storage_root()?, cfg.git_pack)
+        Self::open_with(
+            cfg.storage_root()?,
+            cfg.git_pack,
+            cfg.review.path_filter_max(),
+        )
     }
 
     fn open_with(
         root: &std::path::Path,
         pack: forge_core::config::GitPackConfig,
+        merge_paths_max: Option<usize>,
     ) -> Result<Self, ForgeError> {
         let root = StorageRoot::open(root)?;
         let mut cfg = GitConfig::new("git", root.path());
@@ -97,6 +106,7 @@ impl Storage {
             git: Git::new(cfg),
             root,
             hooks: None,
+            merge_paths_max,
         })
     }
 }

@@ -60,6 +60,11 @@
      - `config_key=review.worker_job_concurrency`（`forge worker` が同時に動かすジョブの数）: `below_min`（0）、`above_max`（17 以上。16 まで）、
        `above_half_write_pool`（`database.write_max_connections` の半分より多い。プールを広げるか値を下げる）、`invalid`（整数でない）。
        未設定なら 4（書き込みのプールの半分が 4 より小さければその数）。`FORGE_REVIEW_WORKER_JOB_CONCURRENCY` か設定ファイルの `[review] worker_job_concurrency`
+     - `config_key=review.path_filter`（計画 18 S4。着地のたびに「着地したパスと重なりうる MR」だけを確かめ直し、残りの結果を新しい先端へ持ち越す。
+       Runbook `merge-request-mergeability`）: `invalid`（`true` / `false` 以外）。未設定なら `true`。**`false` は停止スイッチ**（S4 より前と同じく、
+       着地のたびに target の開いた MR をすべて確かめ直す）。`FORGE_REVIEW_PATH_FILTER` か設定ファイルの `[review] path_filter`
+     - `config_key=review.paths_max`（計画 18 S4。変更パスの集合が持てるファイル（とディレクトリ）の数の上限。超えた変更は「不完全」で、常に確かめ直す）:
+       `below_min`（0）、`above_max`（20001 以上。20000 まで）、`invalid`（整数でない）。未設定なら 5000。`FORGE_REVIEW_PATHS_MAX` か設定ファイルの `[review] paths_max`
      - `config_key=jobs.safety_poll_ms`（計画 18 S2。暇なジョブ実行が通知なしでも自分で見に行く間隔、ミリ秒。Runbook `job-queue-backlog`）: `below_min`
        （0〜99。100 から）、`above_max`（60001 以上。60000 まで）、`invalid`（整数でない）。未設定なら 10000。**1000 にすると計画 18 より前と同じ
        「1 秒ごとに見る」動きに戻る**（通知が来なくても遅くならない）。`FORGE_JOBS_SAFETY_POLL_MS` か設定ファイルの `[jobs] safety_poll_ms`
