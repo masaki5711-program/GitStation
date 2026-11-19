@@ -10,6 +10,32 @@ const pexec = promisify(execFile);
 export const BASE = process.env.GS_LT_BASE ?? 'http://127.0.0.1:28080';
 export const GIT_BASE = process.env.GS_LT_GIT_BASE ?? BASE;
 export const USER = process.env.GS_LT_USER ?? 'dora';
+// GS_LT_CONCURRENCY: API calls this client keeps open at once in a burst.
+// The client is one socket peer, and forge refuses a peer's connections above
+// `server.max_connections_per_peer` (default 64, FG-WEB-0008) before reading
+// them; 200 people at 200 PCs are 200 peers. 32 leaves the poller and git
+// their share. A burst still arrives at once from the queue's point of view.
+export const CONCURRENCY = (() => {
+  const raw = process.env.GS_LT_CONCURRENCY ?? '32';
+  if (!/^[0-9]+$/.test(raw) || Number(raw) < 1 || Number(raw) > 1024) {
+    throw new Error(`GS_LT_CONCURRENCY must be an integer from 1 to 1024 (got '${raw}')`);
+  }
+  return Number(raw);
+})();
+/** `Promise.all(items.map(fn))` with at most `limit` calls running; results keep the order of `items`. */
+export async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 let secret = null;
 /** The token and its Basic form, read on first use (`spawn-bench` runs without one). */
 function credentials() {
