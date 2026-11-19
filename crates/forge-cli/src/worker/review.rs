@@ -170,6 +170,20 @@ impl JobHandler for MergeabilityHandler {
             // `checking` (review HIGH). A timeout or crash never gets here;
             // the sweep ends those rows (`job_stale`).
             forge_review::mergeability::fail(&inner.db, request, &request_id, &e).await;
+            if asked {
+                // Plan 18 S5 review: the person's ask goes with the job;
+                // say so (the page still offers the button: asking again
+                // starts it).
+                tracing::warn!(
+                    target: "forge_cli",
+                    event = "forge.review.mergeability_ask_lost",
+                    request_id = %request_id,
+                    error_code = e.code().id(),
+                    merge_request_id = request.merge_request.get(),
+                    check_seq = request.check_seq,
+                    "a mergeability job that carried a request for the merge request pipeline failed for good; the request is lost"
+                );
+            }
             Err(if retryable(&e) {
                 JobFailure::retry(e)
             } else {

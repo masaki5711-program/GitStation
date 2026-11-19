@@ -65,7 +65,8 @@ target に一致する保護のルールのマージの条件は **いちばん�
      監査の行 `pipeline.run_merge_request`、ログ `forge.ci.merge_request_pipeline_asked`。パイプラインが通ったら直接マージできる。
 - `computing` のまま進まない: マージ可能性のジョブ（`merge_request.mergeability`、ペイロードに `"pipeline": true`）が残っているか見る
   （`SELECT id, state, payload FROM forge.jobs WHERE kind = 'merge_request.mergeability' AND payload->>'merge_request_id' = '<mr_id>' ORDER BY id DESC LIMIT 5;`）。
-  ジョブが dead になった・ファンアウトの上限で後回しにされた（FG-REVIEW-0003 `fanout_deferred`）ときは依頼が消える（既知の限界）。
+  ジョブが dead になった（worker の warn `forge.review.mergeability_ask_lost`、`merge_request_id` と失敗のコード）・ファンアウトの
+  上限で後回しにされた（FG-REVIEW-0003 `fanout_deferred`）ときは依頼が消える（既知の限界）。
   画面は古いままボタンを出すので、もう一度押せばよい。
 - 以前の動き（target の移動ごとに MR パイプライン）に戻す: `[MUTATING — needs approval]` 設定 `ci.mr_pipeline_on_target_move = true`
   （環境変数 `FORGE_CI_MR_PIPELINE_ON_TARGET_MOVE=true`）にして **`forge worker`** を再起動する（読むのはマージ結果を書く worker の

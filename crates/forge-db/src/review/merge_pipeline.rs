@@ -13,7 +13,8 @@
 //! - a computed `can_be_merged` for the head with its merge result → the
 //!   merge result's `ci.pipeline_create` job (deduplicated on the
 //!   pipeline's identity): `queued` (one `pipeline.run_merge_request` audit
-//!   row), or `exists` when it was already asked for (nothing written);
+//!   row), or `exists` when its pipeline row exists or its job is still
+//!   there (nothing written);
 //! - no merge result for the tip yet (a carried row, unchecked, a failed
 //!   check, another head) → a check is requested whose job carries the ask
 //!   (`"pipeline": true`), and the pipeline follows its merge result:
@@ -175,6 +176,28 @@ async fn row_on(conn: &mut PgConnection, mr: MergeRequestId) -> Result<Option<Ro
     ))
 }
 
+/// Whether the merge request pipeline of `result` exists (any status):
+/// `ci_pipelines_once` (project, source, ref, sha, merge request) serves it.
+async fn pipeline_exists(
+    conn: &mut PgConnection,
+    (project, mr): (ProjectId, MergeRequestId),
+    source: &str,
+    result: &ObjectId,
+) -> Result<bool, ForgeError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM forge.ci_pipelines WHERE project_id = $1 \
+         AND source = 'merge_request' AND ref = $2 AND sha = $3 \
+         AND coalesce(merge_request_id, 0) = $4)",
+    )
+    .bind(project.get())
+    .bind(source)
+    .bind(result.as_str())
+    .bind(mr.get())
+    .fetch_one(conn)
+    .await
+    .map_err(|e| query_error("review.merge_pipeline_exists", e))
+}
+
 /// What the locked facts call for.
 enum Step {
     /// Enqueue the pipeline job of `result` (the merge of the head into
@@ -270,6 +293,24 @@ pub async fn run_merge_request_pipeline_decided<P>(
         };
         match step_of(&subject, &head_raw, row.as_ref(), (project, iid))? {
             Step::Enqueue { result, target } => {
+                // Review (plan 18 S5): the pipeline itself, not only its
+                // job (a dead job frees its dedup key; a purged one is
+                // gone): a row for (merge request, merge result) is
+                // `exists`, and nothing is written.
+                let source = subject.source.clone(); // clone: moved into the step
+                let on = result.clone(); // clone: as above
+                let exists = tx
+                    .step(|c| async move { pipeline_exists(c, (project, mr), &source, &on).await })
+                    .await?;
+                if exists {
+                    let answer = run(
+                        MergePipelineOutcome::Exists,
+                        Some(result),
+                        Some(target),
+                        None,
+                    );
+                    return Ok(Settle::Discard((answer, decided)));
+                }
                 let source = subject.source.clone(); // clone: moved into the step
                 let (on, origin) = (result.clone(), origin.clone()); // clone: as above
                 let head_for = head.clone(); // clone: as above
@@ -362,3 +403,7 @@ mod tests {
         assert!(pipeline_asked(&bad).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "merge_pipeline_tests.rs"]
+mod db_tests;

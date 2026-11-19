@@ -11,8 +11,9 @@
 //!   merge request pipeline on the result (`ci.pipeline_create`, source
 //!   `merge_request`, the source branch as its ref, the head's pusher as
 //!   `triggered_by`) as [`MergeRequestPipeline`] says — plan 18 S5: by
-//!   default only on a new head's FIRST merge result; a row written because
-//!   the target moved (same head) gets none unless
+//!   default only while the head has no merge request pipeline yet (a new
+//!   head, or one whose first pipeline's create failed for good); a row
+//!   written because the target moved (same head) gets none unless
 //!   `ci.mr_pipeline_on_target_move` is on or a person asked for it. Two
 //!   jobs racing on one pair: `merge_result_refs_once` keeps the first row
 //!   and the loser gets its result back (`created: false`).
@@ -37,7 +38,7 @@ use sqlx::postgres::PgConnection;
 
 use crate::checks::{runs_for, runs_on};
 use crate::jobs::enqueue_on;
-use crate::pipelines::{create_job, PipelineRequest, Source};
+use crate::pipelines::{create_dedup_key, create_job, PipelineRequest, Source};
 use crate::{query_error, read_query_error, Db};
 
 /// One stored merge result.
@@ -208,6 +209,7 @@ pub async fn record_merge_result(
         let Some((project, source)) = subject else {
             return Ok(None);
         };
+        let git_ref = stored_ref(mr, &source)?;
         let inserted: Option<String> = sqlx::query_scalar(
             "INSERT INTO forge.merge_result_refs \
              (merge_request_id, project_id, head_sha, target_sha, result_sha) \
@@ -228,7 +230,8 @@ pub async fn record_merge_result(
                 let wanted = match pipeline {
                     MergeRequestPipeline::OnTargetMove | MergeRequestPipeline::Requested => true,
                     MergeRequestPipeline::OnNewHead => {
-                        first_of_head(&mut tx, mr, (head, target)).await?
+                        !head_has_pipeline(&mut tx, (ProjectId::new(project), mr), &git_ref, head)
+                            .await?
                     }
                 };
                 let enqueued = if wanted {
@@ -244,6 +247,9 @@ pub async fn record_merge_result(
                 } else {
                     false
                 };
+                if pipeline == MergeRequestPipeline::Requested {
+                    consume_ask(&mut tx, mr).await?;
+                }
                 RecordedResult {
                     result: result.clone(), // clone: the answer owns its id
                     created: true,
@@ -277,6 +283,9 @@ pub async fn record_merge_result(
                 } else {
                     false
                 };
+                if pipeline == MergeRequestPipeline::Requested {
+                    consume_ask(&mut tx, mr).await?;
+                }
                 RecordedResult {
                     result: existing,
                     created: false,
@@ -375,24 +384,93 @@ pub async fn replace_merge_result(
     .await
 }
 
-/// Whether (`head`, `target`) is the head's first merge result: no other
-/// row of the merge request has this head (plan 18 S5: a new head gets its
-/// pipeline, a target move of the same head does not).
-async fn first_of_head(
+/// The merge results of a head [`head_has_pipeline`] looks at, at most
+/// (newest first): one per target tip the head was merged into.
+const HEAD_RESULTS_READ: i64 = 100;
+
+/// Whether `head` of `mr` already has its merge request pipeline (plan 18
+/// S5): a pipeline row on one of the head's merge results that is not
+/// `error`, or a `ci.pipeline_create` job for one of them that is not dead
+/// (queued, running, or succeeded — a succeeded job with no row found no
+/// `.forge-ci.yml`). Otherwise — none written yet (a new head), or the first
+/// one's create failed for good (a dead job, an `error` row) — the new merge
+/// result gets one. A head that comes back after a force push (A → B → A)
+/// is answered by its own earlier pipeline, whatever target it ran on.
+///
+/// Served by `merge_result_refs_once` (the head's rows), `ci_pipelines_once`
+/// (project, source, ref, sha, merge request) and `jobs_dedup` (kind,
+/// dedup key: the pipeline's identity, `pipelines::create_dedup_key`).
+async fn head_has_pipeline(
     conn: &mut PgConnection,
-    mr: MergeRequestId,
-    (head, target): (&ObjectId, &ObjectId),
+    (project, mr): (ProjectId, MergeRequestId),
+    git_ref: &RefName,
+    head: &ObjectId,
 ) -> Result<bool, ForgeError> {
-    sqlx::query_scalar(
-        "SELECT NOT EXISTS (SELECT 1 FROM forge.merge_result_refs \
-         WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha <> $3)",
+    const QUERY: &str = "review.merge_result_head_pipeline";
+    let results: Vec<String> = sqlx::query_scalar(
+        "SELECT result_sha FROM forge.merge_result_refs \
+         WHERE merge_request_id = $1 AND head_sha = $2 ORDER BY id DESC LIMIT $3",
     )
     .bind(mr.get())
     .bind(head.as_str())
-    .bind(target.as_str())
+    .bind(HEAD_RESULTS_READ)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| query_error(QUERY, e))?;
+    let keys = results
+        .iter()
+        .map(|sha| {
+            Ok(create_dedup_key(&PipelineRequest {
+                project,
+                git_ref: git_ref.clone(), // clone: the request owns it
+                sha: oid(mr, "result_sha", sha)?,
+                source: Source::MergeRequest,
+                merge_request: Some(mr),
+                triggered_by: None,
+            }))
+        })
+        .collect::<Result<Vec<String>, ForgeError>>()?;
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM forge.ci_pipelines p WHERE p.project_id = $1 \
+         AND p.source = 'merge_request' AND p.ref = $2 AND p.sha = ANY($3) \
+         AND coalesce(p.merge_request_id, 0) = $4 AND p.status <> 'error') \
+         OR EXISTS (SELECT 1 FROM forge.jobs j WHERE j.kind = 'ci.pipeline_create' \
+         AND j.dedup_key = ANY($5) AND j.state <> 'dead')",
+    )
+    .bind(project.get())
+    .bind(git_ref.as_str())
+    .bind(&results)
+    .bind(mr.get())
+    .bind(&keys)
     .fetch_one(conn)
     .await
-    .map_err(|e| query_error("review.merge_result_first_of_head", e))
+    .map_err(|e| query_error(QUERY, e))
+}
+
+/// Plan 18 S5 review: a person's ask is consumed by the first merge result
+/// written for it — the ask is taken off the merge request's live asked
+/// mergeability jobs (in the same transaction), so a later request does not
+/// inherit it and one press makes one pipeline.
+async fn consume_ask(conn: &mut PgConnection, mr: MergeRequestId) -> Result<u64, ForgeError> {
+    sqlx::query(
+        "UPDATE forge.jobs SET payload = payload - 'pipeline' \
+         WHERE kind = 'merge_request.mergeability' AND state IN ('queued', 'running') \
+         AND payload ->> 'merge_request_id' = $1 AND payload ->> 'pipeline' = 'true'",
+    )
+    .bind(mr.get().to_string())
+    .execute(conn)
+    .await
+    .map(|done| done.rows_affected())
+    .map_err(|e| query_error("review.merge_result_consume_ask", e))
+}
+
+/// The stored source branch of `mr` as a ref.
+fn stored_ref(mr: MergeRequestId, source: &str) -> Result<RefName, ForgeError> {
+    RefName::parse(source).map_err(|_| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "stored_branch_invalid")
+            .with_context("merge_request_id", mr.get())
+    })
 }
 
 /// The `ci.pipeline_create` job of the merge result (deduplicated on the
@@ -405,11 +483,7 @@ pub(crate) async fn enqueue_pipeline(
     result: &ObjectId,
     origin: &RequestId,
 ) -> Result<bool, ForgeError> {
-    let git_ref = RefName::parse(source).map_err(|_| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "stored_branch_invalid")
-            .with_context("merge_request_id", mr.get())
-    })?;
+    let git_ref = stored_ref(mr, source)?;
     // The pusher of the head's latest version (none for an import).
     let pushed_by: Option<Option<i64>> = sqlx::query_scalar(
         "SELECT pushed_by FROM forge.merge_request_versions \
