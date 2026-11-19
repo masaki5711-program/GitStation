@@ -108,14 +108,14 @@ describe('a target that requires the merge request pipeline', () => {
   it('offers the run only to who may run pipelines, and not while a conflict holds it', () => {
     expect(pipelineRunOffered(stale())).toBe(true);
     expect(
-      pipelineRunOffered({ ...stale(), viewer: { ...viewer, can_run_pipeline: false } } as never),
+      pipelineRunOffered({ ...stale(), viewer: { ...viewer, can_run_pipeline: false } }),
     ).toBe(false);
     expect(pipelineRunOffered(green())).toBe(false);
     expect(
       pipelineRunOffered({
         ...stale(),
         checks: [pipelineCheck({ status: null, conclusion: null, stale: false, waits_for_merge_result: true, target_sha: null })],
-      } as never),
+      }),
     ).toBe(false);
   });
 });
