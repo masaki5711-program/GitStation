@@ -3383,22 +3383,32 @@ impl World {
             .to_owned()
     }
 
-    /// dave's ask for the merge request pipeline on the current target
-    /// (`POST …/merge-requests/{iid}/pipeline` after its decision).
-    async fn ask_pipeline(&self, request_id: &str) -> forge_db::review::MergePipelineRun {
-        let (run, ()) = forge_db::review::run_merge_request_pipeline_decided(
+    /// A check whose job carries a person's ask for the merge request
+    /// pipeline (`"pipeline": true`, set by `POST …/merge-requests/{iid}/
+    /// pipeline`), run as the worker runs it.
+    async fn asked_check(&self) -> forge_review::CheckReport {
+        let seq = request_check(
             &self.t.db,
-            &ChangeContext::new(
-                Actor::User(self.dave),
-                RequestId::parse(request_id).expect("id"),
-            ),
-            (self.project, self.mr.iid),
-            self.dave,
-            |_| Ok(()),
+            self.mr.id,
+            RequestId::parse("req-q-asked").expect("id"),
         )
         .await
-        .expect("ask");
-        run
+        .expect("request")
+        .expect("open");
+        let report = forge_review::check_asked(
+            &self.t.db,
+            &Mergeability::new(self.git.clone(), self.storage.clone()),
+            MergeabilityRequest {
+                merge_request: self.mr.id,
+                check_seq: seq,
+            },
+            true,
+            &RequestId::parse("req-check-asked").expect("id"),
+        )
+        .await
+        .expect("check");
+        self.browser.invalidate(self.repo);
+        report
     }
 }
 
@@ -3540,27 +3550,22 @@ async fn a_pipeline_of_another_head_never_satisfies_ci_pipeline() {
     w.t.drop_now().await;
 }
 
-/// Plan 18 S5: a person's run of the pipeline on the current target
-/// enqueues exactly one pipeline on its merge result; a second press finds
-/// it; its green run makes the direct merge possible again.
+/// Plan 18 S5: the check a person's run on the current target asks for
+/// enqueues the pipeline on the merge result of the current target even
+/// though the row exists (a target move wrote it without one); asked
+/// again, it stays one pipeline; its green run makes the direct merge
+/// possible again. (The ask itself, `queued` / `exists` / `computing`, is
+/// tested through its route: forge-web `tests/pipeline_routes.rs`.)
 #[tokio::test]
-async fn running_the_pipeline_on_the_current_target_enqueues_it_once() {
+async fn an_asked_check_enqueues_the_pipeline_on_the_current_target_once() {
     let (w, r1, r2) = moved_target().await;
-    let run = w.ask_pipeline("req-ask-1").await;
-    assert_eq!(run.outcome, forge_db::review::MergePipelineOutcome::Queued);
+    assert_eq!(w.mr_pipeline_shas().await, std::slice::from_ref(&r1));
+    let report = w.asked_check().await;
     assert_eq!(
-        run.merge_result.as_ref().map(ObjectId::as_str),
+        report.merge_result.as_ref().map(ObjectId::as_str),
         Some(r2.as_str())
     );
-    assert_eq!(
-        run.target.as_ref().map(ObjectId::as_str),
-        Some(w.tip("main").as_str())
-    );
-    let again = w.ask_pipeline("req-ask-2").await;
-    assert_eq!(
-        again.outcome,
-        forge_db::review::MergePipelineOutcome::Exists
-    );
+    w.asked_check().await;
     assert_eq!(w.mr_pipeline_shas().await, [r1, r2.clone()]);
     w.system_run(&r2, "ci/pipeline", "success").await;
     let status = w.status().await;

@@ -177,6 +177,20 @@ impl World {
         );
         let commit = plumb(&path, &["commit-tree", &tree, "-m", "synthetic"], None);
         plumb(&path, &["update-ref", "refs/heads/main", &commit], None);
+        // Plan 18 S5: a branch one commit ahead, for a merge request.
+        let feature = plumb(
+            &path,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &commit,
+                "-m",
+                "synthetic feature",
+            ],
+            None,
+        );
+        plumb(&path, &["update-ref", "refs/heads/feature", &feature], None);
         Self {
             t,
             owner: owner.user_id,
@@ -267,6 +281,26 @@ impl World {
                 namespaces: Arc::new(self.t.db.clone()),
                 projects: Arc::new(self.t.db.clone()),
             },
+        )
+        // Plan 18 S5: the merge request routes (a merge request is opened
+        // through its route: only forge-review calls the review commands).
+        .with_review(
+            forge_review::Review::new(
+                self.t.db.clone(),
+                Arc::new(Browser::new(
+                    self.git.clone(),
+                    self.storage.clone(),
+                    BrowseLimits::default(),
+                )),
+            )
+            .with_version_refs(forge_review::VersionRefs::new(
+                self.git.clone(),
+                self.storage.clone(),
+            ))
+            .with_review_git(forge_review::approvals::ReviewGit::new(
+                self.git.clone(),
+                self.storage.clone(),
+            )),
         )
         .with_pipelines(Pipelines::new(
             self.t.db.clone(),
@@ -535,35 +569,39 @@ impl World {
     /// dave's merge request `feature` → `main` with its head `e…`
     /// recorded (no mergeability check yet); its iid and id.
     async fn merge_request(&self) -> (i64, forge_core::MergeRequestId) {
-        let (mr, ()) = forge_db::review::open_mr_decided(
-            &self.t.db,
-            &ChangeContext::new(
-                Actor::User(self.dev),
-                RequestId::parse("req-open").expect("id"),
-            ),
-            self.web,
-            self.dev,
-            &forge_db::review::NewMergeRequest {
-                title: "Feature".to_owned(),
-                description: String::new(),
-                source_branch: RefName::parse("refs/heads/feature").expect("ref"),
-                target_branch: RefName::parse("refs/heads/main").expect("ref"),
-                draft: false,
-            },
-            |_| Ok(()),
-        )
-        .await
-        .expect("open");
+        let uri = format!("/api/v1/projects/{}/merge-requests", self.web.get());
+        let opened = self
+            .call_at(
+                "POST",
+                &uri,
+                session(self.dev),
+                Some(json!({"title": "Feature", "source_branch": "feature", "target_branch": "main"})),
+            )
+            .await;
+        assert_eq!(opened.status, StatusCode::CREATED, "{}", opened.json);
+        let iid = opened.json["iid"].as_i64().expect("iid");
+        let id = self
+            .t
+            .json_rows(&format!(
+                "SELECT id FROM forge.merge_requests WHERE project_id = {} AND iid = {iid}",
+                self.web.get()
+            ))
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .expect("merge request id");
+        let mr = forge_core::MergeRequestId::new(id);
+        // The version job's record (the test pins the head to `e…`).
         forge_db::review::record_mr_version(
             &self.t.db,
             &ctx("req-version"),
-            mr.id,
+            mr,
             &oid('e'),
             Some(self.dev),
         )
         .await
         .expect("version");
-        (mr.iid, mr.id)
+        (iid, mr)
     }
 
     async fn ask_pipeline(&self, iid: i64, who: Principal) -> Answer {
@@ -675,6 +713,15 @@ async fn the_merge_request_pipeline_runs_once_on_the_current_target() {
         .await
         .expect("request")
         .expect("open");
+    // A later request (as a landing makes) replaces the asked job and
+    // keeps the ask.
+    let checks = w.jobs("merge_request.mergeability").await;
+    let last = checks.last().expect("a job");
+    assert_eq!(
+        (last["check_seq"].as_i64(), last["pipeline"].clone()),
+        (Some(seq), json!(true)),
+        "{checks:?}"
+    );
     let stored = forge_db::review::record_check(
         &w.t.db,
         &ctx("req-check"),

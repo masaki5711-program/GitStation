@@ -128,8 +128,8 @@ merge request in place (ADR-0024 §1).
   `a_new_head_creates_one`, `ci_mr_pipeline_on_target_move_restores_the_old_behavior`,
   `direct_merge_on_a_stale_pipeline_hints_the_queue`,
   `a_pipeline_of_another_head_never_satisfies_ci_pipeline`,
-  `running_the_pipeline_on_the_current_target_enqueues_it_once`; `tests/queue_paths/mod.rs`:
-  `the_run_on_a_carried_mr_computes_its_merge_result_and_one_pipeline`,
+  `an_asked_check_enqueues_the_pipeline_on_the_current_target_once`; `tests/queue_paths/mod.rs`:
+  `an_asked_check_of_a_carried_mr_writes_its_merge_result_and_one_pipeline`,
   `with_the_key_at_default_the_train_pipeline_gates_a_queued_landing`).
 
 - M3 X6 (conflict prediction, plan 04 C-2, ADR-0024 Amendment X6; `src/conflicts.rs`):

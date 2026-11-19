@@ -546,8 +546,20 @@ async fn a_direct_merge_of_a_carried_mr_asks_for_its_merge_result_at_once() {
         .expect("read")
         .expect("the live tip's merge result");
     assert_eq!(pipeline_jobs(w, a).await, asked_before);
-    let run = ask_pipeline(w, a, "req-ask-computed").await;
-    assert_eq!(run.outcome, forge_db::review::MergePipelineOutcome::Queued);
+    // What a person's ask on the current target writes (its route:
+    // forge-web `tests/pipeline_routes.rs`).
+    let asked = forge_db::review::record_merge_result(
+        &w.t.db,
+        &RequestId::parse("req-ask-computed").expect("id"),
+        a.id,
+        (&c.head, &c.tip),
+        &r2,
+        forge_db::review::MergeRequestPipeline::Requested,
+    )
+    .await
+    .expect("record")
+    .expect("open");
+    assert!(asked.pipeline_enqueued && !asked.created);
     let mut asked_after = pipeline_jobs(w, a).await;
     assert_eq!(asked_after.len(), asked_before.len() + 1);
     assert_eq!(asked_after.pop().as_deref(), Some(r2.as_str()));
@@ -782,30 +794,24 @@ async fn a_carried_mr_that_conflicts_in_a_direct_merge_is_refused_and_recomputed
 
 // --- plan 18 S5: the merge request pipeline on the current target -------
 
-/// The queued mergeability job of `mr`'s current request, run as the
-/// worker runs it: its payload read (a person's ask included) and the
-/// check made with the path filter on.
-async fn run_queued_job(w: &World, mr: &StoredMergeRequest) -> forge_review::CheckReport {
-    let asked = stored(w, mr).await;
-    let rows =
-        w.t.json_rows(&format!(
-            "SELECT payload FROM forge.jobs WHERE kind = 'merge_request.mergeability' \
-             AND state = 'queued' AND (payload->>'merge_request_id')::bigint = {} \
-             AND (payload->>'check_seq')::bigint = {}",
-            mr.id.get(),
-            asked.check_seq
-        ))
-        .await;
-    let payload = &rows.first().expect("a queued job")["payload"];
-    let request = forge_db::review::mergeability_payload(payload).expect("payload");
-    let pipeline = forge_db::review::pipeline_asked(payload).expect("ask");
+/// `mr`'s check run as the worker runs a job that carries a person's ask
+/// for the merge request pipeline (`"pipeline": true`), with the path
+/// filter on.
+async fn asked_check(w: &World, mr: &StoredMergeRequest) -> forge_review::CheckReport {
+    let seq = request_check(&w.t.db, mr.id, RequestId::parse("req-q-asked").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
     let checker = Mergeability::new(w.git.clone(), w.storage.clone()).with_paths(Some(PATHS_MAX));
     let report = forge_review::check_asked(
         &w.t.db,
         &checker,
-        request,
-        pipeline,
-        &RequestId::parse("req-check-job").expect("id"),
+        MergeabilityRequest {
+            merge_request: mr.id,
+            check_seq: seq,
+        },
+        true,
+        &RequestId::parse("req-check-asked").expect("id"),
     )
     .await
     .expect("check");
@@ -813,71 +819,16 @@ async fn run_queued_job(w: &World, mr: &StoredMergeRequest) -> forge_review::Che
     report
 }
 
-/// dave's ask for the merge request pipeline on the current target.
-async fn ask_pipeline(
-    w: &World,
-    mr: &StoredMergeRequest,
-    id: &str,
-) -> forge_db::review::MergePipelineRun {
-    let (run, ()) = forge_db::review::run_merge_request_pipeline_decided(
-        &w.t.db,
-        &forge_db::change::ChangeContext::new(
-            forge_db::change::Actor::User(w.dev),
-            RequestId::parse(id).expect("id"),
-        ),
-        (w.project, mr.iid),
-        w.dev,
-        |_| Ok(()),
-    )
-    .await
-    .expect("ask");
-    run
-}
-
-/// Plan 18 S5: the ask on a carried row (no merge result at the live tip)
-/// requests a check whose job carries it — a double click asks once, and a
-/// request in between (a landing, the sweep) keeps the ask — and the
-/// worker's run of that job writes the merge result with its pipeline.
+/// Plan 18 S5: the asked check of a carried row (no merge result at the
+/// live tip) computes the live tip's merge result and enqueues exactly
+/// one pipeline on it (a target move's result, written for the ask);
+/// asked again, it stays one.
 #[tokio::test]
-async fn the_run_on_a_carried_mr_computes_its_merge_result_and_one_pipeline() {
+async fn an_asked_check_of_a_carried_mr_writes_its_merge_result_and_one_pipeline() {
     let c = carried_green(false).await;
     let (w, a) = (&c.w, &c.a);
     let before = pipeline_jobs(w, a).await;
-    let first = ask_pipeline(w, a, "req-ask-1").await;
-    assert_eq!(
-        first.outcome,
-        forge_db::review::MergePipelineOutcome::Computing
-    );
-    let seq = first.check_seq.expect("a check");
-    assert!(seq > c.seq);
-    let again = ask_pipeline(w, a, "req-ask-2").await;
-    assert_eq!(
-        again.outcome,
-        forge_db::review::MergePipelineOutcome::Computing
-    );
-    assert_eq!(again.check_seq, Some(seq), "a double click asks once");
-    assert_eq!(check_jobs(w, a, seq).await, 1);
-    // Another request in between (as a landing makes): the ask is kept.
-    let later = request_check(&w.t.db, a.id, RequestId::parse("req-landing").expect("id"))
-        .await
-        .expect("request")
-        .expect("open");
-    assert!(later > seq);
-    assert_eq!(check_jobs(w, a, seq).await, 0, "superseded");
-    let inherited =
-        w.t.json_rows(&format!(
-            "SELECT payload FROM forge.jobs WHERE kind = 'merge_request.mergeability' \
-             AND state = 'queued' AND (payload->>'merge_request_id')::bigint = {} \
-             AND (payload->>'check_seq')::bigint = {later}",
-            a.id.get()
-        ))
-        .await;
-    assert_eq!(
-        inherited.first().map(|r| r["payload"]["pipeline"].clone()),
-        Some(serde_json::Value::Bool(true)),
-        "the later request's job keeps the ask"
-    );
-    let report = run_queued_job(w, a).await;
+    let report = asked_check(w, a).await;
     assert_eq!(report.outcome, "checked");
     let r2 = forge_db::review::merge_result_of(&w.t.db, a.id, &c.head, &c.tip)
         .await
@@ -886,13 +837,7 @@ async fn the_run_on_a_carried_mr_computes_its_merge_result_and_one_pipeline() {
     let mut after = pipeline_jobs(w, a).await;
     assert_eq!(after.len(), before.len() + 1, "{after:?}");
     assert_eq!(after.pop().as_deref(), Some(r2.as_str()));
-    // Now computed: one more press finds the pipeline.
-    let found = ask_pipeline(w, a, "req-ask-3").await;
-    assert_eq!(
-        found.outcome,
-        forge_db::review::MergePipelineOutcome::Exists
-    );
-    assert_eq!(found.merge_result.as_ref(), Some(&r2));
+    asked_check(w, a).await;
     assert_eq!(pipeline_jobs(w, a).await.len(), before.len() + 1);
 }
 
