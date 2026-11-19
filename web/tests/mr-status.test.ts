@@ -39,6 +39,7 @@ function status(
       can_mark_ready: false,
       approved_by_me: false,
       can_revert: false,
+      can_run_pipeline: false,
     },
   } satisfies MergeStatus;
 }
@@ -274,6 +275,7 @@ describe('statusHint / statusTone (U1 review: name what is waited for)', () => {
       conclusion: null,
       stale: false,
       waits_for_merge_result: true,
+      target_sha: null,
     };
     const waiting: MergeStatus = {
       ...status([

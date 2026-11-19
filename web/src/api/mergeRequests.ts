@@ -340,6 +340,25 @@ export function useMarkReady(project: number, iid: number) {
   });
 }
 
+/** Plan 18 S5: run the merge request pipeline on the current target
+ * (`POST …/{iid}/pipeline`; `PipelineCreate`). The status is read again: the
+ * check's run and its "as of" follow. */
+export function useRunMergePipeline(project: number, iid: number) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const refreshSession = useRefreshSessionOn403();
+  return useMutation({
+    mutationFn: () =>
+      call(() =>
+        api.POST('/api/v1/projects/{id}/merge-requests/{iid}/pipeline', {
+          params: { path: { id: project, iid: String(iid) } },
+        }),
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) }),
+    onError: refreshSession,
+  });
+}
+
 /** Read everything of one merge request again (after a stale view). */
 export function useReloadMergeRequest(project: number, iid: number) {
   const queryClient = useQueryClient();

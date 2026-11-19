@@ -212,6 +212,16 @@ function Checks({ status }: { status: MergeStatus }) {
           return (
             <li key={c.name} className={styles.checkItem}>
               <code>{c.name}</code> <StateBadge tone={badge.tone}>{badge.label}</StateBadge>
+              {typeof c.target_sha === 'string' && (
+                // Plan 18 S5: which target tip the merge result's run is about
+                // (absent from a server before S5: nothing is shown).
+                <span className={styles.nextHint}>
+                  {' '}
+                  {c.stale
+                    ? t('mr.conditions.asOfOlder', { sha: c.target_sha.slice(0, 8) })
+                    : t('mr.conditions.asOf', { sha: c.target_sha.slice(0, 8) })}
+                </span>
+              )}
               {c.waits_for_merge_result && (
                 <p className={styles.nextHint}>{t('mr.conditions.waitsForMergeResult')}</p>
               )}

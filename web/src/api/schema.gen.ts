@@ -1781,6 +1781,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/pipeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run the merge request pipeline (ci/pipeline) on the merge result of the current target: 202 queued (its job was enqueued), exists (asked for already; a second press asks nothing more) or computing (the merge result of the current target is written first, then the pipeline runs on it). A target move alone starts no merge request pipeline (ci.mr_pipeline_on_target_move); the merge queue does not need this. 404 FG-REPO-0005 without the merge request; 409 FG-CI-0003 when it is not open, has no version or conflicts (Developer; a token needs api) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_pipeline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/reopen": {
         parameters: {
             query?: never;
@@ -4992,6 +5009,8 @@ export interface components {
         };
         Error: {
             error_code: string;
+            /** @enum {string} */
+            hint?: "merge_queue";
             request_id: string;
             user_message: string;
         };
@@ -5715,6 +5734,26 @@ export interface components {
             /** Format: int64 */
             id: number;
             username: string;
+        };
+        /** @description What an ask did (`202`). */
+        MergeRequestPipelineBody: {
+            /**
+             * Format: int64
+             * @description The mergeability check the pipeline waits for (`computing`).
+             */
+            check_seq: number | null;
+            /** Format: int64 */
+            iid: number;
+            /** @description The merge result the pipeline runs on (`queued`, `exists`). */
+            merge_result_sha: string | null;
+            /**
+             * @description `queued` (the pipeline's job was enqueued), `exists` (it had been
+             *     asked for already) or `computing` (the merge result of the current
+             *     target is being written; the pipeline follows it).
+             */
+            outcome: string;
+            /** @description The target tip of that merge result (`queued`, `exists`). */
+            target_sha: string | null;
         };
         /** @description `GET …/status` (the stable contract, `schema_version` 1). */
         MergeRequestStatusBody: {
@@ -7367,6 +7406,13 @@ export interface components {
             /** @description `null`: no run reported (never success). */
             status: string | null;
             /**
+             * @description Plan 18 S5 (added within `schema_version` 1): the target tip the
+             *     run's merge result merged into — the result is "as of" this tip (a
+             *     `stale` run's is an older one). `null`: no run, or a run on the head
+             *     (a name the merge request pipeline does not report).
+             */
+            target_sha: string | null;
+            /**
              * @description M4 C7 review (added within `schema_version` 1): the check is the
              *     merge request pipeline's (`ci/pipeline`) and there is no clean merge
              *     result (`merge_result_sha` null: a conflict, no target, unrelated
@@ -7452,6 +7498,13 @@ export interface components {
              *     Always `false` when acting for a person.
              */
             can_revert: boolean;
+            /**
+             * @description Plan 18 S5 (added within `schema_version` 1): `POST
+             *     …/merge-requests/{iid}/pipeline` would be allowed — running the
+             *     merge request pipeline on the current target (`PipelineCreate` on
+             *     the project). Always `false` when acting for a person.
+             */
+            can_run_pipeline: boolean;
             /**
              * @description `POST …/unapprove` would be allowed (pair it with `approved_by_me`:
              *     there may be nothing to withdraw).
@@ -12558,6 +12611,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MergeabilityBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_pipeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestPipelineBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

@@ -802,7 +802,7 @@
         "approvals": "Waiting for reviewers to approve.",
         "owners": "Waiting for an owner of those files to approve.",
         "checks": "Waiting for the check result.",
-        "checksStale": "The target branch moved. Waiting for the checks on the new merge result.",
+        "checksStale": "The target branch moved, so no new pipeline was started. Press Merge when ready, or run the pipeline on the current target.",
         "checksWaitMergeResult": "Waiting for a merge result without conflicts; the pipeline runs on it.",
         "checksCarried": "The target branch moved without touching this merge request's files, so no new pipeline was started. Add it to the merge queue: the queue tests it on the current target and merges it.",
         "merging": "Waiting for the merge to finish.",
@@ -910,7 +910,9 @@
       "codeownersSuspended": "CODEOWNERS approval is suspended until {{until}}.",
       "checks": "Required checks",
       "waitsForMergeResult": "This check runs only once there is a merge result without conflicts.",
-      "unread": "The conditions could not be read. The message above has the request ID."
+      "unread": "The conditions could not be read. The message above has the request ID.",
+      "asOf": "as of {{sha}}",
+      "asOfOlder": "as of {{sha}} (an older target)"
     },
     "uncounted": {
       "stale": "it was given for an older version",
@@ -972,7 +974,8 @@
         "sourceMoved": "New commits were pushed meanwhile. Look at them, then merge again.",
         "other": "The merge was stopped. Look at the merge request and merge again."
       },
-      "progressLabel": "Merge progress"
+      "progressLabel": "Merge progress",
+      "hintQueue": "Use Merge when ready instead: the merge queue tests it on the current target."
     },
     "check": {
       "none": "Not reported yet",
@@ -1003,6 +1006,13 @@
       "checksPassed": "Checks {{passed}}/{{total}} passed",
       "checksFailed": "{{failed}} failed (checks {{passed}}/{{total}} passed)",
       "checksPending": "{{pending}} running or waiting (checks {{passed}}/{{total}} passed)"
+    },
+    "pipelineRun": {
+      "run": "Run the pipeline on the current target",
+      "running": "Asking…",
+      "queued": "The pipeline was started on the current target.",
+      "exists": "The pipeline on the current target was already started.",
+      "computing": "The merge result for the current target is being prepared. Its pipeline starts after that."
     }
   },
   "webhooks": {
@@ -1759,7 +1769,9 @@
     "listLabel": "Queued changes",
     "recentTitle": "Recent results",
     "mr": "!{{iid}}",
-    "alone": "(tested on its own)"
+    "alone": "(tested on its own)",
+    "mergeWhenReady": "Merge when ready",
+    "mergeWhenReadyHint": "This target requires the pipeline on the current target. The merge queue tests the change on it and merges it when it passes."
   },
   "revert": {
     "label": "Revert",
