@@ -36,6 +36,11 @@ use super::evaluate::BlockReason;
 use super::Merger;
 use crate::Review;
 
+// Plan 18 S3 (ADR-0037 (a)): the worker's wait — the merge requests an
+// event names, and the sweep that is the safety net.
+mod watch;
+pub use watch::{AutoMergeWake, AutoMergeWatch};
+
 /// The bounds of one tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AutoMergeLimits {
@@ -71,6 +76,49 @@ pub struct AutoMergeReport {
     pub waiting: usize,
     pub stopped: usize,
     pub failed: usize,
+}
+
+impl AutoMergeReport {
+    /// Count what deciding `c` came to; a failure is logged here
+    /// (`FG-REVIEW-0028`) and the others go on.
+    fn count(
+        &mut self,
+        c: &Candidate,
+        request_id: &RequestId,
+        scanned: Result<Verdict, ForgeError>,
+    ) {
+        self.looked += 1;
+        match scanned {
+            Ok(Verdict::Enqueue { .. } | Verdict::Queued { .. }) => self.queued += 1,
+            Ok(Verdict::Stopped(_)) => self.stopped += 1,
+            Ok(Verdict::Waiting { .. } | Verdict::Held { .. }) => self.waiting += 1,
+            Ok(Verdict::Inactive) => {}
+            Err(e) => {
+                self.failed += 1;
+                let failure = scan_failed(&e, c);
+                tracing::error!(
+                    target: "forge_review",
+                    event = "forge.auto_merge.scan_failed",
+                    error_code = failure.code().id(),
+                    cause_code = e.code().id(),
+                    request_id = %request_id,
+                    project_id = c.project.get(),
+                    merge_request_id = c.merge_request.get(),
+                    error = %e,
+                    "auto-merge could not decide a merge request (runbook auto-merge)"
+                );
+            }
+        }
+    }
+
+    /// Add what another round did.
+    fn add(&mut self, other: &AutoMergeReport) {
+        self.looked += other.looked;
+        self.queued += other.queued;
+        self.waiting += other.waiting;
+        self.stopped += other.stopped;
+        self.failed += other.failed;
+    }
 }
 
 /// The auto-merge worker (module docs).
@@ -186,29 +234,9 @@ impl AutoMerger {
         let due = db::candidates(db, self.limits.batch, self.limits.recheck).await?;
         let mut report = AutoMergeReport::default();
         for c in &due {
-            report.looked += 1;
             let request_id = RequestId::generate();
-            match self.scan(c, &request_id).await {
-                Ok(Verdict::Enqueue { .. } | Verdict::Queued { .. }) => report.queued += 1,
-                Ok(Verdict::Stopped(_)) => report.stopped += 1,
-                Ok(Verdict::Waiting { .. } | Verdict::Held { .. }) => report.waiting += 1,
-                Ok(Verdict::Inactive) => {}
-                Err(e) => {
-                    report.failed += 1;
-                    let failure = scan_failed(&e, c);
-                    tracing::error!(
-                        target: "forge_review",
-                        event = "forge.auto_merge.scan_failed",
-                        error_code = failure.code().id(),
-                        cause_code = e.code().id(),
-                        request_id = %request_id,
-                        project_id = c.project.get(),
-                        merge_request_id = c.merge_request.get(),
-                        error = %e,
-                        "auto-merge could not decide a merge request (runbook auto-merge)"
-                    );
-                }
-            }
+            let scanned = self.scan(c, &request_id).await;
+            report.count(c, &request_id, scanned);
         }
         Ok(report)
     }

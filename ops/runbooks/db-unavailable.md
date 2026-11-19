@@ -108,6 +108,21 @@ COMMIT の失敗（`FG-DB-0002` で `db_message` に NOTIFY の待ち行列が�
   - 待ち行列の使用率（上の手順 1）が上がっていないか。
   対処は開発者（Claude のセッション）に渡す（通知をまとめる、送る数を減らす）。設定で NOTIFY を止める手段はない。
 
+## ref の変更の通知（`forge_refs`、`task=refs_announce` / `task=refs_listen`、計画 18 S3）
+
+`forge serve` は、自分が ref を書くたび（push、Web のコミット、マージ、マージキュー、revert、autofix、version refs）に
+`forge_refs`（ペイロード = リポジトリの id）を送る。他の `forge serve` はそれを聞いて、そのリポジトリの ref のキャッシュを捨てる。
+通知は合図にすぎない。捨てるキャッシュは 5 s（`refs_ttl`）で自分から古くなるので、**通知が届かなくても、間違いは最長 5 s で直る**。
+
+| ログ | 意味 | 対処 |
+|---|---|---|
+| `FG-DB-0001` / `FG-DB-0002` に `task=refs_announce`（`repos`、`streak` つき） | 通知を送れなかった。送り直さない。続く間は 1 分に 1 回 | DB の障害として上の Diagnose。直れば止まる。影響は「他の serve から、消したブランチが最長 5 s 見える」だけ |
+| `FG-SYS-0005` `operation=merge_task_exited` に `task=refs_announce` / `task=refs_listen` | タスクが頼まれずに終わった（panic など）。1〜30 s の間隔で自動でやり直す | 繰り返すなら開発者（Claude のセッション）へ。その間の影響も最長 5 s |
+| `FG-SYS-0005` `operation=refs_task_pending`（`task`、`wait_ms`） | 停止のとき、タスクが 5 s で終わらなかった（最後の通知が DB を待っていた） | 対処は不要。直前の ref の変更は、他の serve に最長 5 s 遅れて見える |
+| `FG-SYS-0005` `operation=refs_supervisor_exited` / `refs_hook_taken` | プログラムの誤り | 開発者（Claude のセッション）へ |
+
+設定で止める手段は無い（止める必要も無い: 送るのは ref の書き込み 1 回につき短い 1 文）。待ち行列が詰まる場合は上の「notify queue」。
+
 ## Verify
 
 - 新しい FG-DB-0001 / FG-DB-0002 が出ていない

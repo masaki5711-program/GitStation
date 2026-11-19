@@ -86,6 +86,15 @@ use super::{decide_queued, train_run, Asked, TrainRuns};
 
 // Plan 18 S1 (ADR-0037 (b)): the document lint of a train before it lands.
 mod train_lint;
+// Plan 18 S3 (ADR-0037 (a)): a turn task and its wait for a wake.
+mod turn;
+pub use turn::{QueueTurn, Roused};
+
+/// The next step of a queue whose step could not run now for a reason no
+/// sender announces the end of (a failed step, a landing another worker
+/// still holds the merge lock of): at most this, whatever the waiting
+/// period is.
+const RETRY: Duration = Duration::from_secs(10);
 
 /// The bounds of the queue's worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,8 +104,16 @@ pub struct QueueLimits {
     pub lease: Duration,
     /// How long a batch may test before it is reaped (`FG-CI-0024`).
     pub test_timeout: Duration,
-    /// The next step of a queue that waits (a pipeline running, paused).
+    /// The safety net of a queue whose train's pipeline runs
+    /// (`merge_queue.waiting_safety_poll_ms`): the pipeline's end wakes the
+    /// queue (plan 18 S3), this is the look when that wake is lost — and
+    /// the look that notices what no sender announces (an entry whose
+    /// merge request got a new head or was closed, a target that moved).
     pub poll: Duration,
+    /// The safety net of a queue with nothing to do now — paused, or its
+    /// entries held by an auto-merge emergency stop — and of a turn that
+    /// found no queue due (`merge_queue.safety_poll_ms`).
+    pub idle: Duration,
     /// The most changed paths read to find a migration (more: alone).
     pub max_paths: usize,
     /// The most the document lint of one train may take (plan 18 S1,
@@ -110,7 +127,8 @@ impl Default for QueueLimits {
         Self {
             lease: Duration::from_secs(300),
             test_timeout: Duration::from_secs(2 * 3600),
-            poll: Duration::from_secs(10),
+            poll: Duration::from_secs(60),
+            idle: Duration::from_secs(30),
             max_paths: 5000,
             train_lint_budget: Duration::from_secs(10),
         }
@@ -162,7 +180,8 @@ fn millis(d: Duration) -> u64 {
 pub struct TickReport {
     pub queue_id: i64,
     /// `idle`, `paused`, `built`, `waiting`, `landed`, `bisected`,
-    /// `removed`, `abandoned`, `reaped`, `raced`, `recovered`.
+    /// `removed`, `abandoned`, `reaped`, `raced`, `recovered`, `retry`
+    /// (a landing to recover whose merge lock another worker holds).
     pub outcome: &'static str,
     pub batch_id: Option<i64>,
 }
@@ -307,8 +326,15 @@ impl MergeQueue {
 
     /// Claim one due queue, do one step, release it (module docs). `None`:
     /// no queue to work now. A failure is returned after the lease is
-    /// released (the queue is tried again after `poll`).
+    /// released (the queue is tried again after at most [`RETRY`]).
     pub async fn tick(&self) -> Result<Option<TickReport>, ForgeError> {
+        Ok(self.tick_timed().await?.map(|(report, _)| report))
+    }
+
+    /// [`MergeQueue::tick`] with how long the queue had been claimable
+    /// when it was claimed (the database's clock; `turn.rs` reports a
+    /// missed wake with it).
+    async fn tick_timed(&self) -> Result<Option<(TickReport, Duration)>, ForgeError> {
         let Some(claimed) = db::claim(&self.merger.db, &self.worker, self.limits.lease).await?
         else {
             return Ok(None);
@@ -319,16 +345,21 @@ impl MergeQueue {
         // reads served by a reused `cat-file --batch-command` process are
         // not in it (`forge_git::counting_spawns`).
         let stepped = forge_git::counting_spawns(self.step(&claimed)).await;
+        // Plan 18 S3: the end of what a queue waits for is announced by
+        // its sender (`forge_db::review::merge_queue`'s `wake.rs`), which
+        // makes the queue due at once; these are the safety nets.
         let next_in = match &stepped {
-            Ok(report) if matches!(report.outcome, "waiting" | "paused" | "idle") => {
-                self.limits.poll
-            }
+            Ok(report) if report.outcome == "waiting" => self.limits.poll,
+            Ok(report) if matches!(report.outcome, "paused" | "idle") => self.limits.idle,
+            Ok(report) if report.outcome == "retry" => self.limits.poll.min(RETRY),
             Ok(_) => Duration::ZERO,
-            Err(_) => self.limits.poll,
+            Err(_) => self.limits.poll.min(RETRY),
         };
+        // Released due now: announced in the release's statement, so a
+        // turn that is in a whole wait (it saw the lease) claims it.
         let released = db::release(&self.merger.db, &claimed, next_in).await;
         let report = stepped?;
-        if !released? {
+        if released? == db::Released::LeaseLost {
             tracing::warn!(
                 target: "forge_review",
                 event = "forge.merge_queue.lease_lost",
@@ -338,7 +369,7 @@ impl MergeQueue {
                 "the queue's lease expired during the step; another worker owns it now"
             );
         }
-        Ok(Some(report))
+        Ok(Some((report, claimed.ready_for)))
     }
 
     async fn step(&self, claimed: &Claimed) -> Result<TickReport, ForgeError> {
@@ -1894,8 +1925,9 @@ impl MergeQueue {
         let asked = LandClock::asked();
         let lock = match merges::try_lock_merges(&self.merger.db, repo).await? {
             Some(lock) => lock,
-            // A landing still runs (its worker holds the lock): later.
-            None => return Ok("waiting"),
+            // A landing still runs (its worker holds the lock): later
+            // (nothing announces the lock's release — a short retry).
+            None => return Ok("retry"),
         };
         // A recovery lints nothing: the target already moved to the train.
         let clock = LandClock::locked(asked, Duration::ZERO);

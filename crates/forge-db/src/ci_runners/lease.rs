@@ -730,7 +730,7 @@ pub(crate) async fn settle_pipeline(
     if made_pending > 0 {
         notify_on(&mut *c, Channel::Jobs, CI_JOB).await?;
     }
-    sqlx::query(
+    let moved = sqlx::query(
         "UPDATE forge.ci_pipelines p SET status = s.next, updated_at = now(), \
            finished_at = CASE WHEN s.next = 'running' THEN NULL ELSE now() END \
          FROM (SELECT CASE \
@@ -745,7 +745,13 @@ pub(crate) async fn settle_pipeline(
     .bind(pipeline)
     .execute(&mut *c)
     .await
-    .map_err(|e| query_error(QUERY, e))?;
+    .map_err(|e| query_error(QUERY, e))?
+    .rows_affected();
+    if moved > 0 {
+        // Plan 18 S3: a train's pipeline that just ended makes its queue
+        // due and tells the queue's turns (nothing for any other change).
+        crate::review::merge_queue::train_pipeline_ended_on(&mut *c, pipeline).await?;
+    }
     sqlx::query_scalar("SELECT status FROM forge.ci_pipelines WHERE id = $1")
         .bind(pipeline)
         .fetch_one(&mut *c)

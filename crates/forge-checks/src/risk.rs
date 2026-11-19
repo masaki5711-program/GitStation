@@ -519,8 +519,9 @@ impl Risk {
         head: &ObjectId,
         ai_assets: bool,
     ) -> Result<TargetFindings, ForgeError> {
-        // The cached ref list may be older than the target's tip.
-        self.browse.invalidate(repo);
+        // The cached ref list may be older than the target's tip. A
+        // reader's refresh, not a ref write: nothing is announced.
+        self.browse.forget_refs(repo);
         let tip = match self.browse.find_ref(repo, target).await? {
             RefLookup::Commit(rev) => ObjectId::parse(&rev.commit)
                 .map_err(|_| internal("invalid_commit_id").with_context("repo_id", repo.get()))?,

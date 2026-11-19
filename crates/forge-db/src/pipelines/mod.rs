@@ -510,6 +510,11 @@ async fn insert(
         // Plan 18 S2: the waiting runners look when this commits.
         notify_on(&mut *c, Channel::Jobs, CI_JOB).await?;
     }
+    if r.source == Source::MergeQueue {
+        // Plan 18 S3: a train's pipeline born terminal (an invalid
+        // definition, nothing to run) is the batch's verdict at once.
+        crate::review::merge_queue::train_pipeline_ended_on(&mut *c, pipeline_id).await?;
+    }
     Ok(Some(pipeline_id))
 }
 
@@ -1051,6 +1056,9 @@ async fn transition<P>(
                     .execute(&mut *c)
                     .await
                     .map_err(|e| query_error(QUERY, e))?;
+                    // Plan 18 S3: a cancelled train pipeline is the
+                    // batch's verdict; its queue's turns look.
+                    crate::review::merge_queue::train_pipeline_ended_on(&mut *c, pipeline).await?;
                 }
                 Ok(jobs)
             })

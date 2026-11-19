@@ -2,27 +2,28 @@
 //! Amendment 2026-11-13): it adds mergeable merge requests to the merge
 //! queue as the auto-merge principal, so it runs next to the queue's worker.
 //!
-//! One task under the supervisor of `serve_merges` ([`supervise`]): it
-//! ticks [`forge_review::AutoMerger`] every [`PERIOD`]. Each tick is
-//! bounded by [`TICK_TIMEOUT`]; a failing tick (listing the merge requests)
-//! is logged on the first failure of a streak and then at most once a
-//! minute, and backs off. One merge request's failure is the tick's own
-//! log line (`FG-REVIEW-0028`).
+//! One task under the supervisor of `serve_merges` ([`supervise`]). It no
+//! longer polls (plan 18 S3, ADR-0037 (a)): it waits on its
+//! [`forge_review::AutoMergeWatch`] — sequenced events
+//! (`forge_events_sequenced`), "can be merged" (`forge_auto_merge`), and
+//! the sweep of every merge request each `auto_merge.safety_poll_ms` — and
+//! decides only what the wake names. Without a live listener the watch
+//! polls by itself. Each act is bounded by [`TICK_TIMEOUT`]; a failing act
+//! (listing or reading) is logged on the first failure of a streak and
+//! then at most once a minute, and backs off. One merge request's failure
+//! is the worker's own log line (`FG-REVIEW-0028`).
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::{telemetry, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_review::AutoMerger;
+use forge_review::{AutoMergeWatch, AutoMerger};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::serve_merges::supervise;
 
-/// How often the worker looks for due merge requests.
-const PERIOD: Duration = Duration::from_secs(5);
-/// The most one tick may take (git reads for each merge request).
+/// The most one act may take (git reads for each merge request).
 pub(crate) const TICK_TIMEOUT: Duration = Duration::from_secs(240);
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
@@ -35,7 +36,8 @@ pub(crate) struct AutoMergeTasks {
 }
 
 impl AutoMergeTasks {
-    /// Stop the worker and wait at most `wait`.
+    /// Stop the worker and wait at most `wait` (a waiting worker ends at
+    /// once; one deciding ends after the merge requests it is on).
     pub(crate) async fn stop(self, wait: Duration) {
         let _ = self.stop.send(true);
         match tokio::time::timeout(wait, self.supervisor).await {
@@ -56,19 +58,22 @@ impl AutoMergeTasks {
     }
 }
 
-/// Start the auto-merge worker under its supervisor.
-pub(crate) fn spawn(worker: Arc<AutoMerger>) -> AutoMergeTasks {
+/// Start the auto-merge worker under its supervisor; `safety` is
+/// `auto_merge.safety_poll_ms`.
+pub(crate) fn spawn(worker: AutoMerger, safety: Duration) -> AutoMergeTasks {
     let (stop, stopped) = watch::channel(false);
     tracing::info!(
         batch = worker.limits().batch,
         recheck_s = worker.limits().recheck.as_secs(),
+        safety_poll_ms = safety.as_millis(),
         "forge.serve.auto_merge_started"
     );
     let supervisor = tokio::spawn(supervise(
         "auto_merge",
         stopped,
         (BACKOFF_MIN, BACKOFF_MAX),
-        move |s| tokio::spawn(run(Arc::clone(&worker), s)),
+        // A restarted task starts a new watch: it sweeps first.
+        move |s| tokio::spawn(run(worker.watch(safety), s)),
     ));
     AutoMergeTasks { stop, supervisor }
 }
@@ -95,22 +100,30 @@ impl Streak {
     }
 }
 
-async fn run(worker: Arc<AutoMerger>, mut stop: watch::Receiver<bool>) {
+async fn run(mut watch: AutoMergeWatch, mut stop: watch::Receiver<bool>) {
     let mut streak = Streak::default();
     loop {
         if *stop.borrow() {
             break;
         }
-        let ticked = tokio::time::timeout(TICK_TIMEOUT, worker.tick()).await;
-        let wait = match ticked {
+        // The first wait of a watch ends at once (its first sweep).
+        let wake = tokio::select! {
+            wake = watch.wait() => wake,
+            _ = stop.wait_for(|s| *s) => break,
+        };
+        let woken_by = wake.as_str();
+        // Not cut by the stop: a merge request is decided to its end.
+        let acted = tokio::time::timeout(TICK_TIMEOUT, watch.act(wake)).await;
+        let wait = match acted {
             Ok(Ok(_)) => {
                 streak = Streak::default();
-                PERIOD
+                continue;
             }
-            Ok(Err(e)) => streak.fail(e),
+            Ok(Err(e)) => streak.fail(e.with_context("woken_by", woken_by)),
             Err(_) => streak.fail(
                 ForgeError::new(ErrorCode::ServeFailed)
                     .with_context("reason", "auto_merge_tick_timeout")
+                    .with_context("woken_by", woken_by)
                     .with_context("timeout_ms", TICK_TIMEOUT.as_millis()),
             ),
         };

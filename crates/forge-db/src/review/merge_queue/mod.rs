@@ -27,6 +27,12 @@ use crate::projects::{lock_shared, locked_access_facts, ProjectUpdateFacts};
 use crate::review::commands::{absent, facts, MergeRequestFacts};
 use crate::{query_error, read_query_error, Db};
 
+// Plan 18 S3 (ADR-0037 (a)): the senders of `forge_merge_queue` and the
+// next due time an idle turn waits for.
+mod wake;
+pub use wake::next_due;
+pub(crate) use wake::{notify_queue_on, train_pipeline_ended_on};
+
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
 
 /// `FG-CI-0025 reason=<reason>` (ADR-0030 §2, §10): the queue's own state
@@ -346,10 +352,12 @@ pub async fn dequeue_mr_decided<P>(
             .map_err(|e| query_error("merge_queue.dequeue", e))?;
             sqlx::query("UPDATE forge.merge_queues SET next_run_at = now() WHERE id = $1")
                 .bind(queue)
-                .execute(c)
+                .execute(&mut *c)
                 .await
-                .map(drop)
-                .map_err(|e| query_error("merge_queue.wake", e))
+                .map_err(|e| query_error("merge_queue.wake", e))?;
+            // Plan 18 S3: the entries behind the one that left (or the
+            // batch it was in) are the queue's next step.
+            notify_queue_on(c, queue).await
         })
         .await?;
         let removed = StoredEntry {
@@ -398,7 +406,7 @@ pub async fn set_paused_decided<P>(
             .await?;
         let changed: Option<QueueRow> = tx
             .step(|c| async move {
-                sqlx::query_as(&format!(
+                let changed: Option<QueueRow> = sqlx::query_as(&format!(
                     "UPDATE forge.merge_queues SET paused = $2, \
                      paused_by = CASE WHEN $2 THEN $3 END, \
                      paused_at = CASE WHEN $2 THEN now() END, \
@@ -409,9 +417,15 @@ pub async fn set_paused_decided<P>(
                 .bind(queue)
                 .bind(paused)
                 .bind(caller.get())
-                .fetch_optional(c)
+                .fetch_optional(&mut *c)
                 .await
-                .map_err(|e| query_error("merge_queue.pause", e))
+                .map_err(|e| query_error("merge_queue.pause", e))?;
+                // Plan 18 S3: a resumed queue has work again; a pause (or
+                // a change that changed nothing) makes nothing actionable.
+                if changed.is_some() && !paused {
+                    notify_queue_on(c, queue).await?;
+                }
+                Ok(changed)
             })
             .await?;
         match changed {
@@ -595,6 +609,23 @@ pub async fn entry_of(
 pub struct Claimed {
     pub queue: StoredQueue,
     pub worker: String,
+    /// The queue's `next_run_at` when it was claimed (microseconds of the
+    /// database's epoch): [`release`] sees with it whether a sender made
+    /// the queue due again during the step (plan 18 S3).
+    pub due_us: i64,
+    /// How long the queue had been claimable when it was claimed (the
+    /// database's clock): since it was due, or since the lease of a turn
+    /// that never released it ended. What `FG-DB-0024` reports as
+    /// `oldest_ready_ms`.
+    pub ready_for: Duration,
+}
+
+#[derive(sqlx::FromRow)]
+struct ClaimRow {
+    #[sqlx(flatten)]
+    queue: QueueRow,
+    due_us: i64,
+    ready_for_ms: i64,
 }
 
 /// Claim one queue that is due, unleased (or whose lease expired) and has
@@ -603,20 +634,29 @@ pub struct Claimed {
 /// queue to work now.
 pub async fn claim(db: &Db, worker: &str, lease: Duration) -> Result<Option<Claimed>, ForgeError> {
     const QUERY: &str = "merge_queue.claim";
-    let row: Option<QueueRow> = db
+    let row: Option<ClaimRow> = db
         .within(QUERY, async {
+            // `due` has no column named like one of the queue's: the
+            // unqualified names of `queue_columns` are the updated row's.
             sqlx::query_as(&format!(
-                "UPDATE forge.merge_queues SET lease_owner = $1, \
+                "UPDATE forge.merge_queues m SET lease_owner = $1, \
                    lease_until = now() + make_interval(secs => $2), updated_at = now() \
-                 WHERE id = (SELECT q.id FROM forge.merge_queues q \
+                 FROM (SELECT q.id AS due_id, \
+                         GREATEST(q.next_run_at, COALESCE(q.lease_until, q.next_run_at)) \
+                           AS ready_at \
+                       FROM forge.merge_queues q \
                    WHERE q.next_run_at <= now() \
                      AND (q.lease_until IS NULL OR q.lease_until < now()) \
                      AND (EXISTS (SELECT 1 FROM forge.merge_queue_entries e \
                             WHERE e.queue_id = q.id AND e.state IN ('queued', 'testing')) \
                           OR EXISTS (SELECT 1 FROM forge.merge_queue_batches b \
                             WHERE b.queue_id = q.id AND b.state IN ('testing', 'landing'))) \
-                   ORDER BY q.next_run_at, q.id LIMIT 1 FOR UPDATE SKIP LOCKED) \
-                 RETURNING {}",
+                   ORDER BY q.next_run_at, q.id LIMIT 1 FOR UPDATE SKIP LOCKED) due \
+                 WHERE m.id = due.due_id \
+                 RETURNING {}, \
+                   (EXTRACT(epoch FROM m.next_run_at) * 1000000)::bigint AS due_us, \
+                   GREATEST((EXTRACT(epoch FROM now() - due.ready_at) * 1000)::bigint, 0) \
+                     AS ready_for_ms",
                 queue_columns()
             ))
             .bind(worker)
@@ -628,33 +668,80 @@ pub async fn claim(db: &Db, worker: &str, lease: Duration) -> Result<Option<Clai
         .await?;
     row.map(|r| {
         Ok(Claimed {
-            queue: r.parse()?,
+            queue: r.queue.parse()?,
             worker: worker.to_owned(),
+            due_us: r.due_us,
+            ready_for: Duration::from_millis(u64::try_from(r.ready_for_ms).unwrap_or(0)),
         })
     })
     .transpose()
 }
 
+/// What [`release`] left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Released {
+    /// The lease was no longer this worker's (it expired and another
+    /// worker took the queue); nothing was written.
+    LeaseLost,
+    /// Released; `due_now`: the queue is claimable at once (the step asked
+    /// for the next one now, or a sender made it due during the step).
+    Released { due_now: bool },
+}
+
 /// Release `claimed`'s lease and ask for the next step after `next_in`.
-/// `false`: the lease was no longer this worker's (it expired and another
-/// worker took the queue).
-pub async fn release(db: &Db, claimed: &Claimed, next_in: Duration) -> Result<bool, ForgeError> {
+///
+/// A sender that made the queue due during the step (an enqueue, a
+/// finished train pipeline: `next_run_at` is no longer what the claim
+/// read) is not overwritten: the queue stays due at the earlier of the two
+/// times, so the step that just ended without that fact is followed by one
+/// that reads it (plan 18 S3 — before it the next look was at most one
+/// short poll away; with the long safety-net periods a lost poke would
+/// cost a whole one). A stamp older than the release becomes the release's
+/// time: the queue was leased, not ready, until now (the claim's
+/// `ready_for` — what `FG-DB-0024` reports — counts from here).
+///
+/// A queue released due now is announced on `forge_merge_queue` in the
+/// same statement (review of plan 18 S3): the turn that released it may
+/// go on to another queue, and a turn of this or another `forge serve`
+/// process that is in a whole safety-net wait (it saw the lease) would
+/// otherwise wait it out.
+pub async fn release(
+    db: &Db,
+    claimed: &Claimed,
+    next_in: Duration,
+) -> Result<Released, ForgeError> {
     const QUERY: &str = "merge_queue.release";
-    db.within(QUERY, async {
-        let done = sqlx::query(
-            "UPDATE forge.merge_queues SET lease_owner = NULL, lease_until = NULL, \
-               next_run_at = now() + make_interval(secs => $3), updated_at = now() \
-             WHERE id = $1 AND lease_owner = $2",
-        )
-        .bind(claimed.queue.id)
-        .bind(&claimed.worker)
-        .bind(next_in.as_secs_f64())
-        .execute(db.write_pool())
-        .await
-        .map_err(|e| query_error(QUERY, e))?;
-        Ok(done.rows_affected() == 1)
+    let row: Option<(bool,)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "WITH r AS ( \
+                   UPDATE forge.merge_queues SET lease_owner = NULL, lease_until = NULL, \
+                     next_run_at = CASE \
+                       WHEN (EXTRACT(epoch FROM next_run_at) * 1000000)::bigint <> $4 \
+                         THEN GREATEST(LEAST(next_run_at, now() + make_interval(secs => $3)), \
+                                       now()) \
+                       ELSE now() + make_interval(secs => $3) END, \
+                     updated_at = now() \
+                   WHERE id = $1 AND lease_owner = $2 \
+                   RETURNING id, next_run_at <= now() AS due_now) \
+                 SELECT r.due_now, \
+                        (SELECT pg_catalog.pg_notify($5, r.id::text) WHERE r.due_now) \
+                   FROM r",
+            )
+            .bind(claimed.queue.id)
+            .bind(&claimed.worker)
+            .bind(next_in.as_secs_f64())
+            .bind(claimed.due_us)
+            .bind(crate::wake::Channel::MergeQueue.name())
+            .fetch_optional(db.write_pool())
+            .await
+            .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
+    Ok(match row {
+        None => Released::LeaseLost,
+        Some((due_now,)) => Released::Released { due_now },
     })
-    .await
 }
 
 /// The queue row as it is now (the worker reads `paused` again before it

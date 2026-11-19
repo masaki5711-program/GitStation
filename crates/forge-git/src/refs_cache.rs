@@ -28,9 +28,10 @@
 //!   repository's snapshot; a read in progress is not kept and not joined
 //!   by later callers. It is called for every ref write this process
 //!   knows of (`Browser::invalidate`: `forge serve`'s pushes and ref
-//!   writes; plan 18 S2 adds the `forge_refs` listener for the worker's).
+//!   writes; `Browser::forget_refs`: the ref writes other processes
+//!   announce on `forge_refs`, plan 18 S3).
 //! - **Staleness bound.** A ref write this process is not told about
-//!   (another process, until S2) can only leave a *deleted* branch
+//!   (a one-shot command, a lost notification) can only leave a *deleted* branch
 //!   answered "present", and for at most `ttl` measured from the start of
 //!   the read that saw it. The create that believed it records no commit
 //!   id; its version job reads git and ends `source_missing`.

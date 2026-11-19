@@ -54,7 +54,7 @@ mod reconcile;
 mod request;
 mod source;
 
-pub use auto::{AutoMergeLimits, AutoMergeReport, AutoMerger};
+pub use auto::{AutoMergeLimits, AutoMergeReport, AutoMergeWake, AutoMergeWatch, AutoMerger};
 pub use conditions::{conditions, method_allowed, CheckRuns, Conditions};
 pub use evaluate::{
     blocked, evaluate_merge, stored_mergeable, BlockReason, CheckConclusion, CheckRun, CheckStatus,
@@ -64,8 +64,8 @@ pub(crate) use execute::account_commit_identity;
 pub use execute::{MergeReport, RECONCILE_BATCH};
 pub use forge_db::review::merges::{CredentialRef, StoredMerge};
 pub use queue::{
-    AfterFence, MergeQueue, QueueAsk, QueueLimits, TickReport, MERGE_RESULT_BUDGET,
-    MERGE_RESULT_MAX_FAILURES,
+    AfterFence, MergeQueue, QueueAsk, QueueLimits, QueueTurn, Roused, TickReport,
+    MERGE_RESULT_BUDGET, MERGE_RESULT_MAX_FAILURES,
 };
 pub use reconcile::ReconcileReport;
 pub use request::MergeAsk;

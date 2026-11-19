@@ -277,8 +277,37 @@ Tests: `tests/merge_queue_git.rs` (`a_full_project_queues_and_lands_…`,
 `every_stop_class_keeps_…`, `a_warning_does_not_stop_auto_merge`,
 `the_emergency_stop_pauses_auto_merge_and_its_queue_entries`, …).
 
+**Woken, not polling (plan 18 S3, ADR-0037 (a) and its S3 addendum)**:
+`merges/queue/worker/turn.rs` — `MergeQueue::turns(workers)` gives the
+`QueueTurn`s `forge serve` runs (`merge_queue.workers`, lease owner
+`<worker>-<n>`): `QueueTurn::tick` claims one due queue, steps it and
+releases it; `QueueTurn::idle` waits for `forge_merge_queue` (sent by
+forge-db in the transaction of an enqueue, a dequeue, a resume, a train
+pipeline that ended, a create job that left no pipeline), the next due time
+(`merge_queue::next_due`) or `QueueLimits::idle`
+(`merge_queue.safety_poll_ms`); a waiting queue is looked at again after
+`QueueLimits::poll` (`merge_queue.waiting_safety_poll_ms`), a step that
+could not run after at most 10 s (`retry`). One queue is stepped by one turn
+at a time — the claim's lease, not the wake. A queue released due now is
+announced on `forge_merge_queue` by the release's statement, so another
+turn (of this or another process) in a whole wait claims it.
+`MergeQueue::wake(queue_id)`
+is the in-process nudge the `Review` commands send after their commit. A
+queue found by a whole safety-net wait after being claimable that long is
+`FG-DB-0024` (`channel=forge_merge_queue`). `merges/auto/watch.rs` —
+`AutoMerger::watch(safety)` gives the `AutoMergeWatch`: `wait` ends on
+`forge_events_sequenced` (`decide_events`: only the merge requests the
+events after the cursor name, 10 reads of 200 per wake and at once again
+while more wait; no cursor before the first successful sweep), on
+`forge_auto_merge` (`decide_named`, in slices of `NAMED_MAX`) or
+for the sweep of everything each `auto_merge.safety_poll_ms` (`sweep`); at
+most `DECIDE_AT_ONCE` (4) merge requests are decided at once. Without a
+live listener both fall back to their poll of before plan 18 (2 s / the 5 s
+`tick`). Tests: `tests/queue_wake/` (a module of `tests/merge_queue_git.rs`).
+
 **Runbooks**: `secret-removal` (R1b), `merge-execution` (R4), `codeowners` and
-`merge-blocked` (R5), `auto-merge` (M4 C9).
+`merge-blocked` (R5), `auto-merge` (M4 C9), `merge-queue` (the queue; its
+"起床と安全網" for plan 18 S3).
 
 **Tests**: `tests/commands.rs` (the full flow through proofs, a role removed or a
 Maintainer demoted after the proof, missing branches, bad input and mismatched
