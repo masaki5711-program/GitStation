@@ -437,8 +437,9 @@ async function burstCreate(p, branches, burst, { enqueueByPerson }) {
   for (let i = 0; i < branches.length; i += burst) {
     abortIfStopped();
     const slice = branches.slice(i, i + burst);
-    const made = await Promise.all(slice.map((b) => createMr(p, b)));
-    if (enqueueByPerson) await Promise.all(made.filter((r) => r.iid).map((r) => enqueue(p, r)));
+    // at most L.CONCURRENCY at once: one client is one peer (lib.mjs CONCURRENCY)
+    const made = await L.mapLimit(slice, L.CONCURRENCY, (b) => createMr(p, b));
+    if (enqueueByPerson) await L.mapLimit(made.filter((r) => r.iid), L.CONCURRENCY, (r) => enqueue(p, r));
     for (const r of made) { recs.push(r); L.log(`${scenario}-${TAG}.jsonl`, r); }
     console.log(`burst at MR ${made[0]?.branch}: ${made.length} MRs (create p95 ${L.pct(made.map((r) => r.create_ms), 95)} ms)`);
     if (i + burst < branches.length) await L.sleep(GAP_S * 1000);
