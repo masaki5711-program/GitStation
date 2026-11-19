@@ -2,27 +2,30 @@
 //! the merge job (`serve_merges`), it writes the target branches, so it
 //! runs next to the browse cache its ref writes invalidate.
 //!
-//! One task under the supervisor of `serve_merges` ([`supervise`]): it
-//! ticks [`forge_review::MergeQueue`] — at once again after a queue was
-//! worked, every [`IDLE_PERIOD`] while none is due. Each tick is bounded by
+//! `merge_queue.workers` turn tasks (plan 18 S3, ADR-0037 (a)), each under
+//! its own supervisor of `serve_merges` ([`supervise`]): a task ticks its
+//! [`forge_review::QueueTurn`] — at once again after a queue was worked —
+//! and, while no queue is due, waits for a wake (`forge_merge_queue`), the
+//! next due time or the safety-net period (`merge_queue.safety_poll_ms`)
+//! instead of polling. Different queues progress on different tasks; one
+//! queue is one task's at a time (the claim's lease — every task of every
+//! process may wake for it, one steps it). Each tick is bounded by
 //! [`TICK_TIMEOUT`] (the queue's lease outlives it, so a tick cut short is
-//! taken over by the next one). A failing tick is logged on the first
-//! failure of a streak and then at most once a minute with its count
+//! taken over by the next one). A failing tick or wait is logged on the
+//! first failure of a streak and then at most once a minute with its count
 //! (the claim's own failures included), and backs off.
 
-use std::sync::Arc;
 use std::time::Duration;
 
+use forge_core::config::MergeQueueConfig;
 use forge_core::{telemetry, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_review::MergeQueue;
+use forge_review::{MergeQueue, QueueLimits, QueueTurn};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::serve_merges::supervise;
 
-/// How often an idle worker looks for a due queue.
-const IDLE_PERIOD: Duration = Duration::from_secs(2);
 /// The most one tick may take (git, a landing under the merge lock).
 pub(crate) const TICK_TIMEOUT: Duration = Duration::from_secs(240);
 /// The backoff of a failing tick and of a restarted task.
@@ -31,56 +34,84 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// A failure streak is logged at most this often after its first line.
 const LOG_EVERY: Duration = Duration::from_secs(60);
 
-/// The supervised task; [`QueueTasks::stop`] ends it.
+/// The supervised turn tasks; [`QueueTasks::stop`] ends them.
 pub(crate) struct QueueTasks {
     stop: watch::Sender<bool>,
-    supervisor: JoinHandle<()>,
+    supervisors: Vec<JoinHandle<()>>,
 }
 
 impl QueueTasks {
-    /// Stop the worker and wait at most `wait` (a tick in progress keeps
-    /// its lease: the next start takes the queue over after it expires).
+    /// Stop the turn tasks and wait at most `wait` for all of them (a tick
+    /// in progress is not cut: it runs to its end within `wait`, and past
+    /// it keeps its lease — the next start takes the queue over after it
+    /// expires). An idle task ends at once.
     pub(crate) async fn stop(self, wait: Duration) {
         let _ = self.stop.send(true);
-        match tokio::time::timeout(wait, self.supervisor).await {
-            Ok(Ok(())) => {}
-            Ok(Err(join)) => telemetry::log_failure(
-                &ForgeError::new(ErrorCode::ServeFailed)
-                    .with_context("operation", "merge_queue_supervisor_exited")
-                    .with_context("panicked", join.is_panic()),
-                &RequestId::generate(),
-            ),
-            Err(_) => telemetry::log_failure(
-                &ForgeError::new(ErrorCode::ServeFailed)
-                    .with_context("operation", "merge_queue_task_pending")
-                    .with_context("wait_ms", wait.as_millis()),
-                &RequestId::generate(),
-            ),
+        let deadline = tokio::time::Instant::now() + wait;
+        for (turn, supervisor) in self.supervisors.into_iter().enumerate() {
+            match tokio::time::timeout_at(deadline, supervisor).await {
+                Ok(Ok(())) => {}
+                Ok(Err(join)) => telemetry::log_failure(
+                    &ForgeError::new(ErrorCode::ServeFailed)
+                        .with_context("operation", "merge_queue_supervisor_exited")
+                        .with_context("turn", turn)
+                        .with_context("panicked", join.is_panic()),
+                    &RequestId::generate(),
+                ),
+                Err(_) => telemetry::log_failure(
+                    &ForgeError::new(ErrorCode::ServeFailed)
+                        .with_context("operation", "merge_queue_task_pending")
+                        .with_context("turn", turn)
+                        .with_context("wait_ms", wait.as_millis()),
+                    &RequestId::generate(),
+                ),
+            }
         }
     }
 }
 
-/// Start the merge queue's worker under its supervisor.
-pub(crate) fn spawn(queue: Arc<MergeQueue>) -> QueueTasks {
+/// The queue's limits with `merge_queue.*`'s safety nets.
+fn limits_of(base: QueueLimits, cfg: &MergeQueueConfig) -> QueueLimits {
+    QueueLimits {
+        idle: cfg.safety_poll(),
+        poll: cfg.waiting_safety_poll(),
+        ..base
+    }
+}
+
+/// Start the merge queue's turn tasks, each under its supervisor.
+pub(crate) fn spawn(queue: MergeQueue, cfg: &MergeQueueConfig) -> QueueTasks {
+    let limits = limits_of(queue.limits(), cfg);
+    let queue = queue.with_limits(limits);
+    let workers = usize::try_from(cfg.workers).unwrap_or(1).max(1);
     let (stop, stopped) = watch::channel(false);
     // Plan 18 S1: `train_lint=off` is `merge_queue.train_lint_budget_ms = 0`
     // — trains land without the document lint of their tree.
     let (train_lint, train_lint_budget_ms) =
-        train_lint_fields(queue.lints_trains(), queue.limits().train_lint_budget);
+        train_lint_fields(queue.lints_trains(), limits.train_lint_budget);
     tracing::info!(
-        lease_s = queue.limits().lease.as_secs(),
-        test_timeout_s = queue.limits().test_timeout.as_secs(),
+        lease_s = limits.lease.as_secs(),
+        test_timeout_s = limits.test_timeout.as_secs(),
         train_lint,
         train_lint_budget_ms,
+        workers,
+        safety_poll_ms = limits.idle.as_millis(),
+        waiting_safety_poll_ms = limits.poll.as_millis(),
         "forge.serve.merge_queue_started"
     );
-    let supervisor = tokio::spawn(supervise(
-        "merge_queue",
-        stopped,
-        (BACKOFF_MIN, BACKOFF_MAX),
-        move |s| tokio::spawn(run(Arc::clone(&queue), s)),
-    ));
-    QueueTasks { stop, supervisor }
+    let supervisors = (0..workers)
+        .map(|n| {
+            let queue = queue.clone(); // clone: handles; one per supervisor
+            tokio::spawn(supervise(
+                "merge_queue",
+                stopped.clone(), // clone: each supervisor watches the stop
+                (BACKOFF_MIN, BACKOFF_MAX),
+                // A restarted task starts a new turn (a new waiter).
+                move |s| tokio::spawn(run(queue.turn(n), s)),
+            ))
+        })
+        .collect();
+    QueueTasks { stop, supervisors }
 }
 
 /// `train_lint` and `train_lint_budget_ms` of the start line: `off` and 0
@@ -117,35 +148,50 @@ impl Streak {
     }
 }
 
-async fn run(queue: Arc<MergeQueue>, mut stop: watch::Receiver<bool>) {
+async fn run(mut turn: QueueTurn, mut stop: watch::Receiver<bool>) {
     let mut streak = Streak::default();
     loop {
         if *stop.borrow() {
             break;
         }
-        let ticked = tokio::time::timeout(TICK_TIMEOUT, queue.tick()).await;
-        let wait = match ticked {
+        // Never cut by the stop: a landing in progress runs to its end.
+        let ticked = tokio::time::timeout(TICK_TIMEOUT, turn.tick()).await;
+        let failed = match ticked {
             Ok(Ok(Some(_))) => {
                 streak = Streak::default();
                 continue;
             }
-            Ok(Ok(None)) => {
-                streak = Streak::default();
-                IDLE_PERIOD
-            }
-            Ok(Err(e)) => streak.fail(e),
-            Err(_) => streak.fail(
+            Ok(Ok(None)) => None,
+            Ok(Err(e)) => Some(e),
+            Err(_) => Some(
                 ForgeError::new(ErrorCode::ServeFailed)
                     .with_context("reason", "merge_queue_tick_timeout")
                     .with_context("timeout_ms", TICK_TIMEOUT.as_millis()),
             ),
         };
-        tokio::select! {
-            () = tokio::time::sleep(wait) => {}
-            _ = stop.wait_for(|s| *s) => break,
+        let failed = match failed {
+            Some(e) => Some(e),
+            // No queue is due: a wake, the next due time or the safety net.
+            None => tokio::select! {
+                idled = turn.idle() => match idled {
+                    Ok(_) => {
+                        streak = Streak::default();
+                        None
+                    }
+                    Err(e) => Some(e.with_context("step", "idle_wait")),
+                },
+                _ = stop.wait_for(|s| *s) => break,
+            },
+        };
+        if let Some(e) = failed {
+            let wait = streak.fail(e.with_context("worker_id", turn.worker()));
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                _ = stop.wait_for(|s| *s) => break,
+            }
         }
     }
-    tracing::info!("forge.serve.merge_queue_stopped");
+    tracing::info!(worker = turn.worker(), "forge.serve.merge_queue_stopped");
 }
 
 #[cfg(test)]
@@ -177,5 +223,36 @@ mod tests {
             train_lint_fields(true, Duration::from_secs(10)),
             ("on", 10_000)
         );
+    }
+
+    #[test]
+    fn the_safety_nets_are_the_configured_ones_and_nothing_else_moves() {
+        let base = QueueLimits {
+            train_lint_budget: Duration::from_secs(3),
+            ..QueueLimits::default()
+        };
+        let cfg = MergeQueueConfig {
+            safety_poll_ms: 12_000,
+            waiting_safety_poll_ms: 45_000,
+            ..MergeQueueConfig::default()
+        };
+        let limits = limits_of(base, &cfg);
+        assert_eq!(limits.idle, Duration::from_secs(12));
+        assert_eq!(limits.poll, Duration::from_secs(45));
+        assert_eq!(
+            QueueLimits {
+                idle: base.idle,
+                poll: base.poll,
+                ..limits
+            },
+            base,
+            "the lease, the test timeout and the lint budget stay"
+        );
+        // The defaults of the keys are the defaults of the limits.
+        assert_eq!(limits_of(base, &MergeQueueConfig::default()), base);
+        // The longest waiting period is still shorter than a lease is long
+        // only by chance: nothing depends on it (a waiting queue holds no
+        // lease), but a tick must end before its lease does.
+        assert!(base.lease > TICK_TIMEOUT);
     }
 }

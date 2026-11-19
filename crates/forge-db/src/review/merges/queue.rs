@@ -175,9 +175,11 @@ pub async fn enqueue_mr_decided<P>(
                 })?;
                 sqlx::query("UPDATE forge.merge_queues SET next_run_at = now() WHERE id = $1")
                     .bind(queue)
-                    .execute(c)
+                    .execute(&mut *c)
                     .await
                     .map_err(|e| query_error("merge_queue.wake", e))?;
+                // Plan 18 S3: the queue's turns are told at the commit.
+                crate::review::merge_queue::notify_queue_on(c, queue).await?;
                 Ok(id)
             })
             .await?;

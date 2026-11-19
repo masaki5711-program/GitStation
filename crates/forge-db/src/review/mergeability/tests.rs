@@ -1116,3 +1116,45 @@ async fn the_backfill_requests_clean_decisions_without_a_merge_result() {
     assert!(again.is_empty(), "idempotent: {again:?}");
     t.drop_now().await;
 }
+
+/// Review of plan 18 S3 (2): "can be merged" is announced on
+/// `forge_auto_merge` only for a merge request auto-merge acts on — a
+/// project left at the default (`full`) is told, one that turned
+/// auto-merge off is not (after a landing every open merge request of
+/// the target is checked again).
+#[tokio::test]
+async fn can_be_merged_is_announced_only_where_auto_merge_acts() {
+    use crate::wake::{Channel, WakeHub, Woken};
+    use std::time::Duration;
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let mr = open_at_a(&t, alice, web.project_id, "feature", "main").await;
+    let hub = WakeHub::spawn(&t.db, &[Channel::AutoMerge]).expect("hub");
+    let began = std::time::Instant::now();
+    while !hub.is_live(Channel::AutoMerge) {
+        assert!(began.elapsed() < Duration::from_secs(30), "never live");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let mut told = hub.subscribe(Channel::AutoMerge);
+    run(&t, mr.id, MergeabilityStatus::CanBeMerged, 0).await;
+    assert_eq!(
+        told.wait(Duration::from_secs(10)).await,
+        Woken::Notified(vec![mr.id.get().to_string()]),
+        "the default mode acts"
+    );
+    let project = web.project_id.get();
+    t.commit_audited(
+        ("project", project),
+        &[format!(
+            "INSERT INTO forge.project_auto_merge (project_id, mode) VALUES ({project}, 'off')"
+        )],
+    )
+    .await;
+    run(&t, mr.id, MergeabilityStatus::CanBeMerged, 1).await;
+    assert_eq!(
+        told.wait(Duration::from_millis(1500)).await,
+        Woken::SafetyNet,
+        "auto-merge is off: nobody is told"
+    );
+    hub.stop(Duration::from_secs(10)).await.expect("stop");
+}

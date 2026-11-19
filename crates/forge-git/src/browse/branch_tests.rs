@@ -4,6 +4,7 @@
 //! create asks before it writes anything.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use forge_core::RefName;
@@ -30,6 +31,46 @@ fn long_lived() -> BrowseLimits {
         refs_ttl: Duration::from_secs(3600),
         ..BrowseLimits::default()
     }
+}
+
+/// Plan 18 S3 (`forge_refs`): a ref write of THIS process
+/// (`Browser::invalidate`) is told to whoever announces it — once per
+/// call, through every clone, and only to the first one registered. What
+/// another process announced (`Browser::forget_refs`) drops the same
+/// caches and tells no one: no echo between the processes.
+#[tokio::test]
+async fn only_this_process_ref_writes_are_announced() {
+    let f = fixture().await;
+    let c1 = seed(&f.path);
+    for name in ["main", "old"] {
+        update_ref(&f.path, &format!("refs/heads/{name}"), &c1);
+    }
+    let b = f.browser(long_lived());
+    let told = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&told);
+    assert!(b.on_refs_changed(move |repo| sink.lock().expect("told").push(repo)));
+    assert!(
+        !b.on_refs_changed(|_| panic!("the first one stays")),
+        "set once"
+    );
+
+    b.require_branch(f.id, &branch("old"))
+        .await
+        .expect("old exists (the snapshot is read)");
+    plumb(&f.path, &["update-ref", "-d", "refs/heads/old"], None);
+    // Heard from another process: the snapshot is dropped, no one is told.
+    b.forget_refs(f.id);
+    let err = b
+        .require_branch(f.id, &branch("old"))
+        .await
+        .expect_err("deleted");
+    assert_eq!(reason(&err), "ref_not_found");
+    assert!(told.lock().expect("told").is_empty(), "no echo");
+
+    // This process wrote: told once per write, through a clone too.
+    b.invalidate(f.id);
+    b.clone().invalidate(f.id); // clone: shares the registration
+    assert_eq!(*told.lock().expect("told"), vec![f.id, f.id]);
 }
 
 /// A branch that is not in the snapshot is asked of git before the answer
@@ -69,9 +110,10 @@ async fn a_branch_pushed_after_the_snapshot_is_found() {
 
 /// A ref write by another process (the worker's merge deletes a source
 /// branch, a maintenance job, a restore) reaches the cache three ways:
-/// the signal ([`Browser::invalidate`]: `forge serve`'s own ref writes
-/// today, the `forge_refs` listener of plan 18 S2) drops the snapshot at
-/// once; with no signal a deleted branch is still answered "present" for
+/// the signal (`Browser::invalidate`: `forge serve`'s own ref writes;
+/// `Browser::forget_refs`: the `forge_refs` listener of plan 18 S3, for
+/// the ref writes other processes announce) drops the snapshot at once;
+/// with no signal a deleted branch is still answered "present" for
 /// at most `refs_ttl` (the stated bound); a created branch is found at
 /// once whatever the snapshot says.
 #[tokio::test]

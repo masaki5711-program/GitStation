@@ -136,6 +136,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             // 2026-11-12: the one-time history import allowance (operator CLI).
             .with_history_imports(Arc::new(db.clone())); // clone: the pool handle is shared
         let push_tasks = smart_http.push_tasks();
+        // Plan 18 S3 (`forge_refs`): the ref writes made through this
+        // browser are announced to the other processes, and theirs drop
+        // its caches (`serve_refs`).
+        let refs_tasks = crate::serve_refs::spawn(&db, &wake_hub, &smart_http.browse);
         // M3 R4 (ADR-0024 §4.2): the merge job runs here, next to the browse
         // cache its ref writes invalidate (`serve_merges`).
         let merger = Arc::new(
@@ -181,7 +185,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     smart_http.browse.clone(),  // clone: shares the ref cache
                 )));
         }
-        let queue_tasks = crate::serve_merge_queue::spawn(Arc::new(queue));
+        // Plan 18 S3: `merge_queue.workers` turns, woken instead of polling.
+        let queue_tasks = crate::serve_merge_queue::spawn(queue, &cfg.merge_queue);
         // M4 C10 (plan 04 M-4): the system's revert drafts after a failed
         // target pipeline write a branch: here, next to the browse cache.
         let revert_tasks = crate::serve_reverts::spawn(
@@ -238,11 +243,13 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // runs from the database (the request and the merge job read them
         // in the gate's transaction).
         .with_check_results(Arc::new(db.clone())); // clone: the pool handle is shared
-        let auto_merge_tasks =
-            crate::serve_auto_merge::spawn(Arc::new(forge_review::AutoMerger::new(
+        let auto_merge_tasks = crate::serve_auto_merge::spawn(
+            forge_review::AutoMerger::new(
                 review.clone(),                       // clone: shares the pool and caches
                 forge_review::Merger::clone(&merger), // clone: shares git and storage
-            )));
+            ),
+            cfg.auto_merge.safety_poll(), // plan 18 S3: the sweep's period
+        );
         let merge_tasks = crate::serve_merges::spawn(&db, merger)?;
         let oidc = crate::oidc::service(cfg, &db)?;
         let mut state = app_state(&db, database, cfg.web.session_idle, oidc.as_ref())
@@ -468,6 +475,9 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 &forge_core::RequestId::generate(),
             );
         }
+        // Every ref writer has stopped: what they noted is announced, then
+        // the `forge_refs` tasks end — before the hub and the pools do.
+        refs_tasks.stop(crate::serve_refs::STOP_WAIT).await;
         crate::wake::stop(&wake_hub).await;
         db.close().await;
         served?;

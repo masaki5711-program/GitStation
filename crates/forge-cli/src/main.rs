@@ -45,6 +45,9 @@ mod serve_auto_merge;
 mod serve_autofix;
 mod serve_merge_queue;
 mod serve_merges;
+// Plan 18 S3: `forge_refs` (ref writes announced to and heard from the
+// other processes).
+mod serve_refs;
 mod serve_reverts;
 mod state_copy;
 // Plan 18 S2: the wake hub of `serve` and `worker`.

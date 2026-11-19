@@ -523,3 +523,267 @@ S4 の差分を 2 人の評価者（データベース、Rust）が読んだ。�
 - **`recompute_carried` は衝突したときだけ動く**。試しのマージがエラーや時間切れで終わったときは動かさない: そのマージは
   どのみち断られ、次に頼まれたときにまた試しのマージをする。
 - **足した列は読み取り専用のロールから読める**。入っているのはパスの名前だけで、リポジトリを読める人が見られるものと同じ。
+
+## 追記（2026-11-19、計画 18 S3 の実装）— (a) の残り（キューと自動マージの起床）: 作ったもの、文との違い、既知の限界、S5/S6 が引き継ぐもの
+
+上の Decision (a) の文は変えない。S3 が作ったのは (a) の 2（`forge_merge_queue` の分）・3・4・5（キューと自動マージの分）・
+6（キューの分）・7。新しいエラーコードもマイグレーションも無い（`FG-DB-0024` を S2 の規則のまま使う）。
+
+**作ったもの**
+
+- **送り手**（`crates/forge-db/src/review/merge_queue/wake.rs`）: キューを進められるようにした書き込みは、同じトランザクションで
+  2 つのことをする。キューを今すぐ期限にする（`next_run_at = now()`。手番が読む事実）と、`pg_notify('forge_merge_queue', <キューの id>)`
+  を送る（暇な手番の待ちを終わらせる合図）。送るのは次のとき:
+  - MR を列に入れた（`merges::enqueue_mr_decided`）、外した（`dequeue_mr_decided`）、止めていたキューを再開した
+    （`set_paused_decided`。止めるほうと、何も変えなかった呼び出しは送らない）。
+  - 列車のパイプラインが終わりの状態になった（`train_pipeline_ended_on`）: ランナーの最後のジョブの報告、回収されたジョブ、
+    取り消し、生まれたときから終わっているパイプライン（定義が正しくない、ジョブが 0 件）。列車のものでないパイプライン、
+    まだ終わっていないパイプライン、もう試していないバッチは、何も書かず何も送らない。
+  - パイプラインを作るジョブが、パイプラインを残さずに終わった（列車に CI の定義が無かった、ジョブが dead になった）:
+    `jobs::queue` の `complete` / `fail` の 1 文の中。
+- **プロセス内の起床**: `Review` の enqueue / enqueue_auto / dequeue / 再開は、コミットの後に `MergeQueue::wake(queue_id)` と同じ
+  `wake_queue`（`WakeHub::nudge`）を呼ぶ。LISTEN の接続の往復を待たない。
+- **待つ側（キュー）**: `forge_review::QueueTurn`（`merges/queue/worker/turn.rs`）。`forge serve` は `merge_queue.workers` 個
+  （既定 2）の手番タスクを、それぞれ監督つきで動かす。手番は「期限のキューを 1 つ取る → 1 手 → 返す」を期限のキューが無くなるまで
+  続け、無くなったら次のうち早いものまで待つ: 通知、次の期限（待っているキューの期限か、返されなかった貸し出しの終わり。
+  `merge_queue::next_due`）、安全網（`merge_queue.safety_poll_ms`、既定 30 s）。列車のパイプラインを待っているキューは
+  `merge_queue.waiting_safety_poll_ms`（既定 60 s）先に次の期限を置く。
+- **待つ側（自動マージ）**: `forge_review::AutoMergeWatch`（`merges/auto/watch.rs`）。`forge_events_sequenced` で起き、カーソルより
+  後のイベントが名指しする MR だけを判定する（`auto_merge::named_by_events`: MR 自身のイベントと、その head かマージ結果の
+  `check.completed`）。`forge_auto_merge`（下の違い 1）で起き、ペイロードの MR を判定する。同時に判定するのは 4 件まで。全件の
+  見回りは `auto_merge.safety_poll_ms`（既定 30 s）ごとと、聞き手がつながり直したとき。
+- **取りこぼし**（キューだけ）: 安全網の周期を丸ごと待った後（待ちの前後とも聞き手が生きている）に取ったキューが、その周期以上前から
+  取れる状態で（DB の時計。`oldest_ready_ms`）、その手が何かをした（結果が `idle` / `paused` / `waiting` / `retry` 以外）ときだけ
+  `FG-DB-0024` を出す（`channel=forge_merge_queue`、`queue_id`、`outcome`、`worker_id`、`safety_poll_ms`）。1 分に 1 回まで。
+- **聞き手が無い・切れているとき**: キューの手番は最長 2 s ごと、自動マージは 5 s ごとの `tick`（どちらも計画 18 より前の間隔と動き）に
+  戻り、つながり直したら全件を見る。この間は `FG-DB-0024` を出さない。
+- **設定**（どれも新しいキー。以前の周期は定数だったので、移す古いキーは無い）: `merge_queue.safety_poll_ms`（30000、100〜300000）、
+  `merge_queue.waiting_safety_poll_ms`（60000、100〜600000）、`merge_queue.workers`（2、1〜8）、`auto_merge.safety_poll_ms`
+  （30000、100〜300000）。範囲の外は起動時に `FG-SYS-0002`。戻し方: `2000` / `10000` / `1` / `5000` で計画 18 より前の間隔になる
+  （通知は送られ続けるので、遅くはならない）。
+
+**1 つのキューを同時に進める手番は 1 つ**（守り方と証明）
+
+S3 より前からの貸し出しをそのまま使う。`merge_queue::claim` が `FOR UPDATE SKIP LOCKED` で期限のキューを 1 行選び、`lease_owner` /
+`lease_until`（300 s。1 手の上限 240 s より長い）を書く。貸し出しの間、そのキューは誰の `claim` にも出ない。返せるのは持ち主だけ
+（`release` は `lease_owner` を条件にする）。通知は「誰が取るか」に関わらない: どのプロセスのどの手番が起きても、取れるのは 1 つ。
+手番ごとに持ち主の名前が違う（`<worker>-<n>`）ので、同じプロセスの 2 つの手番も互いの貸し出しを返せない。
+試験: `one_queue_is_never_stepped_by_two_turns_at_once`（2 つの手番が同時に `tick` して取れるのは片方だけ。着地の最中に起床を送り、
+別の持ち主で `claim` しても取れない。同時に動いた着地は 1 まで）、`two_queues_progress_concurrently`（1 つのキューの着地を
+止めている間に、別のキューのバッチができる）。
+
+**止め方**
+
+`forge serve` の停止は、自動マージ → キューの手番 → …→ hub → `db.close()` の順（S2 までと同じ並び）。待っている手番と自動マージは
+停止の合図ですぐ終わる。手の途中（着地を含む）は切らず、終わりまで走らせる（`MERGE_SHUTDOWN_WAIT` まで待つ。過ぎたら
+`FG-SYS-0005 operation=merge_queue_task_pending` を出して先へ進み、貸し出しは期限で切れて次の起動が引き継ぐ）。タスクが頼まれずに
+終わったら監督がログを出して起動し直す（新しい手番 = 新しい待ち手。自動マージは見回りから始める）。
+
+**(a) の文との違い**（どれも意図したもの）
+
+1. **5 本目のチャネル `forge_auto_merge`**。マージできるかの確認が「マージできる」と答えたとき、その MR の id を同じトランザクションで
+   送る（`review/mergeability/run.rs`）。(a) 4 はイベントだけで起きる形だったが、この答えは衝突が消えたとき以外はイベントを出さない。
+   イベントを足すと outbox・監査・購読者の全部に波及するので、合図だけを足した。
+2. **チェック実行の書き手には通知を足していない。** `check.completed` は outbox のイベントで、順序づけが `forge_events_sequenced` を
+   送る（試験 `auto_merge_decides_a_merge_request_right_after_its_check_completes` が、完了したチェックで起床が届くことを確かめる）。
+   (a) 4 のかっこ書きの「出さなければ」の枝は要らなかった。
+3. **プロセス内の起床は `tokio::sync::Notify` ではなく `WakeHub::nudge`。** 待つ側が 1 つの受け手で、通知とプロセス内の起床の両方を
+   待てる。hub の無いプロセス（単発のコマンド）では何もしない。
+4. **dequeue はいつも送る**（「取れるようになったときだけ」より広い）。外れた MR がバッチの中にいたか、後ろに誰かいるかを書き込みの
+   中で判定するより、空の見回り 1 回のほうが安い。
+5. **`release` は、手の間に送り手がキューを期限にしていたら、それを上書きしない。** `claim` が読んだ `next_run_at` を持って帰り
+   （`due_us`）、返すときに違っていたら早いほうを残す。以前は次の見回りが短い間隔 1 回先だったので上書きしても害が無かったが、
+   長い安全網では、手の最中に届いた enqueue やパイプラインの終わりを上書きすると丸 1 周期遅れる。`claim` の文は、取れるように
+   なってからの時間（`ready_for`）も返すように組み替えた。
+6. **新しい結果 `retry`（最長 10 s 後にもう一度）。** 今は進めない理由の終わりを誰も知らせないもの — 失敗した手、他の worker が
+   マージのロックを持っている着地の回復 — は、待ちの周期（60 s）ではなく最長 10 s 後に見る。以前は `waiting` と同じ扱いだった。
+7. **`QueueLimits` に `idle` を足し、`poll` の既定を 10 s から 60 s にした。** 「止めている・することが無い」は `idle`（30 s）、
+   「パイプラインを待っている」は `poll`（60 s）。以前はどちらも `poll`。
+8. **暇な待ちは、安全網だけでなく「次の期限」でも終わる。** 待っているキューの期限や、死んだ手番の貸し出しの終わりを、30 s の格子に
+   合わせずその時刻に見る。期限なのに取れないとき（書き手のトランザクションが行を持っている、他の手番が取った）は、50 ms から
+   1 s まで倍々に延ばして待つ。
+9. **待つ側は forge-cli ではなく forge-review の型**（`QueueTurn` / `AutoMergeWatch`）。計画は `serve_merge_queue.rs` /
+   `serve_auto_merge.rs` に待ちを書く形だったが、待ちの規則を本物の DB と hub で試験するには forge-review の試験
+   （`tests/queue_wake/`）から届く必要がある。forge-cli に残るのは監督・停止・失敗の間引きとバックオフ。`spawn` は `Arc` を
+   取らなくなった。
+10. **自動マージの見回りは `FG-DB-0024` を出さない。** 「準備ができた時刻」が 1 つに決まらない（判定は十数個の事実から）。設定の
+    変更は、設計として見回りが拾う。
+
+**既知の限界**
+
+- **送り手の無い変化**: 列にいる MR に新しい版が push された・閉じられた、target が他から動いた。試し中のキューは待ちの期限
+  （最長 60 s。以前は 10 s）で気づく。害は遅れだけ（着地の前に必ず読み直すので、古い列車は着地しない）。
+- **止めているキューと、緊急停止で保留のエントリー**は 30 s ごとに見る。緊急停止の解除には送り手が無い（キューは最長 30 s、
+  自動マージは次の見回り）。プロジェクトの `merge.auto` やインスタンスの許可の変更、`forge/doc-lint` の待ちの時間切れも見回りだけ。
+- **安全網の周期より若い取りこぼしは、拾うが報告しない**（S2 の規則）。パイプラインの終わりの通知を取りこぼしたキューは、待ちの
+  期限（60 s）で拾う。これは安全網の待ちではないので `FG-DB-0024` は出ない。
+- **同じリポジトリの 2 つのキュー**（target が違う）は、着地でリポジトリのマージのロックに並ぶ。並行するのはバッチを作る・試す
+  ところまで。
+- **起床 1 回で、全プロセスの全手番が `claim` を 1 回ずつ試す**（プロセス数 × `merge_queue.workers`）。取れなかった側は次の期限を
+  1 回読んで待ちに戻る。
+- **自動マージのイベントの起床には、順序づけの周期（200 ms）が入る。** 1 回の起床で読むイベントは 200 件 × 10 回まで（残りは次の
+  起床）。1 回の見回りは 20 回 × `batch` 件まで（残りは次の見回りの先頭）。
+- **手番の数は書き込み用のプールと釣り合わせていない。** 手番 1 つは 1 手の間に接続を 1〜2 本使う。`merge_queue.workers` の上限は 8。
+
+**S5 / S6 が引き継ぐもの**
+
+- キューを進められるようにする書き込みを足すときは、同じトランザクションで `next_run_at = now()` と
+  `merge_queue::notify_queue_on(conn, queue_id)` を書く。パイプラインを終わりの状態にする文を足すときは、その後で
+  `train_pipeline_ended_on(conn, pipeline_id)` を呼ぶ（列車のものでなければ何もしない）。
+- 手の結果の文字列を足すときは 2 か所を決める: `tick_timed` の次の期限（`waiting` = 60 s、`idle` / `paused` = 30 s、`retry` = 10 s、
+  それ以外 = すぐ）と、`found_by_the_safety_net` の「何もしなかった」の一覧。
+- 待ちは `QueueTurn::idle` と `AutoMergeWatch::wait` にだけ書く。forge-cli のループに待ちの規則を足さない。
+- 決まりは S2 のまま: 通知は id だけ、起きた側は必ず表を読む、待ちは必ず有限、聞き手が無ければ自分の短い確認に戻る。
+
+## 追記（2026-11-19、計画 18 S3 の最後のコミット）— `forge_refs`: 送り手と聞き手をつないだ。作ったもの、文との違い、既知の限界
+
+S2 の追記の既知の限界「`forge_refs` の送り手と聞き手が無い」を閉じる。どの段の持ち物でもなかったので、S3 の最後に別の
+コミットで入れた。
+
+**調べて分かったこと（S8・S2 の追記の訂正）**
+
+- S8 の追記の「他のプロセス（今は worker のマージ）」と、S2 の追記の「`merges/queue/worker.rs` は worker のプロセスで動く」は
+  事実と違う。マージ・マージキュー・revert・autofix・version refs は **`forge serve` の中**で、serve の `Browser` の複製を
+  持って動く（`forge-cli/src/serve.rs`）。`forge worker` の `Browser` は読むだけで、ref を書くハンドラーは無い。
+- だから、今 serve の外で ref が変わるのは次の 2 つだけ: **もう 1 つの `forge serve`**（入れ替えの間の 2 プロセス、将来の
+  複数台）と、**1 回きりの管理コマンド**（復元、履歴の取り込みなど）。
+- S2 が書き手に数えた `forge-checks/src/risk.rs` と `forge-pipelines/src/spec_publish.rs` は書き手ではなかった。読む前に
+  自分のキャッシュを捨てているだけ。この 2 か所は `Browser::forget_refs`（誰にも知らせない）に変えた。
+
+**作ったもの**
+
+1. **`forge_git::browse::Browser`** を 2 つの入口に分けた。
+   - `invalidate(repo)`: **このプロセスが ref を書いた**。キャッシュを捨て、`on_refs_changed` で登録された関数に知らせる。
+     書き手 15 か所は 1 行も変えていない（今までどおり `invalidate` を呼ぶ）。新しい書き手も `invalidate` を呼べば送られる。
+   - `forget_refs(repo)`: キャッシュを捨てるだけ。**他のプロセスの通知を聞いた側**と、読む前に自分のキャッシュを捨てたい側が呼ぶ。
+     知らせ直さないので、通知がプロセスの間を回り続けることはない。
+   - `on_refs_changed(f) -> bool`: 知らせ先を 1 回だけ登録する（複製は同じ登録を共有する。2 回目は `false`）。forge-git は
+     DB を知らないままにする（依存の向き）。`f` は書き手の経路で動くので、待ってはいけない。
+2. **`forge_db::wake::refs_changed(db, repos)`**: 何個のリポジトリでも 1 文（`pg_notify('forge_refs', id)`）。書き込み用の
+   プールで、`Db::within` の上限つき。
+3. **`forge-cli/src/serve_refs.rs`**（`forge serve` だけ）:
+   - **知らせるタスク**: 書き手は id を集合に入れるだけで、DB を待たない。タスクがまとめて 1 文で送る。失敗は、その失敗の
+     コードと `task=refs_announce` で 1 回（続く間は 1 分に 1 回、回数つき）出し、**送り直さない**。
+   - **聞くタスク**: wake hub の `forge_refs` を待ち、聞いた id ごとに `forget_refs` を呼ぶ。id でないペイロードは捨てる
+     （debug の 1 行）。再接続・安全網では何もしない（下の「安全網」）。
+   - 2 つとも `serve_merges::supervise` の下で動く。頼まれずに終わると `FG-SYS-0005 operation=merge_task_exited`
+     （`task=refs_announce` / `task=refs_listen`）を出して、1〜30 s の間隔でやり直す。
+   - **止め方**: push・マージなど ref の書き手が全部止まった後、hub と DB のプールを閉じる前に止める。知らせるタスクは残りを
+     1 回送ってから終わる。待つのは最長 5 s で、過ぎたら `FG-SYS-0005 operation=refs_task_pending` を出して先へ進む。
+
+**安全網**: 通知で捨てるキャッシュ（ref の一覧、ブランチのスナップショット、到達の答え）は、どれも `refs_ttl`（5 s。設定の
+キーではない定数）で自分から古くなる。だから、通知が届かなくても間違いは最長 5 s で直る。正しさは通知に頼らない。新しい
+エラーコードも、`FG-DB-0024` の報告も足していない（待っている仕事が無いので、「取りこぼした」と言える時点が無い）。
+
+**文との違い**（どれも意図したもの）
+
+1. **送るのは ref を書いたトランザクションの中ではなく、直後。** git の ref は DB の外にあるので、同じトランザクションに
+   できない。書いた後で送れなかった場合は、上の安全網（5 s）が拾う。
+2. **書き手ごとに送る文を書かず、`Browser::invalidate` の 1 か所から送る。** 書き手の半分は同期の文脈（`Drop`、クロージャ）で
+   `invalidate` を呼ぶので、その場で DB を待てない。1 か所にしたので、書き手が送り忘れることもない。
+3. **聞いた側が呼ぶのは `Browser::invalidate` ではなく `forget_refs`。** `invalidate` は知らせ直すので、聞いた側が呼ぶと通知が
+   回り続ける。
+4. **送り手は `forge serve` だけ。** worker には ref の書き手が無い（上の「調べて分かったこと」）。
+
+**既知の限界**
+
+- **書いたプロセスも自分の通知を聞き、その ref をもう 1 回読む**（`for-each-ref` 1 回。答えは変わらない）。
+- **1 回きりの管理コマンドが書いた ref は通知されない**（`Browser` を持たない）。serve からは今までどおり最長 5 s 古く見える。
+- **worker の `Browser` は聞かない。** worker のハンドラーは、必要な所で読む前に `forget_refs` を呼んでいる（今までと同じ）。
+  それ以外の読み取りは最長 5 s 古い。
+- **ref を書くたびに NOTIFY つきの短いトランザクションが 1 つ増える**（NOTIFY は COMMIT を直列にする。
+  `ops/runbooks/db-unavailable.md` の「notify queue」）。push 1 回で 1〜2 回。
+- 256 を超える別々のリポジトリの通知が、聞くタスクの 1 回の起床の間に溜まると、hub は「全部見ろ」（`Reconnected`）を返す。
+  聞くタスクは何もしないので、その分は 5 s の安全網で拾う。
+
+**引き継ぐもの**
+
+- **ref を書く処理を足すときは、書いた後で `Browser::invalidate(repo)` を呼ぶ**（serve の `Browser` の複製で）。それだけで
+  `forge_refs` も送られる。読む前に自分のキャッシュを捨てたいだけなら `forget_refs` を呼ぶ。
+- `forge serve` の外（worker、管理コマンド）で `refs/heads/` を書く処理を足すときは、書いた後で
+  `forge_db::wake::refs_changed` を送る（S8 の追記の決まりの、今の形）。
+
+## 追記（2026-11-19、計画 18 S3 のレビューの後）— 直したもの、そのままにしたもの
+
+S3（`6bd203af..5d9f85f7`）の 2 つの読むだけのレビュー（並行性: WARN、DB: WARN。CRITICAL / HIGH なし）の指摘を、コードで確かめて
+から直した。直した順に、先に失敗する試験を書いた（1・2・4・6・9。修正を外した木で 5 件とも失敗、修正を戻して成功）。新しい
+エラーコードは無い。マイグレーションを 1 つ足した（下の 7。測った結果による）。
+
+**直したもの**
+
+1. **「すぐ次」で返したキューを誰も起こさなかった。** `merge_queue::release` は、キューが今すぐ取れる状態で返ったとき（手が
+   「すぐ次」を求めた、または手の間に送り手が期限にした）、同じ文で `pg_notify('forge_merge_queue', <id>)` を送り、
+   `Released::Released { due_now }` を返す。返した手番が別のキューへ行っても、まるごとの待ちにいる手番（貸し出しを見て待った）が
+   取る。プロセス内の起床ではなく NOTIFY にしたのは、`forge serve` が 2 つ動く形（入れ替えの間、将来の複数台。上の `forge_refs`
+   の追記と `docs/deploy/test-server-guide.md` の「`forge serve` と `forge worker` が複数プロセスなら」）を文書が認めているから。
+   同じプロセスの手番も同じ通知を聞く。費用は 1 手あたり NOTIFY 1 回（手は git の仕事で秒の単位）。試験
+   `a_queue_released_due_now_wakes_a_turn_in_its_whole_wait`。
+2. **`forge_auto_merge` を送りすぎていた。** 「マージできる」の答えごと（着地のたびに target の開いた MR 全部が確かめ直される）に
+   送っていた。今は `auto_merge::notify_if_acting_on` が 1 文で、自動マージが扱う MR のときだけ送る。「扱う」は見回りと同じ
+   `ACTS`: 開いている、head がある、プロジェクトが消えていない、`merge.auto` が `conditional` か `full`（**行が無ければ
+   `full`**。MR ごとの「予約」は無いので、既定のプロジェクトでは条件を満たす開いた MR が全部対象で、取りこぼしは無い）。
+   最後の判定の理由でさらに絞ることはしていない（forge-db が forge-review の理由の言葉を知ることになる）。`named` は 1 回に
+   `NAMED_MAX`（200）件までで、`decide_named` が切って渡す。S4 の持ち越し（下の「main を取り込んで」）は答えを書き換えないので
+   送らない。試験 `can_be_merged_is_announced_only_where_auto_merge_acts`（既定のプロジェクトは 1 回、`off` は 0 回）。
+3. **イベントの読み残しを次の起床まで放っていた。** `decide_events` は上限（200 件 × 10 回）で止まったとき「まだある」を返し、
+   watch は次の `wait` で待たずに `Events` を返す。1 回の `act` の量は今までどおり有限で、ループの先頭の停止の確認も効く。
+4. **最初の見回りが失敗した後、イベントを番号 0 から読んでいた。** カーソルは見回りが成功するまで無い（`Option`）。その間に
+   `Events` が来たら、今の最大の番号をカーソルにするだけで何も判定しない（それより古いものは、すぐ後の見回りが見る）。試験
+   `auto_merge_reads_no_event_history_before_its_first_sweep`。
+5. **つながり直し 1 回で見回りが 2〜3 回走っていた。** 2 つの受け手はそれぞれ 1 回ずつ `Reconnected` を返す。見回りを返すときは
+   必ず（安全網、つながり直し、ポールから戻ったとき）両方の受け手に溜まっているものを `wait(0)` で引き取る。見回りはその後で
+   読むので、引き取った通知の中身も見る。決定的な試験は書いていない（接続を切る時刻と受け手が気づく時刻の順が決まらない）。
+6. **列車のパイプラインを作るジョブが貸し出しの期限切れで dead になっても、キューは 60 s 待っていた。** `jobs::reap` の 1 文に、
+   `complete` / `fail` と同じ `poked`（パイプラインを残さずに終わった列車のキューを今すぐ期限にして送る）を足した。試験
+   `a_train_create_job_that_dies_by_its_lease_wakes_the_queue`。
+7. **`named_by_events` の 2 つの結合に索引が無かった。** 測った（使い捨ての DB。開いた MR 5 000、閉じた MR 15 000、マージ結果の
+   ref 60 000、イベント 3 000、1 つのプロジェクト。200 件の 1 回の読み）: 今までの索引では開いた MR のマージ結合が 67 万行を
+   捨て、ref は順に全部読む。実行 55.6 ms（20 回の平均 40.8 ms）。1 回の起床で最大 10 回なので、0.4 s 以上。索引 2 つ
+   （`merge_requests_open_head (project_id, head_sha) WHERE state = 'open'`、`merge_result_refs_result (project_id,
+   result_sha)`）で、どちらもイベントごとの索引の引き当てになり、実行 1.1 ms（平均 4.3 ms、往復込み）。文の書き換えでは
+   既存の索引に sha の列が無いので届かない。マイグレーション `20261229100300_auto_merge_named_by_events_indexes.sql`
+   （S4 の `20261229100200` より後）。作る間は両方の表に SHARE ロック（書き込みが待つ。読みは続く）。行数は MR の数の桁なので
+   短い。
+8. **`forge_refs` の数字のペイロードごとに世代の表が増えていた。** 世代は「リポジトリごとの表 + 共通の床」にした。表が 4 096 件に
+   なったら空にして、床を表の最大より先へ進める（その前に始まった読みは保存しない。キャッシュの答えは 1 回ずつ読み直し）。
+   メモリは有界で、正しさは変わらない。試験は `the_ref_list_is_cached_until_a_push_invalidates_it` に追加（1 万の別の id の後も
+   有界、そのリポジトリの変更は今までどおり効く）。
+9. **`FG-DB-0024` の誤報。** 他の手番の長い手の間に送り手が期限を押すと、返した後の `next_run_at` は押した時刻のままで、`ready_for`
+   （`next_run_at` と `lease_until` の遅いほうから）は貸し出しの間も「取れる状態」と数えていた（返すときに `lease_until` を消す
+   ため）。`release` は、手の前より古い押しを返した時刻に上げる（`GREATEST(LEAST(next_run_at, now() + next_in), now())`）。取れる
+   ようになったのは返したときからなので、`oldest_ready_ms` もそこから数える。並びの順は、押されたキューの中で同じ（すぐ取れる）。
+   試験 `a_queue_stamped_during_a_long_step_is_ready_from_its_release`（直す前は 10.008 s、直した後は 2 s 未満）。
+
+**そのままにしたもの**（意図して）
+
+- **送り手の無い変化は安全網の周期で気づく。** 列にいる MR に新しい版が push された・閉じられた（キューは最長 60 s、以前は
+  10 s）、自動マージの緊急停止の解除とプロジェクトの `merge.auto` の変更（キューは最長 30 s、自動マージは次の見回り 30 s）。
+  書き手を調べた: push と閉じるは `merge_request.pushed` / `merge_request.closed` のイベントを出すので**自動マージは**それで起きる。
+  キューはイベントを聞いていない（`forge_events_sequenced` を聞いて MR からキューを引く仕組みは、手番の起床の数を増やすので
+  安くない）。`merge.auto` の変更・プロジェクトとインスタンスの緊急停止（`review/auto_merge.rs` の `set_mode_decided`、
+  `set_project_stop_decided`、`set_instance_stop_decided`、`set_full_auto_decided`）は監査だけでイベントを出さない
+  （`forge-core/src/audit_details.rs` の `Self::AutoMerge(_) => None`）。害は遅れだけ。
+- **自動マージの見回りは `FG-DB-0024` を出さない**（上の S3 の追記の違い 10）。通知を取りこぼしても遅れは最長
+  `auto_merge.safety_poll_ms`。
+- **N 個の手番が 1 つの締め切りを分け合って止まる。** 締め切りを過ぎても着地中の手番は切らずに手放し、
+  `FG-SYS-0005 operation=merge_queue_task_pending` を出す。貸し出しの期限で次の起動が引き継ぐ。
+- **書いたプロセスも自分の `forge_refs` を聞く**（上の `forge_refs` の追記の既知の限界）。
+
+**MR を名指しするイベントの書き手**（自動マージが `merge_request` の集約のイベントで起きることの確認）
+
+| 書き込み | 書き手 | イベント（集約 `merge_request`、id = MR） |
+|---|---|---|
+| 承認 | `crates/forge-db/src/review/approvals/commands.rs:344` `approve_mr_decided`（持ち越し `:215` も） | `merge_request.approved`（`entry`、`:57`、集約 `:82`） |
+| 承認の取り消し・版の push で外れた承認 | 同 `:475` `unapprove_mr_decided`、`:122` `ended_records` | `merge_request.unapproved`（同じ `entry`） |
+| スレッドの解決・解決の取り消し | `crates/forge-db/src/review/discussions/commands.rs:180` `resolve_discussion_mr_decided` | `merge_request.commented`（`thread_resolved` / `thread_unresolved`、`discussions/steps.rs:238`） |
+| 下書きの解除 | `crates/forge-db/src/review/commands/edit.rs:57`（`MergeRequestChange::DraftChanged`） | `merge_request.draft_changed`（`commands/mod.rs:257`） |
+| 自動マージの「予約」 | 無い。プロジェクトの `merge.auto`（`review/auto_merge.rs:220` `set_mode_decided`）がそれにあたる | イベントなし（上の「そのままにしたもの」。見回りが拾う） |
+
+足りない通知は、MR の側には無かった。`merge.auto` の変更はプロジェクトの全部の MR に効くので、MR の id で名指しする通知は
+足していない（見回りの仕事）。
+
+**main を取り込んで**（S4、変更パスを見たマージ可能性）
+
+S4 の持ち越し（`paths::carry_forward_on`）は、target が動いても重ならない MR の答えを確かめ直さずに残す。答えの状態は
+「マージできる」のまま変わらないので、自動マージの判定も変わらない。だから `forge_auto_merge` は送らない（送るのは
+`record_check` が「マージできる」を書いたときだけ）。

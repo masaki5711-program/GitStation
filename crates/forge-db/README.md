@@ -792,8 +792,17 @@ link check and the `FG-DB-0023` sample in one) — outside the write and read
 pools, counted by `bootstrap::ConnectionBudget` (`+ 4`: a LISTEN connection
 per process, migration, maintenance). Channels: `Jobs` (`forge_jobs`,
 payload = job kind, `ci.job` for a CI job), `MergeQueue`
-(`forge_merge_queue`, no sender yet — plan 18 S3), `Refs` (`forge_refs`, no
-sender yet), `Events` (`forge_events_sequenced`). `Db::with_wake(hub,
+(`forge_merge_queue`, payload = queue id; plan 18 S3, below), `Refs`
+(`forge_refs`, payload = repository id: `wake::refs_changed`, sent by
+`forge serve` right after each ref write of its own — one bounded
+statement, not transactional with the write and never retried, the
+listeners' caches age out after `refs_ttl`; plan 18 S3), `Events`
+(`forge_events_sequenced`),
+`AutoMerge` (`forge_auto_merge`, payload = merge request id: a
+mergeability check answered "can be merged" for a merge request auto-merge
+acts on — `review/mergeability/run.rs` through
+`auto_merge::notify_if_acting_on`, one statement with the `ACTS` filter;
+plan 18 S3). `Db::with_wake(hub,
 safety)` attaches it; `JobRunner::wait_for_work` (an idle runner: a
 notification of a kind it can take now, the next `run_after` of its kinds,
 or `jobs.safety_poll_ms`; one second while the listener is down) and

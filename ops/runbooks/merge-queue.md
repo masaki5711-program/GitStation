@@ -1,4 +1,4 @@
-# Runbook: merge-queue（FG-CI-0024、FG-CI-0032。関連: FG-CI-0023、FG-CI-0025、FG-CI-0005、FG-CI-0002、FG-DOC-0002、FG-REPO-0024、FG-REVIEW-0009）
+# Runbook: merge-queue（FG-CI-0024、FG-CI-0032。関連: FG-DB-0024 `channel=forge_merge_queue`、FG-CI-0023、FG-CI-0025、FG-CI-0005、FG-CI-0002、FG-DOC-0002、FG-REPO-0024、FG-REVIEW-0009）
 
 M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_queue`、表 `forge.merge_queues` / `forge.merge_queue_batches` /
 `forge.merge_queue_entries`、隠した ref `refs/merge-queue/<queue_id>/train`、パイプラインの `source = merge_queue`）が
@@ -24,7 +24,10 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
   ではなく **`reason=doc_lint_unavailable`**（試験が遅れたのではなく、文書の検査を終えられなかった）。その `entry_removed`（warn）に
   lint の `lint_reason` / `cause` / `bound` / `budget_ms` が付く。
 - `forge serve` のログに `FG-SYS-0005` ServeFailed（`operation=merge_queue_tick`、`reason=merge_queue_tick_timeout` など）が
-  1 分に 1 回まで続く。
+  1 分に 1 回まで続く。`worker_id` が手番（`<worker>-<番号>`）、`step=idle_wait` なら待ちに入るときの読み取りの失敗。
+- `forge serve` のログに `FG-DB-0024` WakeupMissed（warn）が `channel=forge_merge_queue` で繰り返し出る: 通知なしで、安全網の
+  見回り（`merge_queue.safety_poll_ms`、既定 30 秒）が進められるキューを見つけた（下の「起床と安全網」）。
+- 「列に入れたのに 30 秒〜1 分たってから動き出す」「CI が緑になってから着地まで 1 分かかる」という問い合わせ（同じ節）。
 
 ## Impact
 
@@ -130,8 +133,50 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
      列は次の手番まで新しい列車を作らず、MR は 3 回で外れるので、積み上がる数は限られる）。`forge serve` の CPU が高いままなら、
      `train_lint_unavailable reason=train_budget` の回数と突き合わせ、上限を上げるか（60000 まで）、文書を減らすか、関門を切る。
 
+## 起床と安全網（計画 18 S3。FG-DB-0024 `channel=forge_merge_queue`）
+
+キューの手番（`forge serve` のタスク `merge_queue`。`merge_queue.workers` 個、既定 2）は、短い間隔で表を見に行かない。キューを
+進められるようにした書き込みが、同じトランザクションで `NOTIFY forge_merge_queue, <キューの id>` を送り、手番はそれで起きる。
+送るのは: MR を列に入れた・外した、止めていたキューの再開、列車のパイプラインの終わり（成功・失敗・取り消し・定義が正しくない）、
+パイプラインを作るジョブがパイプラインを残さずに終わったとき（完了・失敗・貸し出しの期限切れで dead）、手番が 1 手の後にキューを
+「すぐ次」で返したとき（返した手番が別のキューへ行っても、待っている手番が取る）。通知は合図にすぎない: 起きた手番は必ず表を読み直し、通知が
+来なくても下の周期で自分で見る。だから取りこぼしても MR は失われず、遅れるだけ。
+
+| 待ち | 既定 | 設定 | 計画 18 より前 |
+|---|---|---|---|
+| することが無い手番、止めているキュー、全部が保留のキュー | 30 秒 | `merge_queue.safety_poll_ms`（100〜300000） | 2 秒 |
+| 列車のパイプラインを待っているキューを、通知なしで次に見るまで | 60 秒 | `merge_queue.waiting_safety_poll_ms`（100〜600000） | 10 秒 |
+| 今は進めない手（失敗した手、他の worker が着地の途中）の次 | 最長 10 秒 | （固定） | 10 秒 |
+| LISTEN の接続が無い・切れている間 | 最長 2 秒 | （固定） | — |
+
+- 1 つのキューを同時に進める手番は 1 つだけ（キューの貸し出し `lease_owner` / `lease_until`）。別のキューは別の手番で同時に進む。
+  `lease_owner` は `<worker>-<手番の番号>`。同じリポジトリの 2 つのキューは、着地だけリポジトリのマージのロックに並ぶ。
+- 起動のログ `forge.serve.merge_queue_started` に `workers`、`safety_poll_ms`、`waiting_safety_poll_ms`。止まるときは手番ごとに
+  `forge.serve.merge_queue_stopped`（`worker`）。
+- **通知が無い変化**（待ちの期限で気づく。最長 60 秒）: 列にいる MR に新しい版が push された・閉じられた、target が他から動いた。
+  止めているキューと、自動マージの緊急停止で保留のエントリーは 30 秒ごとに見る。
+
+`FG-DB-0024`（`channel=forge_merge_queue`）を読む:
+
+1. `context`: `queue_id`、`outcome`（見つけた手が何をしたか。`built` = バッチを作った、`landed` = 着地した、など）、`worker_id`（手番）、
+   `oldest_ready_ms`（そのキューが取れる状態になってからの時間。DB の時計。他の手番が貸し出し中に期限にされたキューは、返された
+   時刻から数える）、`safety_poll_ms`、`suppressed`（前の 1 件の後に
+   出さなかった件数）。1 分に 1 回まで。安全網の周期より短い遅れは出ない。
+2. 同じ時間帯に LISTEN の接続の失敗があるか: `error_code=FG-DB-0001` / `FG-DB-0002` で `operation=wake_listen`、`FG-SYS-0001` で
+   `task=wake_hub`、`FG-DB-0023`（NOTIFY の待ち行列）。読み方は Runbook `job-queue-backlog` の「起床の通知の取りこぼし」と
+   `db-unavailable` の「notify queue」。接続が切れている間、手番は 2 秒ごとの確認に戻る（`FG-DB-0024` は出ない）。
+3. 通知を送らない経路でキューが進められるようになっていないか: 表を手で変えた、計画 18 S3 より前のビルドの `forge serve` /
+   `forge worker` が並んで動いている（入れ替えの途中）。`outcome` と時刻から、その手の `forge.merge_queue.*` の行をたどる。
+4. 表: `SELECT id, paused, lease_owner, lease_until, next_run_at, now() FROM forge.merge_queues ORDER BY next_run_at;`
+   `next_run_at` が過去で `lease_until` が空のキューが残り続けるなら、手番が動いていない（上の Diagnose 4）。
+
 ## Mitigate（変更は人の承認のあと）
 
+- **通知に頼らずに動かす**（`FG-DB-0024` が続く、LISTEN の接続が直らない）: サーバーの設定を `merge_queue.safety_poll_ms = 2000`、
+  `merge_queue.waiting_safety_poll_ms = 10000`（計画 18 より前の間隔。`FORGE_MERGE_QUEUE_SAFETY_POLL_MS` /
+  `FORGE_MERGE_QUEUE_WAITING_SAFETY_POLL_MS`）にして `forge serve` を再起動する。手番を 1 つに戻すなら `merge_queue.workers = 1`。
+  **人の承認が要る**（ロールバック: 設定を元の値に戻して再起動する。列の MR は失われない）。繰り返す `FG-DB-0024` は開発者
+  （Claude のセッション）に渡す（`queue_id`、`outcome`、時刻、手順 2・3 の結果）。
 - **緊急停止**: `gstn queue pause --project <id> --target <branch>`（Developer 以上）。新しいバッチを作らず、緑になっても着地しない。
   再開は `gstn queue resume`（Maintainer 以上）。止めている間も MR は列に入れられる。
 - パイプラインが進まない: 元の原因（Runner、パイプラインの作成）をその Runbook の手順で直す。直ったら列は次の手番で進む。
@@ -167,5 +212,6 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
 ## 関連
 
 - ADR-0030（マージキュー）、ADR-0037（列車の doc-lint）、ADR-0024（マージの実行、照合）、Runbook `merge-execution`、`ci-pipelines`、`ci-runner`、
-  `checks-reporting`（`forge/doc-lint` のチェック）、`config-invalid`（`merge_queue.train_lint_budget_ms`。リポジトリの `.forge/repo.yml` は
-  ここ）、`auto-merge`（`merge_queue_doc_lint_*` / `merge_queue_repo_config_invalid` の止まり方）。負荷試験: `ops/loadtest/README.md` の `a-xref`。
+  `checks-reporting`（`forge/doc-lint` のチェック）、`config-invalid`（`merge_queue.train_lint_budget_ms`、
+  `merge_queue.safety_poll_ms` / `waiting_safety_poll_ms` / `workers`。リポジトリの `.forge/repo.yml` は
+  ここ）、`job-queue-backlog`（`FG-DB-0024` の読み方）、`auto-merge`（`merge_queue_doc_lint_*` / `merge_queue_repo_config_invalid` の止まり方）。負荷試験: `ops/loadtest/README.md` の `a-xref`。

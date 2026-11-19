@@ -366,6 +366,33 @@ async fn a_burst_of_notifications_is_one_wake() {
     t.drop_now().await;
 }
 
+/// Plan 18 S3 (`forge_refs`): one statement announces every repository,
+/// each id once, to the waiters of every process.
+#[tokio::test]
+async fn a_ref_change_is_announced_with_the_repository_ids() {
+    let t = FreshDb::migrated().await;
+    let hub = WakeHub::spawn(&t.db, &[Channel::Refs]).expect("hub");
+    let mut rx = hub.subscribe_unseen(Channel::Refs);
+    assert_eq!(rx.wait(SOON).await, Woken::Reconnected);
+    refs_changed(&t.db, &[]).await.expect("nothing to announce");
+    assert_eq!(rx.wait(QUIET).await, Woken::SafetyNet);
+    let repos = [RepoId::new(7), RepoId::new(9), RepoId::new(7)];
+    refs_changed(&t.db, &repos).await.expect("announce");
+    let mut heard = Vec::new();
+    while heard.len() < 2 {
+        let woken = rx.wait(SOON).await;
+        assert!(matches!(woken, Woken::Notified(_)), "{woken:?}");
+        if let Woken::Notified(payloads) = woken {
+            heard.extend(payloads);
+        }
+    }
+    heard.sort();
+    assert_eq!(heard, ["7", "9"]);
+    assert_eq!(rx.wait(QUIET).await, Woken::SafetyNet, "each id once");
+    hub.stop(SOON).await.expect("stop");
+    t.drop_now().await;
+}
+
 #[tokio::test]
 async fn a_stopped_hub_leaves_waiters_to_their_own_poll() {
     let t = FreshDb::migrated().await;
