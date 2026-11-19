@@ -2895,7 +2895,8 @@ impl World {
 /// ref, and the merge request pipeline runs on it; `ci/pipeline` reported
 /// there clears the merge. The target advances: a new merge result, the
 /// old run is stale and the merge on the protected branch is refused with
-/// FG-CI-0013; a run on the new merge result makes it mergeable again and
+/// FG-CI-0013 (`hint=merge_queue`, plan 18 S5: no pipeline followed the
+/// target move); a run on the new merge result makes it mergeable again and
 /// the merge lands.
 #[tokio::test]
 async fn a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge() {
@@ -2932,7 +2933,8 @@ async fn a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge
     w.system_run(&r1, "ci/pipeline", "success").await;
     assert!(w.status().await.mergeable);
 
-    // The target advances (no conflict): a new merge result, a new pipeline.
+    // The target advances (no conflict): a new merge result (plan 18 S5:
+    // without a pipeline of its own).
     let tip = w
         .advance_main(&[("README.md", "base\n"), ("other.txt", "o\n")])
         .await;
@@ -2949,7 +2951,8 @@ async fn a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge
         plumb(&w.path, &["rev-parse", &format!("{r2}^1")], None),
         tip
     );
-    assert_eq!(w.mr_pipeline_shas().await, [r1.clone(), r2.clone()]);
+    // Plan 18 S5: the target move asked for no pipeline on the new result.
+    assert_eq!(w.mr_pipeline_shas().await, std::slice::from_ref(&r1));
     assert_eq!(World::reason_names(&status), ["required_check_stale"]);
     assert!(status.checks[0].stale);
     assert_eq!(
@@ -2959,8 +2962,13 @@ async fn a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge
     let refused = w.ask().await.expect_err("stale");
     assert_eq!(refused.code(), ErrorCode::RequiredCheckStale);
     assert_eq!(reasons(&refused), "required_check_stale");
+    assert!(refused
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "hint" && v == "merge_queue"));
 
-    // The pipeline on the new merge result reports: mergeable, and it lands.
+    // A pipeline on the new merge result (a person's run on the current
+    // target, plan 18 S5) reports: mergeable, and it lands.
     w.system_run(&r2, "ci/pipeline", "success").await;
     let status = w.status().await;
     assert!(status.mergeable, "{:?}", status.reasons);
@@ -3204,7 +3212,9 @@ async fn a_pruned_merge_result_is_written_again_when_its_pair_returns() {
     // A pipeline on the rewritten result: a new one for a new id; for the
     // same id (rewritten within the pruned one's second), the one r1
     // already has (doc comment).
-    let mut pipelines = vec![r1.clone(), r2];
+    // Plan 18 S5: r2 is a target move of the same head: no pipeline of its
+    // own. The rewrite of a pruned result still asks for one.
+    let mut pipelines = vec![r1.clone()];
     if fresh.as_str() != r1 {
         pipelines.push(fresh.as_str().to_owned());
     }
@@ -3327,5 +3337,242 @@ async fn the_status_says_ci_pipeline_waits_for_a_clean_merge_result() {
         .map(|c| (c.name.as_str(), status.waits_for_merge_result(c)))
         .collect();
     assert_eq!(waits, [("ci/gates", false), ("ci/pipeline", true)]);
+    w.t.drop_now().await;
+}
+
+// ── Plan 18 S5: the merge request pipeline only on a new head ──
+
+impl World {
+    /// [`World::advance_main`], checked by `checker` (the worker's, with
+    /// its configuration).
+    async fn advance_main_with(&self, files: &[(&str, &str)], checker: &Mergeability) -> String {
+        let next = commit(&self.path, files, Some(&self.tip("main")));
+        plumb(&self.path, &["update-ref", "refs/heads/main", &next], None);
+        self.browser.invalidate(self.repo);
+        let seq = request_check(
+            &self.t.db,
+            self.mr.id,
+            RequestId::parse("req-q").expect("id"),
+        )
+        .await
+        .expect("request")
+        .expect("open");
+        let report = check(
+            &self.t.db,
+            checker,
+            MergeabilityRequest {
+                merge_request: self.mr.id,
+                check_seq: seq,
+            },
+            &RequestId::parse("req-check-with").expect("id"),
+        )
+        .await
+        .expect("check");
+        assert_eq!(report.outcome, "checked");
+        self.browser.invalidate(self.repo);
+        next
+    }
+
+    /// The merge result of the status now, as a string.
+    async fn merge_result_now(&self) -> String {
+        self.status()
+            .await
+            .merge_result_sha
+            .expect("a merge result")
+            .as_str()
+            .to_owned()
+    }
+
+    /// A check whose job carries a person's ask for the merge request
+    /// pipeline (`"pipeline": true`, set by `POST …/merge-requests/{iid}/
+    /// pipeline`), run as the worker runs it.
+    async fn asked_check(&self) -> forge_review::CheckReport {
+        let seq = request_check(
+            &self.t.db,
+            self.mr.id,
+            RequestId::parse("req-q-asked").expect("id"),
+        )
+        .await
+        .expect("request")
+        .expect("open");
+        let report = forge_review::check_asked(
+            &self.t.db,
+            &Mergeability::new(self.git.clone(), self.storage.clone()),
+            MergeabilityRequest {
+                merge_request: self.mr.id,
+                check_seq: seq,
+            },
+            true,
+            &RequestId::parse("req-check-asked").expect("id"),
+        )
+        .await
+        .expect("check");
+        self.browser.invalidate(self.repo);
+        report
+    }
+}
+
+/// `main` with a required `ci/pipeline`, the MR pipeline green on the first
+/// merge result, then `main` advanced (no conflict) by the worker's check
+/// at its default (`ci.mr_pipeline_on_target_move = false`): the first
+/// merge result and the second.
+async fn moved_target() -> (World, String, String) {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &["ci/pipeline"], false, false)
+        .await;
+    let r1 = w.merge_result_now().await;
+    w.system_run(&r1, "ci/pipeline", "success").await;
+    assert!(w.status().await.mergeable);
+    w.advance_main(&[("README.md", "base\n"), ("other.txt", "o\n")])
+        .await;
+    let r2 = w.merge_result_now().await;
+    assert_ne!(r2, r1);
+    (w, r1, r2)
+}
+
+/// Plan 18 S5: a target move writes the new merge result (and moves the
+/// merge ref) but asks for no merge request pipeline: the head's
+/// `ci/pipeline` is stale, "as of" the tip it ran on.
+#[tokio::test]
+async fn a_target_move_creates_no_merge_request_pipeline() {
+    let (w, r1, r2) = moved_target().await;
+    assert_eq!(w.merge_ref().as_deref(), Some(r2.as_str()));
+    assert_eq!(
+        w.mr_pipeline_shas().await,
+        std::slice::from_ref(&r1),
+        "the target move asked for no pipeline"
+    );
+    let status = w.status().await;
+    assert_eq!(World::reason_names(&status), ["required_check_stale"]);
+    assert!(status.checks[0].stale);
+    assert_eq!(
+        status.check_target(&status.checks[0]).map(ObjectId::as_str),
+        Some(w.base.as_str()),
+        "the run is as of the old tip"
+    );
+    w.t.drop_now().await;
+}
+
+/// Plan 18 S5: a new head's first merge result gets its pipeline, also
+/// after target moves that got none.
+#[tokio::test]
+async fn a_new_head_creates_one() {
+    let (mut w, r1, _r2) = moved_target().await;
+    w.push_next(
+        &[("README.md", "base\n"), ("f.txt", "f\n"), ("g.txt", "g\n")],
+        "req-push-next",
+    )
+    .await;
+    let r3 = w.merge_result_now().await;
+    assert_eq!(
+        w.mr_pipeline_shas().await,
+        [r1, r3],
+        "one pipeline for the new head's merge result"
+    );
+    w.t.drop_now().await;
+}
+
+/// Plan 18 S5: `ci.mr_pipeline_on_target_move = true` restores a pipeline
+/// on every merge result, a target move's too.
+#[tokio::test]
+async fn ci_mr_pipeline_on_target_move_restores_the_old_behavior() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &["ci/pipeline"], false, false)
+        .await;
+    let r1 = w.merge_result_now().await;
+    let checker =
+        Mergeability::new(w.git.clone(), w.storage.clone()).with_pipeline_on_target_move(true);
+    w.advance_main_with(&[("README.md", "base\n"), ("other.txt", "o\n")], &checker)
+        .await;
+    let r2 = w.merge_result_now().await;
+    assert_eq!(w.mr_pipeline_shas().await, [r1, r2]);
+    w.t.drop_now().await;
+}
+
+/// Plan 18 S5: a direct merge on a target that requires `ci/pipeline`,
+/// whose MR pipeline ran for an older target, is FG-CI-0013 with
+/// `hint=merge_queue`.
+#[tokio::test]
+async fn direct_merge_on_a_stale_pipeline_hints_the_queue() {
+    let (w, _r1, _r2) = moved_target().await;
+    let refused = w.ask().await.expect_err("stale");
+    assert_eq!(refused.code(), ErrorCode::RequiredCheckStale);
+    assert!(
+        refused
+            .context()
+            .iter()
+            .any(|(k, v)| *k == "hint" && v == "merge_queue"),
+        "{:?}",
+        refused.context()
+    );
+    // The merge queue takes it (the train's pipeline decides).
+    let blocked =
+        forge_review::merges::evaluate::blocked(&[forge_review::BlockReason::MergeabilityUnknown]);
+    assert!(
+        !blocked.context().iter().any(|(k, _)| *k == "hint"),
+        "only FG-CI-0013 carries the hint"
+    );
+    w.t.drop_now().await;
+}
+
+/// Plan 18 S5 (safety): a required `ci/pipeline` is never satisfied by a
+/// pipeline of another head — green runs on every merge result of the old
+/// head leave the new head's `ci/pipeline` missing until its own runs.
+#[tokio::test]
+async fn a_pipeline_of_another_head_never_satisfies_ci_pipeline() {
+    let (mut w, r1, r2) = moved_target().await;
+    w.system_run(&r2, "ci/pipeline", "success").await;
+    assert!(
+        w.status().await.mergeable,
+        "green on the current merge result"
+    );
+    w.push_next(
+        &[("README.md", "base\n"), ("f.txt", "f\n"), ("g.txt", "g\n")],
+        "req-push-next",
+    )
+    .await;
+    let status = w.status().await;
+    assert!(!status.mergeable);
+    assert_eq!(World::reason_names(&status), ["required_check_missing"]);
+    assert_eq!(status.check_target(&status.checks[0]), None);
+    let r3 = w.merge_result_now().await;
+    assert!(r3 != r1 && r3 != r2);
+    w.system_run(&r3, "ci/pipeline", "success").await;
+    assert!(w.status().await.mergeable);
+    w.t.drop_now().await;
+}
+
+/// Plan 18 S5: the check a person's run on the current target asks for
+/// enqueues the pipeline on the merge result of the current target even
+/// though the row exists (a target move wrote it without one); asked
+/// again, it stays one pipeline; its green run makes the direct merge
+/// possible again. (The ask itself, `queued` / `exists` / `computing`, is
+/// tested through its route: forge-web `tests/pipeline_routes.rs`.)
+#[tokio::test]
+async fn an_asked_check_enqueues_the_pipeline_on_the_current_target_once() {
+    let (w, r1, r2) = moved_target().await;
+    assert_eq!(w.mr_pipeline_shas().await, std::slice::from_ref(&r1));
+    let report = w.asked_check().await;
+    assert_eq!(
+        report.merge_result.as_ref().map(ObjectId::as_str),
+        Some(r2.as_str())
+    );
+    w.asked_check().await;
+    assert_eq!(w.mr_pipeline_shas().await, [r1, r2.clone()]);
+    w.system_run(&r2, "ci/pipeline", "success").await;
+    let status = w.status().await;
+    assert!(status.mergeable, "{:?}", status.reasons);
+    assert_eq!(
+        status.check_target(&status.checks[0]).map(ObjectId::as_str),
+        Some(w.tip("main").as_str())
+    );
     w.t.drop_now().await;
 }

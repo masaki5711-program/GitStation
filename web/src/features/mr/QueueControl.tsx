@@ -5,7 +5,14 @@
 // queue merges for the person who asked once a pipeline on it (with what is
 // ahead of it) passes. The server decides every press again; a refusal shows
 // its user_message and request id (never the code).
+//
+// Plan 18 S5: on a target that requires the merge request pipeline
+// (`ci/pipeline`) a target move starts no pipeline of its own, so this is
+// THE merge button there — "Merge when ready", primary, with the direct
+// "Merge" not offered — and the run of the pipeline on the current target
+// sits beside it (PipelineRun).
 import type { TFunction } from 'i18next';
+import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
@@ -14,7 +21,9 @@ import { isLive, useDequeue, useEnqueue, useQueueEntry, type QueueEntry } from '
 import controls from '../../components/controls.module.css';
 import { encodePath } from '../repoUrls';
 import { ActionError } from './ActionError';
+import { requiresMergeResultPipeline } from './blockedReason';
 import styles from './Mr.module.css';
+import { PipelineRunControl } from './PipelineRun';
 import { useViewedHead } from './viewedHead';
 
 /** The queue control with the screen's facts: the server's trial decision
@@ -40,14 +49,20 @@ export function QueueSection({
     data.viewer.can_merge &&
     data.reasons.every((r) => queueProves(r.reason, r.detail));
   return (
-    <QueueControl
-      projectId={projectId}
-      project={project}
-      iid={iid}
-      open={open}
-      canMerge={queueable}
-      viewedHead={viewed.known ? viewed.head : null}
-    />
+    <>
+      <QueueControl
+        projectId={projectId}
+        project={project}
+        iid={iid}
+        open={open}
+        canMerge={queueable}
+        mergeWhenReady={data !== undefined && requiresMergeResultPipeline(data)}
+        viewedHead={viewed.known ? viewed.head : null}
+      />
+      {data !== undefined && (
+        <PipelineRunControl projectId={projectId} iid={iid} status={data} open={open} />
+      )}
+    </>
   );
 }
 
@@ -57,6 +72,7 @@ export function QueueControl({
   iid,
   open,
   canMerge,
+  mergeWhenReady = false,
   viewedHead,
 }: {
   projectId: number;
@@ -66,6 +82,9 @@ export function QueueControl({
   open: boolean;
   /** The server's trial decision of a merge (the queue is decided alike). */
   canMerge: boolean;
+  /** Plan 18 S5: the target requires the merge request pipeline — the
+   * queue is the merge ("Merge when ready", the primary button). */
+  mergeWhenReady?: boolean;
   /** The head of the version on screen (null: none read yet). */
   viewedHead: string | null;
 }) {
@@ -79,6 +98,8 @@ export function QueueControl({
   const failed = enqueue.isError ? enqueue.error : dequeue.isError ? dequeue.error : null;
   const mayEnqueue = open && canMerge && viewedHead !== null && !live;
   const mayDequeue = canMerge && live;
+  const hintId = useId();
+  const showHint = mayEnqueue && current === null;
 
   return (
     <section className={styles.queue} aria-label={t('mergeQueue.mrLabel')} data-testid="mr-queue">
@@ -99,15 +120,16 @@ export function QueueControl({
           {mayEnqueue && (
             <button
               type="button"
-              className={controls.button}
+              className={mergeWhenReady ? controls.primary : controls.button}
               aria-disabled={busy ? 'true' : undefined}
+              aria-describedby={showHint ? hintId : undefined}
               onClick={() => {
                 if (busy) return;
                 dequeue.reset();
                 enqueue.mutate(viewedHead);
               }}
             >
-              {t('mergeQueue.enqueue')}
+              {mergeWhenReady ? t('mergeQueue.mergeWhenReady') : t('mergeQueue.enqueue')}
             </button>
           )}
           {mayDequeue && (
@@ -126,7 +148,11 @@ export function QueueControl({
           )}
         </div>
       )}
-      {mayEnqueue && current === null && <p className={styles.nextHint}>{t('mergeQueue.enqueueHint')}</p>}
+      {showHint && (
+        <p id={hintId} className={styles.nextHint}>
+          {mergeWhenReady ? t('mergeQueue.mergeWhenReadyHint') : t('mergeQueue.enqueueHint')}
+        </p>
+      )}
       {failed !== null && (
         <ActionError
           projectId={projectId}

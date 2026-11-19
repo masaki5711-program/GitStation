@@ -21,7 +21,8 @@
 //!   2026-11-11). The merge request pipeline runs on the merge RESULT — the
 //!   mergeability job writes `refs/merge-requests/<iid>/merge` and enqueues
 //!   it with the `merge_result_refs` row
-//!   (`crate::review::record_merge_result`), once per (head, target tip).
+//!   (`crate::review::record_merge_result`): plan 18 S5, once per new head
+//!   (a target move gets none unless asked for).
 //!
 //! Exactly once: the job's dedup key is the pipeline's identity (project,
 //! source, merge request, sha, ref), so a retried step or a redelivered

@@ -57,6 +57,7 @@ pub use forge_db::pipelines::{
     create_payload, CopyMark, Created, JobStatus, PipelineRequest, PipelineStatus, Source,
     StoredJob, StoredPipeline, StoredProblem, MAX_PAGE, PIPELINE_CREATE_JOB,
 };
+pub use forge_db::review::{MergePipelineOutcome, MergePipelineRun};
 
 /// The pipeline definition's path at the root of a commit.
 pub const CI_FILE: &str = ".forge-ci.yml";
@@ -708,6 +709,49 @@ impl Pipelines {
         Ok(ManualRun::Recorded(Box::new(
             read_back(&self.db, project, pipeline).await?,
         )))
+    }
+
+    /// `POST …/merge-requests/{iid}/pipeline` (`PipelineCreate`, plan 18
+    /// S5): the merge request pipeline on the merge result of the current
+    /// target (`forge_db::review::merge_pipeline`) — enqueued (`queued`),
+    /// already asked for (`exists`), or after the check that writes the
+    /// merge result (`computing`). One `pipeline.run_merge_request` audit
+    /// row when something was asked; a double click asks once. Errors:
+    /// `FG-REPO-0005 resource=merge_request`, `FG-CI-0003
+    /// operation=run_merge_request` (not open, no version, a conflict).
+    pub async fn run_merge_request(
+        &self,
+        request: &ChangeRequest,
+        proof: &Authorized<ProjectCtx>,
+        iid: i64,
+    ) -> Result<MergePipelineRun, ForgeError> {
+        require(proof.action(), Action::PipelineCreate)?;
+        let user = caller(proof.principal(), Action::PipelineCreate)?;
+        let project: ProjectId = *proof.id();
+        let ctx = change_context(request, proof.principal(), user);
+        let (run, ()) = forge_db::review::run_merge_request_pipeline_decided(
+            &self.db,
+            &ctx,
+            (project, iid),
+            user,
+            |facts| reconfirm(proof, facts),
+        )
+        .await?;
+        tracing::info!(
+            target: "forge_pipelines",
+            event = "forge.ci.merge_request_pipeline_asked",
+            request_id = %request.request_id,
+            project_id = project.get(),
+            merge_request_id = run.merge_request.get(),
+            iid,
+            user_id = user.get(),
+            outcome = run.outcome.as_str(),
+            result_sha = run.merge_result.as_ref().map(ObjectId::as_str),
+            target_sha = run.target.as_ref().map(ObjectId::as_str),
+            check_seq = run.check_seq,
+            "merge request pipeline asked for on the current target"
+        );
+        Ok(run)
     }
 
     async fn ready_repo(&self, project: ProjectId) -> Result<RepoId, ForgeError> {

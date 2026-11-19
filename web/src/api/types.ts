@@ -48,6 +48,8 @@ export type StatusApproval = S['StatusApprovalBody'];
 export type ApprovalAnswer = S['ApprovalAnswerBody'];
 /** One merge attempt (`queued` → … → `applied` / `superseded` / `failed`). */
 export type MergeAttempt = S['MergeAttemptBody'];
+/** Plan 18 S5: a run of the merge request pipeline on the current target. */
+export type MergeRequestPipelineRun = S['MergeRequestPipelineBody'];
 /** `GET …/merge`: the latest attempt (`merge: null` when none). */
 export type LatestMerge = S['MergeStatusBody'];
 export type MergeSettings = S['MergeSettingsBody'];

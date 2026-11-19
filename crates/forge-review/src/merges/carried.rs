@@ -12,11 +12,15 @@
 //!   tip's merge result's, and a carried row has none
 //!   ([`Recompute::MergeResult`]). The refusal is kept (the condition is
 //!   not weakened); what changes is that the computed check is requested
-//!   **at once**, by the refusal itself, so the merge result and its
-//!   pipeline follow without waiting for the worker's sweep
-//!   (`sweep_missing_merge_results`, which a steady stream of landings can
-//!   hold off for as long as it lasts). The merge queue does not need
-//!   this: it decides `ci/pipeline` on its own train.
+//!   **at once**, by the refusal itself, so the merge result follows
+//!   without waiting for the worker's sweep (`sweep_missing_merge_results`,
+//!   which a steady stream of landings can hold off for as long as it
+//!   lasts). Plan 18 S5: that merge result is a target move's (same head),
+//!   so it gets no pipeline of its own unless a person asks for it
+//!   (`POST …/merge-requests/{iid}/pipeline`) or
+//!   `ci.mr_pipeline_on_target_move` is on; the refusal is FG-CI-0013 with
+//!   `hint=merge_queue`. The merge queue does not need any of this: it
+//!   decides `ci/pipeline` on its own train.
 //!
 //! Both end in [`recompute`]: the carried row becomes `unchecked` with a
 //! new check job (`review::recheck_if_carried`). A row that is not

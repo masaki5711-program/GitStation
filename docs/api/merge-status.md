@@ -32,7 +32,7 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
 | `mergeable` | 真偽 | 止める理由が無い |
 | `reasons[]` | 配列 | `{ "reason": 名前, "detail": 文字列 / null }`。下の表 |
 | `approvals` | オブジェクト / null | 承認の側（版が無いと null）: `rules[]`（`name`、`applies`、`required`、`counted`。保護ブランチの最低の承認数は `name = "@protected_branch"`）、`approvals[]`（`approver_id`、`username`、`counted`、`uncounted_reason`）、`codeowners[]`（`pattern`、`owners`、`satisfied`。CODEOWNERS の強制が一時停止中は空） |
-| `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion", "stale", "waits_for_merge_result" }`。**`status: null` は報告が無い**（成功ではない）。値は Checks API（`docs/api/checks.md`、M3 C1）で **今の head** に報告された結果（古い head への報告は数えない）。M4 C7: 今のマージ結果への報告があればそれ、`ci/pipeline` で前のマージ結果への報告しか無ければそれで `stale: true`（数えない）。下の「マージ結果と鮮度」 |
+| `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion", "stale", "waits_for_merge_result", "target_sha" }`（`target_sha` は計画 18 S5 で足した）。**`status: null` は報告が無い**（成功ではない）。値は Checks API（`docs/api/checks.md`、M3 C1）で **今の head** に報告された結果（古い head への報告は数えない）。M4 C7: 今のマージ結果への報告があればそれ、`ci/pipeline` で前のマージ結果への報告しか無ければそれで `stale: true`（数えない）。下の「マージ結果と鮮度」 |
 | `discussions` | オブジェクト / null | マージの条件がスレッドの解決を求めるとき `{ "unresolved": 件数 }`、求めないとき null |
 | `work_item_link` | オブジェクト / null | M3 I1d で追加。マージの条件が作業項目のリンクを求めるとき `{ "linked": 真偽 }`（プロジェクトの **今の** 連携の結びつけの作業項目への開いたリンクがあるか）、求めないとき null |
 | `codeowners` | オブジェクト | `{ "enforced": 真偽, "suspended_until": 文字列 / null }`（一時停止中だけ期限。期限を過ぎれば `enforced: true`） |
@@ -53,6 +53,7 @@ target の保護、頼む変更）で `authorize()` を試しに呼んだ答え�
 | `can_mark_ready` | 真偽 | `PATCH …/{iid}` で `draft: false` が許される（作成者、または他人のドラフトなら Maintainer 以上） |
 | `approved_by_me` | 真偽 | 呼び出した人の生きている承認がある（版が無ければ `false`） |
 | `can_revert` | 真偽 | M4 C10（schema_version 1 のまま足した）: `POST …/revert` が許される（MR がマージ済みで、MR を開ける・ブランチを push できる。Developer 以上・トークンは `api` と `write_repository`）。`revert/*` の保護と、取り消しが衝突するかは取り消しそのものが判定する。代理（act-as）では常に `false` |
+| `can_run_pipeline` | 真偽 | 計画 18 S5（schema_version 1 のまま足した）: `POST …/merge-requests/{iid}/pipeline`（今の target でパイプラインを動かす）が許される（`PipelineCreate`: Developer 以上・トークンは `api`）。代理（act-as）では常に `false` |
 
 - `can_unapprove` は「取り消す権限がある」だけで、取り消す承認があるとは限らない。画面は **`approved_by_me` と組で** 使う
   （`can_unapprove && approved_by_me` のときだけ「承認を取り消す」を出す）。同じく `can_approve && !approved_by_me` で「承認する」。
@@ -131,7 +132,8 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
     "can_merge": true,
     "can_mark_ready": true,
     "approved_by_me": false,
-    "can_revert": false
+    "can_revert": false,
+    "can_run_pipeline": true
   }
 }
 ```
@@ -165,7 +167,25 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   `ci/pipeline` は `checks[].waits_for_merge_result: true`（同じ版の中で足した）。MR のパイプラインはマージ結果でしか動かないので、
   **次の手** は衝突などの最初の理由を解くこと。画面は「衝突のないマージ結果ができてから動く」と出す。外部の名前は常に false。
 - target が進むと、前のマージ結果で出た `ci/pipeline` は古くなる。マージの要求は FG-CI-0013（最初の理由のとき）で断られる。**次の手**:
-  新しいマージ結果（`merge_result_sha`）で動くパイプラインが終わるのを待つ（失敗なら `gstn pipeline retry`）。
+  下の「新しい head のときだけの MR パイプライン」。
+
+## 新しい head のときだけの MR パイプライン（計画 18 S5、ADR-0037）
+
+この契約の版は変えずに、`checks[].target_sha` と `viewer.can_run_pipeline` を足した。
+
+- MR パイプラインは、**新しい head の最初のマージ結果** にだけ積む。target が進んだだけ（head は同じ）で書いた新しいマージ結果には
+  積まない（サーバーの設定 `ci.mr_pipeline_on_target_move = true` で S5 より前の「マージ結果ごと」に戻る）。だから target に着地が
+  あると、必須の `ci/pipeline` は `stale: true`（`required_check_stale`）のまま、ひとりでには新しくならない。
+- `checks[].target_sha`: その実行がどの target の先端のマージ結果のものか（「`<sha>` 時点」）。`stale: true` なら今の先端より前の先端。
+  head への報告（`ci/pipeline` 以外の名前）と、報告が無いときは null。
+- 直接のマージ（`POST …/merge`）が FG-CI-0013 で断られるときは、エラーの本体に決まった語 `hint: "merge_queue"` が付く（ほかの
+  コードには付かない。利用者に見せる文は `user_message` と `request_id` だけ）。
+- **次の手**（どちらか）: マージキューに入れる（`POST …/merge-queue`、画面の「準備ができたらマージ」。列車のパイプラインが今の
+  target で試すので MR パイプラインは要らない。`ci/pipeline` が必須の target では、画面は直接の「マージ…」を出さない）。または、
+  今の target でパイプラインを動かす（`POST …/merge-requests/{iid}/pipeline` → `202`、`viewer.can_run_pipeline`）: 答えの `outcome` は
+  `queued`（今のマージ結果にパイプラインを積んだ。`merge_result_sha` と `target_sha`）、`exists`（もう積んである。二度押しても 1 本）、
+  `computing`（今の先端のマージ結果をまず作る。`check_seq` の判定が終わるとそのマージ結果でパイプラインが動く）。MR が開いていない・
+  版が無い・衝突するときは `409 FG-CI-0003`（`operation=run_merge_request`）。パイプラインが通れば直接マージできる。
 
 ## 持ち越した結果（計画 18 S4、ADR-0037 (c)）
 
@@ -182,13 +202,14 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   `required_check_stale`（前のマージ結果に報告がある）か `required_check_missing` になり、`checks[].waits_for_merge_result` は
   **false**（衝突などが解けるのを待っているのではない。forge は target が動いただけでは計算し直さない）。**次の手**:
   マージキューに入れる（`POST …/merge-queue`。この理由では断られない: 列車が今の先端で試す）。直接のマージ
-  （`POST …/merge`）は FG-CI-0013 / FG-REVIEW-0007 で断られるが、その要求が今の先端での計算し直しを積むので、新しい
-  マージ結果（`merge_result_sha`）のパイプラインが終わってからもう一度頼めば通る。画面はこの行で、マージキューを案内する。
+  （`POST …/merge`）は FG-CI-0013 / FG-REVIEW-0007 で断られ、その要求が今の先端での計算し直しを積む。計画 18 S5 から、その
+  新しいマージ結果には MR パイプラインを積まない（head は同じ）: 今の target でパイプラインを動かし（上の節）、通ってから
+  もう一度頼めば通る。画面はこの行で、マージキューを案内する。
 - `carried_from_target_sha` が null でないのは、パスの集合がその結果の判定自身のものであるときだけ（古い版の worker が書いた
   結果は「計算した結果」として読み、着地のたびに計算し直す）。
 - 持ち越した結果には、今の先端の `merge_result_sha` が無い（null）。必須の `ci/pipeline` があるリポジトリでは、前のマージ結果への
   報告は `stale: true` のまま（上の「マージ結果と鮮度」）。**次の手**: マージキューに入れる（列車が結合した結果を試す）。直接の
-  マージは、見回りが計算し直して新しいマージ結果のパイプラインが終わるまで FG-CI-0013 で断られる。
+  マージは、今の target でのパイプライン（計画 18 S5、上の節）が通るまで FG-CI-0013 で断られる。
 - `GET …/mergeability` の `computed_target_sha` は、結果を実際に計算した先端（`checked_target_sha` と違えば持ち越した結果）。
 - 切り方: サーバーの設定 `review.path_filter = false`（着地のたびに全件を計算し直す、S4 の前の動き。Runbook
   `merge-request-mergeability`）。

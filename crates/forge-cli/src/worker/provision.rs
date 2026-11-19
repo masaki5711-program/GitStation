@@ -72,6 +72,11 @@ pub(crate) struct Storage {
     /// head's changed-path set (`review.paths_max`); `None`: no set
     /// (`review.path_filter = false`, and the tests' default).
     pub(crate) merge_paths_max: Option<usize>,
+    /// Plan 18 S5: `ci.mr_pipeline_on_target_move` — the mergeability job
+    /// (the one writer of merge results) enqueues the merge request
+    /// pipeline on a target move's merge result too (`false`: only on a
+    /// new head's first one, and the tests' default).
+    pub(crate) mr_pipeline_on_target_move: bool,
 }
 
 impl Storage {
@@ -81,7 +86,12 @@ impl Storage {
     /// Tests: the built-in `git.pack.*` caps.
     #[cfg(test)]
     pub(crate) fn open(root: &std::path::Path) -> Result<Self, ForgeError> {
-        Self::open_with(root, forge_core::config::GitPackConfig::DEFAULT, None)
+        Self::open_with(
+            root,
+            forge_core::config::GitPackConfig::DEFAULT,
+            None,
+            false,
+        )
     }
 
     /// The configured root with the configured `git.pack.*` memory caps.
@@ -90,6 +100,7 @@ impl Storage {
             cfg.storage_root()?,
             cfg.git_pack,
             cfg.review.path_filter_max(),
+            cfg.ci.mr_pipeline_on_target_move,
         )
     }
 
@@ -97,6 +108,7 @@ impl Storage {
         root: &std::path::Path,
         pack: forge_core::config::GitPackConfig,
         merge_paths_max: Option<usize>,
+        mr_pipeline_on_target_move: bool,
     ) -> Result<Self, ForgeError> {
         let root = StorageRoot::open(root)?;
         let mut cfg = GitConfig::new("git", root.path());
@@ -107,6 +119,7 @@ impl Storage {
             root,
             hooks: None,
             merge_paths_max,
+            mr_pipeline_on_target_move,
         })
     }
 }

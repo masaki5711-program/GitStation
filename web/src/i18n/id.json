@@ -802,7 +802,7 @@
         "approvals": "Menunggu peninjau menyetujui.",
         "owners": "Menunggu pemilik berkas itu menyetujui.",
         "checks": "Menunggu hasil pemeriksaan.",
-        "checksStale": "Cabang tujuan telah bergerak. Menunggu pemeriksaan pada hasil penggabungan yang baru.",
+        "checksStale": "Cabang tujuan telah bergerak, jadi tidak ada pipeline baru yang dijalankan. Tekan Gabungkan saat siap, atau jalankan pipeline pada target saat ini.",
         "checksWaitMergeResult": "Menunggu hasil penggabungan tanpa konflik; pipeline berjalan di atasnya.",
         "checksCarried": "Cabang tujuan bergerak tanpa menyentuh berkas merge request ini, jadi tidak ada pipeline baru yang dijalankan. Masukkan ke antrean merge: antrean mengujinya pada cabang tujuan saat ini lalu menggabungkannya.",
         "merging": "Menunggu penggabungan selesai.",
@@ -910,7 +910,9 @@
       "codeownersSuspended": "Persetujuan CODEOWNERS ditangguhkan sampai {{until}}.",
       "checks": "Pemeriksaan wajib",
       "waitsForMergeResult": "Pemeriksaan ini hanya berjalan setelah ada hasil penggabungan tanpa konflik.",
-      "unread": "Syarat tidak dapat dibaca. Pesan di atas berisi ID permintaan."
+      "unread": "Syarat tidak dapat dibaca. Pesan di atas berisi ID permintaan.",
+      "asOf": "per {{sha}}",
+      "asOfOlder": "per {{sha}} (target lama)"
     },
     "uncounted": {
       "stale": "diberikan untuk versi yang lebih lama",
@@ -972,7 +974,8 @@
         "sourceMoved": "Commit baru di-push sementara itu. Periksa, lalu merge lagi.",
         "other": "Merge dihentikan. Periksa merge request dan merge lagi."
       },
-      "progressLabel": "Kemajuan merge"
+      "progressLabel": "Kemajuan merge",
+      "hintQueue": "Gunakan Gabungkan saat siap: antrean merge mengujinya pada target saat ini."
     },
     "check": {
       "none": "Belum dilaporkan",
@@ -1003,6 +1006,13 @@
       "checksPassed": "Pemeriksaan {{passed}}/{{total}} lolos",
       "checksFailed": "{{failed}} gagal (pemeriksaan {{passed}}/{{total}} lolos)",
       "checksPending": "{{pending}} berjalan atau menunggu (pemeriksaan {{passed}}/{{total}} lolos)"
+    },
+    "pipelineRun": {
+      "run": "Jalankan pipeline pada target saat ini",
+      "running": "Meminta…",
+      "queued": "Pipeline dijalankan pada target saat ini.",
+      "exists": "Pipeline pada target saat ini sudah dijalankan.",
+      "computing": "Hasil penggabungan untuk target saat ini sedang disiapkan. Pipeline-nya berjalan setelah itu."
     }
   },
   "webhooks": {
@@ -1759,7 +1769,9 @@
     "listLabel": "Perubahan dalam antrean",
     "recentTitle": "Hasil terbaru",
     "mr": "!{{iid}}",
-    "alone": "(diuji sendiri)"
+    "alone": "(diuji sendiri)",
+    "mergeWhenReady": "Gabungkan saat siap",
+    "mergeWhenReadyHint": "Target ini memerlukan pipeline pada target saat ini. Antrean merge mengujinya di sana dan menggabungkannya bila lulus."
   },
   "revert": {
     "label": "Pembatalan merge",

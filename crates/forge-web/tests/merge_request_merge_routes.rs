@@ -1169,7 +1169,10 @@ fn mr_viewer(approve: bool, merge: bool, ready: bool, approved_by_me: bool) -> V
         "can_mark_ready": ready,
         "approved_by_me": approved_by_me,
         // M4 C10: an open merge request is never revertible.
-        "can_revert": false
+        "can_revert": false,
+        // Plan 18 S5: running the merge request pipeline (PipelineCreate:
+        // Developer, as merging on an unprotected target).
+        "can_run_pipeline": merge
     })
 }
 
@@ -1520,7 +1523,10 @@ async fn a_failing_viewer_read_closes_the_flags_and_keeps_the_answer() {
             .any(|r| r["reason"] == "mergeability_unknown"),
         "{s}"
     );
-    assert_eq!(s["viewer"], mr_viewer(false, false, false, false), "{s}");
+    // Plan 18 S5: running the pipeline reads no protection (olga owns it).
+    let mut closed = mr_viewer(false, false, false, false);
+    closed["can_run_pipeline"] = json!(true);
+    assert_eq!(s["viewer"], closed, "{s}");
     let (code_status, settings) = send(
         w.router.clone(),
         "GET",
@@ -2304,7 +2310,9 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
             "status": "completed",
             "conclusion": "success",
             "stale": false,
-            "waits_for_merge_result": false
+            "waits_for_merge_result": false,
+            // Plan 18 S5: a head-reported name has no merge result target.
+            "target_sha": null
         }])
     );
     assert_eq!(s["mergeable"], true, "{s}");

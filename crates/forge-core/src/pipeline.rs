@@ -30,6 +30,20 @@ pub enum PipelineChange {
         sha: String,
         status: String,
     },
+    /// `pipeline.run_merge_request` (plan 18 S5): a person asked for the
+    /// merge request pipeline on the current target tip — `outcome`
+    /// `queued` (its job was enqueued on the merge result `sha` of
+    /// `target_sha`) or `computing` (no merge result for the tip yet: the
+    /// check `check_seq` was requested and the pipeline follows it).
+    MergeRequestRun {
+        project: ProjectId,
+        merge_request: i64,
+        iid: i64,
+        outcome: &'static str,
+        sha: Option<String>,
+        target_sha: Option<String>,
+        check_seq: Option<i64>,
+    },
     /// `pipeline.job_played` (M4 C12): a person started a `when: manual`
     /// job.
     JobPlayed {
@@ -93,6 +107,7 @@ impl PipelineChange {
             Self::Canceled { .. } => "pipeline.canceled",
             Self::Retried { .. } => "pipeline.retried",
             Self::RunManual { .. } => "pipeline.run_manual",
+            Self::MergeRequestRun { .. } => "pipeline.run_merge_request",
             Self::JobPlayed { .. } => "pipeline.job_played",
             Self::ScheduleSaved { created: true, .. } => "pipeline_schedule.created",
             Self::ScheduleSaved { created: false, .. } => "pipeline_schedule.updated",
@@ -110,6 +125,7 @@ impl PipelineChange {
             Self::Canceled { .. }
             | Self::Retried { .. }
             | Self::RunManual { .. }
+            | Self::MergeRequestRun { .. }
             | Self::JobPlayed { .. }
             | Self::ScheduleSaved { .. }
             | Self::ScheduleDeleted { .. }
@@ -146,6 +162,23 @@ impl PipelineChange {
                 "ref": git_ref,
                 "sha": sha,
                 "status": status,
+            }),
+            Self::MergeRequestRun {
+                project,
+                merge_request,
+                iid,
+                outcome,
+                sha,
+                target_sha,
+                check_seq,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "merge_request_id": merge_request,
+                "iid": iid,
+                "outcome": outcome,
+                "sha": sha,
+                "target_sha": target_sha,
+                "check_seq": check_seq,
             }),
             Self::JobPlayed {
                 project,
@@ -396,6 +429,19 @@ mod tests {
         };
         assert_eq!(m.action(), "pipeline.run_manual");
         assert_eq!(m.to_value()["ref"], "refs/heads/main");
+        let asked = PipelineChange::MergeRequestRun {
+            project: p,
+            merge_request: 12,
+            iid: 3,
+            outcome: "queued",
+            sha: Some("c".repeat(40)),
+            target_sha: Some("d".repeat(40)),
+            check_seq: None,
+        };
+        assert_eq!(asked.action(), "pipeline.run_merge_request");
+        assert_eq!(asked.event_type(), None);
+        assert_eq!(asked.to_value()["outcome"], "queued");
+        assert_eq!(asked.to_value()["check_seq"], serde_json::Value::Null);
         let played = PipelineChange::JobPlayed {
             project: p,
             pipeline: 4,

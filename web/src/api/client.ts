@@ -6,8 +6,12 @@ import type { paths } from './schema.gen';
 
 /** What the UI may show of a failure: `user_message` + `request_id` only
  * (CLAUDE.md contract 3). `error_code` stays in the logs. */
+/** Plan 18 S5: the next step the server names for a refusal (a fixed
+ * word; only FG-CI-0013 today). Never shown as it is: the screen words it. */
+export type FailureHint = 'merge_queue';
+
 export type Failure =
-  | { kind: 'api'; status: number; userMessage: string; requestId: string }
+  | { kind: 'api'; status: number; userMessage: string; requestId: string; hint?: FailureHint }
   | { kind: 'unauthenticated'; status: 401; requestId: string | null }
   /** An answer outside the error contract, or a failure in the client
    * itself (`status` null: no answer to speak of). */
@@ -115,7 +119,8 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 /** Statuses a reverse proxy answers with while the server restarts. */
 const UNAVAILABLE_STATUSES = new Set([502, 503, 504]);
 
-/** The server's error body `{ error_code, user_message, request_id }` into
+/** The server's error body `{ error_code, user_message, request_id }` (and
+ * its optional fixed `hint` word) into
  * what the UI shows; a 502/503/504 without it is `unavailable` (the proxy
  * answered for a restarting server); anything else is `unexpected` (never
  * shown raw). */
@@ -131,11 +136,13 @@ export function toFailure(response: Response, body: unknown): Failure {
     typeof body.request_id === 'string' &&
     body.user_message.length > 0
   ) {
+    const hint: FailureHint | undefined = body.hint === 'merge_queue' ? 'merge_queue' : undefined;
     return {
       kind: 'api',
       status: response.status,
       userMessage: body.user_message,
       requestId: body.request_id,
+      ...(hint === undefined ? {} : { hint }),
     };
   }
   if (UNAVAILABLE_STATUSES.has(response.status)) {

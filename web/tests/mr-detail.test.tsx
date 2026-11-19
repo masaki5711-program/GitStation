@@ -47,6 +47,7 @@ const check = (name: string, status: string | null, conclusion: string | null, s
   conclusion,
   stale,
   waits_for_merge_result: false,
+  target_sha: null,
 });
 
 function withApprovalsAndChecks(checks = [check('ci/pipeline', 'completed', 'success'), check('lint', 'in_progress', null)]) {

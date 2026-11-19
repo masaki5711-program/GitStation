@@ -23,6 +23,8 @@ fn pipeline_commands() -> Vec<String> {
         "update_schedule",
         "delete_schedule",
         "fire_schedule",
+        // Plan 18 S5: the merge request pipeline on the current target.
+        "run_merge_request_pipeline",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))

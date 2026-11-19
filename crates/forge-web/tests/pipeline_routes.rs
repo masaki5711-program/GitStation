@@ -177,6 +177,20 @@ impl World {
         );
         let commit = plumb(&path, &["commit-tree", &tree, "-m", "synthetic"], None);
         plumb(&path, &["update-ref", "refs/heads/main", &commit], None);
+        // Plan 18 S5: a branch one commit ahead, for a merge request.
+        let feature = plumb(
+            &path,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &commit,
+                "-m",
+                "synthetic feature",
+            ],
+            None,
+        );
+        plumb(&path, &["update-ref", "refs/heads/feature", &feature], None);
         Self {
             t,
             owner: owner.user_id,
@@ -239,6 +253,17 @@ impl World {
 
     async fn call(&self, method: &str, path: &str, who: Principal, body: Option<Value>) -> Answer {
         let uri = format!("/api/v1/projects/{}/pipelines{path}", self.web.get());
+        self.call_at(method, &uri, who, body).await
+    }
+
+    /// [`Self::call`] on any path.
+    async fn call_at(
+        &self,
+        method: &str,
+        uri: &str,
+        who: Principal,
+        body: Option<Value>,
+    ) -> Answer {
         let builder = Request::builder().method(method).uri(uri);
         let mut req = match body {
             Some(b) => builder
@@ -256,6 +281,26 @@ impl World {
                 namespaces: Arc::new(self.t.db.clone()),
                 projects: Arc::new(self.t.db.clone()),
             },
+        )
+        // Plan 18 S5: the merge request routes (a merge request is opened
+        // through its route: only forge-review calls the review commands).
+        .with_review(
+            forge_review::Review::new(
+                self.t.db.clone(),
+                Arc::new(Browser::new(
+                    self.git.clone(),
+                    self.storage.clone(),
+                    BrowseLimits::default(),
+                )),
+            )
+            .with_version_refs(forge_review::VersionRefs::new(
+                self.git.clone(),
+                self.storage.clone(),
+            ))
+            .with_review_git(forge_review::approvals::ReviewGit::new(
+                self.git.clone(),
+                self.storage.clone(),
+            )),
         )
         .with_pipelines(Pipelines::new(
             self.t.db.clone(),
@@ -511,5 +556,214 @@ async fn a_developer_runs_a_pipeline_by_hand_and_a_reporter_cannot() {
             ),
         ]
     );
+    w.t.drop_now().await;
+}
+
+// ── Plan 18 S5: the merge request pipeline on the current target ──
+
+fn oid(c: char) -> ObjectId {
+    ObjectId::parse(&c.to_string().repeat(40)).expect("oid")
+}
+
+impl World {
+    /// dave's merge request `feature` → `main` with its head `e…`
+    /// recorded (no mergeability check yet); its iid and id.
+    async fn merge_request(&self) -> (i64, forge_core::MergeRequestId) {
+        let uri = format!("/api/v1/projects/{}/merge-requests", self.web.get());
+        let opened = self
+            .call_at(
+                "POST",
+                &uri,
+                session(self.dev),
+                Some(json!({"title": "Feature", "source_branch": "feature", "target_branch": "main"})),
+            )
+            .await;
+        assert_eq!(opened.status, StatusCode::CREATED, "{}", opened.json);
+        let iid = opened.json["iid"].as_i64().expect("iid");
+        let id = self
+            .t
+            .json_rows(&format!(
+                "SELECT id FROM forge.merge_requests WHERE project_id = {} AND iid = {iid}",
+                self.web.get()
+            ))
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .expect("merge request id");
+        let mr = forge_core::MergeRequestId::new(id);
+        // The version job's record (the test pins the head to `e…`).
+        forge_db::review::record_mr_version(
+            &self.t.db,
+            &ctx("req-version"),
+            mr,
+            &oid('e'),
+            Some(self.dev),
+        )
+        .await
+        .expect("version");
+        (iid, mr)
+    }
+
+    async fn ask_pipeline(&self, iid: i64, who: Principal) -> Answer {
+        let uri = format!(
+            "/api/v1/projects/{}/merge-requests/{iid}/pipeline",
+            self.web.get()
+        );
+        self.call_at("POST", &uri, who, None).await
+    }
+
+    /// The payloads of the jobs of `kind`, oldest first.
+    async fn jobs(&self, kind: &str) -> Vec<Value> {
+        self.t
+            .json_rows(&format!(
+                "SELECT payload FROM forge.jobs WHERE kind = '{kind}' ORDER BY id"
+            ))
+            .await
+            .into_iter()
+            .map(|r| r["payload"].clone())
+            .collect()
+    }
+}
+
+/// Plan 18 S5: `POST …/merge-requests/{iid}/pipeline` is decided as a
+/// pipeline run (`PipelineCreate`, the permission matrix's rows): a
+/// Reporter, a Guest, a read-only token and an agent's read token are
+/// refused and write nothing; a Developer is answered `202`.
+#[tokio::test]
+async fn the_merge_request_pipeline_route_is_decided_as_a_pipeline_run() {
+    let w = World::new().await;
+    let (iid, _) = w.merge_request().await;
+    for (who, want) in [
+        (session(w.reporter), (StatusCode::FORBIDDEN, "FG-AUTH-0003")),
+        (session(w.guest), (StatusCode::FORBIDDEN, "FG-AUTH-0003")),
+        (
+            token(w.dev, &[Scope::ReadApi], AccountKind::Human),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0002"),
+        ),
+        (
+            agent(w.dev, &[Scope::ReadApi]),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0002"),
+        ),
+    ] {
+        let a = w.ask_pipeline(iid, who).await;
+        assert_eq!((a.status, a.code()), want, "{}", a.json);
+    }
+    assert_eq!(w.audit().await, [], "a refusal writes nothing");
+    assert_eq!(
+        w.jobs("merge_request.mergeability").await,
+        Vec::<Value>::new()
+    );
+    let a = w.ask_pipeline(iid, session(w.dev)).await;
+    assert_eq!(a.status, StatusCode::ACCEPTED, "{}", a.json);
+    assert_eq!(a.json["outcome"], "computing");
+    // No such merge request.
+    let a = w.ask_pipeline(99, session(w.dev)).await;
+    assert_eq!(
+        (a.status, a.code()),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005")
+    );
+    w.t.drop_now().await;
+}
+
+/// Plan 18 S5: without a merge result for the current target the ask is a
+/// check whose job carries it (`computing`); a second press asks nothing
+/// more. With the merge result of the current target written (a target
+/// move: no pipeline of its own), the ask enqueues exactly one pipeline on
+/// it (`queued`), and a double click finds it (`exists`) — one audit row
+/// per thing asked.
+#[tokio::test]
+async fn the_merge_request_pipeline_runs_once_on_the_current_target() {
+    let w = World::new().await;
+    let (iid, mr) = w.merge_request().await;
+    let first = w.ask_pipeline(iid, session(w.dev)).await;
+    assert_eq!(first.status, StatusCode::ACCEPTED, "{}", first.json);
+    assert_eq!(first.json["outcome"], "computing");
+    let seq = first.json["check_seq"].as_i64().expect("seq");
+    let again = w.ask_pipeline(iid, session(w.dev)).await;
+    assert_eq!(again.json["outcome"], "computing");
+    assert_eq!(again.json["check_seq"], seq, "a double click asks once");
+    let checks = w.jobs("merge_request.mergeability").await;
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(checks[0]["pipeline"], true);
+    assert_eq!(checks[0]["check_seq"], seq);
+
+    // The head's first merge result (target 1) got its pipeline; the target
+    // moved to 2: a new merge result and none.
+    let origin = RequestId::parse("req-mr").expect("id");
+    for (target, result) in [('1', 'a'), ('2', 'c')] {
+        forge_db::review::record_merge_result(
+            &w.t.db,
+            &origin,
+            mr,
+            (&oid('e'), &oid(target)),
+            &oid(result),
+            forge_db::review::MergeRequestPipeline::OnNewHead,
+        )
+        .await
+        .expect("record")
+        .expect("open");
+    }
+    let shas = |jobs: Vec<Value>| -> Vec<String> {
+        jobs.iter()
+            .map(|p| p["sha"].as_str().expect("sha").to_owned())
+            .collect()
+    };
+    assert_eq!(shas(w.jobs("ci.pipeline_create").await), ["a".repeat(40)]);
+    let seq = forge_db::review::request_check(&w.t.db, mr, RequestId::parse("req-q").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
+    // A later request (as a landing makes) replaces the asked job and
+    // keeps the ask.
+    let checks = w.jobs("merge_request.mergeability").await;
+    let last = checks.last().expect("a job");
+    assert_eq!(
+        (last["check_seq"].as_i64(), last["pipeline"].clone()),
+        (Some(seq), json!(true)),
+        "{checks:?}"
+    );
+    let stored = forge_db::review::record_check(
+        &w.t.db,
+        &ctx("req-check"),
+        mr,
+        seq,
+        &forge_db::review::CheckResult {
+            status: forge_core::MergeabilityStatus::CanBeMerged,
+            reason: None,
+            head: Some(oid('e')),
+            target: Some(oid('2')),
+            conflicts: Vec::new(),
+            conflicts_truncated: false,
+            paths: None,
+        },
+    )
+    .await
+    .expect("check");
+    assert!(matches!(stored, forge_db::review::Recorded::Stored { .. }));
+
+    let queued = w.ask_pipeline(iid, session(w.dev)).await;
+    assert_eq!(queued.status, StatusCode::ACCEPTED, "{}", queued.json);
+    assert_eq!(queued.json["outcome"], "queued");
+    assert_eq!(queued.json["merge_result_sha"], "c".repeat(40));
+    assert_eq!(queued.json["target_sha"], "2".repeat(40));
+    // A double click, and a service account's press: the same pipeline.
+    let twice = w.ask_pipeline(iid, session(w.dev)).await;
+    assert_eq!(twice.json["outcome"], "exists", "{}", twice.json);
+    let sa = w
+        .ask_pipeline(iid, token(w.sa, &[Scope::Api], AccountKind::ServiceAccount))
+        .await;
+    assert_eq!(sa.json["outcome"], "exists", "{}", sa.json);
+    assert_eq!(
+        shas(w.jobs("ci.pipeline_create").await),
+        ["a".repeat(40), "c".repeat(40)],
+        "exactly one pipeline for the current target"
+    );
+    let asked: Vec<_> = w
+        .audit()
+        .await
+        .into_iter()
+        .filter(|(action, _, _)| action == "pipeline.run_merge_request")
+        .collect();
+    assert_eq!(asked.len(), 2, "computing once, queued once: {asked:?}");
     w.t.drop_now().await;
 }

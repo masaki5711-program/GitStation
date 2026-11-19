@@ -67,6 +67,11 @@ pub struct MergeStatus {
     pub approvals: Option<ApprovalReport>,
     /// Every required check of the target's merge rule with its run.
     pub checks: Vec<RequiredCheck>,
+    /// Plan 18 S5: for a check whose run is on a merge result, the target
+    /// tip that merge result merged into ("as of `<sha>`"; a stale run's is
+    /// an older tip). A check without such a run has no entry
+    /// ([`MergeStatus::check_target`]).
+    pub check_targets: Vec<(forge_core::CheckName, ObjectId)>,
     /// The unresolved discussions when the merge rule asks for them.
     pub discussions: Option<u32>,
     /// M3 I1d: whether a work item of the project's binding is linked, when
@@ -95,6 +100,15 @@ impl MergeStatus {
         self.merge_result_sha.is_none()
             && self.carried_from_target_sha.is_none()
             && forge_core::merge_results::reported_on_merge_results(&check.name)
+    }
+
+    /// The target tip `check`'s run is about (plan 18 S5: the merge result's
+    /// target; `None`: no run, or a run on the head).
+    pub fn check_target(&self, check: &RequiredCheck) -> Option<&ObjectId> {
+        self.check_targets
+            .iter()
+            .find(|(name, _)| name == &check.name)
+            .map(|(_, target)| target)
     }
 }
 
@@ -309,6 +323,7 @@ impl Review {
                 reasons,
                 approvals: None,
                 checks: Vec::new(),
+                check_targets: Vec::new(),
                 discussions: None,
                 work_item_link: None,
                 settings,
@@ -443,6 +458,14 @@ impl Review {
             Ok(_) => (true, Vec::new()),
             Err(reasons) => (false, reasons),
         };
+        let check_targets = conditions
+            .checks
+            .iter()
+            .filter_map(|c| {
+                runs.resolved_target(&head, target_tip.as_ref(), &c.name)
+                    .map(|t| (c.name.clone(), t.clone())) // clone: the status owns them
+            })
+            .collect();
         Ok(MergeStatus {
             head_sha: Some(head),
             merge_result_sha: merge_result,
@@ -453,6 +476,7 @@ impl Review {
             reasons,
             approvals: Some(report),
             checks: conditions.checks,
+            check_targets,
             discussions: conditions.discussions,
             work_item_link: conditions.work_item_link,
             settings,

@@ -139,8 +139,8 @@ export function reasonLine(first: StatusReason): BlockedReason {
       if (name === null) return generic();
       return { key: t('mr.status.checkMissing'), values: { name }, next: 'wait' };
     }
-    // M4 C7: the run is on an older merge result; the pipeline on the new
-    // one decides (FG-CI-0013).
+    // M4 C7: the run is on an older merge result (FG-CI-0013). Plan 18 S5:
+    // no pipeline follows a target move; the hint names what to press.
     case 'required_check_stale': {
       const name = text(d.name);
       if (name === null) return generic();
@@ -168,7 +168,15 @@ export function reasonLine(first: StatusReason): BlockedReason {
 }
 
 /** The check the merge request pipeline reports on a merge result. */
-const MERGE_RESULT_CHECK = 'ci/pipeline';
+export const MERGE_RESULT_CHECK = 'ci/pipeline';
+
+/** Plan 18 S5: the target's merge rule requires the merge request pipeline
+ * (`ci/pipeline`, reported on the merge result). Since a target move starts
+ * no pipeline of its own, the page merges through the queue there ("Merge
+ * when ready"), whose train tests the merge on the current target. */
+export function requiresMergeResultPipeline(status: MergeStatus): boolean {
+  return status.checks.some((c) => c.name === MERGE_RESULT_CHECK);
+}
 
 /** Plan 18 S4: the mergeability result was carried over a landing that does
  * not touch this merge request's files, so no merge result (and no pipeline)

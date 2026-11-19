@@ -5105,6 +5105,12 @@
             "pattern": "^FG-[A-Z]+-[0-9]{4}$",
             "type": "string"
           },
+          "hint": {
+            "enum": [
+              "merge_queue"
+            ],
+            "type": "string"
+          },
           "request_id": {
             "type": "string"
           },
@@ -6998,6 +7004,52 @@
           "id",
           "username",
           "display_name"
+        ],
+        "type": "object"
+      },
+      "MergeRequestPipelineBody": {
+        "additionalProperties": false,
+        "description": "What an ask did (`202`).",
+        "properties": {
+          "check_seq": {
+            "description": "The mergeability check the pipeline waits for (`computing`).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "merge_result_sha": {
+            "description": "The merge result the pipeline runs on (`queued`, `exists`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "description": "`queued` (the pipeline's job was enqueued), `exists` (it had been\nasked for already) or `computing` (the merge result of the current\ntarget is being written; the pipeline follows it).",
+            "type": "string"
+          },
+          "target_sha": {
+            "description": "The target tip of that merge result (`queued`, `exists`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "outcome",
+          "merge_result_sha",
+          "target_sha",
+          "check_seq"
         ],
         "type": "object"
       },
@@ -11246,6 +11298,13 @@
               "null"
             ]
           },
+          "target_sha": {
+            "description": "Plan 18 S5 (added within `schema_version` 1): the target tip the\nrun's merge result merged into — the result is \"as of\" this tip (a\n`stale` run's is an older one). `null`: no run, or a run on the head\n(a name the merge request pipeline does not report).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "waits_for_merge_result": {
             "description": "M4 C7 review (added within `schema_version` 1): the check is the\nmerge request pipeline's (`ci/pipeline`) and there is no clean merge\nresult (`merge_result_sha` null: a conflict, no target, unrelated\nhistories, or the mergeability check failed or is pending) — its\npipeline waits for one and runs only once the merge is clean.\nPlan 18 S4: `false` when the result was carried forward\n(`carried_from_target_sha`): that merge is clean and nothing is\nwaited for — the merge queue tests it, and a direct merge request\nhas the merge result of the target's tip computed.",
             "type": "boolean"
@@ -11256,7 +11315,8 @@
           "status",
           "conclusion",
           "stale",
-          "waits_for_merge_result"
+          "waits_for_merge_result",
+          "target_sha"
         ],
         "type": "object"
       },
@@ -11430,6 +11490,10 @@
             "description": "M4 C10 (added within `schema_version` 1): `POST …/revert` would be\nallowed — the merge request is merged and the caller may open a\nmerge request and push a branch (a protection of `revert/*`, and\nwhether the revert conflicts, are decided by the revert itself).\nAlways `false` when acting for a person.",
             "type": "boolean"
           },
+          "can_run_pipeline": {
+            "description": "Plan 18 S5 (added within `schema_version` 1): `POST\n…/merge-requests/{iid}/pipeline` would be allowed — running the\nmerge request pipeline on the current target (`PipelineCreate` on\nthe project). Always `false` when acting for a person.",
+            "type": "boolean"
+          },
           "can_unapprove": {
             "description": "`POST …/unapprove` would be allowed (pair it with `approved_by_me`:\nthere may be nothing to withdraw).",
             "type": "boolean"
@@ -11441,7 +11505,8 @@
           "can_merge",
           "can_mark_ready",
           "approved_by_me",
-          "can_revert"
+          "can_revert",
+          "can_run_pipeline"
         ],
         "type": "object"
       },
@@ -19613,6 +19678,55 @@
         },
         "summary": "Whether a merge request can be merged, as last checked (as the repository browse API)",
         "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/pipeline": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_pipeline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestPipelineBody"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Run the merge request pipeline (ci/pipeline) on the merge result of the current target: 202 queued (its job was enqueued), exists (asked for already; a second press asks nothing more) or computing (the merge result of the current target is written first, then the pipeline runs on it). A target move alone starts no merge request pipeline (ci.mr_pipeline_on_target_move); the merge queue does not need this. 404 FG-REPO-0005 without the merge request; 409 FG-CI-0003 when it is not open, has no version or conflicts (Developer; a token needs api)",
+        "x-forge-action": "PipelineCreate"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/reopen": {

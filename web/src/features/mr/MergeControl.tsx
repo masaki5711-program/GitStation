@@ -29,6 +29,7 @@ import { Modal } from '../../ui/Modal';
 import { focusWhenNoDialog } from '../../ui/focus';
 import { mergeMethodHelp, mergeMethodLabel } from '../labels';
 import { ActionError } from './ActionError';
+import { requiresMergeResultPipeline } from './blockedReason';
 import styles from './Mr.module.css';
 
 export function MergeButton({
@@ -57,8 +58,14 @@ export function MergeButton({
   // Shown only when the server said a merge would be allowed, nothing blocks
   // it now and the version on screen is the head the status is about; the
   // server decides again (and the job under its lock).
+  // Plan 18 S5: on a target that requires the merge request pipeline the
+  // page merges through the queue instead ("Merge when ready", QueueControl).
   const shown =
-    status.viewer.can_merge && status.mergeable && viewedHead !== null && viewedHead === status.head_sha;
+    status.viewer.can_merge &&
+    status.mergeable &&
+    !requiresMergeResultPipeline(status) &&
+    viewedHead !== null &&
+    viewedHead === status.head_sha;
   const settings = useMergeSettings(projectId, shown || open);
   const start = useStartMerge(projectId, iid);
   const [method, setMethod] = useState<string | null>(null);

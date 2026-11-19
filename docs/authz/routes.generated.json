@@ -1341,6 +1341,15 @@
     "word": "fixed"
   },
   {
+    "action": "PipelineCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/pipeline",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MergeRequestReopen",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/reopen",

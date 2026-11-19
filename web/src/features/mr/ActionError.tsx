@@ -8,7 +8,15 @@ import { ApiFailure } from '../../api/client';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { focusWhenNoDialog } from '../../ui/focus';
+import styles from './Mr.module.css';
 import { useViewedHead } from './viewedHead';
+
+/** Plan 18 S5: the server names the merge queue as the next step (a direct
+ * merge refused because the merge request pipeline ran on an older target,
+ * FG-CI-0013 `hint=merge_queue`). */
+export function hintsQueue(error: unknown): boolean {
+  return error instanceof ApiFailure && error.failure.kind === 'api' && error.failure.hint === 'merge_queue';
+}
 
 /** The view the person acted on is out of date (409 on an MR action). */
 export function isStale(error: unknown): boolean {
@@ -32,6 +40,11 @@ export function ActionError({
   return (
     <div>
       <QueryError error={error} />
+      {hintsQueue(error) && (
+        <p className={styles.nextHint} data-testid="mr-action-hint">
+          {t('mr.merge.hintQueue')}
+        </p>
+      )}
       {isStale(error) && (
         <button
           type="button"

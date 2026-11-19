@@ -1,4 +1,4 @@
-# Runbook: merge-blocked（FG-REVIEW-0007 の承認とマージの条件の理由。関連: FG-REVIEW-0010 / 0013 / 0014 / 0015 / 0016、FG-GIT-0017）
+# Runbook: merge-blocked（FG-REVIEW-0007 の承認とマージの条件の理由。関連: FG-REVIEW-0010 / 0013 / 0014 / 0015 / 0016、FG-GIT-0017、FG-CI-0013）
 
 M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まるときの読み方。とくに **コミッターの規則** で承認が数えられない理由
 `committer` / `committers_unknown`（ADR-0024 §8 の 3。再レビュー #40 で「副作用は理由の値で見せる」と決めた）。
@@ -12,6 +12,8 @@ M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まると
   `approvals_missing` の内訳が `rule=@protected_branch`（保護ブランチのマージの条件の最低の承認数）。
 - M3 R6: キューにあったマージが `superseded`（`gstn mr merge-status` の `error_code`）で FG-REVIEW-0007 / FG-REVIEW-0010 — 要求の後に
   マージの条件・設定が変わり、ジョブが判定し直した（ADR-0024 §4.2 の 3・5）。
+- plan 18 S5: 直接のマージが FG-CI-0013（`required_check_stale`、本体に `hint: "merge_queue"`）— 下の「必須の `ci/pipeline` が古い
+  対象のもの」。
 
 **まず全部の理由を見る**: `gstn mr status --project <id> --iid <n> --json`（安定した契約、`docs/api/merge-status.md`）。`reasons` は
 ADR-0024 §7 の固定の順で、最初の 1 つが「止まっている理由の 1 行」。
@@ -42,6 +44,34 @@ target に一致する保護のルールのマージの条件は **いちばん�
   影響を受けない）。CODEOWNERS が壊れて MR も通らないときは runbook codeowners の一時停止。
 - キューにあったマージが FG-REVIEW-0010 で `superseded` → 要求の後にプロジェクトの設定（`gstn merge-settings show`）がその方式を
   許さなくなった。許された方式でもう一度要求する。
+
+### 必須の `ci/pipeline` が古い対象のもの（FG-CI-0013 `required_check_stale`、plan 18 S5）
+
+`ci/pipeline` は MR パイプラインがマージ結果（head を target の先端にマージしたコミット）に報告する。plan 18 S5（ADR-0037）から、
+**target が進んだだけ（head は同じ）では新しいマージ結果に MR パイプラインを積まない**（新しい head の最初のマージ結果だけが積む）。
+だから target に着地があったあとの直接のマージは、`ci/pipeline` が古いマージ結果のものとして FG-CI-0013 で止まるのが仕様どおりの答え
+（パイプラインの遅れではない）。答えの本体には `hint: "merge_queue"` が付く。
+
+- 見分け方: `gstn mr status --project <id> --iid <n> --json` の `reasons[0]` が `required_check_stale`（`name=ci/pipeline`）、
+  `checks[].stale: true`、`checks[].target_sha` が実行の時点の target の先端（今の先端と違う）。ログ
+  `forge.review.merge_result_updated` の `pipeline_enqueued=false`・`pipeline=on_new_head` が「target の移動なので積まなかった」。
+- 次の一手（どちらか。どちらも利用者の操作で、運用の変更は要らない）:
+  1. **マージキュー**（画面の「準備ができたらマージ」、`POST …/merge-requests/{iid}/merge-queue`）。列車のパイプラインが今の target で
+     確かめて着地させる。MR パイプラインは要らない。`ci/pipeline` が必須の target では、画面は直接の「マージ…」を出さず、これが主の
+     ボタンになる。
+  2. **今の target でパイプラインを動かす**（画面のボタン、`POST …/merge-requests/{iid}/pipeline`、Developer 以上。認可は手動の
+     パイプラインの実行と同じ `PipelineCreate`）。答えは `queued`（今のマージ結果にパイプラインを積んだ）・`exists`（もう積んである。
+     二度押しても 1 本）・`computing`（今の target のマージ結果をまず作り、そのあとパイプラインが動く。S4 で持ち越した結果など）。
+     監査の行 `pipeline.run_merge_request`、ログ `forge.ci.merge_request_pipeline_asked`。パイプラインが通ったら直接マージできる。
+- `computing` のまま進まない: マージ可能性のジョブ（`merge_request.mergeability`、ペイロードに `"pipeline": true`）が残っているか見る
+  （`SELECT id, state, payload FROM forge.jobs WHERE kind = 'merge_request.mergeability' AND payload->>'merge_request_id' = '<mr_id>' ORDER BY id DESC LIMIT 5;`）。
+  ジョブが dead になった（worker の warn `forge.review.mergeability_ask_lost`、`merge_request_id` と失敗のコード）・ファンアウトの
+  上限で後回しにされた（FG-REVIEW-0003 `fanout_deferred`）ときは依頼が消える（既知の限界）。
+  画面は古いままボタンを出すので、もう一度押せばよい。
+- 以前の動き（target の移動ごとに MR パイプライン）に戻す: `[MUTATING — needs approval]` 設定 `ci.mr_pipeline_on_target_move = true`
+  （環境変数 `FORGE_CI_MR_PIPELINE_ON_TARGET_MOVE=true`）にして **`forge worker`** を再起動する（読むのはマージ結果を書く worker の
+  マージ可能性のジョブだけ。`forge serve` の再起動は要らない）。ランナーの負荷が増える（着地ごとに開いている MR の数だけパイプライン）。
+  戻し方: 設定を外して worker を再起動する。
 
 ### 必須のチェックで動かなくなったブランチ（報告できる主体が無い）
 

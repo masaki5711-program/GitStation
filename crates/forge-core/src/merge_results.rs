@@ -80,18 +80,45 @@ impl MergeCheckRuns {
         target_tip: Option<&ObjectId>,
         name: &CheckName,
     ) -> Option<(CheckRun, Freshness)> {
+        self.resolve_with_target(head, target_tip, name)
+            .map(|(run, freshness, _)| (run, freshness))
+    }
+
+    /// Plan 18 S5: the target tip of the merge result whose run
+    /// [`Self::resolve`] answers with — the "as of `<sha>`" of a
+    /// `ci/pipeline` result (`None`: a run on the head, or no run).
+    pub fn resolved_target(
+        &self,
+        head: &ObjectId,
+        target_tip: Option<&ObjectId>,
+        name: &CheckName,
+    ) -> Option<&ObjectId> {
+        self.resolve_with_target(head, target_tip, name)
+            .and_then(|(_, _, target)| target)
+    }
+
+    /// [`Self::resolve`] with the target of the merge result the run is on.
+    fn resolve_with_target(
+        &self,
+        head: &ObjectId,
+        target_tip: Option<&ObjectId>,
+        name: &CheckName,
+    ) -> Option<(CheckRun, Freshness, Option<&ObjectId>)> {
         let current = self.current(target_tip);
-        if let Some(run) = current.and_then(|c| c.runs.run(&c.result, name)) {
-            return Some((run, Freshness::Fresh));
+        if let Some((run, c)) = current.and_then(|c| c.runs.run(&c.result, name).map(|r| (r, c))) {
+            return Some((run, Freshness::Fresh, Some(&c.target)));
         }
         if !reported_on_merge_results(name) {
-            return self.head.run(head, name).map(|run| (run, Freshness::Fresh));
+            return self
+                .head
+                .run(head, name)
+                .map(|run| (run, Freshness::Fresh, None));
         }
         self.results
             .iter()
             .filter(|r| Some(&r.target) != target_tip)
-            .find_map(|r| r.runs.run(&r.result, name))
-            .map(|run| (run, Freshness::Stale))
+            .find_map(|r| r.runs.run(&r.result, name).map(|run| (run, r)))
+            .map(|(run, r)| (run, Freshness::Stale, Some(&r.target)))
     }
 }
 
@@ -232,6 +259,36 @@ mod tests {
         assert_eq!(
             runs.resolve(&oid('e'), Some(&oid('2')), &name("ci/pipeline")),
             Some((success(), Freshness::Stale))
+        );
+    }
+
+    /// Plan 18 S5: the "as of" of a result is the target tip of the merge
+    /// result its run is on — the current one, or the earlier one of a
+    /// stale run; a head run has none.
+    #[test]
+    fn the_resolved_target_is_the_tip_the_run_was_merged_into() {
+        let runs = MergeCheckRuns {
+            head: on('e', &["ci/gates"]),
+            results: vec![result('2', 'b', &[]), result('1', 'a', &["ci/pipeline"])],
+        };
+        let pipeline = name("ci/pipeline");
+        assert_eq!(
+            runs.resolved_target(&oid('e'), Some(&oid('1')), &pipeline),
+            Some(&oid('1'))
+        );
+        assert_eq!(
+            runs.resolved_target(&oid('e'), Some(&oid('2')), &pipeline),
+            Some(&oid('1')),
+            "a stale run is as of the older tip"
+        );
+        assert_eq!(
+            runs.resolved_target(&oid('e'), Some(&oid('2')), &name("ci/gates")),
+            None,
+            "a head run has no target"
+        );
+        assert_eq!(
+            runs.resolved_target(&oid('e'), Some(&oid('2')), &name("ci/missing")),
+            None
         );
     }
 }

@@ -196,7 +196,10 @@ caller's SSH keys: `GET|POST /api/v1/user/ssh-keys`, `DELETE
   transaction and checks the branches exist (`FG-REPO-0023`). Answers: the merge request
   re-read (`201` for a create, `200` otherwise, also when nothing changed);
   `FG-REVIEW-0001` (409) for a second open one between the same branches. Tests
-  `tests/merge_request_routes.rs`. M3 R1b: `POST …/{iid}/version-refs/purge`
+  `tests/merge_request_routes.rs`. Plan 18 S5: `POST …/{iid}/pipeline` (`PipelineCreate` on
+  the project, `routes/merge_requests/pipeline.rs`, forge-pipelines' `run_merge_request`): the
+  merge request pipeline on the current target, `202` `queued` / `exists` / `computing`; tests
+  `tests/pipeline_routes.rs`. M3 R1b: `POST …/{iid}/version-refs/purge`
   (`MergeRequestVersionRefsPurge`, session only — every token is FG-AUTH-0002
   `session_required` —, administrators; body `{"versions": [n…]}` or `{}`; answers
   `{"iid","purged","already_purged"}`; FG-REVIEW-0002), tests
@@ -370,7 +373,9 @@ caller's SSH keys: `GET|POST /api/v1/user/ssh-keys`, `DELETE
   the list in the commit that routes it.
 - `Ctx` extractor — `request_id` and `lang` (from `Accept-Language`: ja / en /
   id, Japanese otherwise); `ctx.fail(err)` → `ApiError`.
-- `ApiError` — renders `{ error_code, user_message, request_id }` only, sets
+- `ApiError` — renders `{ error_code, user_message, request_id }` only (plus the
+  feed's fixed `reason` for FG-INT-0007 and, plan 18 S5, the fixed `hint` word
+  `merge_queue` for FG-CI-0013, `error::HINTS`), sets
   `Content-Language`, and logs the failure once (`telemetry::log_failure`).
   Every 401 carries `WWW-Authenticate: Basic realm="GitStation",
   charset="UTF-8"` and `Bearer realm="GitStation"` (the one place for the

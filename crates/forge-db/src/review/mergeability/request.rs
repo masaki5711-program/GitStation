@@ -5,7 +5,7 @@ use forge_core::{ObjectId, RequestId};
 use forge_errors::ForgeError;
 use sqlx::postgres::PgConnection;
 
-use super::{mergeability_job, LIVE_JOB, MERGEABILITY_JOB};
+use super::{job_of, ASKED_JOB, LIVE_JOB, MERGEABILITY_JOB};
 use crate::jobs::{enqueue_superseding_on, supersede_queued_on, Enqueued};
 use crate::{query_error, Db};
 
@@ -18,19 +18,21 @@ pub const DEFER_MAX: i64 = 5_000;
 pub const SWEEP_BATCH: i64 = 50;
 
 /// Bump `mr`'s check (status `unchecked`, `check_seq + 1`, the conflict
-/// list cleared) on `conn`, the caller's transaction; the new seq.
+/// list cleared) on `conn`, the caller's transaction; the new seq, and
+/// whether a live job of `mr` carries a person's ask for the pipeline
+/// (plan 18 S5, [`ASKED_JOB`]: read in the same statement).
 async fn bump_on(
     conn: &mut PgConnection,
     mr: MergeRequestId,
     project: ProjectId,
-) -> Result<i64, ForgeError> {
-    sqlx::query_scalar(
+) -> Result<(i64, bool), ForgeError> {
+    sqlx::query_as(&format!(
         "INSERT INTO forge.merge_request_mergeability (merge_request_id, project_id) \
          VALUES ($1, $2) ON CONFLICT (merge_request_id) DO UPDATE SET status = 'unchecked', \
-         reason = NULL, conflicts = '{}', conflicts_truncated = false, \
+         reason = NULL, conflicts = '{{}}', conflicts_truncated = false, \
          check_seq = forge.merge_request_mergeability.check_seq + 1, \
-         updated_at = now() RETURNING check_seq",
-    )
+         updated_at = now() RETURNING check_seq, {ASKED_JOB}"
+    ))
     .bind(mr.get())
     .bind(project.get())
     .fetch_one(conn)
@@ -50,8 +52,23 @@ pub(crate) async fn request_check_on(
     origin: RequestId,
     origin_event_seq: Option<i64>,
 ) -> Result<i64, ForgeError> {
-    let seq = bump_on(conn, mr, project).await?;
-    let job = mergeability_job(mr, seq, origin, origin_event_seq)?;
+    request_check_asking_on(conn, mr, project, (origin, origin_event_seq), false).await
+}
+
+/// [`request_check_on`]; `ask`: a person asked for the merge request
+/// pipeline on the current target (plan 18 S5). The new job carries the
+/// ask when `ask` is set or when a live job it replaces (or makes stale)
+/// carried one, so a request in between — a landing, a sweep, a direct
+/// merge's recompute — never drops it.
+pub(crate) async fn request_check_asking_on(
+    conn: &mut PgConnection,
+    mr: MergeRequestId,
+    project: ProjectId,
+    (origin, origin_event_seq): (RequestId, Option<i64>),
+    ask: bool,
+) -> Result<i64, ForgeError> {
+    let (seq, inherited) = bump_on(conn, mr, project).await?;
+    let job = job_of(mr, seq, (origin, origin_event_seq), ask || inherited)?;
     if let Enqueued::Deduped = enqueue_superseding_on(conn, &job, mr.get()).await?.enqueued {
         // A fresh seq is a fresh key: a duplicate means a job was enqueued
         // for a seq the row had not reached (never expected). The job that

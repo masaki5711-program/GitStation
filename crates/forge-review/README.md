@@ -109,17 +109,28 @@ merge request in place (ADR-0024 §1).
   2026-11-11): a stored clean check becomes the merge result — `Git::write_merge_result` (the
   trial merge's tree, parents target tip then head), once per (head, target tip) pair
   (`forge_db::review::merge_result_of` / `record_merge_result`, which also enqueues the merge
-  request pipeline on the result), and `refs/merge-requests/<iid>/merge` pointed at it while the
+  request pipeline on the result — plan 18 S5: only on a new head's first merge result, unless
+  `Mergeability::with_pipeline_on_target_move(true)` (`ci.mr_pipeline_on_target_move`, set by
+  `forge worker`) or the job carries a person's ask (`check_asked`, `"pipeline": true`)), and `refs/merge-requests/<iid>/merge` pointed at it while the
   run's seq is the latest (decided and written under `lock_version_refs`, the merge request's refs lock); a conflict / no target / unrelated / no version deletes the ref
   (`CheckReport::merge_result`, `merge_ref`; logs `forge.review.merge_result_updated` /
   `_removed`). Required checks are resolved against the live target tip
   (`forge_core::MergeCheckRuns::resolve`, `conditions((target, tip), …)`): a `ci/pipeline` run on an
   earlier merge result only is `BlockReason::RequiredCheckStale` (other names: the head's run counts) (`RequiredCheck::stale`), and `blocked()`
-  answers FG-CI-0013 RequiredCheckStale when it is the first reason. `MergeStatus::merge_result_sha`.
+  answers FG-CI-0013 RequiredCheckStale when it is the first reason (plan 18 S5: with context
+  `hint=merge_queue`, `merges::evaluate::HINT_MERGE_QUEUE`, carried to the error body by forge-web).
+  `MergeStatus::merge_result_sha`; plan 18 S5: `MergeStatus::check_target` (the target tip a
+  check's run is as of, `forge_core::MergeCheckRuns::resolved_target`).
   `prune_merge_results` (the worker's mergeability sweep) deletes the merge ref and the rows of closed
   and merged merge requests, keeping a row a pending or running pipeline needs.
   Tests in `tests/approvals_git.rs` (`a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge`
-  and seven more).
+  and seven more; plan 18 S5: `a_target_move_creates_no_merge_request_pipeline`,
+  `a_new_head_creates_one`, `ci_mr_pipeline_on_target_move_restores_the_old_behavior`,
+  `direct_merge_on_a_stale_pipeline_hints_the_queue`,
+  `a_pipeline_of_another_head_never_satisfies_ci_pipeline`,
+  `an_asked_check_enqueues_the_pipeline_on_the_current_target_once`; `tests/queue_paths/mod.rs`:
+  `an_asked_check_of_a_carried_mr_writes_its_merge_result_and_one_pipeline`,
+  `with_the_key_at_default_the_train_pipeline_gates_a_queued_landing`).
 
 - M3 X6 (conflict prediction, plan 04 C-2, ADR-0024 Amendment X6; `src/conflicts.rs`):
   `scan(&Db, &ConflictPredictor, ConflictScanRequest, &RequestId) -> ScanReport`, the body of the

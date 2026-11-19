@@ -2,7 +2,9 @@
 //!
 //! Body: `{ "error_code", "user_message", "request_id" }` — nothing else,
 //! except the integration feed's 410 (`FG-INT-0007`), which adds its fixed
-//! `reason` word (plan 02 §11.2: the consumer recovers by it).
+//! `reason` word (plan 02 §11.2: the consumer recovers by it), and a
+//! stale required check (`FG-CI-0013`, plan 18 S5), which adds its fixed
+//! `hint` word (`merge_queue`: the next step a client can take).
 //! A failed browser navigation of the sign-in flow (`/-/auth/…`) shows the
 //! same `user_message` and `request_id` as an HTML page (`crate::error_page`).
 //! Context, sources, paths and git stderr stay in the log, written once here.
@@ -119,6 +121,24 @@ struct Body<'a> {
     /// cannot continue — one of [`FEED_GONE_REASONS`], never anything else.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+    /// Only `FG-CI-0013` (plan 18 S5): the next step — one of [`HINTS`],
+    /// never anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<&'static str>,
+}
+
+/// The `hint` values an error body may show (`forge_review`'s
+/// `merges::evaluate::HINT_MERGE_QUEUE`, pinned by a test).
+pub(crate) const HINTS: [&str; 1] = ["merge_queue"];
+
+/// The public `hint` of a refusal (a fixed word from the context, only for
+/// `FG-CI-0013`; anything else is not shown).
+fn hint(err: &ForgeError) -> Option<&'static str> {
+    if err.code() != forge_errors::ErrorCode::RequiredCheckStale {
+        return None;
+    }
+    let hint = err.context().iter().find(|(k, _)| *k == "hint")?;
+    HINTS.into_iter().find(|known| *known == hint.1.as_str())
 }
 
 /// The `reason` values a 410 of the integration feed may show.
@@ -186,6 +206,7 @@ impl IntoResponse for ApiError {
             user_message: self.err.user_message(self.lang),
             request_id: self.request_id.as_str(),
             reason: feed_gone_reason(&self.err),
+            hint: hint(&self.err),
         };
         let view = crate::error_page::ErrorView {
             user_message: body.user_message.to_owned(),
@@ -269,5 +290,50 @@ mod retry_after_tests {
         let res = answer(ForgeError::new(ErrorCode::GitBusy).with_context("reason", "streams"));
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(res.headers().get(RETRY_AFTER).is_none());
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    #![allow(clippy::expect_used)] // tests may fail loudly
+    use axum::response::IntoResponse as _;
+    use forge_core::RequestId;
+    use forge_errors::{ErrorCode, ForgeError, Lang};
+    use http_body_util::BodyExt as _;
+
+    use super::ApiError;
+
+    async fn body(err: ForgeError) -> serde_json::Value {
+        let res = ApiError::new(err, RequestId::generate(), Lang::En)
+            .already_logged()
+            .into_response();
+        let bytes = res.into_body().collect().await.expect("body").to_bytes();
+        serde_json::from_slice(&bytes).expect("json")
+    }
+
+    /// Plan 18 S5: a direct merge refused because the merge request
+    /// pipeline ran on an older target answers FG-CI-0013 with the fixed
+    /// `hint` word the merge evaluation put in the context; the body names
+    /// nothing else of the context.
+    #[tokio::test]
+    async fn a_stale_check_body_carries_the_queue_hint() {
+        let refused = forge_review::merges::evaluate::blocked(&[
+            forge_review::BlockReason::RequiredCheckStale {
+                name: forge_core::CheckName::parse("ci/pipeline").expect("name"),
+            },
+        ]);
+        let json = body(refused).await;
+        assert_eq!(json["error_code"], ErrorCode::RequiredCheckStale.id());
+        assert_eq!(json["hint"], "merge_queue");
+        assert!(json.get("reasons").is_none() && json.get("details").is_none());
+        // Another code with the same context word shows no hint, and a word
+        // outside the closed list is never shown.
+        let other =
+            body(ForgeError::new(ErrorCode::MergeBlocked).with_context("hint", "merge_queue"))
+                .await;
+        assert!(other.get("hint").is_none());
+        let unknown =
+            body(ForgeError::new(ErrorCode::RequiredCheckStale).with_context("hint", "x")).await;
+        assert!(unknown.get("hint").is_none());
     }
 }
