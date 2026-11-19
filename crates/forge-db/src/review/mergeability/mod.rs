@@ -81,7 +81,9 @@ pub use confirm::{confirm_live, decided_candidates, DecidedRow};
 pub(crate) use paths::{carry_forward_on, settled_on};
 pub use paths::{interacts_sql, recheck_if_carried, stored_paths};
 pub use request::DEFER_MAX;
-pub(crate) use request::{defer_checks_on, downgrade_on, request_check_on};
+pub(crate) use request::{
+    defer_checks_on, downgrade_on, request_check_asking_on, request_check_on,
+};
 pub use request::{
     request_check, sweep_missing_merge_results, sweep_unchecked, MISSING_RESULT_AFTER, SWEEP_BATCH,
 };
@@ -270,10 +272,33 @@ pub fn mergeability_job(
     origin_request_id: RequestId,
     origin_event_seq: Option<i64>,
 ) -> Result<NewJob, ForgeError> {
+    job_of(mr, check_seq, (origin_request_id, origin_event_seq), false)
+}
+
+/// [`mergeability_job`]; `pipeline`: a person asked for the merge request
+/// pipeline on the current target (plan 18 S5) — the payload carries
+/// `"pipeline": true` and the check enqueues the pipeline on its merge
+/// result (`MergeRequestPipeline::Requested`). Without the ask the payload
+/// is what it always was.
+pub(super) fn job_of(
+    mr: MergeRequestId,
+    check_seq: i64,
+    (origin_request_id, origin_event_seq): (RequestId, Option<i64>),
+    pipeline: bool,
+) -> Result<NewJob, ForgeError> {
     let key = dedup_key(mr, check_seq);
+    let payload = if pipeline {
+        serde_json::json!({
+            "merge_request_id": mr.get(),
+            "check_seq": check_seq,
+            "pipeline": true,
+        })
+    } else {
+        serde_json::json!({ "merge_request_id": mr.get(), "check_seq": check_seq })
+    };
     Ok(NewJob {
         kind: JobKind::parse(MERGEABILITY_JOB).ok_or_else(|| invalid_job("invalid_job_kind"))?,
-        payload: serde_json::json!({ "merge_request_id": mr.get(), "check_seq": check_seq }),
+        payload,
         max_attempts: MaxAttempts::DEFAULT,
         timeout: JobTimeout::new(MERGEABILITY_TIMEOUT).ok_or_else(|| invalid_job("job_timeout"))?,
         dedup_key: Some(jobs::DedupKey::parse(&key).ok_or_else(|| invalid_job("dedup_key"))?),
@@ -306,6 +331,27 @@ pub fn mergeability_payload(
         check_seq: positive("check_seq")?,
     })
 }
+
+/// Plan 18 S5: whether a claimed job carries a person's ask for the merge
+/// request pipeline (`"pipeline": true`; absent: no ask). Anything but a
+/// boolean is `FG-SYS-0001 reason=invalid_job_payload` (forge wrote it).
+pub fn pipeline_asked(payload: &serde_json::Value) -> Result<bool, ForgeError> {
+    match payload.get("pipeline") {
+        None => Ok(false),
+        Some(serde_json::Value::Bool(asked)) => Ok(*asked),
+        Some(_) => Err(invalid_job("invalid_job_payload")),
+    }
+}
+
+/// The SQL of "a queued or running mergeability job of merge request `$1`
+/// carries a person's ask for the pipeline" (plan 18 S5): a later request
+/// inherits it, so superseding a job never drops the ask.
+pub(super) const ASKED_JOB: &str = "(EXISTS (SELECT 1 FROM forge.jobs j \
+     WHERE j.kind = 'merge_request.mergeability' AND j.state = 'queued' \
+     AND j.payload ->> 'merge_request_id' = $1::text AND j.payload ->> 'pipeline' = 'true') \
+     OR EXISTS (SELECT 1 FROM forge.jobs j \
+     WHERE j.kind = 'merge_request.mergeability' AND j.state = 'running' \
+     AND j.payload ->> 'merge_request_id' = $1::text AND j.payload ->> 'pipeline' = 'true'))";
 
 /// `FG-REVIEW-0003 reason=<reason>`: a merge request whose mergeability is
 /// not being decided (job_failed, job_stale, fanout_deferred).

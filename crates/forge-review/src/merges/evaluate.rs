@@ -325,10 +325,19 @@ pub fn evaluate_merge(facts: &MergeFacts) -> Result<MergeClearance, Vec<BlockRea
     }
 }
 
+/// The context key of the next step an API client can take (plan 18 S5),
+/// carried to the error body as a fixed word (`forge-web`).
+pub const HINT: &str = "hint";
+/// [`HINT`] of `FG-CI-0013`: use the merge queue ("merge when ready"),
+/// whose train pipeline proves the merge on the current target.
+pub const HINT_MERGE_QUEUE: &str = "merge_queue";
+
 /// `FG-REVIEW-0007` MergeBlocked with `reasons` (comma-separated names);
 /// M4 C7: `FG-CI-0013` RequiredCheckStale when the first reason is
-/// `required_check_stale` (its next step is to wait for the pipeline on the
-/// new merge result), with the same context.
+/// `required_check_stale`, with the same context. Plan 18 S5: a target move
+/// no longer starts a pipeline on the new merge result, so FG-CI-0013 also
+/// carries `hint=merge_queue` — the next step is the merge queue (or a
+/// person's run of the pipeline on the current target).
 pub fn blocked(reasons: &[BlockReason]) -> ForgeError {
     let names: Vec<&str> = reasons.iter().map(|r| r.as_str()).collect();
     let details: Vec<String> = reasons
@@ -339,9 +348,12 @@ pub fn blocked(reasons: &[BlockReason]) -> ForgeError {
         Some(BlockReason::RequiredCheckStale { .. }) => ErrorCode::RequiredCheckStale,
         _ => ErrorCode::MergeBlocked,
     };
-    let e = ForgeError::new(code)
+    let mut e = ForgeError::new(code)
         .with_context("reason", names.first().copied().unwrap_or("blocked"))
         .with_context("reasons", names.join(","));
+    if code == ErrorCode::RequiredCheckStale {
+        e = e.with_context(HINT, HINT_MERGE_QUEUE);
+    }
     if details.is_empty() {
         e
     } else {

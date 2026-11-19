@@ -2717,6 +2717,17 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::merge_queue_entry,
         )
         .responds::<mr::QueueEntryStatusBody>(Verb::Get, mr::MERGE_QUEUE)
+        // Plan 18 S5 (ADR-0037): the merge request pipeline on the current
+        // target, decided as a manual pipeline run.
+        .route_with(
+            Verb::Post,
+            mr::MR_PIPELINE,
+            Action::PipelineCreate,
+            "Run the merge request pipeline (ci/pipeline) on the merge result of the current target: 202 queued (its job was enqueued), exists (asked for already; a second press asks nothing more) or computing (the merge result of the current target is written first, then the pipeline runs on it). A target move alone starts no merge request pipeline (ci.mr_pipeline_on_target_move); the merge queue does not need this. 404 FG-REPO-0005 without the merge request; 409 FG-CI-0003 when it is not open, has no version or conflicts (Developer; a token needs api)",
+            mr::MergeRequestToRunPipeline,
+            mr::run_pipeline,
+        )
+        .responds_accepted::<mr::MergeRequestPipelineBody>(Verb::Post, mr::MR_PIPELINE)
         // M4 C9: what auto-merge did with the merge request (one line).
         .route_with(
             Verb::Get,

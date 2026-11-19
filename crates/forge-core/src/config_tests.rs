@@ -1873,6 +1873,32 @@ fn ci_gpu_eval_policy_is_opt_in_per_project() {
     }
 }
 
+/// Plan 18 S5: a target move gets no merge request pipeline by default;
+/// `true` restores it; anything else is refused.
+#[test]
+fn ci_mr_pipeline_on_target_move_is_off_by_default() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert!(!cfg.ci.mr_pipeline_on_target_move);
+    let on = load(
+        None,
+        &env(&[("FORGE_CI_MR_PIPELINE_ON_TARGET_MOVE", "true")]),
+    )
+    .expect("set");
+    assert!(on.ci.mr_pipeline_on_target_move);
+    let off = load(
+        None,
+        &env(&[("FORGE_CI_MR_PIPELINE_ON_TARGET_MOVE", "false")]),
+    )
+    .expect("set");
+    assert!(!off.ci.mr_pipeline_on_target_move);
+    let e = load(
+        None,
+        &env(&[("FORGE_CI_MR_PIPELINE_ON_TARGET_MOVE", "yes")]),
+    )
+    .expect_err("yes");
+    assert_invalid(&e, "ci.mr_pipeline_on_target_move", "invalid");
+}
+
 /// M4 C11: `[deploy]` — no key file by default (no deployment runs), a set
 /// one is an absolute path, the timeouts are bounded, and an unknown
 /// `FORGE_DEPLOY_*` variable is a typo.

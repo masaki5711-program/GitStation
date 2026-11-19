@@ -25,8 +25,12 @@
 //!    merge's tree with the parents (target tip, head), written once per
 //!    (head, target tip) pair (an earlier run's row is reused, no second
 //!    commit, while its commit exists — a pruned one is written again and
-//!    replaces it in the row, with a pipeline on it), stored in `merge_result_refs` with the merge request
-//!    pipeline on it ([`forge_db::review::record_merge_result`]), and
+//!    replaces it in the row, with a pipeline on it), stored in
+//!    `merge_result_refs` ([`forge_db::review::record_merge_result`]) —
+//!    plan 18 S5: with the merge request pipeline on it only when it is
+//!    the head's first merge result (a new head), not when only the
+//!    target moved, unless [`Mergeability::with_pipeline_on_target_move`]
+//!    or the job carries a person's ask ([`check_asked`]) — and
 //!    `refs/merge-requests/<iid>/merge` pointed at it. A conflict (or no
 //!    target, unrelated histories, no version) deletes the ref: no merge
 //!    result. A git failure leaves the ref as it is (the stored status
@@ -68,7 +72,9 @@ use std::time::{Duration, Instant};
 use forge_core::merge_paths::{Incomplete, PathSet};
 use forge_core::{CheckReason, MergeabilityStatus, ObjectId, RefName, RepoId, RequestId};
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::review::{self, CheckResult, CheckStart, MergeabilityRequest, Recorded, RefsLock};
+use forge_db::review::{
+    self, CheckResult, CheckStart, MergeRequestPipeline, MergeabilityRequest, Recorded, RefsLock,
+};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::merge_result::MergeRefChange;
@@ -110,12 +116,17 @@ pub struct Mergeability {
     /// (`review.paths_max`); `None`: no set is read or stored
     /// (`review.path_filter = false`, or not configured).
     paths_max: Option<usize>,
+    /// Plan 18 S5: `ci.mr_pipeline_on_target_move` — a merge result
+    /// written because the target moved gets its own pipeline (`false`,
+    /// the default: only a new head's first merge result does).
+    pipeline_on_target_move: bool,
 }
 
 impl std::fmt::Debug for Mergeability {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mergeability")
             .field("limits", &self.limits)
+            .field("pipeline_on_target_move", &self.pipeline_on_target_move)
             .finish_non_exhaustive()
     }
 }
@@ -216,6 +227,7 @@ impl Mergeability {
             storage,
             limits: MergeTreeLimits::default(),
             paths_max: None,
+            pipeline_on_target_move: false,
         }
     }
 
@@ -234,6 +246,28 @@ impl Mergeability {
     pub fn with_paths(mut self, max: Option<usize>) -> Self {
         self.paths_max = max;
         self
+    }
+
+    /// Plan 18 S5: `ci.mr_pipeline_on_target_move` (`CiConfig`). `true`
+    /// restores a pipeline on every new merge result, a target move's too
+    /// (`forge_db::review::MergeRequestPipeline::OnTargetMove`).
+    #[must_use]
+    pub fn with_pipeline_on_target_move(mut self, on: bool) -> Self {
+        self.pipeline_on_target_move = on;
+        self
+    }
+
+    /// When this run's merge result gets the merge request pipeline: a
+    /// person's ask (the job's `"pipeline": true`) always; otherwise as
+    /// configured.
+    fn pipeline_policy(&self, asked: bool) -> MergeRequestPipeline {
+        if asked {
+            MergeRequestPipeline::Requested
+        } else if self.pipeline_on_target_move {
+            MergeRequestPipeline::OnTargetMove
+        } else {
+            MergeRequestPipeline::OnNewHead
+        }
     }
 
     /// The changed-path set of `head` for a decided result (plan 18 S4):
@@ -440,6 +474,20 @@ pub async fn check(
     request: MergeabilityRequest,
     request_id: &RequestId,
 ) -> Result<CheckReport, ForgeError> {
+    check_asked(db, checker, request, false, request_id).await
+}
+
+/// [`check`] for a job that may carry a person's ask for the merge request
+/// pipeline (plan 18 S5: `forge_db::review::pipeline_asked`, the job's
+/// `"pipeline": true`): its merge result gets the pipeline even when only
+/// the target moved, or when the row already existed.
+pub async fn check_asked(
+    db: &Db,
+    checker: &Mergeability,
+    request: MergeabilityRequest,
+    pipeline_asked: bool,
+    request_id: &RequestId,
+) -> Result<CheckReport, ForgeError> {
     let started = Instant::now();
     let mr = request.merge_request;
     let seq = request.check_seq;
@@ -496,8 +544,8 @@ pub async fn check(
             .merge_result(
                 db,
                 (target.repository, mr, subject.iid, seq),
-                &result,
-                tree.as_ref(),
+                (&result, tree.as_ref()),
+                checker.pipeline_policy(pipeline_asked),
                 request_id,
             )
             .await
@@ -596,13 +644,13 @@ impl Mergeability {
         &self,
         db: &Db,
         subject: (RepoId, forge_core::MergeRequestId, i64, i64),
-        result: &CheckResult,
-        tree: Option<&ObjectId>,
+        (result, tree): (&CheckResult, Option<&ObjectId>),
+        pipeline: MergeRequestPipeline,
         request_id: &RequestId,
     ) -> Result<(Option<ObjectId>, Option<MergeRefChange>), ForgeError> {
         let mut lock = review::lock_version_refs(db, subject.1).await?;
         let out = self
-            .merge_result_locked(db, &mut lock, subject, (result, tree), request_id)
+            .merge_result_locked(db, &mut lock, subject, (result, tree), pipeline, request_id)
             .await;
         lock.release().await;
         out
@@ -615,6 +663,7 @@ impl Mergeability {
         lock: &mut RefsLock,
         (repo, mr, iid, seq): (RepoId, forge_core::MergeRequestId, i64, i64),
         (result, tree): (&CheckResult, Option<&ObjectId>),
+        pipeline: MergeRequestPipeline,
         request_id: &RequestId,
     ) -> Result<(Option<ObjectId>, Option<MergeRefChange>), ForgeError> {
         let clean = match (result.status, tree, &result.head, &result.target) {
@@ -659,7 +708,7 @@ impl Mergeability {
                     .merge_result_exists(&self.storage, repo, &sha, left(lock))
                     .await? =>
             {
-                review::record_merge_result(db, request_id, mr, (head, tip), &sha).await?
+                review::record_merge_result(db, request_id, mr, (head, tip), &sha, pipeline).await?
             }
             Some(pruned) => {
                 let fresh = self
@@ -687,7 +736,8 @@ impl Mergeability {
                     .git
                     .write_merge_result(&self.storage, repo, iid, (tree, tip, head), left(lock))
                     .await?;
-                review::record_merge_result(db, request_id, mr, (head, tip), &written).await?
+                review::record_merge_result(db, request_id, mr, (head, tip), &written, pipeline)
+                    .await?
             }
         };
         let Some(recorded) = recorded else {
@@ -703,7 +753,7 @@ impl Mergeability {
             .git
             .set_merge_result_ref(&self.storage, repo, iid, Some(&recorded.result), left(lock))
             .await?;
-        if recorded.created || change != MergeRefChange::Unchanged {
+        if recorded.created || recorded.pipeline_enqueued || change != MergeRefChange::Unchanged {
             tracing::info!(
                 target: "forge_review",
                 event = "forge.review.merge_result_updated",
@@ -716,6 +766,7 @@ impl Mergeability {
                 result_sha = recorded.result.as_str(),
                 created = recorded.created,
                 pipeline_enqueued = recorded.pipeline_enqueued,
+                pipeline = pipeline.as_str(),
                 merge_ref = change.as_str(),
                 "merge result written (refs/merge-requests/<iid>/merge)"
             );

@@ -1075,6 +1075,7 @@ async fn the_backfill_requests_clean_decisions_without_a_merge_result() {
         has_result.id,
         (&oid('a'), &oid('b')),
         &oid('c'),
+        MergeRequestPipeline::OnNewHead,
     )
     .await
     .expect("record")

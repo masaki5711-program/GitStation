@@ -356,6 +356,11 @@ pub const KEYS: &[Key] = &[
     // Plan 17 P17-1: the GPU runner's projects and per-project limit.
     text("ci.gpu_eval_projects", "FORGE_CI_GPU_EVAL_PROJECTS"),
     number("ci.gpu_eval_max_running", "FORGE_CI_GPU_EVAL_MAX_RUNNING"),
+    // Plan 18 S5: the merge request pipeline on a target move (default off).
+    boolean(
+        "ci.mr_pipeline_on_target_move",
+        "FORGE_CI_MR_PIPELINE_ON_TARGET_MOVE",
+    ),
     // ADR-0036: the PFS portal's home widgets and news.
     boolean("portal.enabled", "FORGE_PORTAL_ENABLED"),
     text("portal.registry_url", "FORGE_PORTAL_REGISTRY_URL"),

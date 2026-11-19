@@ -32,8 +32,8 @@ use std::sync::Arc;
 
 use forge_db::jobs::{ClaimedJob, JobFailure, JobFuture, JobHandler, JobKind};
 use forge_db::review::{
-    conflict_scan_payload, mergeability_payload, refresh_payload, CONFLICT_SCAN_JOB,
-    MERGEABILITY_JOB, REFRESH_JOB,
+    conflict_scan_payload, mergeability_payload, pipeline_asked, refresh_payload,
+    CONFLICT_SCAN_JOB, MERGEABILITY_JOB, REFRESH_JOB,
 };
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
@@ -134,8 +134,11 @@ impl MergeabilityHandler {
                 // clone: the handler owns its git and storage handles
                 // Plan 18 S4: the head's changed paths are stored with the
                 // result (`review.path_filter` / `review.paths_max`).
+                // Plan 18 S5: a target move's merge result gets the merge
+                // request pipeline only with `ci.mr_pipeline_on_target_move`.
                 checker: Mergeability::new(storage.git.clone(), storage.root.clone())
-                    .with_paths(storage.merge_paths_max),
+                    .with_paths(storage.merge_paths_max)
+                    .with_pipeline_on_target_move(storage.mr_pipeline_on_target_move),
             }),
         })
     }
@@ -150,8 +153,12 @@ impl JobHandler for MergeabilityHandler {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
             let request = mergeability_payload(&job.payload).map_err(JobFailure::permanent)?;
+            // Plan 18 S5: a person asked for the pipeline on the current target.
+            let asked = pipeline_asked(&job.payload).map_err(JobFailure::permanent)?;
             let request_id = job.request_id();
-            let ran = forge_review::check(&inner.db, &inner.checker, request, &request_id).await;
+            let ran =
+                forge_review::check_asked(&inner.db, &inner.checker, request, asked, &request_id)
+                    .await;
             let Err(e) = ran else {
                 return Ok(());
             };

@@ -189,6 +189,12 @@ pub struct StatusCheckBody {
     /// waited for — the merge queue tests it, and a direct merge request
     /// has the merge result of the target's tip computed.
     pub waits_for_merge_result: bool,
+    /// Plan 18 S5 (added within `schema_version` 1): the target tip the
+    /// run's merge result merged into — the result is "as of" this tip (a
+    /// `stale` run's is an older one). `null`: no run, or a run on the head
+    /// (a name the merge request pipeline does not report).
+    #[schema(required = true)]
+    pub target_sha: Option<String>,
 }
 
 /// The discussions condition.
@@ -242,6 +248,11 @@ pub struct StatusViewerBody {
     /// whether the revert conflicts, are decided by the revert itself).
     /// Always `false` when acting for a person.
     pub can_revert: bool,
+    /// Plan 18 S5 (added within `schema_version` 1): `POST
+    /// …/merge-requests/{iid}/pipeline` would be allowed — running the
+    /// merge request pipeline on the current target (`PipelineCreate` on
+    /// the project). Always `false` when acting for a person.
+    pub can_run_pipeline: bool,
     /// M3 S2 (ADR-0025 §9; added within `schema_version` 1): only when a
     /// service account acts for a person (`Forge-Act-As`) — what the person
     /// could do through it with a confirmation (`can_*` above are then all
@@ -413,6 +424,7 @@ pub(super) fn status_body(
                     .map(|k| k.as_str().to_owned()),
                 stale: c.stale,
                 waits_for_merge_result: s.waits_for_merge_result(c),
+                target_sha: s.check_target(c).map(|t| t.as_str().to_owned()),
             })
             .collect(),
         discussions: s
@@ -432,6 +444,7 @@ pub(super) fn status_body(
             can_mark_ready: viewer.can_mark_ready,
             approved_by_me,
             can_revert: false,
+            can_run_pipeline: false,
             act_as: act_as.map(|a| StatusActAsViewerBody {
                 can_approve: trial_body(a.can_approve),
                 can_unapprove: trial_body(a.can_unapprove),
@@ -466,6 +479,28 @@ fn can_revert(
         forge_auth::ProjectCtx::new(project),
     );
     create.is_ok() && push.is_ok()
+}
+
+/// Plan 18 S5: whether the caller's run of the merge request pipeline on
+/// the current target would be allowed (a trial `prove()` of the route's
+/// decision, `PipelineCreate` on the project).
+fn can_run_pipeline(
+    principal: &forge_auth::Principal,
+    record: Option<&forge_core::ProjectRecord>,
+) -> bool {
+    let Some(record) = record else {
+        return false;
+    };
+    if principal.act_as_credential().is_some() {
+        return false;
+    }
+    let project = crate::routes::projects::loaded(record);
+    forge_auth::prove(
+        principal,
+        forge_auth::Action::PipelineCreate,
+        forge_auth::ProjectCtx::new(project),
+    )
+    .is_ok()
 }
 
 /// `GET …/status` → `200` the merge status now.
@@ -506,6 +541,7 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
         let act_as = w.proof.ctx().act_as_viewer(principal);
         let mut body = status_body(iid, &answer, viewer, principal.user(), act_as);
         body.viewer.can_revert = can_revert(principal, w.proof.ctx(), record.as_ref(), iid);
+        body.viewer.can_run_pipeline = can_run_pipeline(principal, record.as_ref());
         json(body)
     }
     .await;

@@ -1585,7 +1585,9 @@ fn error_schema() -> Value {
         "properties": {
             "error_code": { "type": "string", "pattern": "^FG-[A-Z]+-[0-9]{4}$" },
             "user_message": { "type": "string" },
-            "request_id": { "type": "string" }
+            "request_id": { "type": "string" },
+            // Plan 18 S5: only FG-CI-0013 (`crate::error::HINTS`).
+            "hint": { "type": "string", "enum": ["merge_queue"] }
         }
     })
 }

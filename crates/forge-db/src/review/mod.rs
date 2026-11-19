@@ -47,6 +47,7 @@ pub mod auto_merge;
 mod commands;
 pub mod conflicts;
 pub mod discussions;
+pub mod merge_pipeline;
 pub mod merge_queue;
 pub mod merge_results;
 pub mod mergeability;
@@ -81,18 +82,22 @@ pub use discussions::{
     DiscussionPosition, NewDiscussion, ResolveOutcome, StoredDiscussion, StoredNote,
     MAX_DISCUSSIONS, MAX_NOTES, MAX_NOTES_PER_DISCUSSION,
 };
+pub use merge_pipeline::{
+    run_merge_request_pipeline_decided, MergePipelineOutcome, MergePipelineRun,
+};
 pub use merge_results::{
     merge_request_open, merge_result_of, merge_result_of_read, merge_results,
     merge_results_to_prune, merge_runs_for, prune_merge_results, record_merge_result,
-    replace_merge_result, MergeResultRow, PruneCandidate, RecordedResult,
+    replace_merge_result, MergeRequestPipeline, MergeResultRow, PruneCandidate, RecordedResult,
 };
 pub use mergeability::{
     begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,
     interacts_sql, mergeability, mergeability_job, mergeability_payload, mergeability_written,
-    not_checked, reap_stale_checks, recheck_if_carried, record_check, request_check, stored_paths,
-    sweep_missing_merge_results, sweep_unchecked, CheckResult, CheckStart, CheckSubject,
-    DecidedRow, MergeabilityHealth, MergeabilityRequest, Recorded, StoredMergeability,
-    MERGEABILITY_JOB, MERGEABILITY_TIMEOUT, MISSING_RESULT_AFTER, STALE_AFTER, SWEEP_BATCH,
+    not_checked, pipeline_asked, reap_stale_checks, recheck_if_carried, record_check,
+    request_check, stored_paths, sweep_missing_merge_results, sweep_unchecked, CheckResult,
+    CheckStart, CheckSubject, DecidedRow, MergeabilityHealth, MergeabilityRequest, Recorded,
+    StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT, MISSING_RESULT_AFTER, STALE_AFTER,
+    SWEEP_BATCH,
 };
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
 pub use settings::{

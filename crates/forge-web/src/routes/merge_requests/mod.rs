@@ -62,6 +62,7 @@ mod discussions;
 mod loaders;
 mod mergeability;
 mod merges;
+mod pipeline;
 mod queue;
 mod revert;
 mod settings;
@@ -104,6 +105,9 @@ pub use mergeability::{mergeability, MergeabilityBody};
 pub use merges::{
     merge, merge_status, MergeAttemptBody, MergeMergeRequest, MergeRequestToMerge, MergeStatusBody,
     MergeStatusOf, MAX_BODY as MERGE_MAX_BODY, MERGE,
+};
+pub use pipeline::{
+    run_pipeline, MergeRequestPipelineBody, MergeRequestToRunPipeline, PIPELINE as MR_PIPELINE,
 };
 pub use queue::{
     dequeue as merge_queue_dequeue, enqueue as merge_queue_enqueue, entry as merge_queue_entry,

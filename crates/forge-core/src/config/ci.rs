@@ -15,6 +15,15 @@
 //!   (`gpu_eval_not_allowed`), and the claim never hands one out.
 //! - `ci.gpu_eval_max_running` (default 1, 1..=16): the `gpu-eval` jobs of
 //!   one project running at once (the claim waits past it).
+//! - `ci.mr_pipeline_on_target_move` (plan 18 S5, ADR-0037; default
+//!   `false`; `true` or `false`): whether a merge result written only
+//!   because the target branch moved (same head, new target tip) gets its
+//!   own merge request pipeline. `false`: only a new head's first merge
+//!   result does — a target move leaves the head's `ci/pipeline` stale,
+//!   the merge queue's train proves it, and a person can ask for the
+//!   pipeline on the current target. `true`: the behaviour before S5
+//!   (every new merge result, one pipeline each). Read by `forge worker`
+//!   only (the mergeability job is the one writer of merge results).
 
 use std::path::PathBuf;
 
@@ -31,6 +40,8 @@ pub struct CiConfig {
     pub artifact_quota_bytes: u64,
     /// `ci.gpu_eval_projects` / `ci.gpu_eval_max_running`.
     pub gpu_eval: GpuEvalPolicy,
+    /// `ci.mr_pipeline_on_target_move` (plan 18 S5).
+    pub mr_pipeline_on_target_move: bool,
 }
 
 /// Plan 17 P17-1: the projects whose jobs may ask for the `gpu-eval`
@@ -97,12 +108,15 @@ impl Default for CiConfig {
             secret_keys_file: None,
             artifact_quota_bytes: Self::DEFAULT_ARTIFACT_QUOTA_BYTES,
             gpu_eval: GpuEvalPolicy::default(),
+            mr_pipeline_on_target_move: false,
         }
     }
 }
 
 /// The configuration key of the artifact quota.
 pub const ARTIFACT_QUOTA_KEY: &str = "ci.artifact_quota_bytes";
+/// The configuration key of the merge request pipeline on a target move.
+pub const MR_PIPELINE_ON_TARGET_MOVE_KEY: &str = "ci.mr_pipeline_on_target_move";
 
 impl CiConfig {
     pub const DEFAULT_ARTIFACT_QUOTA_BYTES: u64 = 5 * 1024 * 1024 * 1024;
@@ -146,6 +160,11 @@ impl CiConfig {
                 Err(_) => return Err(invalid(GPU_EVAL_MAX_RUNNING_KEY, "invalid")),
             },
         };
+        let mr_pipeline_on_target_move = match get(MR_PIPELINE_ON_TARGET_MOVE_KEY) {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(_) => return Err(invalid(MR_PIPELINE_ON_TARGET_MOVE_KEY, "invalid")),
+        };
         Ok(Self {
             secret_keys_file,
             artifact_quota_bytes,
@@ -153,6 +172,7 @@ impl CiConfig {
                 projects,
                 max_running_per_project,
             },
+            mr_pipeline_on_target_move,
         })
     }
 

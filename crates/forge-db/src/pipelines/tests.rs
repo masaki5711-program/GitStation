@@ -252,7 +252,8 @@ async fn one_push_enqueues_one_job_per_branch_and_a_redelivery_none() {
 /// push pipeline covers the branch); the merge request pipeline runs on the
 /// merge result, enqueued with its `merge_result_refs` row — once per
 /// (head, target tip): the same pair again writes nothing and enqueues
-/// nothing, a new target tip is a new row and a new pipeline.
+/// nothing, a new target tip is a new row and (with the policy
+/// `OnTargetMove`, plan 18 S5) a new pipeline.
 #[tokio::test]
 async fn a_merge_request_pipeline_runs_on_each_merge_result_once() {
     let t = FreshDb::migrated().await;
@@ -293,6 +294,7 @@ async fn a_merge_request_pipeline_runs_on_each_merge_result_once() {
         mr.id,
         (&sha('e'), &sha('1')),
         &sha('a'),
+        crate::review::MergeRequestPipeline::OnNewHead,
     )
     .await
     .expect("record")
@@ -306,6 +308,7 @@ async fn a_merge_request_pipeline_runs_on_each_merge_result_once() {
         mr.id,
         (&sha('e'), &sha('1')),
         &sha('b'),
+        crate::review::MergeRequestPipeline::OnNewHead,
     )
     .await
     .expect("record")
@@ -320,13 +323,15 @@ async fn a_merge_request_pipeline_runs_on_each_merge_result_once() {
             .expect("read"),
         Some(sha('a'))
     );
-    // The target advanced: a new merge result and its own pipeline.
+    // The target advanced: a new merge result, and (with
+    // `ci.mr_pipeline_on_target_move`, plan 18 S5) its own pipeline.
     let moved = crate::review::record_merge_result(
         &t.db,
         &origin,
         mr.id,
         (&sha('e'), &sha('2')),
         &sha('c'),
+        crate::review::MergeRequestPipeline::OnTargetMove,
     )
     .await
     .expect("record")

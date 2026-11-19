@@ -7,15 +7,20 @@
 //!
 //! - [`merge_result_of`]: the result already written for a pair — the job
 //!   reuses it and writes no second commit (once per pair).
-//! - [`record_merge_result`]: the row, and in the same transaction — only
-//!   when the row is new — the merge request pipeline on the result
-//!   (`ci.pipeline_create`, source `merge_request`, the source branch as its
-//!   ref, the head's pusher as `triggered_by`). Two jobs racing on one pair:
-//!   `merge_result_refs_once` keeps the first row and the loser gets its
-//!   result back (`created: false`, nothing enqueued).
+//! - [`record_merge_result`]: the row, and in the same transaction the
+//!   merge request pipeline on the result (`ci.pipeline_create`, source
+//!   `merge_request`, the source branch as its ref, the head's pusher as
+//!   `triggered_by`) as [`MergeRequestPipeline`] says — plan 18 S5: by
+//!   default only on a new head's FIRST merge result; a row written because
+//!   the target moved (same head) gets none unless
+//!   `ci.mr_pipeline_on_target_move` is on or a person asked for it. Two
+//!   jobs racing on one pair: `merge_result_refs_once` keeps the first row
+//!   and the loser gets its result back (`created: false`).
 //! - [`replace_merge_result`]: a stored result whose commit `gc` pruned is
 //!   written again by the job; the row points at the new commit and the
-//!   pipeline is asked for on it.
+//!   pipeline is asked for on it (whatever [`MergeRequestPipeline`] says:
+//!   the runs on the pruned commit name a commit nobody can fetch, and
+//!   this happens only after `gc`, never per landing).
 //! - [`merge_results_to_prune`] / [`prune_merge_results`]: a closed or
 //!   merged merge request's rows are removed (with its merge ref, by the
 //!   worker's sweep) except those a live pipeline still needs.
@@ -43,14 +48,42 @@ pub struct MergeResultRow {
     pub result: ObjectId,
 }
 
+/// When [`record_merge_result`] enqueues the merge request pipeline (plan
+/// 18 S5, ADR-0037).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeRequestPipeline {
+    /// The default: only when the new row is the head's first merge result
+    /// (a new head). A row written because the target moved gets none —
+    /// the head's `ci/pipeline` stays stale, the merge queue's train proves
+    /// the merge, and a person can ask for it ([`Self::Requested`]).
+    OnNewHead,
+    /// `ci.mr_pipeline_on_target_move = true`: every new row (the
+    /// behaviour before S5).
+    OnTargetMove,
+    /// A person asked for the pipeline on the current target
+    /// (`pipeline.run_merge_request`): enqueued even when the row already
+    /// exists (the pipeline's job is deduplicated on its identity).
+    Requested,
+}
+
+impl MergeRequestPipeline {
+    /// The word of the log line.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OnNewHead => "on_new_head",
+            Self::OnTargetMove => "on_target_move",
+            Self::Requested => "requested",
+        }
+    }
+}
+
 /// What [`record_merge_result`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedResult {
     /// The pair's merge result (the caller's, or the one a racing job
     /// stored first).
     pub result: ObjectId,
-    /// The row is new, or its pruned result was replaced (and the pipeline
-    /// was enqueued with it).
+    /// The row is new, or its pruned result was replaced.
     pub created: bool,
     /// The merge request pipeline job was enqueued (a deduplicated one is
     /// `false`).
@@ -147,15 +180,16 @@ pub async fn merge_results(db: &Db, mr: MergeRequestId) -> Result<Vec<MergeResul
         .collect()
 }
 
-/// Store `result` as the merge of `head` into `target` for `mr` and, when
-/// the row is new, enqueue the merge request pipeline on it (module docs).
-/// `Ok(None)`: the merge request is gone (purged).
+/// Store `result` as the merge of `head` into `target` for `mr` and
+/// enqueue the merge request pipeline on it as `pipeline` says (module
+/// docs). `Ok(None)`: the merge request is gone (purged).
 pub async fn record_merge_result(
     db: &Db,
     origin: &RequestId,
     mr: MergeRequestId,
     (head, target): (&ObjectId, &ObjectId),
     result: &ObjectId,
+    pipeline: MergeRequestPipeline,
 ) -> Result<Option<RecordedResult>, ForgeError> {
     const QUERY: &str = "review.merge_result_record";
     db.within(QUERY, async {
@@ -191,15 +225,25 @@ pub async fn record_merge_result(
         .map_err(|e| query_error(QUERY, e))?;
         let recorded = match inserted {
             Some(_) => {
-                let enqueued = enqueue_pipeline(
-                    &mut tx,
-                    (ProjectId::new(project), mr),
-                    &source,
-                    head,
-                    result,
-                    origin,
-                )
-                .await?;
+                let wanted = match pipeline {
+                    MergeRequestPipeline::OnTargetMove | MergeRequestPipeline::Requested => true,
+                    MergeRequestPipeline::OnNewHead => {
+                        first_of_head(&mut tx, mr, (head, target)).await?
+                    }
+                };
+                let enqueued = if wanted {
+                    enqueue_pipeline(
+                        &mut tx,
+                        (ProjectId::new(project), mr),
+                        &source,
+                        head,
+                        result,
+                        origin,
+                    )
+                    .await?
+                } else {
+                    false
+                };
                 RecordedResult {
                     result: result.clone(), // clone: the answer owns its id
                     created: true,
@@ -217,10 +261,26 @@ pub async fn record_merge_result(
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(|e| query_error(QUERY, e))?;
+                let existing = oid(mr, "result_sha", &existing)?;
+                // A person's ask is for the pipeline on this pair, whoever
+                // wrote the row (deduplicated when it was asked for).
+                let enqueued = if pipeline == MergeRequestPipeline::Requested {
+                    enqueue_pipeline(
+                        &mut tx,
+                        (ProjectId::new(project), mr),
+                        &source,
+                        head,
+                        &existing,
+                        origin,
+                    )
+                    .await?
+                } else {
+                    false
+                };
                 RecordedResult {
-                    result: oid(mr, "result_sha", &existing)?,
+                    result: existing,
                     created: false,
-                    pipeline_enqueued: false,
+                    pipeline_enqueued: enqueued,
                 }
             }
         };
@@ -315,9 +375,29 @@ pub async fn replace_merge_result(
     .await
 }
 
+/// Whether (`head`, `target`) is the head's first merge result: no other
+/// row of the merge request has this head (plan 18 S5: a new head gets its
+/// pipeline, a target move of the same head does not).
+async fn first_of_head(
+    conn: &mut PgConnection,
+    mr: MergeRequestId,
+    (head, target): (&ObjectId, &ObjectId),
+) -> Result<bool, ForgeError> {
+    sqlx::query_scalar(
+        "SELECT NOT EXISTS (SELECT 1 FROM forge.merge_result_refs \
+         WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha <> $3)",
+    )
+    .bind(mr.get())
+    .bind(head.as_str())
+    .bind(target.as_str())
+    .fetch_one(conn)
+    .await
+    .map_err(|e| query_error("review.merge_result_first_of_head", e))
+}
+
 /// The `ci.pipeline_create` job of the merge result (deduplicated on the
 /// pipeline's identity); `true` when it was enqueued.
-async fn enqueue_pipeline(
+pub(crate) async fn enqueue_pipeline(
     conn: &mut PgConnection,
     (project, mr): (ProjectId, MergeRequestId),
     source: &str,

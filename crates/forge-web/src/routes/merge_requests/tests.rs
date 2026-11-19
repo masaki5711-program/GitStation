@@ -295,6 +295,8 @@ fn status_schema_v1_fields_are_only_added() {
             "can_merge",
             // M4 C10 adds can_revert (within schema_version 1).
             "can_revert",
+            // Plan 18 S5 adds can_run_pipeline (within schema_version 1).
+            "can_run_pipeline",
             "can_unapprove"
         ]
         .into_iter()
