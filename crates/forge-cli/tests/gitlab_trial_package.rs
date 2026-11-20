@@ -199,3 +199,19 @@ fn every_secret_is_mounted_created_and_checked() {
         "db and x-forge"
     );
 }
+
+/// The runner's bash runs with `-o pipefail`: on the first build only this
+/// commit's image exists, so `grep -v` of it matches nothing and exits 1,
+/// which failed `build:image` after a good build (pipeline 6766).
+#[test]
+fn image_cleanup_tolerates_an_empty_filter_under_pipefail() {
+    let ci = read(".gitlab-ci.yml");
+    let line = ci
+        .lines()
+        .find(|l| l.contains("grep -vF \":$CI_COMMIT_SHORT_SHA\""))
+        .expect("cleanup filter line");
+    assert!(
+        line.contains("{ grep -vF \":$CI_COMMIT_SHORT_SHA\" || true; }"),
+        "the cleanup filter must not fail the job when nothing matches: {line}"
+    );
+}

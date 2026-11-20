@@ -58,10 +58,11 @@ build:image:
       -t "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" .
     - docker run --rm --entrypoint /usr/local/bin/forge "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" --version
     # Bounded disk: keep this commit's image, any image a container uses, and the 3 newest others.
+    # The runner shell uses pipefail, so a filter that may match nothing ends in `|| true`.
     - |
       in_use="$(docker ps -a --format '{{.Image}}')"
       docker image ls "$GS_IMAGE_REPO" --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' \
-        | grep -vF ":$CI_COMMIT_SHORT_SHA" | sort -r | tail -n +4 | cut -d'|' -f2 \
+        | { grep -vF ":$CI_COMMIT_SHORT_SHA" || true; } | sort -r | tail -n +4 | cut -d'|' -f2 \
         | while read -r img; do
             if printf '%s\n' "$in_use" | grep -qxF "$img"; then continue; fi
             docker image rm "$img" >/dev/null || echo "could not remove $img (kept)"
