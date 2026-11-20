@@ -30,6 +30,8 @@ pub mod error;
 mod error_page;
 mod git_stream;
 mod guard;
+// A plain-HTTP trial server's cookie names (`web.allow_insecure_http`).
+mod plain_http_cookies;
 pub mod registry;
 pub mod routes;
 pub mod security_headers;

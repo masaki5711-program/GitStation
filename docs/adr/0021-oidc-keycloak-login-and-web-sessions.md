@@ -619,3 +619,26 @@ ADR-0028 §3（proposed）: 承認のフェーズのあるリポジトリの文�
 
 **見送り。** 開発用の Keycloak（`ops/dev/compose.yml`、版は 26.5.5 に合わせた）の realm は claim を ID トークンに入れたまま。
 PFS と同じ形（`basic` + `iotpf-identity`）の realm は後で足す。`forge doctor` が `allow_insecure_issuer = true` を warn に出すのも後で。
+
+## Amendment（accepted、2026-11-20）— 平文 HTTP の試験サーバー（`web.allow_insecure_http`）
+
+**背景。** PFS の試験サーバーに GitLab CI/CD で置く GitStation（`ops/gitlab-trial/`）は、TLS なしの
+`http://<サーバー>:3306` で開く（Keycloak の `gitstation` クライアントの redirect URI もその形で登録済み）。今までの
+`web.base_url` は loopback 以外の http を `insecure_http` で拒否し、§5・§10 のクッキーは `__Host-` で `Secure` なので、
+ブラウザは loopback 以外の http のオリジンからは受け取らない（ログインが戻ってこない）。
+
+**決定。**
+
+1. 新しい設定 `web.allow_insecure_http`（既定 false）。true のときだけ、loopback 以外の `http` の `web.base_url` を受け付ける。
+   ほかの規則（パス・クエリ・ユーザー情報なし）は変わらない。誤りは今までどおり FG-SYS-0002（新しいコードは無い）。
+2. そのような base URL（`BaseUrl::is_plain_http`）のときだけ、`forge serve` は一番外側に `plain_http_cookies` の
+   ミドルウェアを入れる: 応答の `__Host-gstn_session` / `__Host-gstn_oidc` の `Set-Cookie` から `__Host-` と `Secure` を
+   外し（`HttpOnly`・`SameSite=Lax`・`Path=/` は残す）、要求では `gstn_session` / `gstn_oidc` を `__Host-` の名前に戻す。
+   要求に来た `__Host-` の同じ名前は捨てる（資格は 1 つの出どころだけ）。forge-web の中はこれまでの名前のまま。
+3. https と `http://localhost` 等は今までどおり（ミドルウェアは入らない）。
+4. 起動のたびに `forge.serve.plain_http`（WARN）、`forge doctor` の `auth.oidc` は ok の代わりに warn を出す。
+
+**結果。** 試験サーバーではクッキー・トークン・git のパスワードが平文で流れる。CSRF（§6 の `Origin` の一致）、
+SameSite、セッションの寿命は変わらない。**本番では使わない**（runbook `linux-install` は https のまま）。
+試験は `forge-core` の `web_allow_insecure_http_admits_a_plain_http_base_url_only_when_set`、forge-web の
+`plain_http_cookies` の単体テストと `plain_http_cookies_are_translated_only_when_enabled`。

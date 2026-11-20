@@ -348,6 +348,7 @@ tls_root_cert = "<INTERNAL_CA_PEM>"
 | `auth.oidc.claims_source` | `FORGE_AUTH_OIDC_CLAIMS_SOURCE` | 人の claim とクライアントロールを読むトークン。`id_token` か `access_token`（PFS の Keycloak。ADR-0021 の 2026-11-17 の追記、Runbook `oidc-login` の「PFS Keycloak」） | 任意 | `id_token` |
 | `auth.oidc.link_auth_sources` | `FORGE_AUTH_OIDC_LINK_AUTH_SOURCES` | `claims_source = access_token` のとき、社員番号だけで結び付けてよい既存の利用者の `auth_source`（`local`、`ldap` のカンマ区切り） | 任意 | `local,ldap` |
 | `auth.oidc.allow_insecure_issuer` | `FORGE_AUTH_OIDC_ALLOW_INSECURE_ISSUER` | loopback 以外の `http` の issuer を許す（**試験の IdP だけ**。本番では使わない） | 任意 | false |
+| `web.allow_insecure_http` | `FORGE_WEB_ALLOW_INSECURE_HTTP` | loopback 以外の `http` の `web.base_url` を許し、セッションのクッキーを `__Host-`・`Secure` なしの名前で出す（**平文 HTTP の試験サーバーだけ**。`ops/gitlab-trial/`、ADR-0021 Amendment 2026-11-20。本番では使わない） | 任意 | false |
 
 - 設定の誤りは `FG-SYS-0002`（`config_key` と `reason` がログに出る）。意味は `ops/runbooks/config-invalid.md`。
 - `web.hsts` は ADR にあるが**キーとして未実装**（`keys.rs` に無い）。HSTS はプロキシ側で付けるか、付けない (出典: `docs/adr/0022-web-ui-foundation-react-typescript-embedded.md` Amendment、`crates/forge-web/src/app.rs`)。
@@ -419,7 +420,7 @@ $FORGE --config <CONF_DIR>/forge.toml admin token revoke <TOKEN_ID>
 ### 3.7 TLS・`base_url`・リバースプロキシ
 
 - `forge serve` は **TLS を終端しない**。プロキシ（nginx 等。**どれを使うかは未確認**）が 443 で受け、`server.bind` へ転送する。
-- `web.base_url` は `https://<TEST_SERVER_HOST>`（プロキシの外向きの URL）にする。`http://` の非ローカルは `insecure_http` で起動失敗 (出典: `crates/forge-core/src/config/web.rs`)。
+- `web.base_url` は `https://<TEST_SERVER_HOST>`（プロキシの外向きの URL）にする。`http://` の非ローカルは `insecure_http` で起動失敗 (出典: `crates/forge-core/src/config/web.rs`)。平文 HTTP の試験サーバーだけは `web.allow_insecure_http = true` で通せる（`ops/gitlab-trial/README.md`）。
   CSRF は `Origin` が `base_url` の origin と一致することで守っている（ADR-0021 §6）ので、**プロキシは `Origin` / `Host` を改変しない**。
 - 回避（提案）: 社内 CA の証明書が間に合わないときは、`ssh -L 8443:127.0.0.1:8080` 等で自分の PC の `localhost` に出し、`web.base_url = "http://localhost:8080"` で試す（`localhost` は例外として許される）。複数人での試験には向かない。
 - プロキシの条件（根拠のあるもの）:

@@ -49,6 +49,9 @@
        `invalid_key`（`line` の行が `<kid> <64 桁の 16 進数>` でない）、`duplicate`（同じ kid が 2 行）、`unreadable`、`not_absolute`、
        `insecure_permissions`。行の中身はログに出ない。新しい鍵は `openssl rand -hex 32` で作り、`1 <hex>` の 1 行を 0600 のファイルに書く
        （入れ替えは ADR-0013 の Amendment MR6 の手順）
+     - `config_key=web.base_url` の `insecure_http`: loopback 以外の `http://`。本番では `https://` にする。平文 HTTP の試験サーバー
+       （`ops/gitlab-trial/`）だけは `web.allow_insecure_http = true` を明示する（クッキーが `Secure` なしになる。起動のたびに
+       `forge.serve.plain_http` の警告）。`config_key=web.allow_insecure_http` の `invalid` は `true` / `false` 以外の値
      - `config_key=hosting.deletion_grace_days`（D5 MR3。削除したプロジェクトを復元できる日数）: `below_min`（0。1 日以上）、`above_max`（366 以上。365 日まで）、
        `invalid`（整数でない）。未設定なら 7 日。`FORGE_HOSTING_DELETION_GRACE_DAYS` か設定ファイルの `[hosting] deletion_grace_days`
      - `config_key=hosting.purge_interval_secs`（D5 MR4。`forge worker` の完全削除のタスクの周期、秒）: `below_min`（10 未満）、`above_max`

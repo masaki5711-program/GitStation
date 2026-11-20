@@ -1126,6 +1126,60 @@ fn the_web_base_url_is_an_origin_and_is_validated() {
     assert!(from_file.web.base_url().is_some());
 }
 
+/// `web.allow_insecure_http` (a plain-HTTP trial server): off by default;
+/// on, an `http` base URL off the loopback loads and is the only kind that
+/// `is_plain_http` (https and the loopback keep the secure cookies).
+#[test]
+fn web_allow_insecure_http_admits_a_plain_http_base_url_only_when_set() {
+    let lan = ("FORGE_WEB_BASE_URL", "http://192.0.2.10:3306");
+    assert_invalid(
+        &load(None, &env(&[lan])).expect_err("off by default"),
+        "web.base_url",
+        "insecure_http",
+    );
+    assert_invalid(
+        &load(
+            None,
+            &env(&[lan, ("FORGE_WEB_ALLOW_INSECURE_HTTP", "false")]),
+        )
+        .expect_err("explicitly off"),
+        "web.base_url",
+        "insecure_http",
+    );
+    let on = ("FORGE_WEB_ALLOW_INSECURE_HTTP", "true");
+    let trial = load(None, &env(&[lan, on])).expect("trial");
+    let url = trial.web.require_base_url().expect("set");
+    assert_eq!(url.origin(), "http://192.0.2.10:3306");
+    assert!(url.is_plain_http());
+    for value in ["https://git.example.test", "http://localhost:8080"] {
+        let cfg = load(None, &env(&[("FORGE_WEB_BASE_URL", value), on])).expect(value);
+        assert!(
+            !cfg.web.require_base_url().expect("set").is_plain_http(),
+            "{value}"
+        );
+    }
+    // The flag never loosens the other rules.
+    let err = load(
+        None,
+        &env(&[("FORGE_WEB_BASE_URL", "ftp://192.0.2.10"), on]),
+    )
+    .expect_err("scheme");
+    assert_invalid(&err, "web.base_url", "scheme");
+    let err = load(None, &env(&[lan, ("FORGE_WEB_ALLOW_INSECURE_HTTP", "yes")]))
+        .expect_err("not a boolean");
+    assert!(
+        format!("{err:?}").contains("web.allow_insecure_http"),
+        "{err:?}"
+    );
+    let toml = file("[web]\nbase_url = \"http://192.0.2.10:3306\"\nallow_insecure_http = true\n");
+    let from_file = load(Some(toml.path()), &env(&[])).expect("file");
+    assert!(from_file
+        .web
+        .require_base_url()
+        .expect("set")
+        .is_plain_http());
+}
+
 /// `web.session_idle_secs` / `web.session_absolute_secs`: 4 h and 12 h by
 /// default, at least 60 s, idle within absolute, absolute at most 24 h.
 #[test]

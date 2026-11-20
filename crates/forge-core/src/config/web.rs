@@ -19,9 +19,20 @@
 //!   86 400; M2 MR6): the period of the `forge worker` task that deletes
 //!   sessions 30 days past their revocation or absolute expiry.
 //!
+//! - `web.allow_insecure_http` (default `false`): accept an `http`
+//!   `web.base_url` on a host other than the loopback — **a plain-HTTP trial
+//!   server only** (the PFS trial box, `ops/gitlab-trial/`). A browser keeps
+//!   no `Secure` / `__Host-` cookie from such an origin, so with such a base
+//!   URL `forge serve` translates the session and sign-in cookies to
+//!   unprefixed names without `Secure` at the edge
+//!   (`forge_web::plain_http_cookies`); [`BaseUrl::is_plain_http`] is the
+//!   one decision. Cookies, tokens and git passwords then cross the network
+//!   in clear text: never set it in production (`forge doctor` warns).
+//!
 //! Every problem is `FG-SYS-0002` with `config_key` and `reason`
-//! (`invalid`, `scheme`, `insecure_http`, `has_path`, `has_query`,
-//! `has_user_info`, `not_absolute`, `below_min`, `above_max`,
+//! (`invalid`, `scheme`, `insecure_http` (an `http` base URL off the
+//! loopback without `web.allow_insecure_http = true`), `has_path`,
+//! `has_query`, `has_user_info`, `not_absolute`, `below_min`, `above_max`,
 //! `above_absolute`, `missing`).
 
 use std::path::{Path, PathBuf};
@@ -36,6 +47,7 @@ const BASE_URL_KEY: &str = "web.base_url";
 const IDLE_KEY: &str = "web.session_idle_secs";
 const ABSOLUTE_KEY: &str = "web.session_absolute_secs";
 const PURGE_INTERVAL_KEY: &str = "web.session_purge_interval_secs";
+const ALLOW_INSECURE_HTTP_KEY: &str = "web.allow_insecure_http";
 /// Upper bound for the key file (as `api.cursor_keys_file`).
 const MAX_KEYS_BYTES: u64 = 64 * 1024;
 
@@ -44,20 +56,31 @@ const MAX_KEYS_BYTES: u64 = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseUrl {
     origin: String,
+    /// `http` on a host other than the loopback (allowed only with
+    /// `web.allow_insecure_http`): not a secure context for a browser.
+    plain_http: bool,
 }
 
 impl BaseUrl {
-    /// Parse and validate a base URL (see the module documentation).
+    /// Parse and validate a base URL (see the module documentation); an
+    /// `http` URL off the loopback is refused (`insecure_http`).
     pub fn parse(raw: &str) -> Result<Self, ForgeError> {
+        Self::parse_with(raw, false)
+    }
+
+    /// As [`BaseUrl::parse`]; `allow_insecure_http` is
+    /// `web.allow_insecure_http` (a plain-HTTP trial server).
+    pub fn parse_with(raw: &str, allow_insecure_http: bool) -> Result<Self, ForgeError> {
         let bad = |reason| invalid(BASE_URL_KEY, reason);
         let url = url::Url::parse(raw.trim()).map_err(|_| bad("invalid"))?;
         let host = url.host_str().ok_or_else(|| bad("invalid"))?;
-        match url.scheme() {
-            "https" => {}
-            "http" if matches!(host, "localhost" | "127.0.0.1" | "[::1]") => {}
+        let plain_http = match url.scheme() {
+            "https" => false,
+            "http" if matches!(host, "localhost" | "127.0.0.1" | "[::1]") => false,
+            "http" if allow_insecure_http => true,
             "http" => return Err(bad("insecure_http")),
             _ => return Err(bad("scheme")),
-        }
+        };
         if !url.username().is_empty() || url.password().is_some() {
             return Err(bad("has_user_info"));
         }
@@ -69,12 +92,21 @@ impl BaseUrl {
         }
         Ok(Self {
             origin: url.origin().ascii_serialization(),
+            plain_http,
         })
     }
 
     /// `scheme://host[:port]`, exactly as a browser's `Origin` header.
     pub fn origin(&self) -> &str {
         &self.origin
+    }
+
+    /// Whether people open GitStation over plain `http` on a host other
+    /// than the loopback (only with `web.allow_insecure_http = true`): the
+    /// browser is not in a secure context and keeps no `Secure` cookie, so
+    /// `forge serve` must issue the plain-HTTP cookie names.
+    pub fn is_plain_http(&self) -> bool {
+        self.plain_http
     }
 }
 
@@ -104,7 +136,14 @@ impl WebConfig {
         base_url: Option<&str>,
         session_key_file: Option<PathBuf>,
     ) -> Result<Self, ForgeError> {
-        let base_url = base_url.map(BaseUrl::parse).transpose()?;
+        let allow_insecure_http = match get(ALLOW_INSECURE_HTTP_KEY).map(str::trim) {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(_) => return Err(invalid(ALLOW_INSECURE_HTTP_KEY, "invalid")),
+        };
+        let base_url = base_url
+            .map(|raw| BaseUrl::parse_with(raw, allow_insecure_http))
+            .transpose()?;
         let idle = unsigned(get, IDLE_KEY, Self::DEFAULT_SESSION_IDLE_SECS)?;
         let absolute = unsigned(get, ABSOLUTE_KEY, Self::DEFAULT_SESSION_ABSOLUTE_SECS)?;
         for (key, value) in [(IDLE_KEY, idle), (ABSOLUTE_KEY, absolute)] {
