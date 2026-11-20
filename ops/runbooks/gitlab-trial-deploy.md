@@ -99,10 +99,10 @@ GitStation の Runner（`gitstation-trial-runner`）と forge-deploy で、合�
    `deploy:pfs-trial` で配置する。
 2. Web と git: プロジェクト `demo/hello-app`（`system`）に `ops/test-env/m4-hello-app` の `public/`・`tests/` と
    `ops/gitlab-trial/deploy-target/hello-app.forge-ci.yml`（`.forge-ci.yml` として）を push する。
-3. root: `deploy-target/setup-target.sh --pubkey /srv/gitstation/deploy-ssh-key.pub --repo-url http://<サーバー>:3306/demo/hello-app.git --port <空いているポート>`。
+3. root: （`podman`・`uidmap` が要る。無ければ setup-target が `apt-get install podman uidmap` を表示して止まる）`deploy-target/setup-target.sh --pubkey /srv/gitstation/deploy-ssh-key.pub --from <gitstation-trial-net のサブネット> --repo-url http://<サーバー>:3306/demo/hello-app.git --port <1025 以上の空いているポート>`。`gs-deploy` は docker グループに入れず rootless Podman（subuid/subgid、linger）。
    `read_repository` のトークンを `/etc/forge-deploy/hello-app-read.token`（gs-deploy 600）に置き、`--check` が 0 で終わる。
    表示された host key の指紋を、コンソールの `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` と照合する。
-4. `gitstation-ci`: `runner.sh init` → `forge admin runner register --tags linux,podman,trial`（`fgr_…` の 1 行だけを
+4. `gitstation-ci`: `runner.sh init` → `forge admin runner register --tags trial-demo`（`fgr_…` の 1 行だけを
    `/srv/gitstation/secrets-runner/token`、640）→ `runner.sh up`（`check` が `ok: …`）。
 5. API: `main` を保護、`PUT …/deploy/environments/dev {"requires_approval":false,"auto_rollback":true,"auto_deploy_ref":"refs/heads/main"}`、
    `PUT …/deploy/environments/dev/targets/trial-1 {"host":"<サーバー>","port":22,"user":"gs-deploy","host_key_type":"ssh-ed25519","host_key":"<base64>","script":"hello-app"}`。
@@ -116,19 +116,19 @@ GitStation の Runner（`gitstation-trial-runner`）と forge-deploy で、合�
 |---|---|
 | パイプラインが待ちのまま | Runner が動いていない・タグ違い: `docker logs --tail 50 gitstation-trial-runner`、`bash ops/gitlab-trial/runner.sh check` |
 | デプロイが要求されない | `auto_deploy_ref` は**成功した push のパイプライン**の版だけ。`main` が保護されているか、パイプラインが成功したか |
-| FG-DEPLOY-0003（接続できない） | worker から 22 番に届くか: `docker exec gitstation-trial-worker timeout 5 curl -s telnet://<サーバー>:22 </dev/null \| head -c 8`。ファイアウォール、sshd の `AllowUsers` |
+| FG-DEPLOY-0003（接続できない） | worker から 22 番に届くか: `docker exec gitstation-trial-worker timeout 5 curl -s telnet://<サーバー>:22 </dev/null \| head -c 8`。ファイアウォール、sshd の `AllowUsers`、`~gs-deploy/.ssh/authorized_keys` の `from=` が `gitstation-trial-net` のサブネットと合っているか（sshd のログ `/var/log/auth.log`） |
 | FG-DEPLOY-0004（host key の不一致） | ターゲットの `host_key` と `/etc/ssh/ssh_host_ed25519_key.pub`。サーバーの鍵が変わったなら、照合し直して登録し直す |
 | FG-DEPLOY-0008（鍵のファイル） | `secrets/deploy-ssh-key` の有無・所有者・600（`setup-server.sh --check`） |
 | FG-DEPLOY-0013 `outside_allowed_networks` / `denied_address` | `.env` の `DEPLOY_ALLOWED_NETWORKS`、ターゲットの `host` が loopback（`127.0.0.1` は拒まれる。LAN のアドレスにする） |
-| FG-DEPLOY-0007（スクリプトの失敗）・0005（ヘルスチェック） | サーバーの `/var/log/forge-deploy/dispatch.log`（`refused: …` は 3 語の形の誤り）と `/var/log/forge-deploy/hello-app.log`（`FAILED: …`）、`docker logs gs-demo-hello-web` |
+| FG-DEPLOY-0007（スクリプトの失敗）・0005（ヘルスチェック） | サーバーの `/var/log/forge-deploy/dispatch.log`（`refused: …` は 3 語の形の誤り）と `/var/log/forge-deploy/hello-app.log`（`FAILED: …`）、`sudo -u gs-deploy XDG_RUNTIME_DIR=/run/user/$(id -u gs-deploy) podman logs gs-demo-hello-web`。サーバーの再起動の後はコンテナが上がっていない（README「再起動」） |
 
 ### 自前の CI/CD を外す `[MUTATING — needs approval]`
 
 README の「自前の CI/CD の戻し方」の 1〜5 を順に行う（自動デプロイとターゲットを止める → Runner のコンテナ・ボリューム・
-イメージと `/srv/gitstation/{runner,secrets-runner,compose.runner.yml}` → ターゲットの `gs-demo-hello`・`gs-deploy`・
+イメージと `/srv/gitstation/{runner,secrets-runner,compose.runner.yml}` → ターゲットの `gs-deploy` の rootless Podman（コンテナ `gs-demo-hello-web`、`podman system reset`）・linger・`gs-deploy`・
 `/opt|/etc|/srv|/var/log` の `forge-deploy` → `.env` の `DEPLOY_ALLOWED_NETWORKS`）。どれも名前が `gitstation-trial-runner`・
 `gs-demo-hello`・`gs-deploy`・`forge-deploy` のものだけで、GitStation 本体と他のプロジェクトには触れない。
-`deploy-ssh-key` は消さない（この版以降の `deploy.sh` が要る）。
+`deploy-ssh-key` は `[deploy]` を有効にした版が動いている間は消さない（`deploy.sh` が要る）。
 
 ## Verify
 

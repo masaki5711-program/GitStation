@@ -2,21 +2,31 @@
 # Demo app `hello-app` on the PFS trial server, deployed by GitStation's own
 # forge-deploy (ops/gitlab-trial/README.md 「自前の CI/CD」). The source is
 # the synthetic app of ops/test-env/m4-hello-app (public/ is the whole app).
-# Called only through dispatch, as the user gs-deploy:
-#   deploy <sha>    fetch <sha> from GitStation (on refs/heads/main only),
-#                   build gs-demo/hello-app:<sha> from the FIXED Dockerfile of
-#                   this kit with the commit's public/ as the only input, and
-#                   run it in the compose project gs-demo-hello
+# Called only through dispatch, as the user gs-deploy, with ROOTLESS Podman
+# (gs-deploy has no docker group and no sudo):
+#   deploy <sha>    fetch refs/heads/main from GitStation, check that <sha> is
+#                   on it, build localhost/gs-demo/hello-app:<sha> from the
+#                   FIXED Containerfile of this kit with the commit's public/
+#                   as the only input, and run it as the container
+#                   gs-demo-hello-web on DEMO_BIND:DEMO_PORT
 #   health <sha>    0 when <sha> is the live release and GET /health answers
 #                   "ok" and GET /version answers <sha>
 #   rollback <sha>  the same as deploy for <sha> (forge passes the previous
-#                   version); works offline when the release is still here
+#                   version). It fetches main too; only when GitStation cannot
+#                   be reached does it fall back to the last fetched main
+#                   (logged) — the ancestor check itself is never skipped.
 # deploy and rollback hold one exclusive flock (runbook deploy, lock
 # contract). Everything goes to the host log /var/log/forge-deploy/hello-app.log
 # (forge keeps none of the output). The repository's own files never decide
-# what runs here: no Dockerfile, compose file or script from the commit is
-# used, only the static files under public/.
+# what runs here: no Containerfile, compose file or script from the commit
+# is used, only the static files under public/.
+#
+# Time budget (forge: deploy.script_timeout_secs 900 for deploy / rollback,
+# deploy.health_timeout_secs 120 for health — crates/forge-core/src/config/deploy.rs):
+#   flock 300 + fetch 60 + build 300 + replace 2 × 30 = 720 s < 900 s
+#   health: a 90 s deadline < 120 s
 set -euo pipefail
+export LC_ALL=C
 
 verb="${1:-}"
 sha="${2:-}"
@@ -24,22 +34,34 @@ sha="${2:-}"
 case "$verb" in deploy|health|rollback) ;; *) echo "hello-app: unknown verb" >&2; exit 64 ;; esac
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "hello-app: bad sha" >&2; exit 64; }
 
-readonly KIT=/opt/forge-deploy/hello-app        # Dockerfile, compose.yml (root-owned)
+readonly KIT=/opt/forge-deploy/hello-app        # Containerfile (root-owned)
 readonly CONF=/etc/forge-deploy/hello-app.env   # FORGE_REPO_URL, DEMO_BIND, DEMO_PORT (no secret)
 readonly TOKEN=/etc/forge-deploy/hello-app-read.token   # read_repository token, 0600 gs-deploy
 readonly STATE=/srv/forge-deploy/hello-app
 readonly REL="$STATE/releases"
 readonly MIRROR="$STATE/mirror.git"
 readonly LOG=/var/log/forge-deploy/hello-app.log
-readonly PROJECT=gs-demo-hello
-readonly IMAGE=gs-demo/hello-app
+readonly NAME=gs-demo-hello-web
+readonly LABEL=io.gitstation.demo=hello-app
+readonly IMAGE=localhost/gs-demo/hello-app
 readonly DEPLOY_REF=refs/heads/main
 readonly KEEP_RELEASES=5
+readonly LOCK_WAIT=300 FETCH_TIMEOUT=60 BUILD_TIMEOUT=300 RUN_TIMEOUT=30 HEALTH_DEADLINE=90
 
+# The log must be writable before everything goes there.
+if ! { [ -w "$LOG" ] || { [ ! -e "$LOG" ] && [ -w "${LOG%/*}" ]; }; }; then
+  echo "hello-app: cannot write $LOG (setup-target.sh)" >&2
+  exit 1
+fi
 exec 3>&2
 exec >> "$LOG" 2>&1
 log() { printf '%s %s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$verb" "$sha" "$*"; }
 fail() { log "FAILED: $*"; echo "hello-app: $*" >&3; exit 1; }
+
+# Rootless Podman over a forced-command ssh session: the lingering user's
+# runtime directory (setup-target.sh enables linger).
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+[ -d "$XDG_RUNTIME_DIR" ] || fail "no $XDG_RUNTIME_DIR (loginctl enable-linger gs-deploy)"
 
 # KEY=value lines of the config file, read without sourcing it.
 conf() { sed -n "s/^$1=//p" "$CONF" | tail -n 1; }
@@ -48,18 +70,19 @@ REPO_URL="$(conf FORGE_REPO_URL)"
 BIND="$(conf DEMO_BIND)"
 PORT="$(conf DEMO_PORT)"
 [[ "$REPO_URL" =~ ^https?://[A-Za-z0-9.:-]+/[A-Za-z0-9._/-]+\.git$ ]] || fail "FORGE_REPO_URL in $CONF is not http(s)://host[:port]/<path>.git"
-[[ "$PORT" =~ ^[0-9]{2,5}$ ]] || fail "DEMO_PORT in $CONF is not a port"
-{ [[ "$BIND" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && [ "$BIND" != 0.0.0.0 ]; } \
-  || fail "DEMO_BIND in $CONF must be one IPv4 address (127.0.0.1 or the LAN address, never 0.0.0.0)"
-
-compose() { # <sha> <args…>: the fixed compose file of this kit
-  local tag="$1"; shift
-  APP_SHA="$tag" DEMO_BIND="$BIND" DEMO_PORT="$PORT" \
-    docker compose -p "$PROJECT" -f "$KIT/compose.yml" "$@"
+{ [[ "$PORT" =~ ^[0-9]{4,5}$ ]] && [ "$PORT" -ge 1025 ] && [ "$PORT" -le 65535 ]; } \
+  || fail "DEMO_PORT in $CONF must be 1025..65535 (rootless)"
+valid_ipv4() { # one dotted quad, every octet 0..255
+  local IFS=. o
+  [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  for o in $1; do [ "$((10#$o))" -le 255 ] || return 1; done
 }
+{ valid_ipv4 "$BIND" && [ "$BIND" != 0.0.0.0 ]; } \
+  || fail "DEMO_BIND in $CONF must be one IPv4 address (127.0.0.1 or the LAN address, never 0.0.0.0)"
 
 on_ref() { git -C "$MIRROR" merge-base --is-ancestor "$sha" "$DEPLOY_REF" 2>/dev/null; }
 
+# 0 when main was fetched now; 1 when GitStation could not be reached.
 refresh() {
   [ -d "$MIRROR" ] || git init -q --bare "$MIRROR"
   [ -r "$TOKEN" ] || fail "missing $TOKEN (README 「自前の CI/CD」)"
@@ -67,30 +90,46 @@ refresh() {
   local tok
   tok="$(head -n 1 "$TOKEN")"
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: Bearer $tok" \
-    GIT_TERMINAL_PROMPT=0 timeout 120 git -C "$MIRROR" fetch -q --prune --no-tags "$REPO_URL" "+$DEPLOY_REF:$DEPLOY_REF" \
-    || fail "fetch of $DEPLOY_REF failed"
+    GIT_TERMINAL_PROMPT=0 timeout "$FETCH_TIMEOUT" git -C "$MIRROR" fetch -q --prune --no-tags "$REPO_URL" "+$DEPLOY_REF:$DEPLOY_REF"
 }
 
-# A release that exists and is known to be on the ref needs no network (a
-# rollback works while GitStation is down).
 release() {
-  if [ ! -d "$REL/$sha" ] || ! on_ref; then refresh; fi
+  if ! refresh; then
+    # deploy needs the current main; rollback may use the last fetched one.
+    [ "$verb" = rollback ] || fail "fetch of $DEPLOY_REF failed"
+    git -C "$MIRROR" rev-parse -q --verify "$DEPLOY_REF" >/dev/null || fail "fetch failed and no $DEPLOY_REF was ever fetched"
+    log "WARNING: GitStation unreachable, checking against the last fetched $DEPLOY_REF"
+  fi
   on_ref || fail "commit is not on $DEPLOY_REF"
   [ -d "$REL/$sha" ] && return 0
   local tmp="$REL/.tmp-$sha"
   rm -rf "$tmp"; mkdir -p "$tmp"
   # Only public/ of the commit: the build context holds nothing else.
-  git -C "$MIRROR" archive "$sha" public | tar -x -C "$tmp" || fail "unpack failed"
+  git -C "$MIRROR" archive "$sha" public | tar -x --no-same-owner -C "$tmp" || fail "unpack failed"
+  [ -z "$(find "$tmp" -type l -print -quit)" ] || fail "the commit's public/ has symbolic links (refused)"
   [ -f "$tmp/public/index.html" ] || fail "the commit has no public/index.html"
   [ -f "$tmp/public/health" ] || fail "the commit has no public/health"
+  rm -f "$tmp/public/version"
   printf '%s\n' "$sha" > "$tmp/public/version"
   mv "$tmp" "$REL/$sha"
 }
 
 image() {
-  if docker image inspect "$IMAGE:$sha" >/dev/null 2>&1; then return 0; fi
-  timeout 600 nice -n 10 docker build -q -t "$IMAGE:$sha" -f "$KIT/Dockerfile" "$REL/$sha" >/dev/null \
+  if podman image exists "$IMAGE:$sha"; then return 0; fi
+  timeout "$BUILD_TIMEOUT" nice -n 10 podman build -q --pull=missing --label "$LABEL" \
+    -t "$IMAGE:$sha" -f "$KIT/Containerfile" "$REL/$sha" >/dev/null \
     || fail "image build failed"
+}
+
+# Replace the one container of this app (fixed name and label; nothing else
+# is touched). Rootless: the port must be above 1024.
+replace() {
+  timeout "$RUN_TIMEOUT" podman rm -f --ignore "$NAME" >/dev/null || fail "could not remove the old container"
+  timeout "$RUN_TIMEOUT" podman run -d --name "$NAME" --label "$LABEL" \
+    -p "$BIND:$PORT:8080" --read-only --cap-drop=all --security-opt no-new-privileges \
+    --memory 64m --cpus 0.25 --pids-limit 64 --restart unless-stopped \
+    --log-opt max-size=5m "$IMAGE:$sha" >/dev/null \
+    || fail "the container did not start"
 }
 
 # Keep the newest releases (and the live one); remove only our own tags.
@@ -101,7 +140,7 @@ cleanup() {
   ls -1t "$REL" 2>/dev/null | grep -E '^[0-9a-f]{40}$' | tail -n +"$((KEEP_RELEASES + 1))" | while read -r old; do
     [ "$old" = "$live" ] && continue
     rm -rf "${REL:?}/$old"
-    docker image rm "$IMAGE:$old" >/dev/null 2>&1 || true
+    podman image rm "$IMAGE:$old" >/dev/null 2>&1 || true
     log "removed old release $old"
   done
 }
@@ -110,24 +149,25 @@ case "$verb" in
   deploy|rollback)
     mkdir -p "$REL"
     exec 9> "$STATE/.lock"
-    flock -w 900 9 || fail "lock not acquired within 900 s"
+    flock -w "$LOCK_WAIT" 9 || fail "lock not acquired within $LOCK_WAIT s"
     log "start"
     release
     image
-    compose "$sha" up -d --wait --wait-timeout 120 web || fail "the container did not become healthy"
+    replace
     printf '%s\n' "$sha" > "$STATE/current.tmp" && mv -f "$STATE/current.tmp" "$STATE/current"
     log "live"
-    cleanup
+    cleanup || log "WARNING: cleanup failed (the deploy itself succeeded)"
     ;;
   health)
     live="$(cat "$STATE/current" 2>/dev/null || true)"
     [ "$live" = "$sha" ] || fail "live release is '${live:-none}', not $sha"
     body="" version=""
-    for _ in $(seq 1 20); do
+    end=$((SECONDS + HEALTH_DEADLINE))
+    while [ "$SECONDS" -lt "$end" ]; do
       body="$(curl -fsS --max-time 3 "http://$BIND:$PORT/health" 2>/dev/null || true)"
       version="$(curl -fsS --max-time 3 "http://$BIND:$PORT/version" 2>/dev/null || true)"
       if [ "$body" = "ok" ] && [ "$version" = "$sha" ]; then log "healthy"; exit 0; fi
-      sleep 1
+      sleep 2
     done
     fail "unhealthy: /health='$(printf '%s' "$body" | head -c 40)' /version='$(printf '%s' "$version" | head -c 40)'"
     ;;

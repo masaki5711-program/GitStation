@@ -164,21 +164,50 @@ GitStation 自身の CI/CD と forge-deploy（ADR-0031、runbook `deploy`）で�
 | 部品 | 中身 |
 |---|---|
 | デプロイの鍵 | 秘密鍵 `/srv/gitstation/secrets/deploy-ssh-key`（600）を worker が `ssh -i` で使う。公開鍵 `/srv/gitstation/deploy-ssh-key.pub` |
-| ターゲット | このサーバー自身の sshd（22）。利用者 `gs-deploy`（`docker` グループ）。鍵は `restrict,command="/opt/forge-deploy/dispatch"` だけ |
+| ターゲット | このサーバー自身の sshd（22）。利用者 `gs-deploy`（**`docker` グループに入れない**。rootless Podman、subuid/subgid、linger）。鍵は `restrict,from="<worker のネットワーク>",command="/opt/forge-deploy/dispatch"` だけ |
 | dispatch | `/opt/forge-deploy/dispatch`。`SSH_ORIGINAL_COMMAND` が**ちょうど** `<script> <deploy\|health\|rollback> <40 桁の hex>` のときだけ、許可表のスクリプト（`hello-app`）を引数の配列で `exec`。シェルは解釈しない。ログ `/var/log/forge-deploy/dispatch.log` |
-| デモアプリ | `/opt/forge-deploy/scripts/hello-app`。コミットの `public/` **だけ**を取り出し、キットの**固定の** Dockerfile で `gs-demo/hello-app:<sha>` を作り、compose プロジェクト `gs-demo-hello`（コンテナ `gs-demo-hello-web`、64 MiB・0.25 CPU）で `DEMO_BIND:DEMO_PORT` に出す。`deploy` と `rollback` は同じ `flock`。ログ `/var/log/forge-deploy/hello-app.log` |
+| デモアプリ | `/opt/forge-deploy/scripts/hello-app`。コミットの `public/` **だけ**を取り出し、キットの**固定の** Containerfile で `localhost/gs-demo/hello-app:<sha>` を `gs-deploy` の rootless Podman で作り、コンテナ `gs-demo-hello-web`（ラベル `io.gitstation.demo=hello-app`、読み取り専用、cap なし、64 MiB・0.25 CPU）で `DEMO_BIND:DEMO_PORT`（1025 以上）に出す。`deploy` と `rollback` は同じ `flock`。`rollback` も `main` を取り直して祖先を確かめる（GitStation に届かないときだけ最後に取った `main` で確かめ、ログに残す）。ログ `/var/log/forge-deploy/hello-app.log` |
 | ターゲットの設定 | `/etc/forge-deploy/hello-app.env`（root:gs-deploy 640、秘密なし: `FORGE_REPO_URL`・`DEMO_BIND`・`DEMO_PORT`）、`/etc/forge-deploy/hello-app-read.token`（`read_repository` のトークン、gs-deploy 600） |
-| Runner | `gitstation-trial-runner`（compose プロジェクト同名、`compose.runner.yml`）。`ops/runner/Dockerfile` のビルド。中で rootless Podman、Docker のソケットなし、特権なし、ポートの公開なし。3 GiB・2 CPU・pids 2048。タグ `linux,podman,trial` |
+| Runner | `gitstation-trial-runner`（compose プロジェクト同名、`compose.runner.yml`）。`ops/runner/Dockerfile` のビルド。中で rootless Podman、Docker のソケットなし、特権なし、ポートの公開なし。`cap_drop: [ALL]` と `cap_add: [SETUID, SETGID]`（newuidmap 用）。3 GiB・2 CPU・pids 2048。タグは `trial-demo` だけ（デモの `.forge-ci.yml` だけが使う。GitStation 自身のジョブは取らない） |
 | Runner の設定 | `/srv/gitstation/runner/config.toml`（640）、トークン `/srv/gitstation/secrets-runner/token`（640。serve / worker が mount する `secrets/` の外） |
 
 ポート `18090`・プロジェクト `demo/hello-app`・ターゲット名 `trial-1` は例。サーバーのアドレスは `<サーバー>`（例 `192.0.2.10`）と書く。
 
-**権限について:** `gs-deploy` の `docker` グループはこのサーバーの root と同じ。鍵でできることは dispatch（固定の 3 語と許可表）と
-`hello-app`（コミットからは静的ファイルしか使わない）だけに絞っている。Runner の `seccomp=unconfined` と `/dev/fuse` は
-入れ子の rootless Podman のため（`ops/runner` と同じ。**試験サーバーだけ**）。
+**権限について:** `gs-deploy` は `docker` グループに入れない（入っていれば setup-target が外す。`docker` グループはこのサーバーの
+root と同じ）。デモは `gs-deploy` 自身の rootless Podman で動くので、鍵が漏れても届くのは `gs-deploy` の権限まで。さらに鍵で
+できることは dispatch（固定の 3 語と許可表）と `hello-app`（コミットからは静的ファイルしか使わない。シンボリックリンクは拒む）だけ、
+接続元は `from=` の worker のネットワークだけ。Runner の `seccomp=unconfined` と `/dev/fuse` は入れ子の rootless Podman のため
+（`ops/runner` と同じ。**試験サーバーだけ**）。
+
+**再起動:** rootless のコンテナはサーバーの再起動では自動で上がらない（`--restart` は Podman が動いている間だけ）。再起動の後は
+GitStation のデプロイ一覧から最後の版を `dev` に再デプロイする（または次の push を待つ）。
 
 **外への通信（追加）:** ターゲットのイメージのビルドで `docker.io`（alpine、ダイジェストで固定）と `dl-cdn.alpinelinux.org`
-（`busybox-extras`。2 回目からは Docker のキャッシュ）。Runner は `PUBLIC_URL` とジョブのイメージの `docker.io`。
+（`busybox-extras`。2 回目からは Podman のキャッシュ）。Runner は `PUBLIC_URL` とジョブのイメージの `docker.io`。
+
+**受け入れたリスク（試験だけ）: Runner の外への通信。** Runner のコンテナ自身は自分のブリッジネットワークから外へ出られる
+（`PUBLIC_URL` とイメージの取得のため。出口を絞るファイアウォールは入れていない）。**ジョブ**のコンテナは forge-runner が
+`--network=none` で動かすので外へは出ない。イメージは `docker.io/library/` のダイジェスト固定だけ（`runner.sh` が起動の前に
+`image_registries` を確かめ、ダイジェストの無いイメージは forge-runner 自身が拒む）。本番の Runner は専用のホストと出口の制限で動かす
+（runbook `ci-runner`）。
+
+**時間の予算:** forge は `deploy`/`rollback` を `deploy.script_timeout_secs`（既定 900 秒）、`health` を
+`deploy.health_timeout_secs`（既定 120 秒）で切る。`hello-app` は ロック待ち 300 + 取得 60 + ビルド 300 + 入れ替え 2×30 = 720 秒、
+`health` は 90 秒で必ず終わる（forge が途中で切ってもロックが後の `rollback` との競合を防ぐ）。
+
+**ログの回し方:** `/var/log/forge-deploy/*.log` は自動では回らない。必要なら root で `/etc/logrotate.d/forge-deploy` に:
+
+```text
+/var/log/forge-deploy/*.log {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    su gs-deploy gs-deploy
+    create 0640 gs-deploy gs-deploy
+}
+```
 
 ### 手順 A. 鍵と許すネットワーク（root、GitStation の配置の前）
 
@@ -204,11 +233,17 @@ GitStation 自身の CI/CD と forge-deploy（ADR-0031、runbook `deploy`）で�
 
 ### 手順 C. ターゲット（root）
 
+rootless Podman が要る（setup-target はパッケージを入れない。無ければ `apt-get install podman uidmap` を表示して止まる）。
+`--from` は worker の接続元（コンテナのネットワークのサブネット）:
+
 ```sh
+docker network inspect gitstation-trial-net -f '{{(index .IPAM.Config 0).Subnet}}'    # 例 192.0.2.128/25
 sudo bash ops/gitlab-trial/deploy-target/setup-target.sh \
-  --pubkey /srv/gitstation/deploy-ssh-key.pub \
+  --pubkey /srv/gitstation/deploy-ssh-key.pub --from <そのサブネット> \
   --repo-url http://<サーバー>:3306/demo/hello-app.git --port 18090
 ```
+
+`gs-deploy` の subuid/subgid（既存の範囲の後ろに 65536）と `loginctl enable-linger gs-deploy` もここで行う。
 
 取得用のトークン（Reporter だけの利用者で。値は画面に出さない）を置いて、もう一度確かめる:
 
@@ -234,7 +269,7 @@ sshd に `AllowUsers` / `AllowGroups` があれば `gs-deploy` を足す（setup
 
 ```sh
 bash ops/gitlab-trial/runner.sh init        # runner/ と secrets-runner/、config.toml（server = PUBLIC_URL）
-( umask 027; docker exec gitstation-trial-serve forge admin runner register --name trial-1 --tags linux,podman,trial --admin <管理者> \
+( umask 027; docker exec gitstation-trial-serve forge admin runner register --name trial-1 --tags trial-demo --admin <管理者> \
     | grep -oE 'fgr_[A-Za-z0-9_]+' > /srv/gitstation/secrets-runner/token )
 chmod 640 /srv/gitstation/secrets-runner/token
 bash ops/gitlab-trial/runner.sh up          # イメージのビルド（cargo、2 ジョブ、nice。重い）→ check → 起動
@@ -281,10 +316,13 @@ curl -fsS "${H[@]}" -X PUT "$U/deploy/environments/dev/targets/trial-1" \
    取得用と API のトークンを失効させる。デモのプロジェクトは要らなければ Web で消す。
 2. Runner（`gitstation-ci`）: `runner.sh` の先頭のコメントの「Rollback」（`gitstation-trial-runner` のコンテナ・ボリューム・
    イメージと `/srv/gitstation/{runner,secrets-runner,compose.runner.yml}` だけを消す）。
-3. ターゲット（root）: `deploy-target/setup-target.sh` の先頭のコメントの「Rollback」（`gs-demo-hello` のコンテナ、
-   `gs-demo/hello-app` のイメージ、利用者 `gs-deploy`、`/opt|/etc|/srv|/var/log` の `forge-deploy`）。
-4. 鍵と設定: `.env` から `DEPLOY_ALLOWED_NETWORKS` を消す。鍵を捨てるなら `deploy-ssh-key` と `deploy-ssh-key.pub` を消す
-   **前に**、この版より前の版を配置しておく（この版以降の `deploy.sh` は鍵が無いと止まる）。鍵を残すだけなら害はない。
+3. ターゲット（root）: `deploy-target/setup-target.sh` の先頭のコメントの「Rollback」— `gs-deploy` の rootless Podman の
+   コンテナ `gs-demo-hello-web` と、その利用者自身のイメージ・ストレージ（`podman system reset`。他の利用者・Docker には触れない）、
+   `loginctl disable-linger gs-deploy`、`userdel -r gs-deploy`（`/etc/subuid`・`/etc/subgid` の行も消えたか確かめる）、
+   `/opt|/etc|/srv|/var/log` の `forge-deploy` と `/etc/logrotate.d/forge-deploy`。`podman`・`uidmap` のパッケージは、
+   このために入れたのなら `apt-get remove podman uidmap`（他で使っていないか確かめてから）。
+4. 鍵と設定: `.env` から `DEPLOY_ALLOWED_NETWORKS` を消す。鍵を捨てるなら、`forge.toml` で `[deploy]` を有効にした版が
+   動いている間は消さない（`deploy.sh` は `[deploy]` が有効なら鍵を要る。無効なら警告だけ）。鍵を残すだけなら害はない。
 5. イメージの `openssh-client` と `forge.toml` の `[deploy]` は、ターゲットが無ければ何もしない（戻すなら前の版を配置する）。
 
 ## 前の版に戻す
@@ -318,6 +356,5 @@ bash ops/gitlab-trial/deploy-target/test-dispatch.sh            # dispatch の�
 IMAGE_TAG=x PUBLISH_ADDR=192.0.2.1 PUBLIC_URL=http://192.0.2.1:3306 OIDC_ISSUER=http://192.0.2.1:18180/realms/iotpf \
   docker compose -f ops/gitlab-trial/compose.yml config -q
 RUNNER_TAG=x RUNNER_FILES_GID=1000 docker compose -f ops/gitlab-trial/compose.runner.yml config -q
-APP_SHA=x DEMO_BIND=127.0.0.1 DEMO_PORT=18090 docker compose -f ops/gitlab-trial/deploy-target/hello-app.compose.yml config -q
 cargo nextest run -p forge-cli --test gitlab_trial_package     # forge.toml を本物の読み込みで読む
 ```

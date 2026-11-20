@@ -14,7 +14,10 @@
 # touches is named gitstation-trial-runner*; it never prunes anything.
 #
 # Rollback (as gitstation-ci): runner.sh stop; then
-#   docker compose -p gitstation-trial-runner --project-directory /srv/gitstation -f /srv/gitstation/compose.runner.yml down -v
+#   RUNNER_TAG=x RUNNER_FILES_GID=0 docker compose -p gitstation-trial-runner --project-directory /srv/gitstation \
+#     -f /srv/gitstation/compose.runner.yml down -v      # this project's container, network and volumes only
+#   docker rm -f gitstation-trial-runner                 # fallback when compose.runner.yml is already gone
+#   docker network rm gitstation-trial-runner-net; docker volume rm gitstation-trial-runner-podman gitstation-trial-runner-work
 #   docker image ls --format '{{.Repository}}:{{.Tag}}' gitstation/forge-runner | grep ':trial-' | xargs -r docker image rm
 #   rm -rf /srv/gitstation/runner /srv/gitstation/secrets-runner /srv/gitstation/compose.runner.yml
 # and disable the runner in GitStation (forge admin runner disable).
@@ -63,6 +66,9 @@ token_file = "/etc/forge-runner/token"
 work_dir = "/var/lib/forge-runner"
 # Job images: pinned by digest, from Docker Hub's official images only.
 image_registries = ["docker.io/library/"]
+# forge-runner itself refuses a job image that is not pinned by digest
+# (<name>@sha256:<64 hex>, crates/forge-runner/src/podman.rs); runner.sh
+# checks this list before every start.
 # One job at a time inside compose.runner.yml's mem_limit 3g.
 memory = "1g"
 work_dir_max_bytes = 4294967296
@@ -75,6 +81,10 @@ EOF
 }
 
 preflight() {
+  # Job images only from the official Docker Hub images (the runner adds
+  # the digest pin itself); never an empty or wildcard registry list.
+  grep -qx 'image_registries = \["docker.io/library/"\]' "$CONFIG" \
+    || die "$CONFIG must have exactly image_registries = [\"docker.io/library/\"] (runner.sh init)"
   group_only "$CONFIG" 640 || die "$CONFIG must exist, owned by $(id -un), mode 640 (runner.sh init)"
   [ -s "$TOKEN" ] || die "$TOKEN is missing (README: forge admin runner register)"
   group_only "$TOKEN" 640 || die "$TOKEN must be owned by $(id -un) with mode 640"

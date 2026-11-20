@@ -2,7 +2,8 @@
 # 「自前の CI/CD」): copy it as `.forge-ci.yml` next to public/ and tests/ of
 # ops/test-env/m4-hello-app. Same jobs as the test-environment one; the
 # image comes from Docker Hub (the trial runner's image_registries) and
-# the tags select the trial runner. build -> test here; the deploy to dev
+# the tag trial-demo (only this file uses it) selects the trial runner, whose
+# only tag it is. build -> test here; the deploy to dev
 # is forge's own (environment dev, auto_deploy_ref refs/heads/main): CI
 # jobs have no network and never deploy.
 version: 1
@@ -12,7 +13,7 @@ jobs:
     stage: build
     image: docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     timeout: 5m
-    tags: [linux, trial]
+    tags: [trial-demo]
     script:
       - mkdir -p dist
       - cp -R public/. dist/
@@ -24,6 +25,6 @@ jobs:
     needs: [build]
     image: docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     timeout: 5m
-    tags: [linux, trial]
+    tags: [trial-demo]
     script:
       - sh tests/check.sh dist

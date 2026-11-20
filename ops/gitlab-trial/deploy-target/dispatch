@@ -13,6 +13,7 @@
 # script is exec'd with an argument vector: no shell ever interprets it.
 # Installed root-owned 0755 by setup-target.sh; tests: test-dispatch.sh.
 set -euo pipefail
+export LC_ALL=C   # [a-z] and [0-9a-f] mean ASCII only
 
 readonly BASE=/opt/forge-deploy
 readonly LOG=/var/log/forge-deploy/dispatch.log

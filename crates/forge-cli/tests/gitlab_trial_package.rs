@@ -314,6 +314,9 @@ fn the_trial_runner_is_bounded_and_isolated() {
         }
     }
     assert!(code.contains("./secrets-runner/token:/etc/forge-runner/token:ro"));
+    // Every capability dropped but the two newuidmap / newgidmap need.
+    assert!(code.contains("cap_drop: [ALL]"));
+    assert!(code.contains("cap_add: [SETUID, SETGID]\n"));
     // The runner is not part of the GitStation deploy.
     assert!(!read("ops/gitlab-trial/compose.yml").contains("forge-runner"));
     let runner = code_lines(&read("ops/gitlab-trial/runner.sh"));
@@ -330,6 +333,45 @@ fn the_trial_runner_is_bounded_and_isolated() {
     assert!(runner.contains("-p \"$PROJECT\""));
     assert!(runner.contains("PROJECT=gitstation-trial-runner"));
     assert!(read("ops/runner/Dockerfile").contains("ARG RUNNER_BUILD_JOBS="));
+    // Job images: the official Docker Hub images only, checked before every
+    // start (forge-runner itself refuses an image without a digest).
+    assert!(runner.contains("\nimage_registries = [\"docker.io/library/\"]\n"));
+    assert!(runner.contains(r#"grep -qx 'image_registries = \["docker.io/library/"\]' "$CONFIG""#));
+    let preflight = runner.find("preflight() {").expect("preflight");
+    assert!(runner[preflight..].starts_with("preflight() {\n  grep -qx 'image_registries"));
+    // The runner's only tag is the demo's: GitStation's own jobs never land here.
+    let readme = read("ops/gitlab-trial/README.md");
+    assert!(readme.contains("forge admin runner register --name trial-1 --tags trial-demo "));
+    let ci = read("ops/gitlab-trial/deploy-target/hello-app.forge-ci.yml");
+    let tags: Vec<_> = ci.lines().filter(|l| l.contains("tags:")).collect();
+    assert!(
+        !tags.is_empty() && tags.iter().all(|l| l.trim() == "tags: [trial-demo]"),
+        "{tags:?}"
+    );
+    for image in ci.lines().filter_map(|l| l.trim().strip_prefix("image: ")) {
+        let (name, digest) = image.split_once("@sha256:").expect("pinned by digest");
+        assert!(name.starts_with("docker.io/library/"), "{image}");
+        assert!(
+            digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{image}"
+        );
+    }
+    assert!(!code_lines(&read(".forge-ci.yml")).contains("trial-demo"));
+}
+
+/// deploy.sh requires the deploy key only while forge.toml enables
+/// [deploy] with it, and names setup-server.sh when it stops.
+#[test]
+fn deploy_requires_the_key_only_when_deploy_is_enabled() {
+    let deploy = code_lines(&read("ops/gitlab-trial/deploy.sh"));
+    assert!(deploy.contains(
+        "if grep -Eq '^ssh_key_file = \"/run/forge/secrets/deploy-ssh-key\"' \"$SRC/ops/gitlab-trial/forge.toml\"; then"
+    ));
+    assert!(read("ops/gitlab-trial/forge.toml")
+        .contains("\nssh_key_file = \"/run/forge/secrets/deploy-ssh-key\"\n"));
+    for line in deploy.lines().filter(|l| l.contains("die \"secret ")) {
+        assert!(line.contains("setup-server.sh"), "{line}");
+    }
 }
 
 /// The deploy target kit: the dispatcher's allow-list and strict match, the
@@ -351,11 +393,25 @@ fn the_deploy_target_kit_is_restricted() {
     assert!(dispatch.contains("hello-app) path=\"$BASE/scripts/hello-app\""));
 
     let setup = code_lines(&read(&format!("{kit}setup-target.sh")));
-    assert!(setup.contains("'restrict,command=\"%s/dispatch\" %s\\n'"));
+    assert!(setup.contains("'restrict,from=\"%s\",command=\"%s/dispatch\" %s\\n' \"$FROM\""));
+    assert!(setup.contains("valid_from \"$FROM\" || die \"--from is required"));
     assert!(setup.contains("BASE=/opt/forge-deploy"));
     assert!(setup.contains("install -o root -g root -m 0755 \"$KIT/dispatch\""));
     assert!(setup.contains("ssh-keygen -l -f \"$HOST_KEY\""));
-    for bad in ["sshd_config", "prune", "systemctl"] {
+    // Rootless Podman: never the docker group (removed when present), the
+    // packages are checked and never installed, subordinate ids and linger.
+    assert!(setup.contains("gpasswd -d \"$USER_NAME\" docker"));
+    assert!(setup.contains("  apt-get install podman uidmap\\n"));
+    assert!(setup.contains("usermod --add-subuids"));
+    assert!(setup.contains("loginctl enable-linger \"$USER_NAME\""));
+    for bad in [
+        "sshd_config",
+        "prune",
+        "systemctl",
+        "usermod -aG",
+        "apt-get install -",
+        "apt install",
+    ] {
         assert!(
             !setup.contains(bad),
             "setup-target.sh must not touch `{bad}`"
@@ -369,24 +425,40 @@ fn the_deploy_target_kit_is_restricted() {
         .expect("deploy and rollback share a branch");
     assert!(both < lock, "deploy and rollback take the same lock");
     assert!(
-        app.contains("-f \"$KIT/Dockerfile\""),
-        "the kit's Dockerfile, never the commit's"
+        app.contains("-f \"$KIT/Containerfile\""),
+        "the kit's Containerfile, never the commit's"
     );
     assert!(
-        app.contains("archive \"$sha\" public"),
-        "only public/ of the commit"
+        app.contains("archive \"$sha\" public | tar -x --no-same-owner"),
+        "only public/ of the commit, owned by gs-deploy"
     );
-    assert!(app.contains("readonly PROJECT=gs-demo-hello"));
-    for bad in [
-        " prune",
-        "docker rm ",
-        "docker system",
-        "source ",
-        ". \"$CONF\"",
-    ] {
+    assert!(
+        app.contains("find \"$tmp\" -type l"),
+        "symbolic links refused"
+    );
+    assert!(app.contains("rm -f \"$tmp/public/version\""));
+    assert!(app.contains("readonly NAME=gs-demo-hello-web"));
+    assert!(app.contains("export LC_ALL=C"));
+    assert!(dispatch.contains("export LC_ALL=C"));
+    // rollback checks the ancestor of main too (release() for both verbs).
+    let release = app.find("release() {").expect("release");
+    assert!(app[release..].contains("on_ref || fail \"commit is not on $DEPLOY_REF\""));
+    assert!(app.contains("cleanup || log"));
+    for bad in ["docker", " prune", "system reset", "source ", ". \"$CONF\""] {
         assert!(!app.contains(bad), "hello-app must not run `{bad}`");
     }
-    let image = read(&format!("{kit}hello-app.Dockerfile"));
+    // The time budget fits forge's defaults (script 900 s, health 120 s).
+    let num = |key: &str| -> u64 {
+        app.split_whitespace()
+            .find_map(|w| w.strip_prefix(&format!("{key}=")))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("{key} in hello-app"))
+    };
+    let worst =
+        num("LOCK_WAIT") + num("FETCH_TIMEOUT") + num("BUILD_TIMEOUT") + 2 * num("RUN_TIMEOUT");
+    assert!(worst < 900, "deploy / rollback worst case {worst} s");
+    assert!(num("HEALTH_DEADLINE") + 10 < 120, "health deadline");
+    let image = read(&format!("{kit}hello-app.Containerfile"));
     assert!(image.contains("@sha256:"), "the demo base image is pinned");
 
     // The demo's CI is the test-environment one with only the image and
@@ -412,7 +484,7 @@ fn the_deploy_target_kit_is_restricted() {
         "ops/gitlab-trial/deploy-target/dispatch",
         "ops/gitlab-trial/deploy-target/hello-app",
         "ops/gitlab-trial/deploy-target/setup-target.sh",
-        "ops/gitlab-trial/deploy-target/hello-app.compose.yml",
+        "ops/gitlab-trial/deploy-target/hello-app.Containerfile",
     ] {
         for addr in ipv4_literals(&read(file)) {
             assert!(

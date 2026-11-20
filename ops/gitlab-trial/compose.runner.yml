@@ -35,6 +35,13 @@ services:
     group_add: ["${RUNNER_FILES_GID:?RUNNER_FILES_GID is required (runner.sh)}"]
     security_opt:
       - seccomp=unconfined
+    # Every capability dropped except the two newuidmap / newgidmap need to
+    # write the job containers' uid / gid maps (rootless Podman). Nothing
+    # else is granted; `runner.sh up` runs `forge-runner check` (rootless
+    # podman, job isolation) before starting, so a missing capability shows
+    # there — add one only with the reason written here.
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
     devices:
       - /dev/fuse
     volumes:
