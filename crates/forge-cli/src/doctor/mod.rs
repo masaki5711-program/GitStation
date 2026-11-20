@@ -331,6 +331,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let secret_keys = ci_secrets::secret_keys_check(db, cfg).await;
     let known_hosts = deploy::known_hosts_check(db, cfg).await;
     let portal_news = portal::news_check(db, cfg).await;
+    let org_claims = oidc::org_claims_check(db, cfg).await;
     vec![
         bootstrap,
         connections,
@@ -377,6 +378,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         secret_keys,
         known_hosts,
         portal_news,
+        org_claims,
     ]
 }
 

@@ -1,4 +1,4 @@
-# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0025 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0017 / FG-AUTH-0018）
+# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0025 / FG-AUTH-0028 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0014 / FG-AUTH-0017 / FG-AUTH-0018）
 
 ブラウザのログイン（Keycloak の OIDC、ADR-0021 §3・§9）が失敗するとき、バックチャネルのログアウト（FG-AUTH-0017、ADR-0021 §8）が
 断られるとき、5 分ごとのリフレッシュの確認でセッションが切れるとき（ADR-0021 §7、M2 MR5）の診断。
@@ -167,3 +167,53 @@ claims_source = "access_token"
 - この PC で PFS の利用者（`access` ロールあり）がログインでき、ログに `forge.auth.login_succeeded`（`outcome=created` か
   `linked`）が出る。`forge doctor` の `auth.oidc` が `ok`。
 - その利用者の `forge.users.username` が `staff_id` の小文字、`employee_number` が `staff_id`。
+
+## staff_id 未登録
+
+FG-AUTH-0014 `reason=employee_number_missing`（`auth.oidc.claims_source = access_token`）: その人の PFS のアカウントに
+社員番号（`staff_id`）がない。利用者の画面には「社員番号が未登録なら PFS の利用者管理の担当に登録を依頼する」旨と
+問い合わせ番号だけが出る（理由ごとの文言は持たない。ログの `reason` で見分ける）。
+
+1. `request_id` でログを引き、`forge.auth.login_failed` の `reason=employee_number_missing` を確かめる（値はログに出ない）。
+2. PFS の管理者に、その人の `staff_id` の属性が空でないか、クライアントの既定のスコープに `iotpf-identity` があるかを確かめてもらう。
+   GitStation 側で直すものはない（社員番号は PFS の管理者だけが書ける属性。GitStation では書き換えない）。
+3. 登録されたら、その人がもう一度ログインする。`forge.auth.login_succeeded`（`outcome=created` か `linked`）を確かめる。
+4. 何人も同時に出るなら、スコープ `iotpf-identity` のマッパーの変更を疑う（PFS 側の MR を確かめる）。
+
+## PFS の組織の claim
+
+ADR-0021 の追記「組織の claim の写し（2026-11-20）」。`claims_source = access_token` のとき、ログインと 5 分ごとの確認のたびに、
+アクセストークンの `org_units`・`positions`・`position_rank`・`plants`・`plant_code` を確かめて `forge.user_org_profiles` に
+1 人 1 行で写す。**表示だけ**に使い、権限の判定には使わない（Phase 2 で検討）。
+
+- 同じ値: `confirmed_at` だけ進む（監査なし）。変わった: 値を書き、監査 `user.org_profile_changed`（変わった項目の前後）。
+- 規則に合わない値: **ログインは止めない**。前の正しい値を残し `invalid_since` を立て、FG-AUTH-0028
+  （`forge.auth.org_claims_invalid`、warn）を 1 回だけ出す。正しい値が来ると `invalid_since` は消える。
+- claim がまったくない: 空の写し（正しい扱い）。
+
+### 見分け方（読み取りだけ）
+
+1. `forge doctor` の `auth.oidc.org_claims`: 写しの数、`invalid_since` のある数、いちばん古い `confirmed_at`。invalid が 1 以上で warn。
+2. ログ: `error_code=FG-AUTH-0028` の `user_id`、`field`（org_units / positions / position_rank / plants / plant_code）、
+   `reason`:
+   - `format`: 値が形に合わない（部署コード `^[A-Z0-9][A-Z0-9_-]{0,19}$`、役職 `^[a-z][a-z0-9_]{0,63}$`、ランク 0〜999 の整数、
+     工場 `^[A-Z0-9]{1,4}$`）。
+   - `too_many`: 一覧が 64 件を超える。
+   - `multiple_primary`: 主の部署が 2 つ以上。
+   - `type`: JSON の型が違う（`org_units` の文字列が JSON でない、一覧のはずがオブジェクト、など）。
+   値そのものはログに出ない。
+3. DB（読み取りだけ）:
+   `SELECT user_id, invalid_since, confirmed_at FROM forge.user_org_profiles WHERE invalid_since IS NOT NULL;`
+
+### 直し方
+
+- その人の PFS の属性（組織のマスター、役職、工場）を PFS 側で直してもらう。GitStation では何も直さない。
+  次のログインか 5 分ごとの確認で `invalid_since` が消える。
+- 多くの人で同時に起きたら、`iotpf-identity` のマッパーの形が変わった可能性。PFS 側の変更を確かめる。
+  `org_units` の各値は `{"code": "...", "primary": true}` の JSON の文字列（またはオブジェクト）が前提。
+
+### 見え方
+
+- 本人: アカウントの設定の「所属」と、ユーザーメニュー（部署は主を先頭に、文字「主」で示す。工場）。
+- ほかの利用者: 人を選ぶ画面と MR の承認者の一覧に**主の部署コードだけ**。役職とランクは本人と管理者だけ
+  （`GET /api/v1/admin/users/{id}/org-profile`、`UserOrgAdminRead`）。

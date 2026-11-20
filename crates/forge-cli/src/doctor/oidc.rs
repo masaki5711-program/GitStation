@@ -94,3 +94,81 @@ mod tests {
         }
     }
 }
+
+const ORG_CLAIMS: &str = "auth.oidc.org_claims";
+/// A snapshot not confirmed for this long: its person has not signed in
+/// (or no refresh check ran) for a week — informational only.
+const ORG_STALE_SECS: i64 = 7 * 24 * 3600;
+
+/// `auth.oidc.org_claims` (ADR-0021 amendment 2026-11-20): the snapshots of
+/// the PFS org claims. Skipped unless `claims_source = access_token`; warn
+/// while any snapshot is marked invalid (`FG-AUTH-0028`, runbook
+/// oidc-login 「PFS の組織の claim」); otherwise the count and the oldest
+/// confirmation.
+pub(super) async fn org_claims_check(db: &forge_db::Db, cfg: &Config) -> Check {
+    let access = cfg
+        .auth
+        .oidc
+        .as_ref()
+        .is_some_and(|o| o.claims_source == OidcClaimsSource::AccessToken);
+    if !access {
+        return super::skip(
+            ORG_CLAIMS,
+            "auth.oidc.claims_source is not access_token: no org claims are read",
+        );
+    }
+    match forge_db::org_profiles::health(db).await {
+        Ok(h) => org_claims_line(&h),
+        Err(e) => fail(ORG_CLAIMS, e),
+    }
+}
+
+fn org_claims_line(h: &forge_db::org_profiles::OrgHealth) -> Check {
+    let oldest = h.oldest_confirmed_at.as_deref().unwrap_or("none");
+    let detail = format!(
+        "{} snapshot(s), {} invalid; oldest confirmed_at {oldest}",
+        h.profiles, h.invalid
+    );
+    if h.invalid > 0 {
+        return warn(
+            ORG_CLAIMS,
+            &format!("{detail} (FG-AUTH-0028: runbook oidc-login, PFS の組織の claim)"),
+        );
+    }
+    if h.oldest_age_secs.is_some_and(|s| s > ORG_STALE_SECS) {
+        return ok(
+            ORG_CLAIMS,
+            &format!("{detail} (older than 7 days: that person has not signed in since)"),
+        );
+    }
+    ok(ORG_CLAIMS, &detail)
+}
+
+#[cfg(test)]
+mod org_claims_tests {
+    use forge_db::org_profiles::OrgHealth;
+
+    use super::super::Outcome;
+    use super::*;
+
+    #[test]
+    fn invalid_snapshots_warn_and_the_rest_is_ok() {
+        let quiet = org_claims_line(&OrgHealth {
+            profiles: 3,
+            invalid: 0,
+            oldest_confirmed_at: Some("2026-11-20T00:00:00Z".to_owned()),
+            oldest_age_secs: Some(60),
+        });
+        assert!(matches!(quiet.outcome, Outcome::Ok(_)));
+        let marked = org_claims_line(&OrgHealth {
+            profiles: 3,
+            invalid: 1,
+            oldest_confirmed_at: None,
+            oldest_age_secs: None,
+        });
+        let Outcome::Warn(text) = marked.outcome else {
+            panic!("an invalid snapshot warns");
+        };
+        assert!(text.contains("FG-AUTH-0028"), "{text}");
+    }
+}
