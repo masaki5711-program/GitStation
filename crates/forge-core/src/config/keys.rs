@@ -330,6 +330,9 @@ pub const KEYS: &[Key] = &[
         "web.session_purge_interval_secs",
         "FORGE_WEB_SESSION_PURGE_INTERVAL_SECS",
     ),
+    // A plain-HTTP trial server (ops/gitlab-trial): an http base URL off
+    // the loopback, with unprefixed non-Secure cookies.
+    boolean("web.allow_insecure_http", "FORGE_WEB_ALLOW_INSECURE_HTTP"),
     // M2 MR4: the OIDC sign-in (ADR-0021 §12).
     text("auth.oidc.issuer", "FORGE_AUTH_OIDC_ISSUER"),
     text("auth.oidc.client_id", "FORGE_AUTH_OIDC_CLIENT_ID"),

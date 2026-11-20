@@ -2,6 +2,7 @@
 
 GitStation を、PFS（IoT 基盤）と同じ Linux サーバーに**初めて**入れる手順。更新は `linux-upgrade`、パッケージの中身と設計の判断は
 `ops/linux/README.md`（リリースの tar.gz では `README.md`）。
+PFS の**試験サーバー**に社内 GitLab の CI/CD でコンテナとして置くときは、この手順ではなく runbook `gitlab-trial-deploy`（`ops/gitlab-trial/README.md`）。
 
 - 本番のサーバーを変える手順はすべて `[MUTATING — needs approval]`。**人が承認した手順としてだけ**実行する（CLAUDE.md §3.7）。
   新しい環境で利用者はまだいないが、**同じサーバーで PFS が動いている**ので、PFS に触れる可能性のある手順（パッケージの導入、

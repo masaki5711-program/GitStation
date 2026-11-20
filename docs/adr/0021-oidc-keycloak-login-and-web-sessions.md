@@ -619,3 +619,36 @@ ADR-0028 §3（proposed）: 承認のフェーズのあるリポジトリの文�
 
 **見送り。** 開発用の Keycloak（`ops/dev/compose.yml`、版は 26.5.5 に合わせた）の realm は claim を ID トークンに入れたまま。
 PFS と同じ形（`basic` + `iotpf-identity`）の realm は後で足す。`forge doctor` が `allow_insecure_issuer = true` を warn に出すのも後で。
+
+## Amendment（accepted、2026-11-20）— 平文 HTTP の試験サーバー（`web.allow_insecure_http`）
+
+**背景。** PFS の試験サーバーに GitLab CI/CD で置く GitStation（`ops/gitlab-trial/`）は、TLS なしの
+`http://<サーバー>:3306` で開く（Keycloak の `gitstation` クライアントの redirect URI もその形で登録済み）。今までの
+`web.base_url` は loopback 以外の http を `insecure_http` で拒否し、§5・§10 のクッキーは `__Host-` で `Secure` なので、
+ブラウザは loopback 以外の http のオリジンからは受け取らない（ログインが戻ってこない）。
+
+**決定。**
+
+1. 新しい設定 `web.allow_insecure_http`（既定 false）。true のときだけ、loopback 以外の `http` の `web.base_url` を受け付ける。
+   ほかの規則（パス・クエリ・ユーザー情報なし）は変わらない。誤りは今までどおり FG-SYS-0002（新しいコードは無い）。
+2. そのような base URL（`BaseUrl::is_plain_http`）のときだけ、`forge serve` は一番外側に `plain_http_cookies` の
+   ミドルウェアを入れる: 応答の `__Host-gstn_session` / `__Host-gstn_oidc` の `Set-Cookie` を、base URL のポートを入れた
+   `gstn_<port>_session` / `gstn_<port>_oidc` に替えて `Secure` を外し（`HttpOnly`・`SameSite=Lax`・`Path=/` は残す）、
+   要求ではその名前を `__Host-` の名前に戻す。要求に来た `__Host-` の同じ名前と、別のポートの名前は資格にしない
+   （資格は 1 つの出どころだけ）。forge-web の中はこれまでの名前のまま。ポートを名前に入れるのは、ブラウザがクッキーを
+   ポートで分けないため（同じホストの別のポートのアプリ・別の forge と偶然に衝突しない）。
+3. https と `http://localhost` 等は今までどおり（ミドルウェアは入らない）。
+4. 起動のたびに `forge.serve.plain_http`（WARN）、`forge doctor` の `auth.oidc` は ok の代わりに warn を出す。
+5. セッションの固定（fixation）は起きない: コールバックは毎回新しいセッションのトークンを作り、要求に来たセッションは失効させる
+   （`forge_oidc::flow` の callback、`sessions::revoke_presented` のあと `sessions::new_token`）。平文 HTTP でも変わらない。
+
+**結果。** 試験サーバーではクッキー・トークン・git のパスワードが平文で流れる。CSRF（§6 の `Origin` の一致）、
+SameSite、セッションの寿命は変わらない。**本番では使わない**（runbook `linux-install` は https のまま）。
+
+**残るリスク（試験の間は受け入れる。2026-11-20 のセキュリティのレビュー HIGH、利用者が試験に限って承認）。**
+クッキーはホスト単位で、ポートでは分かれない。同じホスト（同じ IP アドレス）で動く別のアプリ（PFS、bankmasalah ほか）は、
+意図すれば `gstn_<port>_session` を読み、別の値を植えられる（`__Host-`・`Secure` の守りが無いため）。ポートの入った名前で防げるのは
+偶然の衝突だけ。前提は「同じサーバーのアプリは信頼できる」「試験の利用者・データに限る」。本当の対処は、GitStation に専用の
+ホスト名を与えるか（別のホスト名のクッキーは共有されない）、TLS にして `web.allow_insecure_http` を外すこと。
+試験は `forge-core` の `web_allow_insecure_http_admits_a_plain_http_base_url_only_when_set`、forge-web の
+`plain_http_cookies` の単体テストと `plain_http_cookies_are_translated_only_when_enabled`。
