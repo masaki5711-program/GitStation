@@ -90,6 +90,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     let base_url = cfg.web.require_base_url()?;
     let web_origin = base_url.origin().to_owned();
     let plain_http = base_url.is_plain_http();
+    let plain_http_port = plain_http.then(|| base_url.port());
     if plain_http {
         // web.allow_insecure_http: a trial server only. Loud at every start.
         tracing::warn!(
@@ -398,7 +399,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         let router = forge_web::app(
             state,
             AppConfig {
-                plain_http_cookies: plain_http,
+                plain_http_port,
                 ..app_config_for(database, &cfg.git_http, &cfg.server.limits)
             },
         )?;

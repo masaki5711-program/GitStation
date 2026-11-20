@@ -1151,6 +1151,7 @@ fn web_allow_insecure_http_admits_a_plain_http_base_url_only_when_set() {
     let url = trial.web.require_base_url().expect("set");
     assert_eq!(url.origin(), "http://192.0.2.10:3306");
     assert!(url.is_plain_http());
+    assert_eq!(url.port(), 3306);
     for value in ["https://git.example.test", "http://localhost:8080"] {
         let cfg = load(None, &env(&[("FORGE_WEB_BASE_URL", value), on])).expect(value);
         assert!(

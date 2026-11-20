@@ -9,17 +9,26 @@
 //! a server (and only there) this outermost middleware translates at the
 //! edge, so the rest of forge-web keeps one cookie vocabulary:
 //!
-//! - **response**: a `Set-Cookie` of one of [`TRANSLATED`] loses the
-//!   `__Host-` prefix and the `Secure` attribute (`HttpOnly`,
+//! - **response**: a `Set-Cookie` of one of [`TRANSLATED`] gets its
+//!   plain-HTTP name and loses the `Secure` attribute (`HttpOnly`,
 //!   `SameSite=Lax`, `Path=/`, `Max-Age` stay);
-//! - **request**: the unprefixed cookie is renamed back to its `__Host-`
+//! - **request**: the plain-HTTP cookie is renamed back to its `__Host-`
 //!   name, and any `__Host-` cookie of [`TRANSLATED`] the request carries
 //!   is dropped first (only the translated one counts, never two sources).
+//!
+//! The plain-HTTP names carry the base URL's port (`gstn_<port>_session`,
+//! `gstn_<port>_oidc`) because browsers do not isolate cookies by port:
+//! another forge (or any app) on the same host under a different port does
+//! not overwrite or read these by accident. A co-hosted app can still read
+//! and plant them on purpose (ADR-0021 Amendment 2026-11-20: trial only;
+//! the real fix is an own host name or TLS).
 //!
 //! Other cookies and every other header pass untouched. On a secure origin
 //! the middleware is not installed at all (`app::build`).
 
-use axum::extract::Request;
+use std::sync::Arc;
+
+use axum::extract::{Request, State};
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::Next;
@@ -30,25 +39,53 @@ use forge_oidc::STATE_COOKIE;
 /// The `__Host-` cookies translated on a plain-HTTP server.
 pub(crate) const TRANSLATED: [&str; 2] = [SESSION_COOKIE, STATE_COOKIE];
 
-const HOST_PREFIX: &str = "__Host-";
+/// The plain-HTTP names of [`TRANSLATED`], in the same order, for one port.
+#[derive(Debug, Clone)]
+pub(crate) struct PlainNames(Arc<[String; 2]>);
+
+impl PlainNames {
+    /// `gstn_<port>_session`, `gstn_<port>_oidc` (the port of `web.base_url`,
+    /// 80 when it names none).
+    pub(crate) fn for_port(port: u16) -> Self {
+        Self(Arc::new([
+            format!("gstn_{port}_session"),
+            format!("gstn_{port}_oidc"),
+        ]))
+    }
+
+    /// The plain name of a `__Host-` name of [`TRANSLATED`].
+    fn plain(&self, host_name: &str) -> Option<&str> {
+        TRANSLATED
+            .iter()
+            .position(|n| *n == host_name)
+            .map(|i| self.0[i].as_str())
+    }
+
+    /// The `__Host-` name of a plain name.
+    fn host(&self, plain_name: &[u8]) -> Option<&'static str> {
+        self.0
+            .iter()
+            .position(|n| n.as_bytes() == plain_name)
+            .map(|i| TRANSLATED[i])
+    }
+}
 
 /// Middleware (`app::build`, outermost, plain-HTTP servers only).
-pub(crate) async fn plain_http_cookies(mut req: Request, next: Next) -> Response {
-    translate_request_cookies(req.headers_mut());
+pub(crate) async fn plain_http_cookies(
+    State(names): State<PlainNames>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    translate_request_cookies(&names, req.headers_mut());
     let mut res = next.run(req).await;
-    translate_set_cookies(res.headers_mut());
+    translate_set_cookies(&names, res.headers_mut());
     res
 }
 
-/// The unprefixed name of a translated cookie (`gstn_session`).
-fn plain_name(host_name: &str) -> &str {
-    host_name.strip_prefix(HOST_PREFIX).unwrap_or(host_name)
-}
-
-/// Request side: `gstn_session=…` → `__Host-gstn_session=…`; a presented
-/// `__Host-gstn_session` / `__Host-gstn_oidc` is dropped. The `Cookie`
-/// headers are folded into one (as `auth::strip_session_cookie` does).
-pub(crate) fn translate_request_cookies(headers: &mut HeaderMap) {
+/// Request side: `gstn_<port>_session=...` becomes `__Host-gstn_session=...`;
+/// a presented `__Host-gstn_session` / `__Host-gstn_oidc` is dropped. The
+/// `Cookie` headers are folded into one (as `auth::strip_session_cookie`).
+pub(crate) fn translate_request_cookies(names: &PlainNames, headers: &mut HeaderMap) {
     if !headers.contains_key(COOKIE) {
         return;
     }
@@ -66,10 +103,7 @@ pub(crate) fn translate_request_cookies(headers: &mut HeaderMap) {
         if TRANSLATED.iter().any(|name| key == name.as_bytes()) {
             continue;
         }
-        match TRANSLATED
-            .iter()
-            .find(|name| key == plain_name(name).as_bytes())
-        {
+        match names.host(key) {
             Some(name) => {
                 let mut renamed = name.as_bytes().to_vec();
                 renamed.extend_from_slice(rest);
@@ -87,16 +121,16 @@ pub(crate) fn translate_request_cookies(headers: &mut HeaderMap) {
     }
 }
 
-/// Response side: each `Set-Cookie` of a translated cookie loses the
-/// `__Host-` prefix and the `Secure` attribute.
-pub(crate) fn translate_set_cookies(headers: &mut HeaderMap) {
+/// Response side: each `Set-Cookie` of a translated cookie gets its plain
+/// name and loses the `Secure` attribute.
+pub(crate) fn translate_set_cookies(names: &PlainNames, headers: &mut HeaderMap) {
     if !headers.contains_key(SET_COOKIE) {
         return;
     }
     let values: Vec<HeaderValue> = headers
         .get_all(SET_COOKIE)
         .iter()
-        .map(|value| translate_set_cookie(value).unwrap_or_else(|| value.clone()))
+        .map(|value| translate_set_cookie(names, value).unwrap_or_else(|| value.clone()))
         .collect();
     headers.remove(SET_COOKIE);
     for value in values {
@@ -106,16 +140,13 @@ pub(crate) fn translate_set_cookies(headers: &mut HeaderMap) {
 
 /// The plain-HTTP form of one `Set-Cookie`, or `None` when it is not a
 /// translated cookie (it then passes unchanged).
-fn translate_set_cookie(value: &HeaderValue) -> Option<HeaderValue> {
+fn translate_set_cookie(names: &PlainNames, value: &HeaderValue) -> Option<HeaderValue> {
     let text = value.to_str().ok()?;
     let mut parts = text.split(';').map(str::trim);
     let first = parts.next()?;
     let (name, cookie_value) = first.split_once('=')?;
-    let name = name.trim();
-    if !TRANSLATED.contains(&name) {
-        return None;
-    }
-    let mut out = format!("{}={}", plain_name(name), cookie_value.trim());
+    let plain = names.plain(name.trim())?;
+    let mut out = format!("{plain}={}", cookie_value.trim());
     for attr in parts.filter(|a| !a.is_empty() && !a.eq_ignore_ascii_case("secure")) {
         out.push_str("; ");
         out.push_str(attr);
@@ -127,6 +158,10 @@ fn translate_set_cookie(value: &HeaderValue) -> Option<HeaderValue> {
 mod tests {
     use super::*;
 
+    fn names() -> PlainNames {
+        PlainNames::for_port(3306)
+    }
+
     fn cookie_header(headers: &HeaderMap) -> Option<&str> {
         headers.get(COOKIE).and_then(|v| v.to_str().ok())
     }
@@ -136,13 +171,16 @@ mod tests {
         let mut h = HeaderMap::new();
         h.append(
             COOKIE,
-            HeaderValue::from_static("a=1; gstn_session=gss_x_y; __Host-gstn_session=forged"),
+            HeaderValue::from_static("a=1; gstn_3306_session=gss_x_y; __Host-gstn_session=forged; gstn_8080_session=other"),
         );
-        h.append(COOKIE, HeaderValue::from_static("gstn_oidc=sealed; b=2"));
-        translate_request_cookies(&mut h);
+        h.append(
+            COOKIE,
+            HeaderValue::from_static("gstn_3306_oidc=sealed; b=2"),
+        );
+        translate_request_cookies(&names(), &mut h);
         assert_eq!(
             cookie_header(&h),
-            Some("a=1; __Host-gstn_session=gss_x_y; __Host-gstn_oidc=sealed; b=2")
+            Some("a=1; __Host-gstn_session=gss_x_y; gstn_8080_session=other; __Host-gstn_oidc=sealed; b=2")
         );
         assert_eq!(h.get_all(COOKIE).iter().count(), 1);
     }
@@ -152,18 +190,18 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert(
             COOKIE,
-            HeaderValue::from_static("theme=dark; gstn_sessionx=1"),
+            HeaderValue::from_static("theme=dark; gstn_session=1"),
         );
-        translate_request_cookies(&mut h);
-        assert_eq!(cookie_header(&h), Some("theme=dark; gstn_sessionx=1"));
+        translate_request_cookies(&names(), &mut h);
+        assert_eq!(cookie_header(&h), Some("theme=dark; gstn_session=1"));
 
         let mut h = HeaderMap::new();
         h.insert(COOKIE, HeaderValue::from_static("__Host-gstn_oidc=x"));
-        translate_request_cookies(&mut h);
+        translate_request_cookies(&names(), &mut h);
         assert!(h.get(COOKIE).is_none());
 
         let mut h = HeaderMap::new();
-        translate_request_cookies(&mut h);
+        translate_request_cookies(&names(), &mut h);
         assert!(h.get(COOKIE).is_none());
     }
 
@@ -188,7 +226,7 @@ mod tests {
             ),
         );
         h.append(SET_COOKIE, HeaderValue::from_static("other=1; Secure"));
-        translate_set_cookies(&mut h);
+        translate_set_cookies(&names(), &mut h);
         let got: Vec<&str> = h
             .get_all(SET_COOKIE)
             .iter()
@@ -197,9 +235,9 @@ mod tests {
         assert_eq!(
             got,
             [
-                "gstn_session=gss_a_b; Max-Age=43200; Path=/; HttpOnly; SameSite=Lax",
-                "gstn_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax",
-                "gstn_oidc=sealed; Max-Age=600; Path=/; HttpOnly; SameSite=Lax",
+                "gstn_3306_session=gss_a_b; Max-Age=43200; Path=/; HttpOnly; SameSite=Lax",
+                "gstn_3306_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax",
+                "gstn_3306_oidc=sealed; Max-Age=600; Path=/; HttpOnly; SameSite=Lax",
                 "other=1; Secure",
             ]
         );
@@ -208,7 +246,10 @@ mod tests {
     #[test]
     fn the_translated_names_are_the_host_cookies() {
         assert_eq!(TRANSLATED, ["__Host-gstn_session", "__Host-gstn_oidc"]);
-        assert_eq!(plain_name(SESSION_COOKIE), "gstn_session");
-        assert_eq!(plain_name(STATE_COOKIE), "gstn_oidc");
+        let n = PlainNames::for_port(80);
+        assert_eq!(n.plain(SESSION_COOKIE), Some("gstn_80_session"));
+        assert_eq!(n.plain(STATE_COOKIE), Some("gstn_80_oidc"));
+        assert_eq!(n.host(b"gstn_80_oidc"), Some(STATE_COOKIE));
+        assert_eq!(n.plain("other"), None);
     }
 }

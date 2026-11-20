@@ -111,7 +111,7 @@ claims_source = "access_token"
 **文字どおり**同じにする。https なら `ca_file`（社内 CA）が要る。loopback 以外の http は `FG-SYS-0002 reason=insecure_http` で
 起動しない。試験の間だけ `auth.oidc.allow_insecure_issuer = true` で通せる（トークンが平文で流れる。本番では使わない）。
 GitStation 自身も http で開く試験サーバー（`ops/gitlab-trial/`）では、`web.allow_insecure_http = true` も要る（クッキーの名前が
-`gstn_session` / `gstn_oidc` になり `Secure` が付かない。ADR-0021 Amendment 2026-11-20）。
+`gstn_<port>_session` / `gstn_<port>_oidc` になり `Secure` が付かない。ADR-0021 Amendment 2026-11-20）。
 
 ### 前提: `staff_id` は管理者だけが書ける（必ず確かめる）
 

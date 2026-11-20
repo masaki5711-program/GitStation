@@ -907,15 +907,16 @@ async fn api_navigation_failures_stay_json() {
 }
 
 /// `web.allow_insecure_http` (a plain-HTTP trial server): the session
-/// cookie is read under its unprefixed name, and a `__Host-` one is not a
-/// credential there; without the setting nothing changes.
+/// cookie is read under its port-qualified plain name only (not another
+/// port's, not the `__Host-` one); without the setting nothing changes.
 #[tokio::test]
 async fn plain_http_cookies_are_translated_only_when_enabled() {
     let plain = AppConfig {
-        plain_http_cookies: true,
+        plain_http_port: Some(3306),
         ..AppConfig::default()
     };
-    let unprefixed = [("cookie", "gstn_session=gss_x_y")];
+    let unprefixed = [("cookie", "gstn_3306_session=gss_x_y")];
+    let other_port = [("cookie", "gstn_8080_session=gss_x_y")];
     let prefixed = [("cookie", "__Host-gstn_session=gss_x_y")];
     // Enabled: the unprefixed cookie reaches the session authentication
     // (this app has no session store: FG-SYS-0001 sessions_unconfigured).
@@ -930,4 +931,7 @@ async fn plain_http_cookies_are_translated_only_when_enabled() {
     // Enabled, a `__Host-` cookie is dropped: anonymous.
     let dropped = send_with(plain, "GET", "/api/v1/session", &prefixed).await;
     assert_eq!(dropped.status, anonymous.status);
+    // Another port's cookie on the same host is not ours.
+    let foreign = send_with(plain, "GET", "/api/v1/session", &other_port).await;
+    assert_eq!(foreign.status, anonymous.status);
 }

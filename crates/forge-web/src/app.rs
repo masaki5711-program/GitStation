@@ -441,10 +441,10 @@ pub struct AppConfig {
     pub hsts: Option<Duration>,
     /// `web.base_url` is plain `http` off the loopback
     /// (`web.allow_insecure_http`, a trial server only): the session and
-    /// sign-in cookies are issued and read under their unprefixed,
-    /// non-`Secure` names (`crate::plain_http_cookies`). `false` (the
-    /// default) installs nothing.
-    pub plain_http_cookies: bool,
+    /// sign-in cookies are issued and read under their plain-HTTP,
+    /// non-`Secure` names `gstn_<port>_…` with this port of the base URL
+    /// (`crate::plain_http_cookies`). `None` (the default) installs nothing.
+    pub plain_http_port: Option<u16>,
 }
 
 impl Default for AppConfig {
@@ -455,7 +455,7 @@ impl Default for AppConfig {
             body_limit_bytes: 1024 * 1024,
             body_read_timeout: Duration::from_secs(10),
             hsts: None,
-            plain_http_cookies: false,
+            plain_http_port: None,
         }
     }
 }
@@ -3309,8 +3309,9 @@ pub(crate) fn build(
         ));
     // A plain-HTTP trial server: outside everything, so every layer and
     // handler sees and issues only the `__Host-` names.
-    let router = if config.plain_http_cookies {
-        router.layer(middleware::from_fn(
+    let router = if let Some(port) = config.plain_http_port {
+        router.layer(middleware::from_fn_with_state(
+            crate::plain_http_cookies::PlainNames::for_port(port),
             crate::plain_http_cookies::plain_http_cookies,
         ))
     } else {

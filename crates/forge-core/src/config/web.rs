@@ -24,7 +24,7 @@
 //!   server only** (the PFS trial box, `ops/gitlab-trial/`). A browser keeps
 //!   no `Secure` / `__Host-` cookie from such an origin, so with such a base
 //!   URL `forge serve` translates the session and sign-in cookies to
-//!   unprefixed names without `Secure` at the edge
+//!   port-qualified names (`gstn_<port>_session`) without `Secure` at the edge
 //!   (`forge_web::plain_http_cookies`); [`BaseUrl::is_plain_http`] is the
 //!   one decision. Cookies, tokens and git passwords then cross the network
 //!   in clear text: never set it in production (`forge doctor` warns).
@@ -56,6 +56,8 @@ const MAX_KEYS_BYTES: u64 = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseUrl {
     origin: String,
+    /// The port (the scheme's default when the URL names none).
+    port: u16,
     /// `http` on a host other than the loopback (allowed only with
     /// `web.allow_insecure_http`): not a secure context for a browser.
     plain_http: bool,
@@ -92,6 +94,7 @@ impl BaseUrl {
         }
         Ok(Self {
             origin: url.origin().ascii_serialization(),
+            port: url.port_or_known_default().unwrap_or(80),
             plain_http,
         })
     }
@@ -99,6 +102,12 @@ impl BaseUrl {
     /// `scheme://host[:port]`, exactly as a browser's `Origin` header.
     pub fn origin(&self) -> &str {
         &self.origin
+    }
+
+    /// The port people open GitStation at (443 / 80 when the URL names
+    /// none); the plain-HTTP cookie names carry it.
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     /// Whether people open GitStation over plain `http` on a host other
