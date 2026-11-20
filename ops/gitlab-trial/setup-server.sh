@@ -125,7 +125,7 @@ fi
 ENV_FILE="$GS_DIR/.env"
 if [ -f "$ENV_FILE" ]; then
   log "kept $ENV_FILE"
-  if grep -q '<' "$ENV_FILE"; then todo "$ENV_FILE still has <placeholders>"; fi
+  if grep -v '^[[:space:]]*#' "$ENV_FILE" | grep -q '<'; then todo "$ENV_FILE still has <placeholders>"; fi
 elif [ "$CHECK_ONLY" -eq 1 ]; then
   todo "$ENV_FILE"
 else

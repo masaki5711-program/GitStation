@@ -73,7 +73,7 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 \
   || die "image $IMAGE not found on this host — run build:image of this pipeline first (README 前の版に戻す)"
 [ -r "$ENV_FILE" ] || die "$ENV_FILE is missing — run setup-server.sh as root (README 手順 2)"
 owner_only "$ENV_FILE" || die "$ENV_FILE must be owned by $(id -un) with mode 600"
-if grep -q '<' "$ENV_FILE"; then die "$ENV_FILE still has <placeholders> (README 手順 2)"; fi
+if grep -v '^[[:space:]]*#' "$ENV_FILE" | grep -q '<'; then die "$ENV_FILE still has <placeholders> (README 手順 2)"; fi
 for d in "$DEPLOY_DIR/secrets" "$DEPLOY_DIR/secrets-privileged" "$DEPLOY_DIR/backups"; do
   if ! { [ -d "$d" ] && owner_only "$d"; }; then
     die "$d must be a directory owned by $(id -un) with mode 700 (setup-server.sh)"
