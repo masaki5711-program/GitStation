@@ -110,6 +110,8 @@ pub mod sessions;
 // ── M2 MR4: OIDC identities (ADR-0021 §4) ──
 pub mod identities;
 // ── end M2 MR4 ──
+// ── ADR-0021 amendment 2026-11-20: the org claims' snapshot ──
+pub mod org_profiles;
 // ── D4: projects, repositories, project members, protected refs ──
 pub mod projects;
 #[cfg(test)]

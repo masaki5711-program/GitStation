@@ -10,9 +10,9 @@
 
 ## 利用者向けメッセージ
 
-- ja: このアカウントを GitStation の利用者に結び付けられませんでした。問い合わせ番号を添えて管理者に連絡してください。
-- en: This account could not be linked to a GitStation user. Contact the administrator with the request ID.
-- id: Akun ini tidak dapat ditautkan ke pengguna GitStation. Hubungi administrator dengan menyertakan ID permintaan.
+- ja: このアカウントを GitStation の利用者に結び付けられませんでした。社員番号（staff_id）が未登録の場合は、PFS の利用者管理の担当に社員番号の登録を依頼してください。それ以外の場合は、問い合わせ番号を添えて管理者に連絡してください。
+- en: This account could not be linked to a GitStation user. If your staff number (staff_id) is not registered, ask the PFS user administration to register it. Otherwise, contact the administrator with the request ID.
+- id: Akun ini tidak dapat ditautkan ke pengguna GitStation. Jika nomor karyawan (staff_id) Anda belum terdaftar, minta administrasi pengguna PFS untuk mendaftarkannya. Jika tidak, hubungi administrator dengan menyertakan ID permintaan.
 
 ## 原因 (cause)
 

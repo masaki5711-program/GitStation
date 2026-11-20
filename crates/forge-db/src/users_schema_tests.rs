@@ -323,6 +323,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: s(&["last_login_at"]),
                 txn_audited_columns: vec![],
             },
+            // ADR-0021 amendment 2026-11-20: the org claims' snapshot.
+            AuditedTable {
+                name: "user_org_profiles".into(),
+                audit_resource: AuditResource::Literal("user".into()),
+                audit_id_column: "user_id".into(),
+                unaudited_columns: s(&["confirmed_at", "invalid_since"]),
+                txn_audited_columns: vec![],
+            },
             // M4 C13: SSH keys, on the owner.
             AuditedTable {
                 name: "user_ssh_keys".into(),

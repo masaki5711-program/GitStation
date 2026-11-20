@@ -924,3 +924,18 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── ADR-0021 amendment 2026-11-20 (20261230100000): the snapshot of a
+# person's PFS organisation claims, written at the sign-in and at every
+# verified refresh, audited on the user (`user.org_profile_changed`). The
+# read pool sees the department codes and the times only (never positions,
+# the rank or the plants) ──
+[tables.user_org_profiles]
+guarded = false
+kind = "audited"
+ro_columns = ["user_id", "org_units", "confirmed_at", "invalid_since"]
+audit_resource = "user"
+audit_id_column = "user_id"
+# An equal snapshot moves confirmed_at only; invalid claims set invalid_since.
+unaudited_columns = ["confirmed_at", "invalid_since"]
+txn_audited_columns = []

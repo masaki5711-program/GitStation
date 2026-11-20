@@ -375,7 +375,9 @@ impl MockOp {
             "staff_id": "SYN9001",
             "plant_code": "P001",
             "plants": ["P001"],
-            "org_units": [{"code": "SYN-ORG", "name": "Synthetic"}],
+            // The live realm's shape: each value a JSON string (Keycloak's
+            // multivalued user attribute emits strings only).
+            "org_units": ["{\"code\":\"SYN-ORG\",\"primary\":true}"],
             "positions": ["member"],
             "position_rank": 3,
             "resource_access": { CLIENT_ID: { "roles": ["access"] } },

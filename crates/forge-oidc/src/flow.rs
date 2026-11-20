@@ -13,6 +13,7 @@ use forge_db::change::{Actor, ChangeContext};
 use forge_db::identities::{
     self, LinkAuthSources, LinkPolicy, LinkRules, LoginAccount, LoginIdentity, LoginOutcome,
 };
+use forge_db::org_profiles::{self, Observed, OrgSnapshot, Recorded};
 use forge_db::sessions::{self, NewSession, OidcSession};
 use forge_db::Db;
 use forge_errors::ForgeError;
@@ -23,6 +24,7 @@ use crate::error::{access_token, internal, loggable, state, unavailable};
 use crate::http::IdpClient;
 use crate::jwks::{JwksCache, JwksTiming};
 use crate::jwt::{AccessClaims, Expected, IdClaims, JwtVerifier};
+use crate::org_claims::{self, OrgClaimsInvalid};
 use crate::state::{safe_next, LoginState};
 use crate::{CALLBACK_PATH, STATE_MAX_AGE_SECS};
 
@@ -457,6 +459,11 @@ impl Oidc {
             }),
         };
         let issued = sessions::issue_with_token(&self.db, &ctx, &new, token).await?;
+        // ADR-0021 amendment 2026-11-20: the org claims' snapshot (display
+        // only; never blocks the sign-in).
+        if let Some(a) = access.as_ref() {
+            self.record_org(&ctx, user, &a.claims).await;
+        }
         let public_id = issued.token.public_id().as_str().to_owned();
         tracing::info!(
             target: "forge_oidc",
@@ -624,6 +631,43 @@ impl Oidc {
         Ok(claims)
     }
 
+    /// Record the organisation claims of a verified access token
+    /// (ADR-0021 amendment 2026-11-20): never fails the caller. Invalid
+    /// claims keep the last valid snapshot and are logged once
+    /// (`FG-AUTH-0028`, when `invalid_since` is set); a database failure is
+    /// logged and the sign-in or the refresh goes on (the snapshot's
+    /// `confirmed_at` then stays old, which `forge doctor` shows).
+    pub(crate) async fn record_org(&self, ctx: &ChangeContext, user: UserId, claims: &Value) {
+        let parsed = org_claims::parse(claims);
+        let observed = match &parsed {
+            Ok(snapshot) => Observed::Valid(snapshot),
+            Err(_) => Observed::Invalid,
+        };
+        match org_profiles::record(&self.db, ctx, user, &self.settings.issuer, observed).await {
+            Ok(recorded) => {
+                if let Some(e) = org_claims_warning(&parsed, recorded, user) {
+                    let context: Vec<String> = e
+                        .context()
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect();
+                    tracing::warn!(
+                        target: "forge_oidc",
+                        request_id = %ctx.request_id,
+                        error_code = e.code().id(),
+                        user_id = user.get(),
+                        context = %context.join(" "),
+                        "forge.auth.org_claims_invalid"
+                    );
+                }
+            }
+            Err(e) => forge_core::telemetry::log_failure(
+                &e.with_context("operation", "org_profile_record"),
+                &ctx.request_id,
+            ),
+        }
+    }
+
     /// `resource_access.<client_id>.roles` holds `auth.oidc.access_role`.
     pub(crate) fn has_access_role(&self, claims: &Value) -> bool {
         claims
@@ -653,6 +697,25 @@ impl Oidc {
     }
 }
 
+/// The `FG-AUTH-0028` to log for a recorded snapshot: only when the claims
+/// were invalid and this call set `invalid_since` (logged once per spell).
+/// Its context is the claim's name and the reason, never a value.
+pub(crate) fn org_claims_warning(
+    parsed: &Result<OrgSnapshot, OrgClaimsInvalid>,
+    recorded: Recorded,
+    user: UserId,
+) -> Option<ForgeError> {
+    match (parsed, recorded) {
+        (Err(invalid), Recorded::Invalid { newly: true }) => Some(
+            ForgeError::new(forge_errors::ErrorCode::OrgClaimsInvalid)
+                .with_context("user_id", user.get())
+                .with_context("field", invalid.field)
+                .with_context("reason", invalid.reason),
+        ),
+        _ => None,
+    }
+}
+
 /// `endpoint` with `pairs` appended to its query (a sync helper: the
 /// query serializer is not `Send`).
 fn with_query(endpoint: &str, pairs: &[(&str, &str)]) -> Result<String, ForgeError> {
@@ -677,6 +740,31 @@ mod tests {
     use forge_errors::ErrorCode;
 
     use super::*;
+
+    #[test]
+    fn org_claims_are_logged_only_when_they_turn_invalid() {
+        let user = UserId::new(7);
+        let invalid = Err(OrgClaimsInvalid {
+            field: "positions",
+            reason: "format",
+        });
+        let e =
+            org_claims_warning(&invalid, Recorded::Invalid { newly: true }, user).expect("logged");
+        assert_eq!(e.code(), ErrorCode::OrgClaimsInvalid);
+        let text = e.to_string();
+        assert!(
+            text.contains("field=positions") && text.contains("reason=format"),
+            "{text}"
+        );
+        assert!(
+            org_claims_warning(&invalid, Recorded::Invalid { newly: false }, user).is_none(),
+            "once per spell"
+        );
+        let valid = Ok(OrgSnapshot::default());
+        for recorded in [Recorded::Created, Recorded::Unchanged, Recorded::Changed] {
+            assert!(org_claims_warning(&valid, recorded, user).is_none());
+        }
+    }
 
     #[test]
     fn a_clock_before_the_epoch_is_an_error_not_zero() {

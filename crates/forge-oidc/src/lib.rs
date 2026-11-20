@@ -50,6 +50,8 @@ pub mod jwks;
 pub mod jwt;
 mod keys;
 mod operator;
+// ADR-0021 amendment 2026-11-20: the org claims' snapshot.
+pub mod org_claims;
 // ADR-0036: the PFS portal's widget tokens and the news' service token.
 mod portal;
 mod session;

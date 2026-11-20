@@ -388,3 +388,125 @@ async fn an_unreachable_provider_keeps_a_session_at_most_thirty_minutes() {
     assert_eq!(forge_oidc::MAX_UNCONFIRMED_SECS, 1800);
     t.drop_now().await;
 }
+
+async fn org_row(t: &FreshDb, done: &LoginDone) -> Value {
+    let rows = t
+        .json_rows(&format!(
+            "SELECT org_units, positions, position_rank, plants, plant_code, \
+             invalid_since IS NOT NULL AS invalid FROM forge.user_org_profiles \
+             WHERE user_id = {}",
+            done.user.get()
+        ))
+        .await;
+    rows.into_iter().next().expect("a snapshot")
+}
+
+async fn org_audits(t: &FreshDb, done: &LoginDone) -> usize {
+    t.json_rows(&format!(
+        "SELECT id FROM forge.audit_log WHERE action = 'user.org_profile_changed' \
+         AND resource_id = {}",
+        done.user.get()
+    ))
+    .await
+    .len()
+}
+
+/// ADR-0021 amendment 2026-11-20: the sign-in stores the access token's org
+/// claims (the live realm's JSON-string `org_units`), and a refresh check
+/// with changed claims changes the snapshot once.
+#[tokio::test]
+async fn a_pfs_sign_in_and_refresh_snapshot_the_org_claims() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = pfs(&t, &op);
+    let done = sign_in(&oidc, &op, json!({}), json!({}))
+        .await
+        .expect("signed in");
+    let row = org_row(&t, &done).await;
+    assert_eq!(
+        row["org_units"],
+        json!([{"code": "SYN-ORG", "primary": true}])
+    );
+    assert_eq!(row["positions"], json!(["member"]));
+    assert_eq!(row["position_rank"], 3);
+    assert_eq!(row["plant_code"], "P001");
+    assert_eq!(row["invalid"], false);
+    assert_eq!(org_audits(&t, &done).await, 1);
+
+    // The same claims again: no new audit row.
+    let again = sign_in(&oidc, &op, json!({}), json!({}))
+        .await
+        .expect("again");
+    assert_eq!(again.user, done.user);
+    assert_eq!(org_audits(&t, &done).await, 1);
+
+    // A refresh with another department: one change.
+    op.set_refresh_access(json!({
+        "org_units": [
+            "{\"code\":\"SYN-NEW\",\"primary\":true}",
+            "{\"code\":\"SYN-ORG\",\"primary\":false}",
+        ],
+    }));
+    assert_eq!(due_check(&t, &oidc, &done).await, RefreshVerdict::Continue);
+    let row = org_row(&t, &done).await;
+    assert_eq!(row["org_units"][0]["code"], "SYN-NEW");
+    assert_eq!(org_audits(&t, &done).await, 2);
+    t.drop_now().await;
+}
+
+/// The errors.toml test of FG-AUTH-0028: invalid org claims never block the
+/// sign-in or the refresh; the last valid snapshot stays and is marked.
+#[tokio::test]
+async fn invalid_org_claims_keep_the_snapshot_and_are_logged_once() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = pfs(&t, &op);
+    let done = sign_in(&oidc, &op, json!({}), json!({}))
+        .await
+        .expect("signed in");
+    for bad in [
+        json!({"org_units": [
+            "{\"code\":\"SYN-A\",\"primary\":true}",
+            "{\"code\":\"SYN-B\",\"primary\":true}",
+        ]}),
+        json!({"positions": ["Not-A-Code"]}),
+        json!({"position_rank": 1000}),
+    ] {
+        let again = sign_in(&oidc, &op, json!({}), bad.clone())
+            .await
+            .expect("an invalid org claim never blocks the sign-in");
+        assert_eq!(again.user, done.user, "{bad}");
+        let row = org_row(&t, &done).await;
+        assert_eq!(row["invalid"], true, "{bad}");
+        assert_eq!(row["org_units"][0]["code"], "SYN-ORG", "kept: {bad}");
+    }
+    op.set_refresh_access(json!({"plants": ["TOOLONG"]}));
+    assert_eq!(due_check(&t, &oidc, &done).await, RefreshVerdict::Continue);
+    assert_eq!(org_audits(&t, &done).await, 1, "invalid is not audited");
+    // Valid again: the mark clears.
+    op.set_refresh_access(json!({}));
+    assert_eq!(due_check(&t, &oidc, &done).await, RefreshVerdict::Continue);
+    assert_eq!(org_row(&t, &done).await["invalid"], false);
+    t.drop_now().await;
+}
+
+/// A first sign-in without any org claim is an empty, valid snapshot.
+#[tokio::test]
+async fn a_pfs_sign_in_without_org_claims_stores_an_empty_snapshot() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = pfs(&t, &op);
+    let done = sign_in(
+        &oidc,
+        &op,
+        json!({}),
+        json!({"org_units": null, "positions": null, "position_rank": null,
+               "plants": null, "plant_code": null}),
+    )
+    .await
+    .expect("signed in");
+    let row = org_row(&t, &done).await;
+    assert_eq!(row["org_units"], json!([]));
+    assert_eq!(row["invalid"], false);
+    t.drop_now().await;
+}
