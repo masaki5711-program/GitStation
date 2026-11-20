@@ -387,6 +387,18 @@ pub const KEYS: &[Key] = &[
     text("portal.ca_file", "FORGE_PORTAL_CA_FILE"),
     number("portal.timeout_ms", "FORGE_PORTAL_TIMEOUT_MS"),
     number("portal.max_attempts", "FORGE_PORTAL_MAX_ATTEMPTS"),
+    // ADR-0038 §1: the copy of the PFS organisation master.
+    boolean("org.master_sync_enabled", "FORGE_ORG_MASTER_SYNC_ENABLED"),
+    number(
+        "org.master_sync_interval_secs",
+        "FORGE_ORG_MASTER_SYNC_INTERVAL_SECS",
+    ),
+    number("org.master_timeout_ms", "FORGE_ORG_MASTER_TIMEOUT_MS"),
+    number("org.master_max_age_hours", "FORGE_ORG_MASTER_MAX_AGE_HOURS"),
+    number(
+        "org.max_profile_age_hours",
+        "FORGE_ORG_MAX_PROFILE_AGE_HOURS",
+    ),
     // M4 C11: deployments over SSH (ADR-0031).
     text("deploy.ssh_key_file", "FORGE_DEPLOY_SSH_KEY_FILE"),
     text("deploy.ssh_program", "FORGE_DEPLOY_SSH_PROGRAM"),

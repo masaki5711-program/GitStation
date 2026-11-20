@@ -2,13 +2,20 @@
    positions and plant, and the primary department code next to a name. */
 .code {
   display: inline-block;
+  max-width: 100%;
   margin-left: var(--gs-space-2);
   padding: 0 var(--gs-space-2);
   border: 1px solid var(--gs-color-border);
   border-radius: var(--gs-radius-pill);
   color: var(--gs-color-text-muted);
   font-size: var(--gs-font-size-sm);
-  white-space: nowrap;
+  /* Department and section names may be long: wrap, never overflow. */
+  overflow-wrap: anywhere;
+}
+
+/* A unit's names (ADR-0038 §1) before its code. */
+.name {
+  color: var(--gs-color-text);
 }
 
 .list {

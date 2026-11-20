@@ -93,6 +93,11 @@ pub struct UserName {
     /// claims (ADR-0021 amendment 2026-11-20); `null` without one.
     #[schema(required = true)]
     pub primary_org_code: Option<String>,
+    /// The primary unit's names, its section and department, from the PFS
+    /// org master's copy (ADR-0038 §1); `null` when not resolved (show the
+    /// code).
+    #[schema(required = true)]
+    pub primary_org: Option<crate::routes::org_profiles::OrgPathBody>,
 }
 
 /// The matches of a search.
@@ -199,12 +204,18 @@ pub async fn search(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
             hosting(&state)?.primary_org_codes(&ids),
         )
         .await?;
+        let mut paths = crate::routes::org_profiles::OrgPaths::of(
+            &state,
+            hosting(&state)?.primary_org_paths(&ids),
+        )
+        .await?;
         json(UserNames {
             items: found
                 .into_iter()
                 .map(|m| UserName {
                     id: m.id.get(),
                     primary_org_code: codes.code(m.id),
+                    primary_org: paths.path(m.id),
                     username: m.username,
                     display_name: m.display_name,
                 })

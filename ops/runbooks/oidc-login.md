@@ -1,4 +1,4 @@
-# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0025 / FG-AUTH-0028 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0014 / FG-AUTH-0017 / FG-AUTH-0018）
+# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0025 / FG-AUTH-0028 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0014 / FG-AUTH-0017 / FG-AUTH-0018 / FG-INT-0025 / FG-INT-0026 / FG-INT-0027 / FG-INT-0028）
 
 ブラウザのログイン（Keycloak の OIDC、ADR-0021 §3・§9）が失敗するとき、バックチャネルのログアウト（FG-AUTH-0017、ADR-0021 §8）が
 断られるとき、5 分ごとのリフレッシュの確認でセッションが切れるとき（ADR-0021 §7、M2 MR5）の診断。
@@ -19,6 +19,7 @@
   too_large、form、token_missing）、0012 と同じ署名・鍵の理由、`issuer`、`audience`、`expired`、`not_yet_valid`、`too_old`
   （`iat` が 2 分より古い）、`missing_claim`（`claim`: iat、jti、events、sid_or_sub）、`events`、`nonce_present`、`replayed`、
   `replay_table_full`。
+- `error_code=FG-INT-0025`〜`FG-INT-0028`（PFS の組織の台帳の写し、ADR-0038 §1）: 下の「組織の台帳の写し」を見る。
 - 「ログインしていたのに急に出された」の問い合わせ: ログの `forge.auth.session_refresh_revoked`（`why`: invalid_grant、
   session_continue_denied、id_token_invalid、id_token_missing、refresh_token_unreadable、`revoked_reason`）か
   `forge.auth.backchannel_logout`（`revoked`）。
@@ -219,3 +220,58 @@ ADR-0021 の追記「組織の claim の写し（2026-11-20）」。`claims_sour
 - 本人: アカウントの設定の「所属」と、ユーザーメニュー（部署は主を先頭に、文字「主」で示す。工場）。
 - ほかの利用者: 人を選ぶ画面と MR の承認者の一覧に**主の部署コードだけ**。役職とランクは本人と管理者だけ
   （`GET /api/v1/admin/users/{id}/org-profile`、`UserOrgAdminRead`）。
+
+## 組織の台帳の写し
+
+ADR-0038 §1（段 A）。worker の `org_master_sync` が PFS registry-api の組織の台帳
+（`GET {portal.registry_url}/api/v1/org/units` と `/api/v1/org/positions`、全工場）を、GitStation のクライアント
+（`auth.oidc.client_id`）の client credentials のトークンで読み、`forge.org_units_master` と `forge.org_positions_master` に写す。
+写しは部・課の **名前** の表示に使い、後の段（組織による所属・承認者の指定）では、利用者の主所属から課・部を
+**親と `level` をたどって** 求める（コードの形からは推測しない）。
+
+- 設定（`[org]`）: `org.master_sync_enabled`（既定 false）、`org.master_sync_interval_secs`（既定 900）、
+  `org.master_timeout_ms`（既定 5000）、`org.master_max_age_hours`（既定 24）、`org.max_profile_age_hours`（既定 24）。
+  registry の URL と CA は `portal.registry_url`・`portal.ca_file`（ポータルの新着と同じ）。`auth.oidc` が無いと worker は起動しない
+  （FG-SYS-0002 `config_key=org.master_sync_enabled reason=needs_auth_oidc`）。
+- PFS 側の前提: registry-api の `ORG_READER_CLIENTS` に `gitstation` があること（PFS の MR !28）。人のトークンは 403。
+- 同期は 1 つのトランザクションで置き換える（一覧に無くなった行は消える）。何か変わったときだけ監査 `org.master_synced`
+  （件数だけ。名前や社員番号は残さない）。失敗したら **何も書かず、前の写しを残す**。次の試行は 1 分、2 分、… と倍にして
+  `org.master_sync_interval_secs` まで待つ。
+- 組織の一覧が空の応答は受け付けない（FG-INT-0027 `reason=empty`）。registry の障害で写しが消えることはない。
+- 写しが `org.master_max_age_hours` より古い（または一度も同期していない）と、組織から求めるもの（課・部）は
+  **「不明」** として閉じる（ADR-0038 §4）。表示は写しの名前を使い続け、写しに無いコードはコードのまま出す。
+
+### 見分け方（読み取りだけ）
+
+1. `forge doctor` の `org.master`: 組織と職位の件数、最後の同期の時刻と経過秒。古い・未同期は FG-INT-0028（alert）。
+2. ログ `forge.org.master_sync_failed`（`list` = units / positions、`reason`、`status`、`failures`。トークンと名前は出ない）:
+   - FG-INT-0025（warn）: 届かない。`reason` = `connect` / `connect_timeout` / `timeout` / `redirect` / `request` /
+     `status`（5xx など）/ `service_token`（トークンを取れない。`detail` に FG-INT-0024 の理由）。
+   - FG-INT-0026（alert）: 401 / 403 / 404。`ORG_READER_CLIENTS` に `gitstation` が無い、別のレルム・クライアントのトークン、
+     registry に組織の API がまだ無い（404）。
+   - FG-INT-0027（alert）: 中身が契約に合わない。`reason` = `envelope` / `too_many` / `field`（`field` と `index`）/
+     `self_parent` / `duplicate` / `item` / `empty`。値そのものはログに出ない。
+   - 回復: `forge.org.master_sync_recovered`。変化: `forge.org.master_synced`（件数）。
+   - 写しが古くなった: `forge.org.master_stale`（FG-INT-0028、失敗が続く間に 1 回）。
+3. DB（読み取りだけ）:
+   `SELECT max(synced_at), count(*) FROM forge.org_units_master;`
+   `SELECT plant_code, code, level, parent_code FROM forge.org_units_master WHERE parent_code IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM forge.org_units_master p WHERE p.plant_code = org_units_master.plant_code
+    AND p.code = org_units_master.parent_code);`（親が台帳に無い組織。その下の人の課・部は「不明」になる）
+
+### 直し方
+
+- FG-INT-0026: PFS の運用者に `ORG_READER_CLIENTS=gitstation` の設定を頼む（GitStation 側の変更は不要。次の試行で直る）。
+  `auth.oidc.client_id` が realm `iotpf` の `gitstation` であることも確かめる。
+- FG-INT-0025: registry の URL（`portal.registry_url`）、CA（`portal.ca_file`）、ネットワーク、PFS 側の稼働を確かめる。
+  `service_token` なら runbook `portal-widgets` の FG-INT-0024 と同じ手順。
+- FG-INT-0027: PFS の台帳の該当する値（`field` と `index`）を PFS 側で直してもらう。契約が合意の上で変わったなら、
+  GitStation の解析（forge-integ `org_master`）を直す。
+- 同期を止めたいとき（承認された手順として）: `org.master_sync_enabled = false` にして worker を再起動する。写しは残るが、
+  古くなると組織から求めるものは「不明」になる。
+
+### 見え方
+
+- 本人の「所属」: 写しにある部署は「部 / 課 / 職場」の名前とコード。無いものはコードだけ。
+- 人を選ぶ画面と MR の承認者の一覧: 主所属の「部 / 課」の名前（画面の言語。英語・インドネシア語の名前が無ければ日本語）。
+  写しに無ければ今までどおりコード。社員番号（`head_staff_id`）は読み取りのプール（`forge_ro`）からも見えない。

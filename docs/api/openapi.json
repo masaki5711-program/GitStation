@@ -7611,6 +7611,79 @@
         ],
         "type": "object"
       },
+      "OrgNameBody": {
+        "additionalProperties": false,
+        "description": "One unit of the PFS org master (ADR-0038 §1): its code, level and\nnames.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "level": {
+            "description": "`division`, `department`, `section` or `team`.",
+            "type": "string"
+          },
+          "name_en": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name_ja": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "level",
+          "name_ja",
+          "name_en",
+          "name_id"
+        ],
+        "type": "object"
+      },
+      "OrgPathBody": {
+        "additionalProperties": false,
+        "description": "A unit and the section and department above it, from the copy of the\nPFS org master (found by the parents' levels, never by the code).",
+        "properties": {
+          "department": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgNameBody",
+                "description": "`null`: no department at or above the unit."
+              }
+            ]
+          },
+          "section": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgNameBody",
+                "description": "`null`: no section at or above the unit."
+              }
+            ]
+          },
+          "unit": {
+            "$ref": "#/components/schemas/OrgNameBody"
+          }
+        },
+        "required": [
+          "unit",
+          "section",
+          "department"
+        ],
+        "type": "object"
+      },
       "OrgProfileBody": {
         "additionalProperties": false,
         "description": "The snapshot of the identity provider's org claims.",
@@ -7684,6 +7757,17 @@
             "description": "The PFS org code (`^[A-Z0-9][A-Z0-9_-]{0,19}$`).",
             "type": "string"
           },
+          "path": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgPathBody",
+                "description": "The unit's names from the org master's copy (ADR-0038 §1); `null`\nwhen the copy does not have the code (show the code)."
+              }
+            ]
+          },
           "primary": {
             "description": "The person's main department (at most one; listed first).",
             "type": "boolean"
@@ -7691,7 +7775,8 @@
         },
         "required": [
           "code",
-          "primary"
+          "primary",
+          "path"
         ],
         "type": "object"
       },
@@ -11309,6 +11394,17 @@
           "counted": {
             "type": "boolean"
           },
+          "primary_org": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgPathBody",
+                "description": "The approver's primary unit with its section and department names\nfrom the PFS org master's copy (ADR-0038 §1); `null` when not\nresolved (show the code)."
+              }
+            ]
+          },
           "primary_org_code": {
             "description": "The approver's primary department code (ADR-0021 amendment\n2026-11-20, added within `schema_version` 1); `null` without one.",
             "type": [
@@ -11331,7 +11427,8 @@
           "username",
           "counted",
           "uncounted_reason",
-          "primary_org_code"
+          "primary_org_code",
+          "primary_org"
         ],
         "type": "object"
       },
@@ -12436,6 +12533,17 @@
             "minimum": 1,
             "type": "integer"
           },
+          "primary_org": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgPathBody",
+                "description": "The primary unit's names, its section and department, from the PFS\norg master's copy (ADR-0038 §1); `null` when not resolved (show the\ncode)."
+              }
+            ]
+          },
           "primary_org_code": {
             "description": "The primary department's code from the identity provider's org\nclaims (ADR-0021 amendment 2026-11-20); `null` without one.",
             "type": [
@@ -12451,7 +12559,8 @@
           "id",
           "username",
           "display_name",
-          "primary_org_code"
+          "primary_org_code",
+          "primary_org"
         ],
         "type": "object"
       },

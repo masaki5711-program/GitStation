@@ -103,6 +103,8 @@ pub(crate) mod mirror;
 mod notify_lane;
 // ADR-0036: the portal news lane.
 mod portal_news;
+// ADR-0038 §1: the copy of the PFS org master.
+mod org_master;
 // ── end M3 N1 ──
 mod seal;
 // ── M3 I1c: events retention ──
@@ -207,6 +209,15 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             )),
             None => None,
         };
+        // ADR-0038 §1: the org master's copy (its token source and CA read now).
+        let org_master = crate::portal::org_master_sync(cfg, &db)?.map(|sync| {
+            org_master::spawn(
+                db.clone(), // clone: the task's own pool handle
+                sync,
+                &cfg.org,
+                stopped.clone(), // clone: the task waits on its own receiver
+            )
+        });
         let purger = purge::Purger::new(&db, storage.root.clone()); // clone: the purge's own handle
         let purge = Some(PurgeTask {
             purger,
@@ -235,6 +246,9 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             task.abort();
         }
         if let Some(task) = news {
+            task.abort();
+        }
+        if let Some(task) = org_master {
             task.abort();
         }
         signal.abort();

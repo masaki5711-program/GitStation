@@ -90,6 +90,18 @@ impl Review {
         forge_db::org_profiles::primary_codes(&self.db, approvers).await
     }
 
+    /// The primary unit's names of each of `approvers` whose code resolves
+    /// in the org master's copy (ADR-0038 §1, display only).
+    pub async fn primary_org_paths(
+        &self,
+        approvers: &[forge_core::UserId],
+    ) -> Result<
+        std::collections::HashMap<forge_core::UserId, forge_db::org_master::OrgPath>,
+        ForgeError,
+    > {
+        forge_db::org_master::primary_paths(&self.db, approvers).await
+    }
+
     /// The latest merge attempt of merge request `mr` (`None`: never asked).
     pub async fn latest_merge(
         &self,

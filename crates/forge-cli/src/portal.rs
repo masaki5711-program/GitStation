@@ -11,6 +11,10 @@
 //!   (the client-credentials token of `auth.oidc.client_id`, the registry
 //!   and its CA); news on without `auth.oidc` stops the start
 //!   (`FG-SYS-0002 config_key=portal.news_enabled reason=needs_auth_oidc`).
+//! - [`org_master_sync`]: the `org_master_sync` task of `forge worker`
+//!   (ADR-0038 §1; the same token, registry and CA as the news), with
+//!   `org.master_sync_enabled`; without `auth.oidc` the start stops
+//!   (`FG-SYS-0002 config_key=org.master_sync_enabled reason=needs_auth_oidc`).
 
 use std::sync::Arc;
 
@@ -19,6 +23,7 @@ use forge_core::portal::PortalAuthenticator;
 use forge_db::portal::NewsPolicy;
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
+use forge_integ::org_master::{HttpMasterTransport, OrgMasterSync};
 use forge_integ::portal_news::{HttpNewsTransport, NewsSender};
 use forge_oidc::{Oidc, OidcSettings, PortalWidgets, ServiceTokens};
 
@@ -73,6 +78,38 @@ pub(crate) fn news_sender(cfg: &Config, db: &Db) -> Result<Option<NewsSender>, F
     let ca = cfg.portal.ca_pem()?;
     let transport = Arc::new(HttpNewsTransport::new(ca.as_deref(), cfg.portal.timeout)?);
     NewsSender::new(db, registry, tokens, transport).map(Some)
+}
+
+/// The org master's sync of `forge worker`, or `None` when it is off.
+pub(crate) fn org_master_sync(cfg: &Config, db: &Db) -> Result<Option<OrgMasterSync>, ForgeError> {
+    if !cfg.org.master_sync_enabled {
+        return Ok(None);
+    }
+    let needs = |key: &'static str, reason: &'static str| {
+        ForgeError::new(ErrorCode::ConfigInvalid)
+            .with_context("config_key", key)
+            .with_context("reason", reason)
+    };
+    let oidc = cfg
+        .auth
+        .oidc
+        .as_ref()
+        .ok_or_else(|| needs("org.master_sync_enabled", "needs_auth_oidc"))?;
+    // The configuration requires it with the sync on (validate_across).
+    let registry = cfg
+        .portal
+        .registry_url
+        .as_deref()
+        .ok_or_else(|| needs("portal.registry_url", "missing"))?;
+    let settings =
+        OidcSettings::from_config(oidc, "", cfg.web.session_idle, cfg.web.session_absolute)?;
+    let tokens = Arc::new(ServiceTokens::new(&settings)?);
+    let ca = cfg.portal.ca_pem()?;
+    let transport = Arc::new(HttpMasterTransport::new(
+        ca.as_deref(),
+        cfg.org.master_timeout,
+    )?);
+    Ok(Some(OrgMasterSync::new(db, registry, tokens, transport)))
 }
 
 #[cfg(test)]
