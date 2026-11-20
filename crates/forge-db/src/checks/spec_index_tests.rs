@@ -9,8 +9,8 @@ use forge_core::{
 use forge_errors::ErrorCode;
 
 use super::spec_index::{
-    spec_index_job, spec_index_payload, SpecIndexRequest, SpecIndexRequests, SPEC_INDEX_JOB,
-    SPEC_INDEX_SUBSCRIBER,
+    hand_over, spec_index_job, spec_index_payload, SpecIndexRequest, SpecIndexRequests,
+    SPEC_INDEX_JOB, SPEC_INDEX_SUBSCRIBER,
 };
 use crate::change::{Actor, ChangeContext};
 use crate::integrations::{self, NewIntegration};
@@ -216,6 +216,58 @@ async fn every_version_and_every_link_change_asks_for_one_spec_index_job() {
         )),
         "{key}"
     );
+    t.drop_now().await;
+}
+
+/// Plan 18 S6: a version the prepare job recorded asks for no
+/// `check.spec_index` job (the prepare job runs the spec checks); its
+/// hand-over of a failed step asks for the job the subscriber would have,
+/// in the merge request's current state.
+#[tokio::test]
+async fn a_prepared_version_asks_for_no_spec_index_job_and_a_hand_over_asks_for_its_state() {
+    let (t, alice, p) = world().await;
+    let user = |request: &str| {
+        ChangeContext::new(Actor::User(alice), RequestId::parse(request).expect("id"))
+    };
+    let mr = open_mr_decided(
+        &t.db,
+        &user("req-open"),
+        p,
+        alice,
+        &new_mr("feature"),
+        |_| Ok(()),
+    )
+    .await
+    .map(|(stored, ())| stored)
+    .expect("open");
+    crate::review::record_mr_version_prepared(
+        &t.db,
+        &system("req-prepared"),
+        mr.id,
+        &sha('a'),
+        Some(alice),
+        None,
+    )
+    .await
+    .expect("version");
+    drain(&t, &SpecIndexRequests).await;
+    assert!(jobs(&t).await.is_empty(), "the prepare job runs them");
+    let request = SpecIndexRequest {
+        project: p,
+        iid: mr.iid,
+        head: sha('a'),
+    };
+    let rid = RequestId::parse("req-hand-over").expect("id");
+    assert!(hand_over(&t.db, &request, rid.clone())
+        .await
+        .expect("hand over"));
+    let found = jobs(&t).await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    let prefix = format!("spec_index:{}:{}:{}:", p.get(), mr.iid, sha('a').as_str());
+    assert!(found[0].0.starts_with(&prefix), "{}", found[0].0);
+    assert_eq!(found[0].1, request);
+    // Held while queued: nothing twice.
+    assert!(!hand_over(&t.db, &request, rid).await.expect("again"));
     t.drop_now().await;
 }
 

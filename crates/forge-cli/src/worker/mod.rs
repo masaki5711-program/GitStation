@@ -83,6 +83,7 @@ mod spec_index_sweep;
 // ── end M3 X2 ──
 // ── M4 C2: CI pipelines (the `ci.pipeline_create` job) ──
 mod pipelines;
+mod prepare;
 // ── M3 X7: `forge/risk` (the `check.risk` job) ──
 mod risk;
 mod risk_sweep;

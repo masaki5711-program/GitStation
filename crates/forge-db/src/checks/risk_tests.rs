@@ -5,8 +5,8 @@ use forge_core::{ObjectId, ProjectId, RefName, RequestId, UserId};
 use forge_errors::ErrorCode;
 
 use super::{
-    risk_job, risk_payload, risk_targets, unanswered_dead_jobs, RiskRequest, RiskRequests,
-    MAX_TARGETS, RISK_JOB, RISK_SUBSCRIBER,
+    hand_over, risk_job, risk_payload, risk_targets, unanswered_dead_jobs, RiskRequest,
+    RiskRequests, MAX_TARGETS, RISK_JOB, RISK_SUBSCRIBER,
 };
 use crate::change::{Actor, ChangeContext};
 use crate::projects::{self, CreatedProject, NewProject};
@@ -168,6 +168,62 @@ async fn every_merge_request_version_enqueues_one_risk_job_of_its_head() {
         jobs[0].0,
         format!("risk:{}:{}:mr{}", p.get(), sha('a').as_str(), mr.id.get())
     );
+    t.drop_now().await;
+}
+
+/// Plan 18 S6: a version the prepare job recorded (`"prepared": true`)
+/// asks for no `check.risk` job — the prepare job runs `forge/risk`
+/// itself; a version recorded otherwise still asks. A failed risk step is
+/// handed over to the very job the subscriber would have asked for.
+#[tokio::test]
+async fn a_prepared_version_asks_for_no_risk_job_and_a_hand_over_asks_for_the_same_one() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    subscribers::register(&t.db, &RiskRequests, Start::Head)
+        .await
+        .expect("register");
+    let mr = open(&t, p, alice, "feature", "main").await;
+    crate::review::record_mr_version_prepared(
+        &t.db,
+        &system("req-prepared"),
+        mr.id,
+        &sha('a'),
+        Some(alice),
+        None,
+    )
+    .await
+    .expect("version");
+    drain(&t, &RiskRequests).await;
+    assert!(risk_keys(&t).await.is_empty(), "the prepare job runs it");
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM forge.events WHERE event_type = 'merge_request.pushed'",
+    )
+    .fetch_one(&mut t.superuser().await)
+    .await
+    .expect("event");
+    assert_eq!(payload["prepared"], true, "{payload}");
+    assert!(crate::review::prepared_version(&payload));
+    // A version recorded otherwise asks as before.
+    record_mr_version(&t.db, &system("req-plain"), mr.id, &sha('b'), Some(alice))
+        .await
+        .expect("version");
+    drain(&t, &RiskRequests).await;
+    let key_b = format!("risk:{}:{}:mr{}", p.get(), sha('b').as_str(), mr.id.get());
+    assert_eq!(risk_keys(&t).await, std::slice::from_ref(&key_b));
+    // The hand-over of a failed step for `a`: the subscriber's job and key.
+    let request = RiskRequest {
+        project: p,
+        head: sha('a'),
+    };
+    let rid = RequestId::parse("req-hand-over").expect("id");
+    assert!(hand_over(&t.db, &request, mr.id, rid.clone())
+        .await
+        .expect("hand over"));
+    let key_a = format!("risk:{}:{}:mr{}", p.get(), sha('a').as_str(), mr.id.get());
+    assert_eq!(risk_keys(&t).await, [key_b, key_a]);
+    // Held: a second hand-over adds nothing.
+    assert!(!hand_over(&t.db, &request, mr.id, rid).await.expect("again"));
     t.drop_now().await;
 }
 

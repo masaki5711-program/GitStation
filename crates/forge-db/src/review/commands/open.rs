@@ -6,7 +6,8 @@ use forge_errors::ForgeError;
 
 use super::{facts, record, refuse_open_duplicate, write_error, MergeRequestFacts};
 use crate::change::{ChangeContext, ChangeTx, Settle};
-use crate::review::versions::{refresh_job, RefreshRequest, RefreshTrigger};
+use crate::review::prepare::prepare_job;
+use crate::review::versions::{RefreshRequest, RefreshTrigger};
 use crate::review::{Row, StoredMergeRequest, COLUMNS};
 use crate::{query_error, Db};
 
@@ -28,7 +29,8 @@ pub struct NewMergeRequest {
 /// (under the project lock; `unique_index` as the backstop), then the next
 /// `iid` of the project (its counter row, never `max(iid) + 1`), the row,
 /// one `merge_request.opened` audit row and event, and the version job
-/// (`merge_request.refresh`, M3 R1b) that records the first version. Errors also:
+/// (`merge_request.prepare` since plan 18 S6; `merge_request.refresh`, M3
+/// R1b, before) that records the first version. Errors also:
 /// `FG-REPO-0005 resource=project`, `FG-WEB-0006` (a CHECK), and whatever
 /// `decide` returns.
 pub async fn open_mr_decided<P>(
@@ -98,7 +100,7 @@ pub async fn open_mr_decided<P>(
         let record = record(project, vec![change], stored.revision)?;
         // M3 R1b: the first version comes from the version job, which reads
         // the source branch (git stays out of this transaction).
-        let job = refresh_job(
+        let job = prepare_job(
             RefreshRequest {
                 merge_request: stored.id,
                 pushed_by: None,

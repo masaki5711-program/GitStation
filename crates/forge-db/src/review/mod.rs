@@ -52,6 +52,7 @@ pub mod merge_queue;
 pub mod merge_results;
 pub mod mergeability;
 pub mod merges;
+pub mod prepare;
 mod refresh;
 pub mod reverts;
 pub mod settings;
@@ -94,10 +95,14 @@ pub use mergeability::{
     begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,
     interacts_sql, mergeability, mergeability_job, mergeability_payload, mergeability_written,
     not_checked, pipeline_asked, reap_stale_checks, recheck_if_carried, record_check,
-    request_check, stored_paths, sweep_missing_merge_results, sweep_unchecked, CheckResult,
-    CheckStart, CheckSubject, DecidedRow, MergeabilityHealth, MergeabilityRequest, Recorded,
+    request_check, request_check_backstop, settle_backstop, stored_paths,
+    sweep_missing_merge_results, sweep_unchecked, Backstop, BackstopCheck, CheckResult, CheckStart,
+    CheckSubject, DecidedRow, MergeabilityHealth, MergeabilityRequest, Recorded,
     StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT, MISSING_RESULT_AFTER, STALE_AFTER,
     SWEEP_BATCH,
+};
+pub use prepare::{
+    prepare_job, prepared_version, BACKSTOP_DELAY, PREPARED, PREPARE_JOB, PREPARE_TIMEOUT,
 };
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
 pub use settings::{
@@ -111,9 +116,10 @@ pub use version_refs::{
     VersionsSnapshot, REFS_LOCK_HOLD, REFS_LOCK_WAIT,
 };
 pub use versions::{
-    list_versions, read_versions, record_mr_version, record_mr_version_carrying, refresh_job,
-    refresh_payload, refresh_target, CarryPlan, RefreshRequest, RefreshTarget, RefreshTrigger,
-    StoredVersion, VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
+    list_versions, read_versions, record_mr_version, record_mr_version_carrying,
+    record_mr_version_prepared, refresh_job, refresh_payload, refresh_target, CarryPlan,
+    RefreshRequest, RefreshTarget, RefreshTrigger, StoredVersion, VersionOutcome, REFRESH_JOB,
+    REFRESH_TIMEOUT,
 };
 
 pub use work_item_links::{

@@ -392,6 +392,31 @@ pub async fn record_mr_version_carrying(
     pushed_by: Option<UserId>,
     carry: Option<&CarryPlan>,
 ) -> Result<VersionOutcome, ForgeError> {
+    record_version(db, ctx, (mr, head, pushed_by), carry, false).await
+}
+
+/// [`record_mr_version_carrying`] for the prepare job (plan 18 S6,
+/// `super::prepare`): the `merge_request.pushed` event says
+/// `"prepared": true`, so the `risk` and `spec-index` subscribers leave the
+/// version's checks to the job that recorded it.
+pub async fn record_mr_version_prepared(
+    db: &Db,
+    ctx: &ChangeContext,
+    mr: MergeRequestId,
+    head: &ObjectId,
+    pushed_by: Option<UserId>,
+    carry: Option<&CarryPlan>,
+) -> Result<VersionOutcome, ForgeError> {
+    record_version(db, ctx, (mr, head, pushed_by), carry, true).await
+}
+
+async fn record_version(
+    db: &Db,
+    ctx: &ChangeContext,
+    (mr, head, pushed_by): (MergeRequestId, &ObjectId, Option<UserId>),
+    carry: Option<&CarryPlan>,
+    prepared: bool,
+) -> Result<VersionOutcome, ForgeError> {
     const ACTION: &str = "merge_request.pushed";
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
@@ -523,13 +548,23 @@ pub async fn record_mr_version_carrying(
         let event_type = details.event_type().ok_or_else(|| {
             ForgeError::new(ErrorCode::Internal).with_context("reason", "audit_only_event")
         })?;
+        let mut payload = details.to_value();
+        if prepared {
+            // Plan 18 S6: fields are only ever added to an event payload.
+            if let Some(fields) = payload.as_object_mut() {
+                fields.insert(
+                    super::prepare::PREPARED.to_owned(),
+                    serde_json::Value::Bool(true),
+                );
+            }
+        }
         let mut events = vec![DomainEvent {
             event_type,
             schema_version: 1,
             aggregate_type: "merge_request",
             aggregate_id: mr.get(),
             project_id: Some(project),
-            payload: details.to_value(),
+            payload,
             dedup_key: Some(dedup),
         }];
         events.append(&mut revoked);

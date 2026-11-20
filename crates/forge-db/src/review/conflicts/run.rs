@@ -101,51 +101,82 @@ pub struct Peers {
     /// Peers whose stored head is not an object id (never written by
     /// forge; logged by the caller, the scan is `incomplete peer_invalid`).
     pub invalid: Vec<MergeRequestId>,
+    /// Plan 18 S6: open merge requests on the target left out because
+    /// their paths cannot interact (0 without the filter).
+    pub passed_over: i64,
 }
 
 /// The open merge requests of `project` on `target` but `mr` that have a
 /// head (drafts included), most recently updated first, at most `limit`;
 /// and how many there are in all.
+///
+/// Plan 18 S6 (ADR-0037 (f)): with `filter` (`review.path_filter`) only
+/// the peers whose changed paths may interact with `mr`'s (the S4
+/// predicate, `mergeability::peer_interacts_sql`) — two merge requests
+/// whose paths cannot interact cannot conflict. A side whose set is
+/// unknown is a peer, as before the filter. `total` counts the
+/// interacting peers; [`Peers::passed_over`] the others.
 pub async fn scan_peers(
     db: &Db,
     project: ProjectId,
     target: &RefName,
     mr: MergeRequestId,
     limit: i64,
+    filter: bool,
 ) -> Result<Peers, ForgeError> {
     const QUERY: &str = "review.conflict_scan_peers";
+    let candidates = format!(
+        "FROM forge.merge_requests m WHERE m.project_id = $1 AND m.state = 'open'          AND m.target_branch = $2 AND m.id <> $3 AND m.head_sha IS NOT NULL          AND (NOT $5::boolean OR {})",
+        crate::review::mergeability::peer_interacts_sql("$3", "$6")
+    );
     db.within(QUERY, async {
         let mut conn = db
             .write_pool()
             .acquire()
             .await
             .map_err(|e| query_error(QUERY, e))?;
-        let rows: Vec<(i64, i64, String, bool)> = sqlx::query_as(
-            "SELECT id, iid, head_sha, draft FROM forge.merge_requests \
-             WHERE project_id = $1 AND state = 'open' AND target_branch = $2 AND id <> $3 \
-             AND head_sha IS NOT NULL ORDER BY updated_at DESC, id DESC LIMIT $4",
-        )
+        let rows: Vec<(i64, i64, String, bool)> = sqlx::query_as(&format!(
+            "SELECT m.id, m.iid, m.head_sha, m.draft {candidates}              ORDER BY m.updated_at DESC, m.id DESC LIMIT $4"
+        ))
         .bind(project.get())
         .bind(target.as_str())
         .bind(mr.get())
         .bind(limit)
+        .bind(filter)
+        .bind(crate::review::mergeability::paths_rule())
         .fetch_all(&mut *conn)
         .await
         .map_err(|e| query_error(QUERY, e))?;
-        let total: i64 = if i64::try_from(rows.len()).unwrap_or(i64::MAX) < limit {
-            i64::try_from(rows.len()).unwrap_or(i64::MAX)
+        let listed = i64::try_from(rows.len()).unwrap_or(i64::MAX);
+        let total: i64 = if listed < limit {
+            listed
         } else {
-            sqlx::query_scalar(
-                "SELECT count(*) FROM forge.merge_requests WHERE project_id = $1 \
-                 AND state = 'open' AND target_branch = $2 AND id <> $3 \
-                 AND head_sha IS NOT NULL",
+            sqlx::query_scalar(&format!(
+                "SELECT count(*) {candidates} AND $4::bigint IS NOT NULL"
+            ))
+            .bind(project.get())
+            .bind(target.as_str())
+            .bind(mr.get())
+            .bind(limit)
+            .bind(filter)
+            .bind(crate::review::mergeability::paths_rule())
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|e| query_error(QUERY, e))?
+        };
+        let passed_over: i64 = if filter {
+            let all: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM forge.merge_requests WHERE project_id = $1                  AND state = 'open' AND target_branch = $2 AND id <> $3                  AND head_sha IS NOT NULL",
             )
             .bind(project.get())
             .bind(target.as_str())
             .bind(mr.get())
             .fetch_one(&mut *conn)
             .await
-            .map_err(|e| query_error(QUERY, e))?
+            .map_err(|e| query_error(QUERY, e))?;
+            (all - total).max(0)
+        } else {
+            0
         };
         let mut peers = Vec::with_capacity(rows.len());
         let mut invalid = Vec::new();
@@ -165,6 +196,7 @@ pub async fn scan_peers(
             peers,
             total,
             invalid,
+            passed_over,
         })
     })
     .await

@@ -140,6 +140,19 @@ pub(crate) async fn enqueue_superseding_on(
     job: &NewJob,
     merge_request: i64,
 ) -> Result<Superseding, ForgeError> {
+    enqueue_superseding_after_on(conn, job, merge_request, None).await
+}
+
+/// [`enqueue_superseding_on`]; with `delay` the new job is ready only
+/// `delay` from now, whatever the replaced ones waited (plan 18 S6: the
+/// mergeability job behind a prepare job's own check, run only if that
+/// check never finishes).
+pub(crate) async fn enqueue_superseding_after_on(
+    conn: &mut PgConnection,
+    job: &NewJob,
+    merge_request: i64,
+    delay: Option<Duration>,
+) -> Result<Superseding, ForgeError> {
     let (id, superseded): (Option<i64>, i64) = sqlx::query_as(
         "WITH gone AS ( \
              DELETE FROM ONLY forge.jobs WHERE kind = $1 AND state = 'queued' \
@@ -149,7 +162,10 @@ pub(crate) async fn enqueue_superseding_on(
              INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key, \
                     origin_request_id, origin_event_seq, run_after) \
              VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7, \
-                    LEAST(pg_catalog.now(), (SELECT min(run_after) FROM gone))) \
+                    CASE WHEN $10::float8 IS NULL \
+                         THEN LEAST(pg_catalog.now(), (SELECT min(run_after) FROM gone)) \
+                         ELSE pg_catalog.now() + pg_catalog.make_interval(secs => $10::float8) \
+                    END) \
              ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead' \
              DO NOTHING \
              RETURNING id, kind) \
@@ -165,6 +181,7 @@ pub(crate) async fn enqueue_superseding_on(
     .bind(job.origin_event_seq)
     .bind(merge_request.to_string())
     .bind(Channel::Jobs.name())
+    .bind(delay.map(|d| d.as_secs_f64()))
     .fetch_one(&mut *conn)
     .await
     .map_err(|e| query_error("jobs.enqueue_superseding", e))?;
@@ -269,7 +286,8 @@ pub const PRIORITY_AGING_SECS: i64 = 300;
 ///
 /// - 0: the train pipeline of a merge queue (`ci.pipeline_create` with
 ///   `source = merge_queue`) and `repository.provision`;
-/// - 1: `merge_request.refresh` (a pushed head, F7) and the mergeability
+/// - 1: `merge_request.refresh` and `merge_request.prepare` (a pushed
+///   head, F7; plan 18 S6) and the mergeability
 ///   check of a merge request with a live queue entry;
 /// - 2: everything else, and any job ready for longer than
 ///   [`PRIORITY_AGING_SECS`];
@@ -281,13 +299,13 @@ pub const PRIORITY_AGING_SECS: i64 = 300;
 pub(crate) fn priority_sql() -> String {
     use crate::pipelines::{Source, PIPELINE_CREATE_JOB};
     use crate::repositories::PROVISION_JOB;
-    use crate::review::{CONFLICT_SCAN_JOB, MERGEABILITY_JOB, REFRESH_JOB};
+    use crate::review::{CONFLICT_SCAN_JOB, MERGEABILITY_JOB, PREPARE_JOB, REFRESH_JOB};
     format!(
         "CASE \
            WHEN j.kind = '{PIPELINE_CREATE_JOB}' \
                 AND j.payload ->> 'source' = '{queue}' THEN 0 \
            WHEN j.kind = '{PROVISION_JOB}' THEN 0 \
-           WHEN j.kind = '{REFRESH_JOB}' THEN 1 \
+           WHEN j.kind IN ('{REFRESH_JOB}', '{PREPARE_JOB}') THEN 1 \
            WHEN j.kind = '{MERGEABILITY_JOB}' AND EXISTS ( \
                 SELECT 1 FROM forge.merge_queue_entries e \
                  WHERE e.state IN ('queued', 'testing') \

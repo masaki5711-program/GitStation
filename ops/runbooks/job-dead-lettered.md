@@ -34,6 +34,18 @@
        同じ種類がほかの worker で待っていれば `FG-DB-0017 reason=queue_wait` も出る → `job-queue-backlog.md`
    - `FG-DB-0007` `reason=left_leased`: 中断したハンドラーが 5 秒で終わらず、リースを残した（`abort_pending` が先に出る）。リース切れの後に回収された
    - `reason=permanent_failure`: ハンドラーが「やり直しても成功しない」と判断した（対象が消えたなど）。原因の行の `reason` を読む
+4. `kind = merge_request.prepare`（計画 18 S6、ADR-0037 (f)）: 版とその検査を 1 つのジョブで行う。原因の行の `step` が失敗した小段:
+   - `step=refresh`: 版の記録（ソース枝の先端の読み、版の行、隠し ref）。コードは `merge_request.refresh` と同じ
+     （`FG-GIT-0002/0003/0004`、`FG-REPO-0016`、`FG-DB-0001/0002`）。版が記録されていないので、MR の検査も始まっていない。
+   - `step=mergeability` / `step=checks`: 判定の後始末（待たせていた判定のジョブの削除・起床）か、検査の引き継ぎの投入が
+     DB で失敗した。版は記録済み。再試行で `forge.review.prepared` の `risk` / `spec` が `skipped` なら、その head の結果はもうある。
+   - 小段（`mergeability`、`risk`、`spec`）そのものの失敗では prepare は失敗しない: worker のログに
+     `forge.review.prepare_step_failed`（`step`、その小段の `error_code`、`job_kind=merge_request.prepare`）が 1 回出て、その小段は
+     自分のジョブ（`merge_request.mergeability`、`check.risk`、`check.spec_index`）で再試行される。そのジョブが `dead` になったら
+     その種類として読む（最後の試行で `error` の結論を書くのは今までどおり）。
+   - prepare が `dead` になった（版はあるが検査がない）とき: 待たせていた判定のジョブ（`merge_request.mergeability`、
+     `run_after` が未来）は `BACKSTOP_DELAY`（120 s）の後に自分で走る。`forge/risk` と spec の検査は、その MR に新しい push か
+     MR の再オープンで新しい prepare が作られるまで出ない。
 
 ## Mitigate
 
@@ -43,6 +55,8 @@
    種類ごとのコマンドは、ハンドラーが追加されたときにここへ追記する。
    - `repository.provision`（D4 MR3b）: `forge admin repo reprovision <repo_id>`（`repo_id` は payload の `repo_id`）。
      原因の調べ方と前提は Runbook `repository-provisioning.md`。
+   - `merge_request.prepare`（計画 18 S6）: 投入し直すコマンドはない。MR のソース枝への新しい push（push の
+     イベントごとに新しいキー `mr_prepare:<id>:push:<seq>`）か、MR を閉じて開き直すと新しい prepare が作られる。
    `[MUTATING — needs approval]`（ロールバック: なし。新しいジョブが `succeeded` になるまで見届ける）
 3. **してはいけないこと**: `forge.jobs` の `state` / `attempts` / `lease_until` を手で書き換えない。`dead` の行を `queued` に戻さない（手順 2 で新しいジョブを作る）。
    リースの切れていないジョブを `queued` に戻すと、二つの worker が同じジョブを同時に実行する。

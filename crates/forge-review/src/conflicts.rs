@@ -91,12 +91,17 @@ pub struct ConflictPredictor {
     git: Git,
     storage: StorageRoot,
     limits: ScanLimits,
+    /// Plan 18 S6 (ADR-0037 (f)): the peers are only the merge requests
+    /// whose paths may interact (`review.path_filter`; `false`, the
+    /// default here: every open one on the target).
+    path_filter: bool,
 }
 
 impl std::fmt::Debug for ConflictPredictor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConflictPredictor")
             .field("limits", &self.limits)
+            .field("path_filter", &self.path_filter)
             .finish_non_exhaustive()
     }
 }
@@ -278,7 +283,16 @@ impl ConflictPredictor {
             git,
             storage,
             limits: ScanLimits::default(),
+            path_filter: false,
         }
+    }
+
+    /// Plan 18 S6: scan only the peers whose changed paths may interact
+    /// with the merge request's (`review.path_filter`).
+    #[must_use]
+    pub fn with_path_filter(mut self, on: bool) -> Self {
+        self.path_filter = on;
+        self
     }
 
     /// Other bounds (tests).
@@ -663,14 +677,35 @@ pub async fn scan(
         .transpose()?;
     let limit = i64::try_from(predictor.limits.peers_max).unwrap_or(i64::MAX);
     let found = if head.is_some() {
-        review::scan_peers(db, stored.project_id, &stored.target_branch, mr, limit).await?
+        review::scan_peers(
+            db,
+            stored.project_id,
+            &stored.target_branch,
+            mr,
+            limit,
+            predictor.path_filter,
+        )
+        .await?
     } else {
         review::Peers {
             peers: Vec::new(),
             total: 0,
             invalid: Vec::new(),
+            passed_over: 0,
         }
     };
+    if found.passed_over > 0 {
+        tracing::debug!(
+            target: "forge_review",
+            event = "forge.review.conflict_peers_filtered",
+            request_id = %request_id,
+            merge_request_id = mr.get(),
+            scan_seq = seq,
+            peers = found.total,
+            passed_over = found.passed_over,
+            "open merge requests whose paths cannot interact are not scanned"
+        );
+    }
     for other in &found.invalid {
         // Never written by forge: that pair is left out (review LOW), not
         // the whole scan.

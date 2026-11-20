@@ -87,7 +87,8 @@ pub use queue::{
     PRIORITY_AGING_SECS, REAP_BATCH,
 };
 pub(crate) use queue::{
-    claim_timed, enqueue_after_on, enqueue_on, enqueue_superseding_on, supersede_queued_on,
+    claim_timed, enqueue_after_on, enqueue_on, enqueue_superseding_after_on,
+    enqueue_superseding_on, supersede_queued_on,
 };
 pub use reports::{Ran, Reported};
 pub use runner::{JobFuture, JobHandler, JobRunner, ABORT_WAIT, RELEASE_TIMEOUT};

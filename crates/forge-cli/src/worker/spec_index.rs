@@ -40,20 +40,26 @@ impl SpecIndexHandler {
                 .with_context("reason", "invalid_job_kind")
                 .with_context("kind", SPEC_INDEX_JOB)
         })?;
-        let browse = Browser::new(
-            storage.git.clone(),  // clone: the browser owns its handles
-            storage.root.clone(), // clone: as git
-            BrowseLimits::default(),
-        );
         Ok(Self {
             kind,
-            checks: Arc::new(SpecChecks::new(
-                db.clone(), // clone: pool handles
-                browse,
-                Arc::new(db.clone()), // clone: the same Db loads the project
-            )),
+            checks: Arc::new(spec_checks(db, storage)),
         })
     }
+}
+
+/// The worker's spec checks (the `check.spec_index` job and the prepare
+/// job's spec step, plan 18 S6).
+pub(crate) fn spec_checks(db: &Db, storage: &Storage) -> SpecChecks {
+    let browse = Browser::new(
+        storage.git.clone(),  // clone: the browser owns its handles
+        storage.root.clone(), // clone: as git
+        BrowseLimits::default(),
+    );
+    SpecChecks::new(
+        db.clone(), // clone: pool handles
+        browse,
+        Arc::new(db.clone()), // clone: the same Db loads the project
+    )
 }
 
 /// Whether a failed run may succeed later.

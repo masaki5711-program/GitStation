@@ -29,7 +29,7 @@ use crate::worker::provision::tests::{project, storage};
 use crate::worker::registry;
 
 /// A commit with `files` (flat names) on top of `parent`.
-fn commit_on(repo: &Path, parent: Option<&str>, files: &[(&str, &str)]) -> String {
+pub(crate) fn commit_on(repo: &Path, parent: Option<&str>, files: &[(&str, &str)]) -> String {
     let mut listing = String::new();
     let mut sorted: Vec<&(&str, &str)> = files.iter().collect();
     sorted.sort_by_key(|(name, _)| *name);
@@ -49,7 +49,7 @@ fn commit_on(repo: &Path, parent: Option<&str>, files: &[(&str, &str)]) -> Strin
     plumb(repo, &args, None)
 }
 
-fn oid(raw: &str) -> ObjectId {
+pub(crate) fn oid(raw: &str) -> ObjectId {
     ObjectId::parse(raw).expect("oid")
 }
 
@@ -57,24 +57,24 @@ fn name(raw: &str) -> RefName {
     RefName::parse(raw).expect("ref")
 }
 
-struct World {
-    t: FreshDb,
+pub(crate) struct World {
+    pub(crate) t: FreshDb,
     _dir: tempfile::TempDir,
-    runner: JobRunner,
+    pub(crate) runner: JobRunner,
     registry: Registry,
     review: Review,
     /// The review's browser (its ref cache is dropped after a git write).
     browser: Browser,
-    path: std::path::PathBuf,
+    pub(crate) path: std::path::PathBuf,
     repo: forge_core::RepoId,
-    project: forge_core::ProjectId,
+    pub(crate) project: forge_core::ProjectId,
     alice: UserId,
     pushes: usize,
     storage: crate::worker::provision::Storage,
 }
 
 impl World {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         let t = FreshDb::migrated().await;
         let (dir, storage) = storage();
         let web = project(&t, "alice").await;
@@ -126,7 +126,7 @@ impl World {
         }
     }
 
-    async fn drain(&self) {
+    pub(crate) async fn drain(&self) {
         drain(&self.t, &self.runner, &self.registry).await;
     }
 
@@ -170,7 +170,7 @@ impl World {
         }
     }
 
-    async fn open(&self, source: &str, target: &str) -> StoredMergeRequest {
+    pub(crate) async fn open(&self, source: &str, target: &str) -> StoredMergeRequest {
         let proof = prove(
             &self.principal(),
             Action::MergeRequestCreate,
@@ -235,7 +235,7 @@ impl World {
 
     /// Move (or delete: `None`) `branch` in git and record the push like
     /// forge-web does.
-    async fn push(&mut self, branch: &str, new: Option<&str>) {
+    pub(crate) async fn push(&mut self, branch: &str, new: Option<&str>) {
         let full = format!("refs/heads/{branch}");
         let old = plumb(
             &self.path,
@@ -293,7 +293,7 @@ impl World {
         self.drain().await;
     }
 
-    async fn status(&self, mr: &StoredMergeRequest) -> StoredMergeability {
+    pub(crate) async fn status(&self, mr: &StoredMergeRequest) -> StoredMergeability {
         mergeability_written(&self.t.db, mr.id)
             .await
             .expect("read")
