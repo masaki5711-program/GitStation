@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import type { Session } from '../api/types';
+import { OrgLine, useOwnOrgProfile } from '../features/OrgProfile';
 import { type Theme, chooseTheme, storedTheme } from '../theme';
 import styles from './UserMenu.module.css';
 
@@ -19,6 +20,8 @@ export function UserMenu({ session }: { session: Session }) {
   const panelId = useId();
   const themeName = useId();
   const [theme, setTheme] = useState<Theme>(storedTheme);
+  // Read when the menu first opens (display only; an error shows nothing).
+  const org = useOwnOrgProfile(open);
   // String literals so the dictionary gate sees every key.
   const themeLabels: Record<Theme, string> = {
     system: t('theme.system'),
@@ -77,6 +80,7 @@ export function UserMenu({ session }: { session: Session }) {
         <p className={styles.who}>
           <span>{t('header.signedInAs')}</span> <code>{user.username}</code>
         </p>
+        <OrgLine org={org.data} />
         <ul className={styles.links}>
           <li>
             <Link

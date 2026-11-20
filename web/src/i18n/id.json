@@ -1780,5 +1780,17 @@
     "pending": "Membuat…",
     "opened": "Merge request pembatalan !{{iid}} telah dibuat.",
     "open": "Buka"
+  },
+  "org": {
+    "title": "Organisasi",
+    "explain": "Organisasi yang dilaporkan penyedia identitas PFS saat Anda masuk (hanya tampilan; tidak memberi hak akses).",
+    "primary": "Utama",
+    "departmentCode": "Kode departemen",
+    "departments": "Departemen",
+    "positions": "Jabatan",
+    "plant": "Pabrik",
+    "none": "Belum ada detail organisasi. Detail muncul setelah Anda masuk dengan akun PFS.",
+    "empty": "Tidak ada",
+    "invalid": "Detail organisasi dari penyedia identitas tidak valid, jadi detail sebelumnya ditampilkan. Minta administrasi pengguna PFS untuk memeriksanya."
   }
 }

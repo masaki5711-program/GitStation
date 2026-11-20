@@ -37,6 +37,7 @@ import { SelectField, TextField } from '../../components/Field';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
+import { OrgCode } from '../../features/OrgProfile';
 import { isStale } from '../../features/mr/ActionError';
 import { formatDateTime, mergeMethodLabel } from '../../features/labels';
 import { Modal } from '../../ui/Modal';
@@ -887,6 +888,7 @@ function UserPicker({
                 <li key={u.id}>
                   <span>
                     {u.display_name} <code>{u.username}</code>
+                    <OrgCode code={u.primary_org_code} />
                   </span>
                   {chosen.includes(u.username) ? (
                     <span className={styles.muted}>{t('settings.rules.alreadyChosen')}</span>

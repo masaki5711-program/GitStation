@@ -1,0 +1,76 @@
+/* The org claims' snapshot (ADR-0021 amendment 2026-11-20): departments,
+   positions and plant, and the primary department code next to a name. */
+.code {
+  display: inline-block;
+  margin-left: var(--gs-space-2);
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-pill);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+  white-space: nowrap;
+}
+
+.list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--gs-space-1) var(--gs-space-4);
+  margin: 0;
+}
+
+.list dt {
+  color: var(--gs-color-text-muted);
+}
+
+.list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.unit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gs-space-1);
+}
+
+.primary {
+  padding: 0 var(--gs-space-1);
+  border: 1px solid var(--gs-color-accent-strong);
+  border-radius: var(--gs-radius-sm);
+  color: var(--gs-color-accent-strong);
+  font-size: var(--gs-font-size-sm);
+  font-weight: 600;
+}
+
+.note {
+  margin: 0 0 var(--gs-space-2);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.warning {
+  margin: 0 0 var(--gs-space-2);
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+  font-size: var(--gs-font-size-sm);
+}
+
+.compact {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-sm);
+}
+
+.srOnly {
+  composes: srOnly from '../components/controls.module.css';
+}
