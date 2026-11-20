@@ -4,6 +4,9 @@
 //! fetch of the discovery document and the JWKS (`FG-AUTH-0015`, never
 //! cached), and the provider's clock (its HTTP `Date`) within 60 s of ours
 //! (beyond: warn — ID tokens would be refused as issued in the future).
+//! A plain-HTTP `web.base_url` (`web.allow_insecure_http`, trial servers
+//! only) turns a passing check into a warning: sign-ins and session cookies
+//! cross the network in clear text.
 
 use std::time::SystemTime;
 
@@ -23,7 +26,19 @@ const STAFF_ID_REMINDER: &str = concat!(
     "permissions: edit = admin only; runbook oidc-login, PFS Keycloak)"
 );
 
+/// The warning of a plain-HTTP `web.base_url` (`web.allow_insecure_http`).
+const PLAIN_HTTP_NOTE: &str = concat!(
+    "; web.allow_insecure_http: web.base_url is plain http, so sign-ins and session ",
+    "cookies cross the network in clear text (trial servers only; never in production)"
+);
+
+/// Whether `web.base_url` is plain `http` off the loopback.
+fn plain_http(cfg: &Config) -> bool {
+    cfg.web.base_url().is_some_and(|u| u.is_plain_http())
+}
+
 pub(super) async fn oidc_check(cfg: &Config) -> Check {
+    let plain = plain_http(cfg);
     let settings = match settings(cfg) {
         Ok(Some((settings, _keys))) => settings,
         Ok(None) => {
@@ -41,6 +56,9 @@ pub(super) async fn oidc_check(cfg: &Config) -> Check {
             if settings.claims_source == OidcClaimsSource::AccessToken {
                 reached.push_str(STAFF_ID_REMINDER);
             }
+            if plain {
+                reached.push_str(PLAIN_HTTP_NOTE);
+            }
             match clock_skew(doc.date.as_deref(), SystemTime::now()) {
                 Some(skew) if skew > MAX_CLOCK_SKEW => warn(
                     NAME,
@@ -50,6 +68,9 @@ pub(super) async fn oidc_check(cfg: &Config) -> Check {
                         MAX_CLOCK_SKEW.as_secs()
                     ),
                 ),
+                Some(skew) if plain => {
+                    warn(NAME, &format!("{reached}; clock skew {} s", skew.as_secs()))
+                }
                 Some(skew) => ok(NAME, &format!("{reached}; clock skew {} s", skew.as_secs())),
                 None => warn(
                     NAME,
@@ -76,6 +97,22 @@ mod tests {
             matches!(check.outcome, Outcome::Warn(ref m) if m.contains("not configured")),
             "auth.oidc without configuration warns"
         );
+    }
+
+    #[test]
+    fn only_a_plain_http_base_url_is_flagged() {
+        let with = |pairs: &[(&str, &str)]| {
+            load(None, &Env::from_pairs(pairs.iter().copied())).expect("config")
+        };
+        assert!(!plain_http(&with(&[])));
+        assert!(!plain_http(&with(&[(
+            "FORGE_WEB_BASE_URL",
+            "https://git.example.test"
+        )])));
+        assert!(plain_http(&with(&[
+            ("FORGE_WEB_BASE_URL", "http://192.0.2.10:3306"),
+            ("FORGE_WEB_ALLOW_INSECURE_HTTP", "true"),
+        ])));
     }
 
     /// The provider check itself, against the mock provider: reachable,

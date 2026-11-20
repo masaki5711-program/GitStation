@@ -3901,6 +3901,73 @@
         }
       ],
       "examples": [
+        "gstn mr run-pipeline --project 7 --iid 3 --json"
+      ],
+      "name": "mr run-pipeline",
+      "output": {
+        "properties": {
+          "check_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "merge_result_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "enum": [
+              "queued",
+              "exists",
+              "computing"
+            ],
+            "type": "string"
+          },
+          "target_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "outcome",
+          "merge_result_sha",
+          "target_sha",
+          "check_seq"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/pipeline"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Run the merge request pipeline (ci/pipeline) on the merge result of the current target (Developer, as a manual run): queued (its job was enqueued), exists (asked for already; nothing written) or computing (the merge result is written first; the pipeline follows). 409 FG-CI-0003 when it is not open, has no version or conflicts with the target; 404 FG-REPO-0005 without the merge request."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
         "gstn mr discussions --project 7 --iid 3 --json"
       ],
       "name": "mr discussions",

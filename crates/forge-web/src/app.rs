@@ -439,6 +439,12 @@ pub struct AppConfig {
     /// (ADR-0022 §3, `web.hsts`); `None` (the default) sends none, since
     /// TLS may end in front of forge.
     pub hsts: Option<Duration>,
+    /// `web.base_url` is plain `http` off the loopback
+    /// (`web.allow_insecure_http`, a trial server only): the session and
+    /// sign-in cookies are issued and read under their plain-HTTP,
+    /// non-`Secure` names `gstn_<port>_…` with this port of the base URL
+    /// (`crate::plain_http_cookies`). `None` (the default) installs nothing.
+    pub plain_http_port: Option<u16>,
 }
 
 impl Default for AppConfig {
@@ -449,6 +455,7 @@ impl Default for AppConfig {
             body_limit_bytes: 1024 * 1024,
             body_read_timeout: Duration::from_secs(10),
             hsts: None,
+            plain_http_port: None,
         }
     }
 }
@@ -3271,7 +3278,7 @@ pub(crate) fn build(
         sessions: state.sessions.clone(), // clone: the Arc is shared
         origin: origin.clone(),           // clone: the browser check keeps one
     };
-    Ok(registry
+    let router = registry
         .into_router()?
         .method_not_allowed_fallback(method_not_allowed)
         // DefaultBodyLimit bounds axum's own body extractors (no route uses
@@ -3319,8 +3326,18 @@ pub(crate) fn build(
         .layer(middleware::from_fn_with_state(
             security,
             crate::security_headers::security_headers,
+        ));
+    // A plain-HTTP trial server: outside everything, so every layer and
+    // handler sees and issues only the `__Host-` names.
+    let router = if let Some(port) = config.plain_http_port {
+        router.layer(middleware::from_fn_with_state(
+            crate::plain_http_cookies::PlainNames::for_port(port),
+            crate::plain_http_cookies::plain_http_cookies,
         ))
-        .with_state(state))
+    } else {
+        router
+    };
+    Ok(router.with_state(state))
 }
 
 async fn method_not_allowed(ctx: Ctx, req: Request) -> ApiError {

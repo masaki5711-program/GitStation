@@ -1,0 +1,142 @@
+# GitStation on the PFS trial server (ops/gitlab-trial/README.md).
+# deploy.sh copies this file to /srv/gitstation/compose.yml and runs
+#   docker compose -p gitstation-trial --project-directory /srv/gitstation \
+#     --env-file /srv/gitstation/.env -f /srv/gitstation/compose.yml …
+# with IMAGE_TAG set to the commit's short sha.
+#
+# The server is shared with other projects (PFS, bankmasalah, …): every
+# container, volume and network is named gitstation-trial-*, PostgreSQL is
+# not published, and the limits are sized for a shared 8-CPU / 30 GiB box.
+# Never `down -v`: the volume gitstation-trial-pgdata is the database.
+#
+# /srv/gitstation/.env (0600, written by setup-server.sh, edited by the
+# operator — no secret in it):
+#   PUBLISH_ADDR, PUBLISH_PORT   where the web is published (LAN address, 3306)
+#   PUBLIC_URL                   web.base_url, http://<server>:3306
+#   OIDC_ISSUER                  the PFS Keycloak realm URL, exactly as its discovery document
+name: gitstation-trial
+
+x-forge: &forge
+  image: gitstation/forge:${IMAGE_TAG:?IMAGE_TAG is required (the commit short sha)}
+  environment: &forge-env
+    FORGE_CONFIG: /etc/forge/forge.toml
+    FORGE_WEB_BASE_URL: ${PUBLIC_URL:?PUBLIC_URL is required in .env}
+    FORGE_AUTH_OIDC_ISSUER: ${OIDC_ISSUER:?OIDC_ISSUER is required in .env}
+    RUST_LOG: ${RUST_LOG:-info}
+    TZ: Asia/Tokyo
+  volumes: &forge-volumes
+    - ./forge.toml:/etc/forge/forge.toml:ro
+    - ./secrets:/run/forge/secrets:ro
+    - ./data/repositories:/var/lib/forge/repositories
+  networks: [gitstation]
+  depends_on:
+    db:
+      condition: service_healthy
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  stop_grace_period: 180s
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  db:
+    image: timescale/timescaledb:2.28.1-pg16
+    container_name: gitstation-trial-db
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - max_connections=40
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - log_min_duration_statement=1000
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/forge/privileged/pg-superuser.pw
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      TZ: Asia/Tokyo
+    volumes:
+      - gitstation-trial-pgdata:/var/lib/postgresql/data
+      - ./secrets-privileged/pg-superuser.pw:/run/forge/privileged/pg-superuser.pw:ro
+    networks: [gitstation]
+    # The entrypoint starts as root, fixes the data directory and drops to
+    # postgres: only those capabilities (checked with this image 2026-11-20:
+    # initdb and start succeed).
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    shm_size: 256mb
+    mem_limit: 1g
+    cpus: 2
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging: *logging
+
+  # One-shot: deploy.sh runs it with `--profile ops run --rm migrate`
+  # while serve and worker are stopped. Only this service sees the
+  # migration login (serve / worker refuse a configuration with it,
+  # ADR-0018).
+  migrate:
+    <<: *forge
+    container_name: gitstation-trial-migrate
+    profiles: [ops]
+    restart: "no"
+    command: ["db", "migrate"]
+    environment:
+      <<: *forge-env
+      FORGE_DATABASE_MIGRATE_URL: postgres://forge_migrator@db:5432/forge
+      FORGE_DATABASE_MIGRATE_PASSWORD_FILE: /run/forge/privileged/db-migrate.pw
+    volumes:
+      - ./forge.toml:/etc/forge/forge.toml:ro
+      - ./secrets:/run/forge/secrets:ro
+      - ./secrets-privileged/db-migrate.pw:/run/forge/privileged/db-migrate.pw:ro
+      - ./data/repositories:/var/lib/forge/repositories
+    mem_limit: 512m
+    cpus: 1
+
+  serve:
+    <<: *forge
+    container_name: gitstation-trial-serve
+    restart: unless-stopped
+    command: ["serve"]
+    ports:
+      - "${PUBLISH_ADDR:?PUBLISH_ADDR is required in .env}:${PUBLISH_PORT:-3306}:8080"
+    mem_limit: 1536m
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "--max-time", "5", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 30s
+
+  worker:
+    <<: *forge
+    container_name: gitstation-trial-worker
+    restart: unless-stopped
+    command: ["worker"]
+    mem_limit: 1g
+    cpus: 1.5
+
+networks:
+  gitstation:
+    name: gitstation-trial-net
+
+volumes:
+  gitstation-trial-pgdata:
+    name: gitstation-trial-pgdata

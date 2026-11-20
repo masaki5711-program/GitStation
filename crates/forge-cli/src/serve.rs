@@ -87,7 +87,18 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // M2 MR3: the origin every state-changing browser request must name,
     // and the session keys (used by the login, MR4) checked now, before
     // anything binds.
-    let web_origin = cfg.web.require_base_url()?.origin().to_owned();
+    let base_url = cfg.web.require_base_url()?;
+    let web_origin = base_url.origin().to_owned();
+    let plain_http = base_url.is_plain_http();
+    let plain_http_port = plain_http.then(|| base_url.port());
+    if plain_http {
+        // web.allow_insecure_http: a trial server only. Loud at every start.
+        tracing::warn!(
+            origin = %web_origin,
+            reason = "web_allow_insecure_http",
+            "forge.serve.plain_http"
+        );
+    }
     if let Some(keys) = cfg.web.session_keys()? {
         tracing::info!(kids = ?keys.kids(), "forge.serve.session_keys_loaded");
     }
@@ -387,7 +398,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         let authenticator = Arc::clone(&state.authenticator); // clone: the SSH server shares it
         let router = forge_web::app(
             state,
-            app_config_for(database, &cfg.git_http, &cfg.server.limits),
+            AppConfig {
+                plain_http_port,
+                ..app_config_for(database, &cfg.git_http, &cfg.server.limits)
+            },
         )?;
         let listener = forge_web::server::bind(bind).await?;
         // One signal stops both servers.

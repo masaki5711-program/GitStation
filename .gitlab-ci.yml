@@ -1,0 +1,91 @@
+# GitLab CI/CD — GitStation on the PFS trial server (ops/gitlab-trial/README.md).
+#
+# GitStation's own CI is .forge-ci.yml (and .github/workflows/ci.yml); this
+# file only DEPLOYS. The internal GitLab project mirrors `main`; the only
+# runner is the project's own shell runner ON the trial server (tag
+# $GS_RUNNER_TAG, registered Protected + Locked, run_untagged=false): it has
+# Docker and reads the server-side secrets, so it runs `main` (reviewed code)
+# only — merge request and branch pipelines are not created at all.
+#
+#   build   build:image       on main: builds gitstation/forge:<short sha> on the
+#                             server's Docker (no registry), keeps the newest 3
+#   deploy  deploy:pfs-trial  MANUAL on main: ops/gitlab-trial/deploy.sh
+#
+# Rollback = run deploy:pfs-trial of an older pipeline (README 前の版に戻す).
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE =~ /^(push|web)$/'
+    - when: never
+
+stages:
+  - build
+  - deploy
+
+variables:
+  # The server runner's tag (a project CI/CD variable of the same name
+  # overrides it). Used directly in `tags:`.
+  GS_RUNNER_TAG: gitstation-pfs
+  GS_IMAGE_REPO: gitstation/forge
+  GIT_DEPTH: "20"
+
+build:image:
+  stage: build
+  tags: [$GS_RUNNER_TAG]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  timeout: 90m
+  variables:
+    DOCKER_BUILDKIT: "1"
+  script:
+    # Cheap checks first: the deploy scripts parse and the compose file is valid.
+    - bash -n ops/gitlab-trial/deploy.sh
+    - bash -n ops/gitlab-trial/setup-server.sh
+    - IMAGE_TAG=check PUBLISH_ADDR=192.0.2.1 PUBLIC_URL=http://192.0.2.1:3306 OIDC_ISSUER=http://192.0.2.1:18180/realms/iotpf docker compose -p gitstation-trial-check -f ops/gitlab-trial/compose.yml config -q
+    # Shared server: the build steps run inside dockerd's BuildKit, so the
+    # Dockerfile itself runs npm and cargo under `nice -n 10` with 3 cargo
+    # jobs. No per-build memory cap applies there (BuildKit ignores
+    # docker build --memory); memory is bounded by the job count (about
+    # 1-1.5 GiB per rustc at the peak).
+    - >
+      docker build -f ops/gitlab-trial/Dockerfile
+      --build-arg FORGE_UID="$(id -u)" --build-arg FORGE_GID="$(id -g)"
+      --build-arg GIT_COMMIT="$CI_COMMIT_SHA"
+      ${NPM_CONFIG_REGISTRY:+--build-arg NPM_CONFIG_REGISTRY="$NPM_CONFIG_REGISTRY"}
+      --label "io.gitstation.pipeline=$CI_PIPELINE_ID" --label io.gitstation.trial=1
+      -t "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" .
+    - docker run --rm --entrypoint /usr/local/bin/forge "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" --version
+    # Bounded disk: keep this commit's image, any image a container uses, and the 3 newest others.
+    # The runner shell uses pipefail, so a filter that may match nothing ends in `|| true`.
+    - |
+      in_use="$(docker ps -a --format '{{.Image}}')"
+      docker image ls "$GS_IMAGE_REPO" --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' \
+        | { grep -vF ":$CI_COMMIT_SHORT_SHA" || true; } | sort -r | tail -n +4 | cut -d'|' -f2 \
+        | while read -r img; do
+            if printf '%s\n' "$in_use" | grep -qxF "$img"; then continue; fi
+            docker image rm "$img" >/dev/null || echo "could not remove $img (kept)"
+          done
+      docker image ls "$GS_IMAGE_REPO"
+    # Only GitStation's own leftovers: dangling images it labelled, and its
+    # own cache mounts (id gitstation-trial-*) unused for a week.
+    - docker image prune -f --filter label=io.gitstation.trial=1
+    - docker builder prune -f --filter type=exec.cachemount --filter 'description~=gitstation-trial-' --filter until=168h
+
+deploy:pfs-trial:
+  stage: deploy
+  tags: [$GS_RUNNER_TAG]
+  needs: [build:image]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: false
+  resource_group: gitstation-pfs-trial
+  environment:
+    name: trial-gitstation
+  timeout: 30m
+  variables:
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  script:
+    - bash ops/gitlab-trial/deploy.sh
