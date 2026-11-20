@@ -84,7 +84,7 @@ if ! { [ -d "$REPOS" ] && [ -O "$REPOS" ] && [ -w "$REPOS" ]; }; then
   die "$REPOS must exist and be owned by $(id -un) (setup-server.sh)"
 fi
 for f in secrets/db-app.pw secrets/cursor-keys secrets/audit-seal-keys secrets/web-session-keys \
-         secrets/ci-secret-keys secrets/webhook-secret-keys secrets/oidc-client-secret \
+         secrets/ci-secret-keys secrets/webhook-secret-keys secrets/oidc-client-secret secrets/deploy-ssh-key \
          secrets-privileged/db-migrate.pw secrets-privileged/db-maint.pw secrets-privileged/pg-superuser.pw; do
   [ -s "$DEPLOY_DIR/$f" ] || die "secret $DEPLOY_DIR/$f is missing or empty (setup-server.sh; oidc-client-secret: README 手順 3)"
   owner_only "$DEPLOY_DIR/$f" || die "secret $DEPLOY_DIR/$f must be owned by $(id -un) with mode 600"

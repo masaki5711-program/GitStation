@@ -55,11 +55,15 @@ FROM ${RUNTIME_IMAGE} AS runtime
 ARG FORGE_UID=10001
 ARG FORGE_GID=10001
 # git: forge executes git (>= 2.38, ADR-0006; bookworm has 2.39).
-# curl: the compose health check of /readyz. tini: PID 1 that forwards
-# SIGTERM to forge and reaps git children.
+# curl: the compose health check of /readyz. openssh-client: forge-deploy
+# (the worker runs `ssh` to the deploy targets, ADR-0031; [deploy] in
+# forge.toml); bookworm's package, fixed by the digest of RUNTIME_IMAGE
+# like the others. tini: PID 1 that forwards SIGTERM to forge and reaps git
+# children.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates curl tini \
+    && apt-get install -y --no-install-recommends git ca-certificates curl openssh-client tini \
     && rm -rf /var/lib/apt/lists/* \
+    && ssh -V \
     && git --version | awk '{ split($3, v, "."); if (v[1] < 2 || (v[1] == 2 && v[2] < 38)) { print "git >= 2.38 required, found " $3; exit 1 } }' \
     && groupadd --gid "${FORGE_GID}" forge \
     && useradd --uid "${FORGE_UID}" --gid "${FORGE_GID}" --create-home --home-dir /home/forge --shell /usr/sbin/nologin forge \

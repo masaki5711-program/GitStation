@@ -1,0 +1,36 @@
+# The demo app hello-app on the PFS trial server (ops/gitlab-trial/README.md
+# 「自前の CI/CD」). Installed as /opt/forge-deploy/hello-app/compose.yml by
+# setup-target.sh and run only by /opt/forge-deploy/scripts/hello-app:
+#   APP_SHA=<sha> DEMO_BIND=… DEMO_PORT=… docker compose -p gs-demo-hello -f … up -d --wait web
+# Its own project name, container name and network; small limits (the
+# server is shared). No volume: the release is inside the image.
+name: gs-demo-hello
+
+services:
+  web:
+    image: gs-demo/hello-app:${APP_SHA:?APP_SHA is required}
+    container_name: gs-demo-hello-web
+    ports:
+      - "${DEMO_BIND:?DEMO_BIND is required}:${DEMO_PORT:?DEMO_PORT is required}:8080"
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    restart: unless-stopped
+    networks: [demo]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  demo:
+    name: gs-demo-hello-net

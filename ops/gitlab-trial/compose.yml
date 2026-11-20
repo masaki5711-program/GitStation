@@ -22,6 +22,9 @@ x-forge: &forge
     FORGE_CONFIG: /etc/forge/forge.toml
     FORGE_WEB_BASE_URL: ${PUBLIC_URL:?PUBLIC_URL is required in .env}
     FORGE_AUTH_OIDC_ISSUER: ${OIDC_ISSUER:?OIDC_ISSUER is required in .env}
+    # Optional: where deploy targets may be (CIDRs, comma-separated; empty
+    # = any address forge's own policy allows). README 「自前の CI/CD」.
+    FORGE_DEPLOY_ALLOWED_NETWORKS: ${DEPLOY_ALLOWED_NETWORKS:-}
     RUST_LOG: ${RUST_LOG:-info}
     TZ: Asia/Tokyo
   volumes: &forge-volumes

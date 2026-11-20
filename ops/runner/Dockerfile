@@ -14,7 +14,10 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 # forge-client embeds docs/api/agent-tools.toml.
 COPY docs/api ./docs/api
-RUN cargo build --release --locked -p forge-runner
+# Optional cap on cargo's jobs (empty: all CPUs). The PFS trial server is
+# shared: ops/gitlab-trial/runner.sh passes 2.
+ARG RUNNER_BUILD_JOBS=
+RUN cargo build --release --locked -p forge-runner ${RUNNER_BUILD_JOBS:+--jobs "$RUNNER_BUILD_JOBS"}
 
 FROM quay.io/podman/stable:v5.3@sha256:c7c150ebacb82f778c7f5c8d8eec56358575736c5451e00f68e1057de709c4a6
 RUN dnf -y install git-core && dnf clean all \

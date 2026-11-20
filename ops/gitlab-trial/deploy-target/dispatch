@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# forge-deploy dispatcher on the PFS trial server (ops/gitlab-trial/README.md
+# 「自前の CI/CD」, runbook deploy 「前提」). The forced command of forge's
+# deploy key: authorized_keys of gs-deploy has
+#   restrict,command="/opt/forge-deploy/dispatch" ssh-ed25519 …
+# so whatever the client asks for arrives here in SSH_ORIGINAL_COMMAND and
+# nothing else runs. It must be exactly `<script> <verb> <sha>`:
+#   script  one name of the fixed allow-list below
+#   verb    deploy | health | rollback
+#   sha     40 lowercase hex characters
+# separated by single spaces, nothing before or after. The command is
+# matched as one string (no word splitting, no globbing, no eval) and the
+# script is exec'd with an argument vector: no shell ever interprets it.
+# Installed root-owned 0755 by setup-target.sh; tests: test-dispatch.sh.
+set -euo pipefail
+
+readonly BASE=/opt/forge-deploy
+readonly LOG=/var/log/forge-deploy/dispatch.log
+
+log() { printf '%s dispatch %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG" 2>/dev/null || true; }
+# The refused text itself is never logged or echoed (it is the client's).
+refuse() { log "refused: $1 (from ${SSH_CLIENT%% *})"; echo "dispatch: $2" >&2; exit 64; }
+
+SSH_CLIENT="${SSH_CLIENT:-local}"
+cmd="${SSH_ORIGINAL_COMMAND-}"
+[ "${#cmd}" -le 160 ] || refuse length "command too long"
+re='^([a-z0-9][a-z0-9._-]{0,63}) (deploy|health|rollback) ([0-9a-f]{40})$'
+[[ "$cmd" =~ $re ]] || refuse format "expected <script> <deploy|health|rollback> <40-hex sha>"
+script="${BASH_REMATCH[1]}"
+verb="${BASH_REMATCH[2]}"
+sha="${BASH_REMATCH[3]}"
+
+# The allow-list: a registered name → one fixed file. Add a script here
+# (and to setup-target.sh) to deploy another app to this host.
+case "$script" in
+  hello-app) path="$BASE/scripts/hello-app" ;;
+  *) refuse script "unknown script" ;;
+esac
+
+log "run $script $verb $sha (from ${SSH_CLIENT%% *})"
+exec "$path" "$verb" "$sha"

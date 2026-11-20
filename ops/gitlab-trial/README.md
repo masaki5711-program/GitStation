@@ -25,7 +25,7 @@ MR やブランチのパイプラインは**作られない**（`.gitlab-ci.yml`
 | 配置先 | `/srv/gitstation`（所有者 `gitstation-ci`、750） |
 | 設定 | `/srv/gitstation/forge.toml`、`compose.yml`（配置のたびにコミットのものを写す。手で直さない） |
 | サーバーの値 | `/srv/gitstation/.env`（600）: `PUBLISH_ADDR`、`PUBLISH_PORT`（3306）、`PUBLIC_URL`、`OIDC_ISSUER`。秘密は書かない |
-| 秘密 | `/srv/gitstation/secrets/`（700、中身 600）: `db-app.pw`、`cursor-keys`、`audit-seal-keys`、`web-session-keys`、`ci-secret-keys`、`webhook-secret-keys`、`oidc-client-secret` |
+| 秘密 | `/srv/gitstation/secrets/`（700、中身 600）: `db-app.pw`、`cursor-keys`、`audit-seal-keys`、`web-session-keys`、`ci-secret-keys`、`webhook-secret-keys`、`oidc-client-secret`、`deploy-ssh-key`（forge-deploy の ssh の秘密鍵。公開鍵は `/srv/gitstation/deploy-ssh-key.pub`、644） |
 | 特権の秘密 | `/srv/gitstation/secrets-privileged/`（700、中身 600）: `db-migrate.pw`、`db-maint.pw`、`pg-superuser.pw`。`migrate` と `db` のコンテナだけに見せる |
 | リポジトリ | `/srv/gitstation/data/repositories`（bind mount、`gitstation-ci` の持ち物） |
 | DB | コンテナ `gitstation-trial-db`（`timescale/timescaledb:2.28.1-pg16`）、ボリューム `gitstation-trial-pgdata`。**公開しない**（ネットワーク `gitstation-trial-net` の中だけ） |
@@ -58,9 +58,9 @@ runner の利用者 `gitstation-ci` は `docker` グループに入っている�
 | `docker.io`（Docker Hub）| 土台のイメージ（rust・node・debian はダイジェストで固定、`timescale/timescaledb`） |
 | `registry.npmjs.org` | `web/` の `npm ci` |
 | `index.crates.io` / `static.crates.io` | `cargo build --locked` のクレート |
-| `deb.debian.org` | 実行イメージの `apt-get`（git・curl・tini） |
+| `deb.debian.org` | 実行イメージの `apt-get`（git・curl・openssh-client・tini） |
 
-動かしているとき（serve / worker）の外への通信は Keycloak（`OIDC_ISSUER`）だけ。
+動かしているとき（serve / worker）の外への通信は Keycloak（`OIDC_ISSUER`）と、デプロイのターゲットへの ssh（下の「自前の CI/CD」。使うときだけ）。
 
 ### 平文 HTTP について
 
@@ -149,6 +149,144 @@ systemctl enable --now gitlab-runner-gitstation
 
    `doctor` の FAIL が 0 であること（`auth.oidc` の warn は平文 HTTP のため。`backup.*` の warn は下の「バックアップ」）。
 
+### この版からの更新（既存のサーバー）
+
+`forge.toml` に `[deploy]` が入ったので、`deploy.sh` は `secrets/deploy-ssh-key` が無いと**何も止めずに** preflight で止まる。
+この版を配置する前に、root で `sudo bash setup-server.sh` をもう一度実行する（鍵を作り、**公開鍵だけ**を表示する。既存の秘密は変えない）。
+
+## 自前の CI/CD（GitStation の Runner と自動デプロイ）
+
+GitStation 自身の CI/CD と forge-deploy（ADR-0031、runbook `deploy`）で、合成のデモアプリ `hello-app`
+（`ops/test-env/m4-hello-app` と同じもの）を**同じ試験サーバー**に自動で置く。`main` に push → GitStation の Runner で
+パイプライン → 環境 `dev`（`auto_deploy_ref: refs/heads/main`、承認なし）が自動でデプロイ → ヘルスチェック → 失敗なら前の版に戻す。
+**使うときだけ**の追加（無くても GitStation は動く）。
+
+| 部品 | 中身 |
+|---|---|
+| デプロイの鍵 | 秘密鍵 `/srv/gitstation/secrets/deploy-ssh-key`（600）を worker が `ssh -i` で使う。公開鍵 `/srv/gitstation/deploy-ssh-key.pub` |
+| ターゲット | このサーバー自身の sshd（22）。利用者 `gs-deploy`（`docker` グループ）。鍵は `restrict,command="/opt/forge-deploy/dispatch"` だけ |
+| dispatch | `/opt/forge-deploy/dispatch`。`SSH_ORIGINAL_COMMAND` が**ちょうど** `<script> <deploy\|health\|rollback> <40 桁の hex>` のときだけ、許可表のスクリプト（`hello-app`）を引数の配列で `exec`。シェルは解釈しない。ログ `/var/log/forge-deploy/dispatch.log` |
+| デモアプリ | `/opt/forge-deploy/scripts/hello-app`。コミットの `public/` **だけ**を取り出し、キットの**固定の** Dockerfile で `gs-demo/hello-app:<sha>` を作り、compose プロジェクト `gs-demo-hello`（コンテナ `gs-demo-hello-web`、64 MiB・0.25 CPU）で `DEMO_BIND:DEMO_PORT` に出す。`deploy` と `rollback` は同じ `flock`。ログ `/var/log/forge-deploy/hello-app.log` |
+| ターゲットの設定 | `/etc/forge-deploy/hello-app.env`（root:gs-deploy 640、秘密なし: `FORGE_REPO_URL`・`DEMO_BIND`・`DEMO_PORT`）、`/etc/forge-deploy/hello-app-read.token`（`read_repository` のトークン、gs-deploy 600） |
+| Runner | `gitstation-trial-runner`（compose プロジェクト同名、`compose.runner.yml`）。`ops/runner/Dockerfile` のビルド。中で rootless Podman、Docker のソケットなし、特権なし、ポートの公開なし。3 GiB・2 CPU・pids 2048。タグ `linux,podman,trial` |
+| Runner の設定 | `/srv/gitstation/runner/config.toml`（640）、トークン `/srv/gitstation/secrets-runner/token`（640。serve / worker が mount する `secrets/` の外） |
+
+ポート `18090`・プロジェクト `demo/hello-app`・ターゲット名 `trial-1` は例。サーバーのアドレスは `<サーバー>`（例 `192.0.2.10`）と書く。
+
+**権限について:** `gs-deploy` の `docker` グループはこのサーバーの root と同じ。鍵でできることは dispatch（固定の 3 語と許可表）と
+`hello-app`（コミットからは静的ファイルしか使わない）だけに絞っている。Runner の `seccomp=unconfined` と `/dev/fuse` は
+入れ子の rootless Podman のため（`ops/runner` と同じ。**試験サーバーだけ**）。
+
+**外への通信（追加）:** ターゲットのイメージのビルドで `docker.io`（alpine、ダイジェストで固定）と `dl-cdn.alpinelinux.org`
+（`busybox-extras`。2 回目からは Docker のキャッシュ）。Runner は `PUBLIC_URL` とジョブのイメージの `docker.io`。
+
+### 手順 A. 鍵と許すネットワーク（root、GitStation の配置の前）
+
+1. `sudo bash setup-server.sh` — `deploy-ssh-key` を作り、最後に `deploy public key (…): ssh-ed25519 …` を表示する。
+2. `/srv/gitstation/.env` に `DEPLOY_ALLOWED_NETWORKS=<サーバー>/32` を足す（forge はこの外のターゲットに繋がない）。
+3. `deploy:pfs-trial` で配置する（`openssh-client` の入ったイメージと `[deploy]` の設定が入る）。
+
+### 手順 B. デモのプロジェクト（Web と git）
+
+1. Web でグループ `demo` とプロジェクト `hello-app`（種類 `system`）を作る。
+2. 元を用意して push する（パスワードは自分のトークン）:
+
+   ```sh
+   mkdir hello-app && cd hello-app && git init -b main
+   cp -R <repo>/ops/test-env/m4-hello-app/public <repo>/ops/test-env/m4-hello-app/tests .
+   cp <repo>/ops/gitlab-trial/deploy-target/hello-app.forge-ci.yml .forge-ci.yml
+   git add public tests .forge-ci.yml && git commit -m "hello-app v1"
+   git push http://<サーバー>:3306/demo/hello-app.git main
+   ```
+
+   Runner がまだ無いので、このパイプラインは待ちのまま（手順 D の後に動く）。`auto_deploy_ref` は成功した push の
+   パイプラインの版だけをデプロイする。
+
+### 手順 C. ターゲット（root）
+
+```sh
+sudo bash ops/gitlab-trial/deploy-target/setup-target.sh \
+  --pubkey /srv/gitstation/deploy-ssh-key.pub \
+  --repo-url http://<サーバー>:3306/demo/hello-app.git --port 18090
+```
+
+取得用のトークン（Reporter だけの利用者で。値は画面に出さない）を置いて、もう一度確かめる:
+
+```sh
+( umask 077
+  docker exec gitstation-trial-serve forge admin token issue --user <Reporter の利用者> --scopes read_repository --expires-in 90d \
+    | grep -oE 'fgp_[A-Za-z0-9_]+' > /etc/forge-deploy/hello-app-read.token )
+chown gs-deploy:gs-deploy /etc/forge-deploy/hello-app-read.token && chmod 600 /etc/forge-deploy/hello-app-read.token
+sudo bash ops/gitlab-trial/deploy-target/setup-target.sh --check    # MISSING が無く終了コード 0
+```
+
+トークンは出力の全体をリダイレクトしない（表の全体が入り、取得が失敗する）。期限が切れたら置き直す。
+
+最後に `host key fingerprint`・`host_key_type`・`host_key (base64 …)` を表示する。**指紋は、サーバーのコンソールで
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` を自分で実行した結果と照合する**（`ssh-keyscan` だけを信じない）。
+`DEMO_BIND` は既定で `127.0.0.1`（LAN から見せない）。LAN から見せるなら `--bind <サーバー>`（`0.0.0.0` は拒む）。
+
+worker のコンテナからサーバーの 22 番に届くこと（ファイアウォールが Docker のブリッジからの ssh を止めていないこと）:
+`docker exec gitstation-trial-worker timeout 5 curl -s telnet://<サーバー>:22 </dev/null | head -c 8`（`SSH-2.0-` が出る）。
+sshd に `AllowUsers` / `AllowGroups` があれば `gs-deploy` を足す（setup-target は sshd の設定を変えず、警告だけ出す）。
+
+### 手順 D. Runner（`gitstation-ci` として、リポジトリのチェックアウトから）
+
+```sh
+bash ops/gitlab-trial/runner.sh init        # runner/ と secrets-runner/、config.toml（server = PUBLIC_URL）
+( umask 027; docker exec gitstation-trial-serve forge admin runner register --name trial-1 --tags linux,podman,trial --admin <管理者> \
+    | grep -oE 'fgr_[A-Za-z0-9_]+' > /srv/gitstation/secrets-runner/token )
+chmod 640 /srv/gitstation/secrets-runner/token
+bash ops/gitlab-trial/runner.sh up          # イメージのビルド（cargo、2 ジョブ、nice。重い）→ check → 起動
+```
+
+`check` は `ok: configuration, token, rootless podman, job isolation`。トークンは `fgr_…` の 1 行だけ（表の全体を入れると FG-SYS-0002）。
+
+### 手順 E. 環境とターゲット（API。プロジェクトの Maintainer の `api` のトークン）
+
+`gstn` はこのサーバー（http）には使えないので curl で送る。`<id>` は `GET /api/v1/namespaces/resolve?path=demo/hello-app` の
+プロジェクトの id。
+
+```sh
+T=<api のトークンのファイル>; U=http://<サーバー>:3306/api/v1/projects/<id>
+H=(-H "Authorization: Bearer $(cat "$T")" -H 'Content-Type: application/json')
+curl -fsS "${H[@]}" -X POST "$U/protected-refs" -d '{"pattern":"refs/heads/main","push_min_role":"maintainer"}'
+curl -fsS "${H[@]}" -X PUT "$U/deploy/environments/dev" \
+  -d '{"requires_approval":false,"auto_rollback":true,"auto_deploy_ref":"refs/heads/main"}'
+curl -fsS "${H[@]}" -X PUT "$U/deploy/environments/dev/targets/trial-1" \
+  -d '{"host":"<サーバー>","port":22,"user":"gs-deploy","host_key_type":"ssh-ed25519","host_key":"<手順 C の base64>","script":"hello-app"}'
+```
+
+応答の `host_key_fingerprint` が手順 C で照合した指紋と同じこと。Web のプロジェクトの「デプロイ」の画面でも設定できる。
+
+### 手順 F. 確かめる
+
+1. `public/index.html` の `release: v1` を `v2` にして `main` に push する。
+2. パイプライン（`build` → `test`、Runner `trial-1`）が成功し、デプロイ（`dev`、`requested_by` system）が `succeeded` になる
+   （Web のデプロイの一覧、または worker のログ `forge.deploy.requested`）。
+3. サーバーで `curl -s http://127.0.0.1:18090/version` がその SHA、`/var/log/forge-deploy/hello-app.log` に `live` と `healthy`。
+4. 失敗の確かめ: `public/health` を `ng` にして push（CI は通る）→ `rolled_back`、`error_code = FG-DEPLOY-0005`。
+   `/version` は前の SHA に戻る。`public/health` を `ok` に戻して push する。
+   その環境の**最初の**デプロイが失敗したときは前の版が無いので `FG-DEPLOY-0006 no_previous_version`（仕様）。
+
+詰まったら runbook `deploy`（FG-DEPLOY-0003 接続できない、0004 host key の不一致、0008 鍵のファイル、0013 `denied_address` /
+`outside_allowed_networks`）と runbook `gitlab-trial-deploy`。
+
+### 自前の CI/CD の戻し方（サーバーの変更をすべて元に戻す）
+
+上から順に。どれも GitStation 本体（`gitstation-trial-db` / `serve` / `worker`）には触れない。
+
+1. GitStation: 自動デプロイを止める（`PUT …/deploy/environments/dev` を `"auto_deploy_ref":null` で）。ターゲットを止める
+   （`PUT …/targets/trial-1` に同じ内容と `"enabled":false`）。Runner を止める（`forge admin runner disable`）。
+   取得用と API のトークンを失効させる。デモのプロジェクトは要らなければ Web で消す。
+2. Runner（`gitstation-ci`）: `runner.sh` の先頭のコメントの「Rollback」（`gitstation-trial-runner` のコンテナ・ボリューム・
+   イメージと `/srv/gitstation/{runner,secrets-runner,compose.runner.yml}` だけを消す）。
+3. ターゲット（root）: `deploy-target/setup-target.sh` の先頭のコメントの「Rollback」（`gs-demo-hello` のコンテナ、
+   `gs-demo/hello-app` のイメージ、利用者 `gs-deploy`、`/opt|/etc|/srv|/var/log` の `forge-deploy`）。
+4. 鍵と設定: `.env` から `DEPLOY_ALLOWED_NETWORKS` を消す。鍵を捨てるなら `deploy-ssh-key` と `deploy-ssh-key.pub` を消す
+   **前に**、この版より前の版を配置しておく（この版以降の `deploy.sh` は鍵が無いと止まる）。鍵を残すだけなら害はない。
+5. イメージの `openssh-client` と `forge.toml` の `[deploy]` は、ターゲットが無ければ何もしない（戻すなら前の版を配置する）。
+
 ## 前の版に戻す
 
 GitLab で戻したい版のパイプラインを開き、`deploy:pfs-trial` をもう一度実行する。イメージは直近の 3 版（と動いている版）まで
@@ -174,8 +312,12 @@ GitLab で戻したい版のパイプラインを開き、`deploy:pfs-trial` を
 ## 確かめ方（ローカル）
 
 ```sh
-bash -n ops/gitlab-trial/deploy.sh ops/gitlab-trial/setup-server.sh
+for f in ops/gitlab-trial/{deploy.sh,setup-server.sh,runner.sh} \
+         ops/gitlab-trial/deploy-target/{dispatch,hello-app,setup-target.sh,test-dispatch.sh}; do bash -n "$f" || echo "BAD $f"; done
+bash ops/gitlab-trial/deploy-target/test-dispatch.sh            # dispatch の引数の検証（root・ssh 不要）
 IMAGE_TAG=x PUBLISH_ADDR=192.0.2.1 PUBLIC_URL=http://192.0.2.1:3306 OIDC_ISSUER=http://192.0.2.1:18180/realms/iotpf \
   docker compose -f ops/gitlab-trial/compose.yml config -q
+RUNNER_TAG=x RUNNER_FILES_GID=1000 docker compose -f ops/gitlab-trial/compose.runner.yml config -q
+APP_SHA=x DEMO_BIND=127.0.0.1 DEMO_PORT=18090 docker compose -f ops/gitlab-trial/deploy-target/hello-app.compose.yml config -q
 cargo nextest run -p forge-cli --test gitlab_trial_package     # forge.toml を本物の読み込みで読む
 ```
