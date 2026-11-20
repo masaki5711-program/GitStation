@@ -148,6 +148,11 @@ pub struct StatusApprovalBody {
     /// 2026-11-20, added within `schema_version` 1); `null` without one.
     #[schema(required = true)]
     pub primary_org_code: Option<String>,
+    /// The approver's primary unit with its section and department names
+    /// from the PFS org master's copy (ADR-0038 §1); `null` when not
+    /// resolved (show the code).
+    #[schema(required = true)]
+    pub primary_org: Option<crate::routes::org_profiles::OrgPathBody>,
 }
 
 /// The approval side.
@@ -406,6 +411,7 @@ pub(super) fn status_body(
                     uncounted_reason: a.uncounted_reason.map(|r| r.as_str().to_owned()),
                     // Filled by the route (one read for every approver).
                     primary_org_code: None,
+                    primary_org: None,
                 })
                 .collect(),
             codeowners: report
@@ -555,8 +561,12 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
             let codes =
                 crate::routes::org_profiles::OrgCodes::of(&state, review.primary_org_codes(&ids))
                     .await?;
+            let mut paths =
+                crate::routes::org_profiles::OrgPaths::of(&state, review.primary_org_paths(&ids))
+                    .await?;
             for a in &mut approvals.approvals {
                 a.primary_org_code = codes.code(UserId::new(a.approver_id));
+                a.primary_org = paths.path(UserId::new(a.approver_id));
             }
         }
         body.viewer.can_revert = can_revert(principal, w.proof.ctx(), record.as_ref(), iid);

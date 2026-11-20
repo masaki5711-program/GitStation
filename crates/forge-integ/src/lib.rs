@@ -52,6 +52,8 @@ mod dev_status;
 pub mod webhooks;
 // ADR-0036: news to the PFS portal.
 pub mod portal_news;
+// ADR-0038 §1: the copy of the PFS organisation master.
+pub mod org_master;
 // ── end M3 I2 ──
 // ── M3 O2: the push mirror's administration ──
 pub mod mirror;

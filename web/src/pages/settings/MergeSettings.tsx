@@ -888,7 +888,7 @@ function UserPicker({
                 <li key={u.id}>
                   <span>
                     {u.display_name} <code>{u.username}</code>
-                    <OrgCode code={u.primary_org_code} />
+                    <OrgCode code={u.primary_org_code} path={u.primary_org} />
                   </span>
                   {chosen.includes(u.username) ? (
                     <span className={styles.muted}>{t('settings.rules.alreadyChosen')}</span>

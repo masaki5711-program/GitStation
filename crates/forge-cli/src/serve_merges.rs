@@ -339,6 +339,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PortalNewsAttemptFailed
         | ErrorCode::PortalNewsUndeliverable
         | ErrorCode::PortalServiceTokenUnavailable
+        | ErrorCode::OrgMasterUnreachable
+        | ErrorCode::OrgMasterRefused
+        | ErrorCode::OrgMasterInvalid
+        | ErrorCode::OrgMasterStale
         | ErrorCode::ApprovalRuleChanged
         | ErrorCode::MergeRuleChanged
         // M3 C1: a stored run this build cannot read stays unreadable;

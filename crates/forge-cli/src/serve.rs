@@ -135,7 +135,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // ADR-0036: the business changes stage portal news only when on.
         let db = Db::connect(database)
             .await?
-            .with_portal_news(crate::portal::news_policy(cfg)?);
+            .with_portal_news(crate::portal::news_policy(cfg)?)
+            .with_org_ages(crate::portal::org_ages(cfg));
         forge_db::check_schema(&db, &MIGRATOR).await?;
         // Plan 18 S2: the job runners and the runner long poll of this
         // process wait on its wake hub (attached before the first clone).

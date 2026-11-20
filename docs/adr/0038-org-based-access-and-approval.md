@@ -22,6 +22,7 @@ PFS 側で確かめた事実（2026-11-20、`origin/main`）:
 | 見本の職位ランク: operator 10、staff 15、line_leader 25、supervisor 35、assistant_manager 45、**manager 55**（課長に近い）、**general_manager 75**（部長）、director 85、president 95 | seed（spec の値とずれあり、ID-4 未決） |
 | 組織の台帳 API: `GET /api/v1/org/units?plant=`（`level`、`parentCode`、`name{ja,en,id}`、`headStaffId`、`validFrom`、`version`）、`GET /api/v1/org/positions` | registry-api `src/domain/org.ts` |
 | registry-api は `azp` が `REGISTRY_AUTHORIZED_PARTIES`（既定 `portal`）のトークンしか受けない | `docker-compose.yml:152` |
+| （2026-11-20 追記）組織・職位の API は、環境変数 `ORG_READER_CLIENTS` に挙げたクライアントの client credentials のトークン（`client_id == azp`、`staff_id` なし、追加のスコープなし）も受ける。`gitstation` を挙げる。全工場（`?plant=` は任意）、応答は `{success, data:{items:[…]}}`。人のトークンは 403 | PFS の MR !28（未配備） |
 | 異動はポータルの利用者管理で Keycloak に即時に書かれ、アクセストークン（5 分）の次の更新で届く。通知（webhook）は無い | identity-api、レルム設定 |
 | 組織の改編は版を閉じて新しい版を足す（消さない） | 台帳の設計 |
 
@@ -45,12 +46,27 @@ web のセッションだけ・本人と変更者は不可（ADR-0031）。文�
 
 ## 1. 組織の台帳（新しい写し）
 
-- 表 `org_units_master`（工場、コード、`level`、親のコード、名前 ja/en/id、`head_staff_id`、`valid_from`、`version`、
-  `synced_at`）と `org_positions_master`（工場、コード、名前、`rank`、`active`）。
+- 表 `org_units_master`（工場、コード、`level`、親のコード、名前 ja/en/id、`cost_center`、`head_staff_id`、`valid_from`、
+  `version`、`changed_at`）と `org_positions_master`（工場、コード、名前 ja/en/id、`rank`、`sort_order`、`active`、`version`、
+  `changed_at`）。キーは（工場, コード）。最後に成功した同期の時刻は 1 行の表 `org_master_state`。migration `20261231100000`、tables.toml では `derived`（外の台帳の写し）。
+  読み取りのプール（`forge_ro`）は名前・階層・`level` を読めるが、`head_staff_id`（個人の情報）と `cost_center` は読めない。
 - worker `org_master_sync` が 15 分ごとに `GET /api/v1/org/units` と `/api/v1/org/positions` を GitStation の
-  サービスアカウント（client credentials）で読む。タイムアウト 5 秒、失敗は指数バックオフ、前の写しを保つ。
-- 台帳の写しが 24 時間より古ければ `doctor` が警告し、結び付けと承認者の資格は **閉じる**（§4）。
-- 名前（部・課の名前）は画面の表示にも使う（Phase 1b の「名前」はこれで満たす）。
+  クライアント（`auth.oidc.client_id`）の client credentials のトークンで読む（PFS は役割ではなく `ORG_READER_CLIENTS`
+  の許可リストで受ける、§8）。タイムアウト 5 秒、失敗は指数バックオフ（1 分から倍に、間隔まで）、前の写しを保つ。
+  すべての項目を確かめてから 1 つのトランザクションで置き換え（変わった行だけを書く。worker が複数でも advisory lock で
+  1 つずつ）、変わったときだけ監査 `org.master_synced`（件数だけ）。組織の一覧が空の応答は受けない（registry の障害で
+  写しを消さない）。書く前に一覧の全体で、親が同じ工場にあり `level` が上であることを確かめる。急な縮小（組織の半分より
+  多くが消える、今ある工場の組織・職位が 0 件になる、職位が 1 件も無い）は、運用者が `org.allow_large_shrink`（既定 false）
+  を一時的に有効にしない限り拒否する（FG-INT-0027）。
+- 設定は新しい節 `[org]`（`org.master_sync_enabled` 既定 false、`org.master_sync_interval_secs` 900、`org.master_timeout_ms`
+  5000、`org.master_max_age_hours` 24、`org.max_profile_age_hours` 24、`org.allow_large_shrink` false）。registry の URL と CA は `[portal]` のもの
+  （`portal.registry_url`、`portal.ca_file`）を使う。`[portal]` の下に置かないのは、写しの古さの上限が権限の判定
+  （§2・§3）にも効き、ポータルの新着・ウィジェットとは別の関心だから。
+- 台帳の写しが 24 時間より古ければ `doctor` の `org.master` が FG-INT-0028 を出し、結び付けと承認者の資格は **閉じる**（§4）。
+  同期の失敗は FG-INT-0025（届かない）・FG-INT-0026（拒否）・FG-INT-0027（中身が不正）。runbook `oidc-login`「組織の台帳の写し」。
+- 名前（部・課の名前）は画面の表示にも使う（Phase 1b の「名前」はこれで満たす）。表示も `derive` と同じ条件（本人の写しが
+  正しく新しい、台帳の写しが新しい）を確かめ、満たさないときも名前は出すが「最終確認時点」と示す（API の `stale: true`）。
+  写しで求められないコードはコードのまま出す（表示だけで、判定には使わない）。
 
 利用者ごとの **派生した所属** をこの台帳で作る:
 
@@ -59,6 +75,12 @@ web のセッションだけ・本人と変更者は不可（ADR-0031）。文�
 | 課（section） | 所属コードが課ならそれ。職場ならその親の課 |
 | 部（department） | 課の親の部（所属が部ならそれ） |
 | 主所属 | `primary: true` の 1 件。兼務は主所属以外 |
+
+実装（段 A）: `forge_db::org_master::derive`。写しの工場（`plant_code`）と主所属のコードで台帳を引き、`parent_code` を
+たどる（最大 8 段）。親はいつも上の `level` でなければならない。親が台帳に無い・まだ有効でない（`valid_from` が先）なら
+`missing_parent`、同じか下の `level`・8 段を超える（循環）なら `broken_hierarchy` として **不明** を返す。ほかの不明の理由は
+§4 の表のとおり（`no_snapshot`、`invalid_snapshot`、`stale_snapshot`、`master_missing`、`master_stale`、`no_primary`、
+`no_plant`、`not_in_master`、`not_yet_valid`）。
 
 ## 2. アクセス制限 — 組織による所属（Phase 2）
 
@@ -204,6 +226,10 @@ required: 2                             # この中から何人の承認が要�
 ## 6. 個人情報の扱い
 
 - 職位・ランクは本人と管理者だけが見る（Phase 1 のまま）。ほかの人に見せるのは部・課の名前と「承認できる/できない」だけ。
+- **段 A から（2026-11-20）**: サインインした利用者は **だれでも**、ほかの利用者の主所属の部・課の名前（とコード）を見られる。
+  見える場所は人を選ぶ画面（`GET /api/v1/users?search=`、`UserSearch`）と MR の承認者の一覧（`MergeRequestRead`）。
+  兼務の所属、職位・ランク、工場、部署の長の社員番号（`head_staff_id`）は見せない（本人と管理者だけ。`head_staff_id` は
+  読み取りのプールにも出さない）。
 - 承認の行に残す写しは、コード・ランク・`digest` だけ（名前は台帳から引く）。
 
 ## 7. 進め方
@@ -220,6 +246,9 @@ required: 2                             # この中から何人の承認が要�
 
 1. registry-api の組織・職位の API を GitStation のサービスアカウント（`azp = gitstation`）で読めるようにする
    （`REGISTRY_AUTHORIZED_PARTIES` に足すか、読み取り専用のロール）。
+   **→ 2026-11-20 PFS が決定（MR !28、未配備）: ロールではなく環境変数の許可リスト `ORG_READER_CLIENTS=gitstation`。**
+   `gitstation` のクライアントの id と secret で `grant_type=client_credentials`（追加のスコープなし）。トークンは
+   `client_id == azp` で `staff_id` を持たない。GitStation はこの前提で段 A を作った。
 2. 本物の組織コードの投入（試験サーバー）と、GitStation の既定のボードの `SYN-*` の置き換え。
 3. 職位ランクの確定（spec ID-4。見本と spec の値、`test-supervisor` の 30 / 35 のずれ）。
 4. `head_staff_id` を使うなら、その値の投入（使わないなら `head_only` は作らない）。

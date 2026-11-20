@@ -112,6 +112,8 @@ pub mod identities;
 // ── end M2 MR4 ──
 // ── ADR-0021 amendment 2026-11-20: the org claims' snapshot ──
 pub mod org_profiles;
+// ── ADR-0038 §1: the copy of the PFS organisation master ──
+pub mod org_master;
 // ── D4: projects, repositories, project members, protected refs ──
 pub mod projects;
 #[cfg(test)]

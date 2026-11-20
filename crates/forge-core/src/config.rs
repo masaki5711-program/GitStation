@@ -48,6 +48,8 @@ pub mod mirror;
 mod notify;
 // ADR-0036: the PFS portal's widgets and news.
 mod portal;
+// ADR-0038 §1: the copy of the PFS organisation master.
+mod org;
 // ── end M3 N1 ──
 mod review;
 mod secret;
@@ -78,6 +80,7 @@ pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
 pub use merge_queue::MergeQueueConfig;
 pub use mirror::{CredentialProblem, MirrorConfig};
 pub use notify::{valid_mailbox, NotifyConfig, SmtpConfig, SmtpTls};
+pub use org::OrgConfig;
 pub use portal::PortalConfig;
 pub use review::ReviewConfig;
 pub(crate) use secret::read_secret_text;
@@ -244,6 +247,8 @@ pub struct Config {
     pub deploy: DeployConfig,
     /// `portal.*` (the PFS portal's widgets and news, ADR-0036).
     pub portal: PortalConfig,
+    /// `org.*` (the PFS organisation master's copy, ADR-0038 §1).
+    pub org: OrgConfig,
 }
 
 impl Config {
@@ -251,6 +256,11 @@ impl Config {
     /// git idle timeout would cut a slow Smart HTTP body before git's own
     /// (documented) idle limit.
     fn validate_across(self) -> Result<Self, ForgeError> {
+        // ADR-0038 §1: the org master is read from the portal's registry.
+        self.org.check_registry(
+            self.portal.registry_url.as_deref(),
+            self.portal.ca_file.is_some(),
+        )?;
         if self.server.limits.read_idle_timeout < self.git_http.idle_timeout {
             return Err(invalid(
                 "server.read_idle_timeout_ms",
@@ -516,6 +526,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         ci: CiConfig::load(get)?,
         deploy: DeployConfig::load(get)?,
         portal: PortalConfig::load(get)?,
+        org: OrgConfig::load(get)?,
     }
     .validate_across()
 }
