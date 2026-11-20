@@ -620,6 +620,57 @@ ADR-0028 §3（proposed）: 承認のフェーズのあるリポジトリの文�
 **見送り。** 開発用の Keycloak（`ops/dev/compose.yml`、版は 26.5.5 に合わせた）の realm は claim を ID トークンに入れたまま。
 PFS と同じ形（`basic` + `iotpf-identity`）の realm は後で足す。`forge doctor` が `allow_insecure_issuer = true` を warn に出すのも後で。
 
+## Amendment（accepted、2026-11-20）— 組織の claim の写し
+
+**背景。** PFS の Keycloak（realm `iotpf`、スコープ `iotpf-identity`）はアクセストークンに組織の claim を入れる:
+`org_units`（複数値。各値は `"{\"code\":\"…\",\"primary\":true}"` という **JSON の文字列**）、`positions`（複数値の文字列）、
+`position_rank`（数か数の文字列 1 つ）、`plants`（複数値）、`plant_code`（1 つ）。これまで GitStation は読んでいなかった
+（試験の fixture の `{"code","name"}` のオブジェクトは実物と違う形だった。実物の形に直した）。
+
+**決定（Phase 1: 写しと表示だけ）。**
+
+1. **ログインの時の写し。** `claims_source = access_token` のとき、コールバックと確かめたリフレッシュ（§7、5 分ごと）のたびに、
+   確かめたアクセストークンの組織の claim を読み、`forge.user_org_profiles`（マイグレーション `20261230100000`、1 人 1 行、
+   監査対象。`confirmed_at` と `invalid_since` は監査しない列）に写す。ID トークンのモードでは読まない。
+   - PFS の registry と同じ規則で厳しく確かめる（forge-oidc `org_claims`）: 部署コード `^[A-Z0-9][A-Z0-9_-]{0,19}$`、
+     役職 `^[a-z][a-z0-9_]{0,63}$`、ランク 0〜999 の整数、工場 `^[A-Z0-9]{1,4}$`、一覧は 64 件まで、主の部署は 1 つまで。
+     `org_units` の値は JSON の文字列でもオブジェクトでも受け、素のコードは主でない部署として受ける。主の部署を先頭に並べる。
+   - 同じ値（ダイジェストと issuer が同じ）: `confirmed_at` だけ進める。変わった（と最初の写し）: 値を書き、監査
+     `user.org_profile_changed`（変わった項目の前後とダイジェスト。6 KiB を超えるときは項目名とダイジェストだけ）。
+     プライバシー: 監査の前後には役職・ランク・工場の値も入る。`forge.audit_log` を読めるのはサーバー（`forge_app`）と
+     運用のロール（`forge_seq`・`forge_purge`・`forge_maint`）だけで、監査の行を利用者に見せる API はない（読み取りの
+     プール `forge_ro` にも権限はない）。監査の行を API や画面で見せるときは、この 3 項目を項目名とダイジェストだけにする。
+   - 表の CHECK が forge-oidc と同じ規則を持つ（`forge.org_units_valid`・`forge.codes_match`、IMMUTABLE）。書き込みの
+     ロックは写しの行だけ（最初の写しだけ利用者の行）、待ちは `SET LOCAL lock_timeout = 3s` まで。
+   - 規則に合わない値は**ログインを止めない**: 前の正しい値を残して `invalid_since` を立て、新しい **FG-AUTH-0028
+     OrgClaimsInvalid**（warn、`field` と `reason` = format / too_many / multiple_primary / type。値は出さない）を
+     `invalid_since` を立てた 1 回だけログに出す。claim がまったくないのは空の正しい写し。
+   - DB への書き込みの失敗もログインとリフレッシュを止めない（ログに 1 回。`confirmed_at` が古いまま残り doctor に見える）。
+2. **見せる範囲（既定は控えめ。見直してよい）。** 本人は全部（`GET /api/v1/user/org-profile`、`UserSelfRead`）。
+   管理者はだれのものでも（`GET /api/v1/admin/users/{id}/org-profile`、新しい `UserOrgAdminRead`: 管理者の権利、人の資格情報
+   だけ。トークンは `read_api` と `admin`。エージェントのトークン・サービスアカウント・bot は拒否）。ほかのサインインした
+   利用者には**主の部署コードだけ**（人を選ぶ画面 `GET /api/v1/users?search=` と MR の承認者の一覧
+   `primary_org_code`）。役職とランクは本人と管理者だけ。社内で見せてよい範囲が決まれば広げてよい（その時は権限の表を変える）。
+3. **画面。** アカウントの設定の「所属」とユーザーメニューに部署（主を先頭に、色だけでなく文字「主」で示す）・役職・工場。
+   人を選ぶ画面と MR の承認者の一覧に主の部署コード。
+4. **運用。** `forge doctor` の行 `auth.oidc.org_claims`（写しの数、invalid の数、いちばん古い `confirmed_at`）。runbook
+   `oidc-login` の「PFS の組織の claim」と「staff_id 未登録」。FG-AUTH-0014 の利用者向けの文言は、社員番号が未登録なら
+   PFS の利用者管理の担当に登録を頼むよう案内する（理由ごとの文言は持たない。問い合わせ番号はそのまま）。
+
+**見送り（後の段階）。**
+
+- **Phase 1b — 部署の名前。** コードではなく名前を出すには PFS の組織のマスターを読む必要がある。PFS 側に読み取り専用の
+  ロール（`org-reader`）を作ってもらい、GitStation のクライアントに付ける（PFS 側の MR）。それまではコードだけ。
+- **Phase 2 — グループの結び付け。** (工場, 部署コード) で GitStation のグループの一員にする。上限のあるロール（Developer まで）、
+  写しの最大の古さ（それを過ぎた写しでは結び付けない）、確かめられない・invalid のときは**閉じる**（fail closed）。
+  その時は写しが権限に効くので、この ADR を改めて決め、権限の表に行を足す。
+- **Phase 3 — 承認の資格。** ADR-0028（文書の承認）が accepted になった後、役職コードで承認できる人を決める。
+
+**結果。** 確かめ方: forge-oidc `org_claims` の単体テスト（形・規則・すべての `reason`）、`tests/pfs.rs` の
+`a_pfs_sign_in_and_refresh_snapshot_the_org_claims` と `invalid_org_claims_keep_the_snapshot_and_are_logged_once`、
+forge-db `org_profiles` のテスト（監査 1 回、同じ値は `confirmed_at` だけ、invalid の印、読み取り）、権限の表の
+`UserOrgAdminRead` の行（allow と deny）。
+
 ## Amendment（accepted、2026-11-20）— 平文 HTTP の試験サーバー（`web.allow_insecure_http`）
 
 **背景。** PFS の試験サーバーに GitLab CI/CD で置く GitStation（`ops/gitlab-trial/`）は、TLS なしの

@@ -22,6 +22,8 @@ export type Handler = (call: Call) => Response | Promise<Response>;
 export const MR_COUNTS_PATH = '/api/v1/user/merge-requests/counts';
 /** The caller's activity: Home's "recent updates" and /-/activity (plan 15 MR 9). */
 export const ACTIVITY_PATH = '/api/v1/user/activity';
+/** The caller's org claims snapshot. */
+export const ORG_PROFILE_PATH = '/api/v1/user/org-profile';
 export const MR_COUNTS_ZERO = {
   authored: { count: 0, capped: false, truncated: false },
   approvable: { count: 0, capped: false, truncated: false },
@@ -34,6 +36,9 @@ const defaults: Record<string, Handler> = {
   [`GET ${MR_COUNTS_PATH}`]: () => json(200, MR_COUNTS_ZERO),
   // Home's "recent updates" (plan 15 MR 9).
   [`GET ${ACTIVITY_PATH}`]: () => json(200, { events: [], next_before: null, truncated: false }),
+  // The caller's org claims snapshot (the user menu, the account page;
+  // ADR-0021 amendment 2026-11-20): none unless a test gives one.
+  [`GET ${ORG_PROFILE_PATH}`]: () => json(200, { user_id: 1, org: null }),
 };
 
 export function mockServer(routes: Record<string, Handler>) {

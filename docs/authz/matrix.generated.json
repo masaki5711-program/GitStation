@@ -60,6 +60,7 @@
   { "action": "UserDisable", "allow": 2, "deny": 17, "public": false, "git_operation": false },
   { "action": "UserSearch", "allow": 4, "deny": 12, "public": false, "git_operation": false },
   { "action": "UserAdminList", "allow": 3, "deny": 15, "public": false, "git_operation": false },
+  { "action": "UserOrgAdminRead", "allow": 3, "deny": 20, "public": false, "git_operation": false },
   { "action": "UserRename", "allow": 3, "deny": 19, "public": false, "git_operation": false },
   { "action": "ServiceAccountCreate", "allow": 1, "deny": 16, "public": false, "git_operation": false },
   { "action": "ServiceAccountList", "allow": 2, "deny": 13, "public": false, "git_operation": false },

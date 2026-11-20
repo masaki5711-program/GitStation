@@ -1471,6 +1471,13 @@ pub enum UserCommand {
         #[arg(value_parser = parse_id)]
         id: i64,
     },
+    /// The org claims snapshot (departments, positions, rank, plants): your
+    /// own, or with an id another user's (administrators).
+    #[command(name = "org-profile")]
+    OrgProfile {
+        #[arg(value_parser = parse_id)]
+        id: Option<i64>,
+    },
     /// End every web session of a user (administrators). Needs --yes.
     #[command(name = "end-sessions")]
     EndSessions {

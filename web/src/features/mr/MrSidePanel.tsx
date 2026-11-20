@@ -17,6 +17,7 @@ import { latestVersion, useMergeStatus, useVersions, type useDiscussions } from 
 import type { MergeRequest, MergeStatus } from '../../api/types';
 import { InlineError } from '../../components/InlineError';
 import { shortOid } from '../../pages/repo/common';
+import { OrgCode } from '../OrgProfile';
 import { formatDateTime, formatRelative } from '../labels';
 import { StateBadge, type BadgeTone } from './StateBadge';
 import styles from './Mr.module.css';
@@ -210,6 +211,7 @@ function StatusRows({ status }: { status: MergeStatus }) {
             {given.map((g) => (
               <li key={g.approver_id}>
                 {g.counted ? g.username : t('mr.side.notCounted', { name: g.username })}
+                <OrgCode code={g.primary_org_code} />
               </li>
             ))}
           </ul>

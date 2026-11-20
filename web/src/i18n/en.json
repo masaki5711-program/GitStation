@@ -1780,5 +1780,17 @@
     "pending": "Creating…",
     "opened": "Revert merge request !{{iid}} opened.",
     "open": "Open it"
+  },
+  "org": {
+    "title": "Organisation",
+    "explain": "The organisation the PFS identity provider reported when you signed in (display only; it grants no rights).",
+    "primary": "Main",
+    "departmentCode": "Department code",
+    "departments": "Departments",
+    "positions": "Positions",
+    "plant": "Plant",
+    "none": "No organisation details yet. They appear after you sign in with your PFS account.",
+    "empty": "None",
+    "invalid": "The organisation details from the identity provider are invalid, so the previous ones are shown. Ask the PFS user administration to check them."
   }
 }

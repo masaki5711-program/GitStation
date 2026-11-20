@@ -15,6 +15,7 @@ import type { Project } from '../../api/types';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
+import { OrgDetails, useOwnOrgProfile } from '../../features/OrgProfile';
 import { formatDateTime } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { SESSION_KEY, useSession } from '../../session/session';
@@ -59,6 +60,7 @@ export function Account({ path }: { path: string }) {
   return (
     <>
       <PageHeader title={t('account.title')} />
+      <OrgSection />
       <nav aria-label={t('account.tabs')}>
         <ul className={styles.tabs}>
           {tabs.map((x) => (
@@ -83,6 +85,28 @@ export function Account({ path }: { path: string }) {
       {tab === 'service-accounts' && <ServiceAccounts base={base} />}
       {tab === 'integrations' && <Integrations base={base} />}
     </>
+  );
+}
+
+/** The organisation the identity provider says the person belongs to
+ * (ADR-0021 amendment 2026-11-20): display only. */
+function OrgSection() {
+  const { t } = useTranslation();
+  const org = useOwnOrgProfile();
+  return (
+    <Section id="org-title" title={t('org.title')}>
+      <p className={styles.hint}>{t('org.explain')}</p>
+      {org.isPending && <Loading />}
+      {org.isError && (
+        <QueryError
+          error={org.error}
+          onRetry={() => {
+            void org.refetch();
+          }}
+        />
+      )}
+      {org.isSuccess && <OrgDetails org={org.data} />}
+    </Section>
   );
 }
 

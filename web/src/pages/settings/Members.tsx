@@ -15,6 +15,7 @@ import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { ErrorSummary } from '../../features/CreateDialogs';
+import { OrgCode } from '../../features/OrgProfile';
 import { formatDate, roleLabel } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
@@ -363,6 +364,7 @@ function AddMember({ scope, members }: { scope: Scope; members: Member[] }) {
                   <li key={u.id}>
                     <span>
                       {u.display_name} <code>{u.username}</code>
+                      <OrgCode code={u.primary_org_code} />
                     </span>
                     {present.has(u.id) ? (
                       <span className={styles.muted}>{t('members.already')}</span>

@@ -985,6 +985,15 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             "forge.ci_pipeline_schedules",
             [dml("forge_app"), ro("ci_pipeline_schedules")?].concat(),
         ),
+        // ── ADR-0021 amendment 2026-11-20: org claims (20261230100000) ──
+        (
+            "forge.user_org_profiles",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:UPDATE"]),
+                ro("user_org_profiles")?,
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -1193,6 +1202,8 @@ const LATER_TABLES: &[&str] = &[
     "deployments",
     // ── M4 C12: scheduled pipelines (20261219100000) ──
     "ci_pipeline_schedules",
+    // ── ADR-0021 amendment 2026-11-20: org claims (20261230100000) ──
+    "user_org_profiles",
 ];
 
 /// Every table the first migration creates.

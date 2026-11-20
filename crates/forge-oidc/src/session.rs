@@ -241,6 +241,9 @@ impl Oidc {
                 return self.unreachable(&e, request_id, &claim).await;
             }
         };
+        // The verified access token's claims (access_token mode): the org
+        // claims' snapshot is refreshed from them once the session goes on.
+        let mut org_source: Option<Value> = None;
         let access_role = match self.settings.claims_source {
             OidcClaimsSource::IdToken => match id_token.as_deref() {
                 Some(token) => match self.verify_refreshed(&doc, token, &claim).await {
@@ -329,7 +332,11 @@ impl Oidc {
                     .verify_access(&doc, token, &claim.issuer, &claim.subject)
                     .await
                 {
-                    Ok(claims) => self.has_access_role(&claims.claims),
+                    Ok(claims) => {
+                        let role = self.has_access_role(&claims.claims);
+                        org_source = Some(claims.claims);
+                        role
+                    }
                     Err(e) if e.code() == ErrorCode::IdentityProviderUnavailable => {
                         return self.unreachable(&e, request_id, &claim).await;
                     }
@@ -386,7 +393,7 @@ impl Oidc {
             .map(|t| self.id_keys.seal(aad, t.as_bytes()))
             .transpose()?;
         // `false`: revoked meanwhile; the next request sees it.
-        let _stored = sessions::store_refreshed(
+        let stored = sessions::store_refreshed(
             &self.db,
             claim.session_id,
             Refreshed {
@@ -402,6 +409,10 @@ impl Oidc {
             },
         )
         .await?;
+        if let (true, Some(claims)) = (stored, org_source) {
+            self.record_org(&system(request_id), claim.user, &claims)
+                .await;
+        }
         Ok(RefreshVerdict::Continue)
     }
 

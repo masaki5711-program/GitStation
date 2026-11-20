@@ -209,6 +209,12 @@ async fn credentials(t: &FreshDb) -> Callers {
 /// `the_table_covers_every_user_route_of_the_registry`.
 const ROUTES: &[(&str, &str, &str, Option<&str>)] = &[
     ("GET", "/api/v1/user", "/api/v1/user", None),
+    (
+        "GET",
+        "/api/v1/user/org-profile",
+        "/api/v1/user/org-profile",
+        None,
+    ),
     ("GET", "/api/v1/user/tokens", "/api/v1/user/tokens", None),
     (
         "POST",

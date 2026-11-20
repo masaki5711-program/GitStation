@@ -80,6 +80,16 @@ impl Review {
         Ok(RefProtection::of(&rules, target))
     }
 
+    /// The primary department code of each of `approvers` that has one
+    /// (ADR-0021 amendment 2026-11-20): shown next to the names the status
+    /// already lists (`MergeRequestRead` was decided by the route).
+    pub async fn primary_org_codes(
+        &self,
+        approvers: &[forge_core::UserId],
+    ) -> Result<std::collections::HashMap<forge_core::UserId, String>, ForgeError> {
+        forge_db::org_profiles::primary_codes(&self.db, approvers).await
+    }
+
     /// The latest merge attempt of merge request `mr` (`None`: never asked).
     pub async fn latest_merge(
         &self,

@@ -614,6 +614,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/users/{id}/org-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A user's org claims snapshot (administrators, people only) */
+        get: operations["get_api_v1_admin_users_id_org_profile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users/{id}/sessions": {
         parameters: {
             query?: never;
@@ -2996,6 +3013,23 @@ export interface paths {
         put?: never;
         /** Mark one of the caller's in-app notifications read (another person's or an absent one is not found) */
         post: operations["post_api_v1_user_notifications_id_read"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/org-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own org claims snapshot (departments, positions, rank, plants) */
+        get: operations["get_api_v1_user_org_profile"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6010,6 +6044,35 @@ export interface components {
             /** Format: int64 */
             id: number;
         };
+        /** @description The snapshot of the identity provider's org claims. */
+        OrgProfileBody: {
+            /** @description UTC, RFC 3339: the values last changed. */
+            changed_at: string;
+            /** @description UTC, RFC 3339: the provider last sent these values. */
+            confirmed_at: string;
+            /**
+             * @description UTC, RFC 3339: the provider's claims fail validation since then (the
+             *     values shown are the last valid ones).
+             */
+            invalid_since: string | null;
+            org_units: components["schemas"]["OrgUnitBody"][];
+            plant_code: string | null;
+            plants: string[];
+            /**
+             * Format: int32
+             * @description 0..=999.
+             */
+            position_rank: number | null;
+            /** @description Position codes. */
+            positions: string[];
+        };
+        /** @description One department. */
+        OrgUnitBody: {
+            /** @description The PFS org code (`^[A-Z0-9][A-Z0-9_-]{0,19}$`). */
+            code: string;
+            /** @description The person's main department (at most one; listed first). */
+            primary: boolean;
+        };
         /** @description The person a service account belongs to. */
         OwnerBody: {
             active: boolean;
@@ -7383,6 +7446,11 @@ export interface components {
             /** Format: int64 */
             approver_id: number;
             counted: boolean;
+            /**
+             * @description The approver's primary department code (ADR-0021 amendment
+             *     2026-11-20, added within `schema_version` 1); `null` without one.
+             */
+            primary_org_code: string | null;
             uncounted_reason: string | null;
             username: string;
         };
@@ -7824,11 +7892,16 @@ export interface components {
             /** @description `authored`, `approvable` or `attention`. */
             scope: string;
         };
-        /** @description One search match: names only. */
+        /** @description One search match: names, and the primary department code. */
         UserName: {
             display_name: string;
             /** Format: int64 */
             id: number;
+            /**
+             * @description The primary department's code from the identity provider's org
+             *     claims (ADR-0021 amendment 2026-11-20); `null` without one.
+             */
+            primary_org_code: string | null;
             username: string;
         };
         /** @description A user as the merge request screens name them (MR B0). */
@@ -7839,6 +7912,12 @@ export interface components {
         /** @description The matches of a search. */
         UserNames: {
             items: components["schemas"]["UserName"][];
+        };
+        /** @description One user's snapshot (`org` is `null` without one). */
+        UserOrgProfile: {
+            org: null | components["schemas"]["OrgProfileBody"];
+            /** Format: int64 */
+            user_id: number;
         };
         /** @description The caller's account as the API shows it. */
         UserSelf: {
@@ -9384,6 +9463,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Disabled"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_users_id_org_profile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOrgProfile"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -15395,6 +15505,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarkedRead"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_org_profile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOrgProfile"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

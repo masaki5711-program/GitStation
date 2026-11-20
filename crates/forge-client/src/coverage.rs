@@ -242,6 +242,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/admin/users/{id}/sessions",
         Coverage::Command("user sessions"),
     ),
+    // ADR-0021 amendment 2026-11-20: the org claims' snapshot.
+    (
+        "GET",
+        "/api/v1/admin/users/{id}/org-profile",
+        Coverage::Command("user org-profile"),
+    ),
+    (
+        "GET",
+        "/api/v1/user/org-profile",
+        Coverage::Command("user org-profile"),
+    ),
     (
         "DELETE",
         "/api/v1/admin/users/{id}/sessions",

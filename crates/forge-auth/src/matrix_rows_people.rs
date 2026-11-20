@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 47] = [
+const GROUPS: [[Row; 2]; 48] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -66,6 +66,7 @@ const GROUPS: [[Row; 2]; 47] = [
     both!(A::ProjectRestore, OWNER.0, OWNER.1, F::DeletedProject),
     both!(A::MemberManage, MAINTAINER.0, MAINTAINER.1, F::ProjectMember(M::Add(R::Developer))),
     both!(A::UserDisable, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Instance),
+    both!(A::UserOrgAdminRead, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Instance),
     both!(A::AdminSessionRevoke, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Session { own: false }),
     // Session only: the twin is the administrator's session.
     both!(A::MergeRequestVersionRefsPurge, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Mr(MF::other())),

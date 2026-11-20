@@ -20,6 +20,7 @@ use forge_auth::{
 };
 use forge_core::ssh_key::SshPublicKey;
 use forge_core::{SessionRevokeReason, UserId};
+use forge_db::org_profiles;
 use forge_db::sessions;
 use forge_db::ssh_keys::{self, NewSshKey};
 use forge_db::tokens::{self, NewToken};
@@ -28,6 +29,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{caller, change_context, require, Hosting, WriteRequest};
 
+pub use forge_db::org_profiles::{OrgProfile, OrgSnapshot, OrgUnit};
 pub use forge_db::sessions::{
     is_public_id as is_session_public_id, RevokeOutcome as SessionRevokeOutcome, SessionInfo,
     SessionList, MAX_LISTED as MAX_LISTED_SESSIONS,
@@ -262,6 +264,41 @@ impl Hosting {
     ) -> Result<Vec<UserMatch>, ForgeError> {
         require(proof.action(), Action::UserSearch)?;
         users::search(&self.db, term).await
+    }
+
+    // ── the org claims' snapshot (ADR-0021 amendment 2026-11-20) ──
+
+    /// The caller's own snapshot (`UserSelfRead` was proved on the
+    /// instance): every part of it, the caller's own data.
+    pub async fn own_org_profile(
+        &self,
+        proof: &Authorized<InstanceCtx>,
+    ) -> Result<Option<OrgProfile>, ForgeError> {
+        require(proof.action(), Action::UserSelfRead)?;
+        let user = caller(proof)?;
+        org_profiles::read(&self.db, user).await
+    }
+
+    /// The proof's user's snapshot (`UserOrgAdminRead`: administrators,
+    /// people only). `None`: no snapshot (or no such user).
+    pub async fn admin_org_profile(
+        &self,
+        proof: &Authorized<UserTargetCtx>,
+    ) -> Result<Option<OrgProfile>, ForgeError> {
+        require(proof.action(), Action::UserOrgAdminRead)?;
+        org_profiles::read(&self.db, *proof.id()).await
+    }
+
+    /// The primary department code of each of `users` that has one — the
+    /// only part of the snapshot every signed-in user sees (the people
+    /// pickers, the approval list; ADR-0021 amendment 2026-11-20). Called
+    /// by routes whose own action was decided (`UserSearch`,
+    /// `MergeRequestRead`) for users that route already shows.
+    pub async fn primary_org_codes(
+        &self,
+        users: &[UserId],
+    ) -> Result<std::collections::HashMap<UserId, String>, ForgeError> {
+        org_profiles::primary_codes(&self.db, users).await
     }
 
     /// One administration page (`UserAdminList` was proved on the

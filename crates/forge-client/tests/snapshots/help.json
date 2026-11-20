@@ -8030,6 +8030,48 @@
     {
       "args": [
         {
+          "description": "The user id (administrators); omit for your own.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn user org-profile --json",
+        "gstn user org-profile 12 --json"
+      ],
+      "name": "user org-profile",
+      "output": {
+        "properties": {
+          "org": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "org"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/org-profile",
+        "GET /api/v1/admin/users/{id}/org-profile"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show the org claims snapshot: your own, or with an id another user's (administrators)."
+    },
+    {
+      "args": [
+        {
           "description": "The user id.",
           "kind": "positional",
           "name": "id",
