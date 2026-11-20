@@ -1,7 +1,8 @@
 //! The PFS portal's home widgets (ADR-0036; the PFS portal contract v1,
-//! `docs/portal/widgets.md`): the data of the three widgets GitStation
-//! declares (`my-reviews`, `pipelines`, `stopped-count`) and the project
-//! options of the first two.
+//! `docs/portal/widgets.md`, widget design P1): the data of the widgets
+//! GitStation declares (`my-reviews`, `pipelines`, `stopped-count`, and
+//! from P1 `attention-count`, `inbox`, `menu`) and the project options of
+//! those with a `project` setting.
 //!
 //! - Only the portal's credential reaches them (`crate::auth`: the portal's
 //!   Bearer token, `azp = portal`, decided by `authorize()` as
@@ -35,13 +36,14 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forge_auth::PortalWidgetCtx;
 use forge_core::portal::{
-    rfc3339_utc, valid_tz, Lamp, Tone, Word, CONTRACT_VERSION, MY_MERGE_REQUESTS_HREF,
-    WIDGET_PREFIX,
+    menu_links, rfc3339_utc, valid_tz, Lamp, MenuPurpose, Tone, Word, APPROVABLE_HREF,
+    CONTRACT_VERSION, HOME_HREF, MEMBER_PROJECTS_HREF, MY_MERGE_REQUESTS_HREF,
+    UNREAD_NOTIFICATIONS_HREF, WIDGET_PREFIX,
 };
 use forge_core::{parse_positive_id, ProjectId, UserId};
 use forge_errors::{ErrorCode, ForgeError, Lang};
 use forge_pipelines::portal::Show;
-use forge_review::{AttentionReason, UserListCount, UserListItem, WidgetList};
+use forge_review::{AttentionReason, UserListCount, WidgetItem, WidgetList, WidgetOrder};
 use serde_json::{json, Value};
 
 use crate::app::AppState;
@@ -55,6 +57,11 @@ pub const MY_REVIEWS_OPTIONS: &str = "/api/portal-widgets/v1/my-reviews/options/
 pub const PIPELINES: &str = "/api/portal-widgets/v1/pipelines";
 pub const PIPELINES_OPTIONS: &str = "/api/portal-widgets/v1/pipelines/options/project";
 pub const STOPPED_COUNT: &str = "/api/portal-widgets/v1/stopped-count";
+pub const ATTENTION_COUNT: &str = "/api/portal-widgets/v1/attention-count";
+pub const ATTENTION_COUNT_OPTIONS: &str = "/api/portal-widgets/v1/attention-count/options/project";
+pub const INBOX: &str = "/api/portal-widgets/v1/inbox";
+pub const MENU: &str = "/api/portal-widgets/v1/menu";
+pub const MENU_OPTIONS: &str = "/api/portal-widgets/v1/menu/options/project";
 
 /// The most projects the `pipelines` setting may name (contract §3).
 const MAX_PROJECTS: usize = 24;
@@ -64,6 +71,8 @@ const DEFAULT_LIMIT: usize = 5;
 /// The contract's `stale_after_sec` of the widgets (refresh 60 / 120 s).
 const STALE_LIST_S: u64 = 300;
 const STALE_KPI_S: u64 = 600;
+/// The `menu` changes only with a release (refresh 3600 s).
+const STALE_MENU_S: u64 = 7200;
 
 const LOCALE: QueryParam = QueryParam {
     name: "locale",
@@ -79,7 +88,12 @@ const TZ: QueryParam = QueryParam {
 pub const MY_REVIEWS_QUERY: &[QueryParam] = &[
     QueryParam {
         name: "kind",
-        description: "review (waiting for my review, default), mine (my open changes), stopped (stopped auto-merges I wrote or approved) or spec (specs awaiting my approval)",
+        description: "review (waiting for my review, default), mine (my open changes), stopped (stopped auto-merges I wrote or approved), spec (specs awaiting my approval), threads (my unresolved comments that got a reply), conflicts (my changes with a conflict, a likely one, or one not ruled out) or queue (my changes in the merge queue, and those it removed)",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "sort",
+        description: "oldest (what has waited longest first, default) or newest",
         integer_range: None,
     },
     QueryParam {
@@ -109,6 +123,11 @@ pub const PIPELINES_QUERY: &[QueryParam] = &[
             "pipeline (the newest pipeline of main, default) or deploy (the newest deployment)",
         integer_range: None,
     },
+    QueryParam {
+        name: "only_problems",
+        description: "true: only the projects whose lamp is stop or warn (default false)",
+        integer_range: None,
+    },
     LOCALE,
     TZ,
 ];
@@ -118,6 +137,38 @@ pub const STOPPED_COUNT_QUERY: &[QueryParam] = &[
         name: "scope",
         description: "mine (my changes, default) or reviews (also those I approved)",
         integer_range: None,
+    },
+    LOCALE,
+    TZ,
+];
+
+pub const ATTENTION_COUNT_QUERY: &[QueryParam] = &[
+    QueryParam {
+        name: "scope",
+        description: "reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval) or failed (projects whose main build or test failed); deploy is not available yet (422)",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "project",
+        description: "Project ids, repeated (at most 24); none: every project the person may see (failed: the projects they hold a role on)",
+        integer_range: Some((1, i64::MAX)),
+    },
+    LOCALE,
+    TZ,
+];
+
+pub const INBOX_QUERY: &[QueryParam] = &[LOCALE, TZ];
+
+pub const MENU_QUERY: &[QueryParam] = &[
+    QueryParam {
+        name: "purpose",
+        description: "developer (default), reviewer, spec, operations or manager: whose links",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "project",
+        description: "One project id (an option of options/project): the project the project links open; none: they ask to choose a project",
+        integer_range: Some((1, i64::MAX)),
     },
     LOCALE,
     TZ,
@@ -269,12 +320,38 @@ fn project_id(raw: &str) -> Result<ProjectId, ForgeError> {
         .ok_or_else(|| invalid("project", "not_positive_decimal"))
 }
 
+/// `true` / `false` of a `toggle` (absent: `false`).
+fn toggle(pairs: &[(String, String)], key: &'static str) -> Result<bool, ForgeError> {
+    match single(pairs, key)? {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => Err(invalid(key, "not_boolean")),
+    }
+}
+
+/// The repeated `project` of a `multi` setting: distinct, at most
+/// [`MAX_PROJECTS`] (`None`: not given).
+fn multi_projects(pairs: &[(String, String)]) -> Result<Option<Vec<ProjectId>>, ForgeError> {
+    let mut projects = Vec::new();
+    for (_, value) in pairs.iter().filter(|(k, _)| k == "project") {
+        let id = project_id(value)?;
+        if !projects.contains(&id) {
+            projects.push(id);
+        }
+    }
+    if projects.len() > MAX_PROJECTS {
+        return Err(invalid("project", "too_many"));
+    }
+    Ok((!projects.is_empty()).then_some(projects))
+}
+
 /// `my-reviews`' settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReviewsQuery {
     pub kind: WidgetList,
     pub project: Option<ProjectId>,
     pub limit: usize,
+    pub order: WidgetOrder,
     pub lang: Lang,
 }
 
@@ -286,7 +363,15 @@ pub(crate) fn reviews_query(raw: Option<&str>) -> Result<ReviewsQuery, ForgeErro
         Some("mine") => WidgetList::Mine,
         Some("stopped") => WidgetList::StoppedInvolved,
         Some("spec") => WidgetList::Spec,
+        Some("threads") => WidgetList::Threads,
+        Some("conflicts") => WidgetList::Conflicts,
+        Some("queue") => WidgetList::Queue,
         Some(_) => return Err(invalid("kind", "unknown_value")),
+    };
+    let order = match single(&pairs, "sort")? {
+        None | Some("oldest") => WidgetOrder::Oldest,
+        Some("newest") => WidgetOrder::Newest,
+        Some(_) => return Err(invalid("sort", "unknown_value")),
     };
     let project = single(&pairs, "project")?.map(project_id).transpose()?;
     let limit = match single(&pairs, "limit")? {
@@ -301,6 +386,7 @@ pub(crate) fn reviews_query(raw: Option<&str>) -> Result<ReviewsQuery, ForgeErro
         kind,
         project,
         limit,
+        order,
         lang,
     })
 }
@@ -310,6 +396,8 @@ pub(crate) fn reviews_query(raw: Option<&str>) -> Result<ReviewsQuery, ForgeErro
 pub(crate) struct PipelinesQuery {
     pub projects: Option<Vec<ProjectId>>,
     pub show: Show,
+    /// Only the lamps `stop` and `warn`.
+    pub only_problems: bool,
     pub lang: Lang,
 }
 
@@ -321,19 +409,10 @@ pub(crate) fn pipelines_query(raw: Option<&str>) -> Result<PipelinesQuery, Forge
         Some("deploy") => Show::Deploy,
         Some(_) => return Err(invalid("show", "unknown_value")),
     };
-    let mut projects = Vec::new();
-    for (_, value) in pairs.iter().filter(|(k, _)| k == "project") {
-        let id = project_id(value)?;
-        if !projects.contains(&id) {
-            projects.push(id);
-        }
-    }
-    if projects.len() > MAX_PROJECTS {
-        return Err(invalid("project", "too_many"));
-    }
     Ok(PipelinesQuery {
-        projects: (!projects.is_empty()).then_some(projects),
+        projects: multi_projects(&pairs)?,
         show,
+        only_problems: toggle(&pairs, "only_problems")?,
         lang,
     })
 }
@@ -351,7 +430,71 @@ pub(crate) fn stopped_query(raw: Option<&str>) -> Result<(WidgetList, Lang), For
     Ok((scope, lang))
 }
 
-/// The options' `locale` (the only key they read).
+/// What `attention-count` counts (widget design §3.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttentionScope {
+    /// The person's merge requests whose auto-merge stopped.
+    Stopped,
+    /// Waiting for the person's review.
+    Reviews,
+    /// Specifications awaiting the person's approval.
+    Spec,
+    /// Projects whose newest `main` pipeline failed.
+    Failed,
+}
+
+/// `attention-count`'s settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AttentionQuery {
+    pub scope: AttentionScope,
+    pub projects: Option<Vec<ProjectId>>,
+    pub lang: Lang,
+}
+
+pub(crate) fn attention_query(raw: Option<&str>) -> Result<AttentionQuery, ForgeError> {
+    let pairs = pairs(raw);
+    let lang = common(&pairs)?;
+    let scope = match single(&pairs, "scope")? {
+        None | Some("reviews") => AttentionScope::Reviews,
+        Some("stopped") => AttentionScope::Stopped,
+        Some("spec") => AttentionScope::Spec,
+        Some("failed") => AttentionScope::Failed,
+        // The design's `deploy` needs the per-person approval query (P2).
+        Some("deploy") => return Err(invalid("scope", "not_available")),
+        Some(_) => return Err(invalid("scope", "unknown_value")),
+    };
+    Ok(AttentionQuery {
+        scope,
+        projects: multi_projects(&pairs)?,
+        lang,
+    })
+}
+
+/// `menu`'s settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MenuQuery {
+    pub purpose: MenuPurpose,
+    pub project: Option<ProjectId>,
+    pub lang: Lang,
+}
+
+pub(crate) fn menu_query(raw: Option<&str>) -> Result<MenuQuery, ForgeError> {
+    let pairs = pairs(raw);
+    let lang = common(&pairs)?;
+    let purpose = match single(&pairs, "purpose")? {
+        None => MenuPurpose::Developer,
+        Some(raw) => MenuPurpose::parse(raw).ok_or_else(|| invalid("purpose", "unknown_value"))?,
+    };
+    let project = single(&pairs, "project")?.map(project_id).transpose()?;
+    Ok(MenuQuery {
+        purpose,
+        project,
+        lang,
+    })
+}
+
+/// The options' `locale` (the only key they read); also `inbox`'s
+/// settings (it has none of its own).
 fn options_query(raw: Option<&str>) -> Result<Lang, ForgeError> {
     common(&pairs(raw))
 }
@@ -410,8 +553,30 @@ fn unconfigured(what: &'static str) -> ForgeError {
 }
 
 /// A list item's badge (contract §6.3 `list`).
-fn badge(kind: WidgetList, item: &UserListItem, lang: Lang) -> Value {
+fn badge(kind: WidgetList, row: &WidgetItem, lang: Lang) -> Value {
+    let item = &row.item;
+    let extra = &row.extra;
     let (word, tone) = match kind {
+        WidgetList::Threads => (Word::BadgeReply, Tone::Info),
+        WidgetList::Conflicts => {
+            if item.reasons.contains(&AttentionReason::Conflict) {
+                (Word::BadgeConflict, Tone::Stop)
+            } else if item.reasons.contains(&AttentionReason::ConflictPredicted) {
+                (Word::BadgeConflictPredicted, Tone::Warn)
+            } else {
+                // Not ruled out (`conflict_unknown`): never "no conflict".
+                (Word::BadgeConflictUnknown, Tone::Neutral)
+            }
+        }
+        WidgetList::Queue => match extra.queue_position {
+            Some(n) if !extra.queue_ejected => {
+                let label = Word::BadgeQueuePosition
+                    .in_lang(lang)
+                    .replace("{n}", &n.to_string());
+                return json!({ "label": label, "tone": Tone::Info.as_str() });
+            }
+            _ => (Word::BadgeQueueRemoved, Tone::Stop),
+        },
         WidgetList::Review => (Word::BadgeReview, Tone::Info),
         WidgetList::Spec => (Word::BadgeSpec, Tone::Info),
         WidgetList::StoppedMine | WidgetList::StoppedInvolved => (Word::BadgeStopped, Tone::Stop),
@@ -436,21 +601,57 @@ fn list_title(kind: WidgetList) -> Word {
         WidgetList::Spec => Word::TitleSpec,
         WidgetList::Mine => Word::TitleMine,
         WidgetList::StoppedMine | WidgetList::StoppedInvolved => Word::TitleStopped,
+        WidgetList::Threads => Word::TitleThreads,
+        WidgetList::Conflicts => Word::TitleConflicts,
+        WidgetList::Queue => Word::TitleQueue,
+    }
+}
+
+/// A list item's `sub` and `href`: the conflicts open the changes (with the
+/// other merge request's number when a conflict with it is predicted), the
+/// queue opens the queue of the target branch.
+fn sub_and_href(kind: WidgetList, row: &WidgetItem) -> (String, String) {
+    let item = &row.item;
+    let mr = &item.merge_request;
+    let path = item.project_path.as_str();
+    let sub = format!("{path} !{}", mr.iid);
+    match kind {
+        WidgetList::Conflicts => {
+            let sub = match row.extra.conflict_peer_iid {
+                Some(peer) => format!("{sub} \u{2194} !{peer}"),
+                None => sub,
+            };
+            (
+                sub,
+                forge_core::portal::merge_request_changes_href(path, mr.iid),
+            )
+        }
+        WidgetList::Queue => (
+            sub,
+            forge_core::portal::merge_queue_href(path, mr.target_branch.as_str()),
+        ),
+        WidgetList::Review
+        | WidgetList::Spec
+        | WidgetList::Mine
+        | WidgetList::StoppedMine
+        | WidgetList::StoppedInvolved
+        | WidgetList::Threads => (sub, forge_core::portal::merge_request_href(path, mr.iid)),
     }
 }
 
 /// The contract's `list` body (§6.3).
-pub(crate) fn list_body(kind: WidgetList, items: &[UserListItem], total: i64, lang: Lang) -> Value {
+pub(crate) fn list_body(kind: WidgetList, items: &[WidgetItem], total: i64, lang: Lang) -> Value {
     let items: Vec<Value> = items
         .iter()
-        .map(|item| {
-            let mr = &item.merge_request;
+        .map(|row| {
+            let mr = &row.item.merge_request;
+            let (sub, href) = sub_and_href(kind, row);
             json!({
-                "id": format!("{}!{}", item.project_path, mr.iid),
+                "id": format!("{}!{}", row.item.project_path, mr.iid),
                 "label": mr.title,
-                "sub": format!("{} !{}", item.project_path, mr.iid),
-                "badge": badge(kind, item, lang),
-                "href": forge_core::portal::merge_request_href(&item.project_path, mr.iid),
+                "sub": sub,
+                "badge": badge(kind, row, lang),
+                "href": href,
             })
         })
         .collect();
@@ -470,7 +671,13 @@ pub async fn my_reviews(state: AppState, request: Dispatched<PortalWidgetCtx>) -
         let page = bounded(
             &state,
             "portal_widget_my_reviews",
-            review.portal_merge_requests(&w.proof, q.kind, q.project, q.limit),
+            review.portal_merge_requests(
+                &w.proof,
+                q.kind,
+                q.project.as_ref().map(std::slice::from_ref),
+                q.order,
+                q.limit,
+            ),
         )
         .await?;
         envelope(
@@ -503,6 +710,7 @@ pub async fn pipelines(state: AppState, request: Dispatched<PortalWidgetCtx>) ->
         .await?;
         let items: Vec<Value> = lamps
             .iter()
+            .filter(|l| !q.only_problems || matches!(l.lamp, Lamp::Stop | Lamp::Warn))
             .map(|l| {
                 let label = Word::of_lamp(l.lamp).in_lang(q.lang);
                 let state_label = match &l.tier {
@@ -538,9 +746,16 @@ pub async fn pipelines(state: AppState, request: Dispatched<PortalWidgetCtx>) ->
     answer(&w.ctx, built)
 }
 
-/// The contract's `kpi` body (§6.3): the count against its standard 0.
+/// The contract's `kpi` body (§6.3): the count of changes against its
+/// standard 0 (`stop` above it).
 pub(crate) fn kpi_body(count: UserListCount, lang: Lang) -> Value {
-    let unit = Word::UnitChanges.in_lang(lang);
+    kpi_body_of(count, Word::UnitChanges, Tone::Stop, lang)
+}
+
+/// The `kpi` body of `count` in `unit` against the standard 0: `ok` at it,
+/// `above` over it. A capped or truncated count is shown `n+`.
+pub(crate) fn kpi_body_of(count: UserListCount, unit: Word, above: Tone, lang: Lang) -> Value {
+    let unit = unit.in_lang(lang);
     let shown = if count.capped || count.truncated {
         format!("{}+", count.count)
     } else {
@@ -553,7 +768,7 @@ pub(crate) fn kpi_body(count: UserListCount, lang: Lang) -> Value {
             Word::DeltaAboveStandard
                 .in_lang(lang)
                 .replace("{n}", &shown),
-            Tone::Stop,
+            above,
         )
     };
     json!({
@@ -582,7 +797,7 @@ pub async fn stopped_count(state: AppState, request: Dispatched<PortalWidgetCtx>
         let page = bounded(
             &state,
             "portal_widget_stopped_count",
-            review.portal_merge_requests(&w.proof, scope, None, 0),
+            review.portal_merge_requests(&w.proof, scope, None, WidgetOrder::Oldest, 0),
         )
         .await?;
         let title = if matches!(scope, WidgetList::StoppedInvolved) {
@@ -596,6 +811,181 @@ pub async fn stopped_count(state: AppState, request: Dispatched<PortalWidgetCtx>
             Some(MY_MERGE_REQUESTS_HREF.to_owned()),
             STALE_KPI_S,
             kpi_body(page.total, lang),
+        )
+    }
+    .await;
+    answer(&w.ctx, built)
+}
+
+/// `GET attention-count` → the `kpi` widget (widget design §3.3).
+pub async fn attention_count(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Response {
+    let query = attention_query(request.raw_query());
+    let w = request.into_write();
+    let built = async {
+        let q = query?;
+        let projects = q.projects.as_deref();
+        let (title, href, body) = match q.scope {
+            AttentionScope::Failed => {
+                let pipelines = state
+                    .pipelines
+                    .as_deref()
+                    .ok_or_else(|| unconfigured("pipelines_unconfigured"))?;
+                let lamps = bounded(
+                    &state,
+                    "portal_widget_attention_count",
+                    pipelines.portal_lamps(&w.proof, projects, Show::Pipeline),
+                )
+                .await?;
+                let failed = lamps.iter().filter(|l| l.lamp == Lamp::Stop).count();
+                let count = UserListCount {
+                    count: i64::try_from(failed).unwrap_or(i64::MAX),
+                    capped: false,
+                    // Without a setting only the first 24 projects are
+                    // read: more may fail (said, never silently low).
+                    truncated: projects.is_none() && lamps.len() >= MAX_PROJECTS,
+                };
+                (
+                    Word::TitleFailed,
+                    MEMBER_PROJECTS_HREF,
+                    kpi_body_of(count, Word::UnitProjects, Tone::Stop, q.lang),
+                )
+            }
+            scope @ (AttentionScope::Stopped | AttentionScope::Reviews | AttentionScope::Spec) => {
+                let (list, title, href, above) = match scope {
+                    AttentionScope::Stopped => (
+                        WidgetList::StoppedMine,
+                        Word::TitleStoppedMine,
+                        MY_MERGE_REQUESTS_HREF,
+                        Tone::Stop,
+                    ),
+                    AttentionScope::Spec => (
+                        WidgetList::Spec,
+                        Word::TitleSpec,
+                        APPROVABLE_HREF,
+                        Tone::Warn,
+                    ),
+                    AttentionScope::Reviews | AttentionScope::Failed => (
+                        WidgetList::Review,
+                        Word::TitleReview,
+                        APPROVABLE_HREF,
+                        Tone::Warn,
+                    ),
+                };
+                let review = state
+                    .review
+                    .as_deref()
+                    .ok_or_else(|| unconfigured("review_unconfigured"))?;
+                let page = bounded(
+                    &state,
+                    "portal_widget_attention_count",
+                    review.portal_merge_requests(&w.proof, list, projects, WidgetOrder::Oldest, 0),
+                )
+                .await?;
+                (
+                    title,
+                    href,
+                    kpi_body_of(page.total, Word::UnitChanges, above, q.lang),
+                )
+            }
+        };
+        envelope(
+            "kpi",
+            title.in_lang(q.lang),
+            Some(href.to_owned()),
+            STALE_KPI_S,
+            body,
+        )
+    }
+    .await;
+    answer(&w.ctx, built)
+}
+
+/// The `inbox` widget's `kpi` body: the unread count (no standard).
+pub(crate) fn inbox_body(count: i64, capped: bool, lang: Lang) -> Value {
+    let unit = Word::UnitUnread.in_lang(lang);
+    let shown = if capped {
+        format!("{count}+")
+    } else {
+        count.to_string()
+    };
+    json!({
+        "value": count,
+        "unit": unit,
+        "display": format!("{shown} {unit}"),
+    })
+}
+
+/// `GET inbox` → the `kpi` widget (widget design §3.8): the person's
+/// unread notifications they may see now.
+pub async fn inbox(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Response {
+    let query = options_query(request.raw_query());
+    let w = request.into_write();
+    let built = async {
+        let lang = query?;
+        let inbox = state
+            .inbox
+            .as_deref()
+            .ok_or_else(|| unconfigured("in_app_notifications_unconfigured"))?;
+        let unread = bounded(
+            &state,
+            "portal_widget_inbox",
+            inbox.portal_unread_count(&w.proof),
+        )
+        .await?;
+        envelope(
+            "kpi",
+            Word::TitleInbox.in_lang(lang),
+            Some(UNREAD_NOTIFICATIONS_HREF.to_owned()),
+            STALE_KPI_S,
+            inbox_body(unread.count, unread.capped, lang),
+        )
+    }
+    .await;
+    answer(&w.ctx, built)
+}
+
+/// The `menu` widget's `links` body.
+pub(crate) fn menu_body(purpose: MenuPurpose, project_path: Option<&str>, lang: Lang) -> Value {
+    let items: Vec<Value> = menu_links(purpose, project_path)
+        .into_iter()
+        .map(|l| json!({ "label": l.label.in_lang(lang), "href": l.href }))
+        .collect();
+    json!({ "items": items })
+}
+
+/// `GET menu` → the `links` widget (widget design §3.1, §4): the purpose's
+/// links; a project's links open the chosen project when the person may
+/// read it (otherwise, as without one, they ask to choose a project).
+pub async fn menu(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Response {
+    let query = menu_query(request.raw_query());
+    let w = request.into_write();
+    let built = async {
+        let q = query?;
+        let path = match q.project {
+            None => None,
+            Some(id) => {
+                let pipelines = state
+                    .pipelines
+                    .as_deref()
+                    .ok_or_else(|| unconfigured("pipelines_unconfigured"))?;
+                bounded(
+                    &state,
+                    "portal_widget_menu",
+                    pipelines.portal_project(&w.proof, id),
+                )
+                .await?
+                .map(|o| o.path)
+            }
+        };
+        let title = Word::TitleMenu
+            .in_lang(q.lang)
+            .replace("{purpose}", q.purpose.word().in_lang(q.lang));
+        envelope(
+            "links",
+            &title,
+            Some(HOME_HREF.to_owned()),
+            STALE_MENU_S,
+            menu_body(q.purpose, path.as_deref(), q.lang),
         )
     }
     .await;

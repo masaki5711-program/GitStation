@@ -357,32 +357,58 @@ impl Review {
     }
 }
 
-// ── ADR-0036: the PFS portal's `my-reviews` and `stopped-count` widgets ──
+// ── ADR-0036: the PFS portal's `my-reviews`, `stopped-count` and
+// `attention-count` widgets ──
 
-pub use forge_db::review::user_lists::WidgetList;
+pub use forge_db::review::user_lists::{WidgetList, WidgetOrder};
+
+/// The facts a P1 list shows beside the row (widget design §3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WidgetExtra {
+    /// `Conflicts`: a conflict could not be ruled out (the scan did not
+    /// finish): never shown as "no conflict".
+    pub conflict_unknown: bool,
+    /// `Conflicts`: the number of a merge request a conflict is predicted
+    /// with (the same project: readable whenever the row is).
+    pub conflict_peer_iid: Option<i64>,
+    /// `Queue`: the place in the queue (1 = next).
+    pub queue_position: Option<i64>,
+    /// `Queue`: removed from the queue by the queue itself.
+    pub queue_ejected: bool,
+}
+
+/// One row of a portal list the person may see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WidgetItem {
+    pub item: UserListItem,
+    pub extra: WidgetExtra,
+}
 
 /// What a portal list widget shows: the first visible rows and the count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WidgetPage {
-    pub items: Vec<UserListItem>,
+    pub items: Vec<WidgetItem>,
     pub total: UserListCount,
 }
 
 impl Review {
     /// The portal's list `list` for the person of `proof` (`PortalWidgetRead`
-    /// on the widget route), in `project` when given: the first `limit`
-    /// visible rows and the visible count (capped at [`COUNT_CAP`] over at
-    /// most [`COUNT_SCAN_PAGES`] pages, as the counts of "My work"). Each
-    /// row is decided for the person as a session without administrator
-    /// rights would see it (`forge_auth::portal_reader`): `MergeRequestRead`,
-    /// and for `Review` / `Spec` the approval trial — the same decisions as
-    /// the person's own lists, so a merge request of a project they cannot
-    /// read is never shown or counted.
+    /// on the widget route), in `projects` when given, in `order`: the
+    /// first `limit` visible rows and the visible count (capped at
+    /// [`COUNT_CAP`] over at most [`COUNT_SCAN_PAGES`] pages, as the counts
+    /// of "My work"). Each row is decided for the person as a session
+    /// without administrator rights would see it
+    /// (`forge_auth::portal_reader`): `MergeRequestRead`, and for `Review` /
+    /// `Spec` the approval trial — the same decisions as the person's own
+    /// lists, so a merge request of a project they cannot read is never
+    /// shown or counted (another person's merge request of `Threads`
+    /// included).
     pub async fn portal_merge_requests(
         &self,
         proof: &Authorized<forge_auth::PortalWidgetCtx>,
         list: WidgetList,
-        project: Option<ProjectId>,
+        projects: Option<&[ProjectId]>,
+        order: WidgetOrder,
         limit: usize,
     ) -> Result<WidgetPage, ForgeError> {
         require(proof.action(), Action::PortalWidgetRead)?;
@@ -390,9 +416,12 @@ impl Review {
         let user = *proof.id();
         let scope = match list {
             WidgetList::Review | WidgetList::Spec => UserListScope::Approvable,
-            WidgetList::Mine | WidgetList::StoppedMine | WidgetList::StoppedInvolved => {
-                UserListScope::Authored
-            }
+            WidgetList::Mine
+            | WidgetList::StoppedMine
+            | WidgetList::StoppedInvolved
+            | WidgetList::Threads
+            | WidgetList::Conflicts
+            | WidgetList::Queue => UserListScope::Authored,
         };
         let shared = Shared::default();
         let decider = Decider {
@@ -404,18 +433,27 @@ impl Review {
         };
         let mut items = Vec::new();
         let mut count: i64 = 0;
-        let mut before = None;
+        let mut after = None;
         for _ in 0..COUNT_SCAN_PAGES {
             let rows = user_lists::widget_merge_requests(
-                &self.db, user, list, project, before, COUNT_PAGE,
+                &self.db, user, list, projects, order, after, COUNT_PAGE,
             )
             .await?;
             let full = rows.len() >= COUNT_PAGE;
-            before = rows.last().map(|r| r.merge_request.id.get());
-            for item in decider.visible(rows).await? {
+            after = rows.last().map(|r| r.row.merge_request.id.get());
+            for row in rows {
+                let extra = WidgetExtra {
+                    conflict_unknown: row.conflict_unknown,
+                    conflict_peer_iid: row.conflict_peer_iid,
+                    queue_position: row.queue_position,
+                    queue_ejected: row.queue_ejected,
+                };
+                let Some(item) = decider.decide(row.row).await? else {
+                    continue;
+                };
                 count = count.saturating_add(1);
                 if items.len() < limit {
-                    items.push(item);
+                    items.push(WidgetItem { item, extra });
                 }
                 if count >= COUNT_CAP {
                     return Ok(WidgetPage {

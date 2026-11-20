@@ -90,6 +90,13 @@ pub(crate) const PORTAL_ROWS: &[Row] = &[
     row(A::PortalWidgetRead, W::Portal(Case::WrongParty), F::InternalProject, deny(E::Forbidden)),
     // No other resource.
     row(A::PortalWidgetRead, OK, F::OwnUserMergeRequests, deny(E::Forbidden)),
+    // Widget design P1: `inbox`, `attention-count` and the new `my-reviews`
+    // kinds read on the widget route (the instance) only — never the
+    // person's notifications or another person's lists as a resource.
+    row(A::PortalWidgetRead, OK, F::OwnNotificationPreferences, deny(E::Forbidden)),
+    row(A::PortalWidgetRead, W::Portal(Case::Reporter), F::ForeignUserMergeRequests, deny(E::Forbidden)),
+    row(A::NotificationInboxRead, OK, F::OwnNotificationPreferences, deny(E::Forbidden)),
+    row(A::UserMergeRequestList, OK, F::OwnUserMergeRequests, deny(E::Forbidden)),
     // Nobody but the portal's credential.
     row(A::PortalWidgetRead, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
     row(A::PortalWidgetRead, W::Disabled, F::Instance, deny(E::AccountDisabled)),

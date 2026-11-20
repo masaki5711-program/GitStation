@@ -12,6 +12,11 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 | `my-reviews` | list | M, L（既定 M） | 60 秒 | `/api/portal-widgets/v1/my-reviews` |
 | `pipelines` | status | S, M, L（既定 M） | 60 秒 | `/api/portal-widgets/v1/pipelines` |
 | `stopped-count` | kpi | S | 120 秒 | `/api/portal-widgets/v1/stopped-count` |
+| `attention-count` | kpi | S | 120 秒 | `/api/portal-widgets/v1/attention-count`（P1） |
+| `inbox` | kpi | S | 60 秒 | `/api/portal-widgets/v1/inbox`（P1） |
+| `menu` | links | S, M（既定 S） | 3600 秒 | `/api/portal-widgets/v1/menu`（P1） |
+
+P1 は設計（[widget-design.md](widget-design.md) §8）の第 1 段。PFS の台帳に載せる形は末尾の「台帳の写し」。
 
 ## 設定（「何を表示するか」）
 
@@ -26,10 +31,15 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 | | | `mine` | | 自分が出した、開いている MR。バッジは 検査が失敗 / 衝突 / 下書き / 進行中 |
 | | | `stopped` | | 現在の head で自動マージが止まった MR のうち、自分が作者か承認者のもの |
 | | | `spec` | | 承認待ちの仕様書: 仕様を公開したことのあるプロジェクト（`spec.released`）の `review` |
+| | | `threads` | | 自分が始めた未解決のコメントのうち、いちばん新しい書き込みが自分以外のもの（返事が来た）がある、開いている MR（だれの MR でもよい）。バッジは 返事あり（`info`） |
+| | | `conflicts` | | 自分が出した、開いている MR のうち 衝突（`stop`）/ 衝突の見込み（`warn`、相手の番号を `sub` に `↔ !n` で付ける）/ 調べきれていない（`neutral`: 衝突の調べが `incomplete` / `failed`、マージできるかの確認が `check_failed`、相手との組が `failed`）。調べが終わっていないものを「衝突なし」とは出さない |
+| | | `queue` | | 自分が出した MR のうち、マージ待ちの列に入っているもの（バッジ `n 番目`、`info`）と、列が自分で外したもの（人が外したものは出さない。`stop`） |
+| `sort` | select | `oldest` / `newest` | `oldest` | 古い順（待たせている順）/ 新しい順 |
 | `project` | select（`options_from: options/project`） | プロジェクトの id | なし = 見られるすべて | 1 つのプロジェクトに絞る |
 | `limit` | number | 3〜10 | 5 | 件数。`total` は見える件数（100 で頭打ち） |
 
-項目: `id`（`<path>!<iid>`）、`label`（MR の題）、`sub`（`<path> !<iid>`）、`badge`、`href`（`/<path>/-/pull/<iid>`）。カードの `href` は `/-/merge-requests`。
+項目: `id`（`<path>!<iid>`）、`label`（MR の題）、`sub`（`<path> !<iid>`）、`badge`、`href`（`/<path>/-/pull/<iid>`。
+`conflicts` は `/<path>/-/pull/<iid>/changes`、`queue` は `/<path>/-/merge-queue?target=<ブランチ>`）。カードの `href` は `/-/merge-requests`。
 
 ### pipelines（status）
 
@@ -37,6 +47,7 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 |---|---|---|---|---|
 | `project` | multi（`options_from: options/project`） | プロジェクトの id（繰り返す、最大 24） | なし = 自分がロールを持つプロジェクト | 表示するプロジェクト |
 | `show` | select | `pipeline` / `deploy` | `pipeline` | `refs/heads/main` の最新のパイプライン / 最新の配備 |
+| `only_problems` | toggle | `true` / `false` | `false` | `true` のとき `stop` と `warn` のランプだけを出す。無ければ空（ポータルが「問題なし」の空の状態を出す） |
 
 ランプ: パイプライン 成功 → `ok`、失敗・不正・エラー → `stop`、取り消し → `warn`、待ち・実行中・該当なし → `info`、まだ無い → `unknown`。
 配備 成功 → `ok`、失敗・戻せなかった → `stop`、戻した・止められた → `warn`、承認待ち・待ち・実行中 → `info`。`state_label` は環境（`prod` など）付き。
@@ -49,10 +60,55 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 | `scope` | select | `mine` / `reviews` | `mine` | 自分の MR だけ / 自分が承認した MR も |
 
 `value` = 止まっている件数、`reference` = 標準 0、`delta` = 標準との差（0 なら `ok`、それ以外は `stop`）。
+P1 からは `attention-count?scope=stopped` が同じものを数える（`stopped-count` は互換のため残す）。
+
+### attention-count（kpi、P1）
+
+| キー | 型 | 値 | 既定 | 意味 |
+|---|---|---|---|---|
+| `scope` | select | `reviews` | ✓ | 自分のレビュー待ち（`my-reviews?kind=review` の件数）。差は `warn` |
+| | | `stopped` | | 自動マージが止まった自分の変更。差は `stop` |
+| | | `spec` | | 承認待ちの仕様書。差は `warn` |
+| | | `failed` | | `main` の最新のパイプラインが失敗しているプロジェクトの数（単位は「件 / projects」）。差は `stop` |
+| | | `deploy` | | **P2 まで使えない**: 422（`FG-WEB-0011 param=scope rule=not_available`） |
+| `project` | multi（`options_from: options/project`） | プロジェクトの id（繰り返す、最大 24） | なし | 数えるプロジェクトを絞る。見られないプロジェクトは数えない |
+
+`value` = 件数、`reference` = 標準 0。件数は 100 で頭打ち（`100+`）。`failed` を `project` なしで数えるときは自分がロールを持つ
+プロジェクトの先頭 24 件だけを見る（24 件あれば `n+` と出す）。カードの `href`: `reviews` / `spec` → `/-/merge-requests?scope=approvable`、
+`stopped` → `/-/merge-requests`、`failed` → `/-/projects?tab=member`。
+
+### inbox（kpi、P1）
+
+設定は `locale` / `tz` だけ。`value` = 未読の通知の数（GitStation の画面で今見られるものだけ。管理者の権限は使わない。100 で頭打ち）。
+`reference` / `delta` は無い。カードの `href` は `/-/notifications?unread=1`。
+
+### menu（links、P1）— 用途別メニュー
+
+| キー | 型 | 値 | 既定 | 意味 |
+|---|---|---|---|---|
+| `purpose` | select | `developer` / `reviewer` / `spec` / `operations` / `manager` | `developer` | だれのためのリンクか |
+| `project` | select（`options_from: options/project`） | プロジェクトの id | なし | プロジェクトの画面（ビルドとテスト・マージ待ちの列・仕様書・承認待ちの変更）を開くプロジェクト |
+
+| 用途 | リンク（上から。`{p}` は選んだプロジェクトのパス） |
+|---|---|
+| 開発 | 自分が出した変更 `/-/merge-requests?scope=authored`・対応が必要な変更 `/-/merge-requests?scope=attention`・ビルドとテスト `/{p}/-/pipelines`・マージ待ちの列 `/{p}/-/merge-queue`・通知 `/-/notifications?unread=1`・プロジェクト `/-/projects?tab=member` |
+| レビュー | 自分の承認待ち `/-/merge-requests?scope=approvable`・対応が必要な変更・通知・プロジェクト |
+| 仕様 | 仕様書 `/{p}/-/documents`・承認待ちの変更 `/{p}/-/pulls?state=open`・自分の承認待ち・通知 |
+| 運用 | ビルドとテスト・マージ待ちの列・通知・プロジェクト |
+| 管理 | 対応が必要な変更・自分の承認待ち・プロジェクト `/-/projects`・グループ `/-/groups`・最近の動き `/-/activity` |
+
+- プロジェクトを選んでいない、または選んだプロジェクトを本人が見られないときは、プロジェクトの画面のリンクを 1 つの
+  「プロジェクトを選ぶ」（`/-/projects?tab=member`）にまとめる（同じ行き先のリンクは 2 度出さない）。見られないことは答えに出ない。
+- 設計 §4 の「新しい仕様を書く `/{p}/-/new`」は SPA に該当する画面が無い（`new` はブランチとパスが要る）ので入れない。
+  運用の「配備」は P2（配備の画面ができてから）。
+- すべての `href` が SPA の経路（`web/src/App.tsx`、`RepoViews.tsx`）にあり、問い合わせのキーと値を画面が読むことはテスト
+  （forge-web `every_menu_href_is_a_screen_of_the_spa`）で確かめる。
+- カードの題は「GitStation（開発）」の形、カードの `href` は `/`。
 
 ### 選択肢
 
-`GET /api/portal-widgets/v1/my-reviews/options/project` と `…/pipelines/options/project`: 本人がロールを持ち読めるプロジェクト
+`GET /api/portal-widgets/v1/my-reviews/options/project`、`…/pipelines/options/project`、`…/attention-count/options/project`、
+`…/menu/options/project`: 本人がロールを持ち読めるプロジェクト
 （新しい順、最大 200）。`{success: true, data: {options: [{value: "<id>", label: "<path>"}]}}`。
 
 ## 認証と認可
@@ -84,3 +140,105 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 - 題と本文は ja / en / id。中身はプロジェクトのパス、MR の番号、環境、版、短い SHA だけ（人の名前・メール・MR の題・本文は入れない）。
 - 送る直前に宛先を決め直す: 有効な人で、社員番号があり、プロジェクトを読める人だけ。誰も残らなければ送らない（`dropped`）。
 - 「レビューを頼まれた」「承認待ちの仕様」の新着は出さない（GitStation にその出来事が無い。ADR-0036 の契約の穴）。
+
+## 台帳の写し（PFS チームへの引き渡し用）
+
+PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 側の MR で入れる。このリポジトリから PFS は変えない）。
+既存の `my-reviews` / `pipelines` は設定を足すだけ。台帳の文字列は 1 行で、`$(`・`${`・`\` を含めない（台帳の検査）。
+
+```yaml
+  # my-reviews: kind に 3 つ、sort を足す（既存の kind / project / limit はそのまま）
+  - id: my-reviews
+    settings:
+      - key: kind
+        type: select
+        label: { ja: 表示するもの, en: Show, id: Tampilkan }
+        options:
+          - { value: review,    label: { ja: 自分のレビュー待ち, en: Waiting for my review, id: Menunggu tinjauan saya } }
+          - { value: mine,      label: { ja: 自分が出した変更, en: My open changes, id: Perubahan saya yang terbuka } }
+          - { value: stopped,   label: { ja: 止まった自動マージ, en: Stopped auto-merges, id: Auto-merge yang berhenti } }
+          - { value: spec,      label: { ja: 承認待ちの仕様書, en: Specs awaiting my approval, id: Spesifikasi menunggu persetujuan saya } }
+          - { value: threads,   label: { ja: 返事が来た自分のコメント, en: Replies to my comments, id: Balasan untuk komentar saya } }
+          - { value: conflicts, label: { ja: 衝突している自分の変更, en: My changes with conflicts, id: Perubahan saya yang berkonflik } }
+          - { value: queue,     label: { ja: マージ待ちの列にある自分の変更, en: My changes in the merge queue, id: Perubahan saya di antrean merge } }
+        default: review
+      - key: sort
+        type: select
+        label: { ja: 並べ方, en: Order, id: Urutan }
+        options:
+          - { value: oldest, label: { ja: 古い順, en: Oldest first, id: Terlama dulu } }
+          - { value: newest, label: { ja: 新しい順, en: Newest first, id: Terbaru dulu } }
+        default: oldest
+
+  # pipelines: only_problems を足す
+  - id: pipelines
+    settings:
+      - key: only_problems
+        type: toggle
+        label: { ja: 問題のあるものだけ, en: Problems only, id: Hanya yang bermasalah }
+        default: false
+
+  - id: attention-count
+    type: kpi
+    name:        { ja: 対応が必要な件数, en: Needs my attention, id: Perlu perhatian saya }
+    description: { ja: "レビュー待ち・止まった変更・承認待ちの仕様書・失敗しているプロジェクトのどれかを数えます。0 が標準です。", en: "Counts reviews waiting for you, stopped changes, specs awaiting approval or failing projects. The standard is 0.", id: "Menghitung tinjauan yang menunggu Anda, perubahan yang berhenti, spesifikasi yang menunggu persetujuan atau proyek yang gagal. Standarnya 0." }
+    sizes: [S]
+    default_size: S
+    endpoint: /api/portal-widgets/v1/attention-count
+    refresh_sec: 120
+    required_role: access
+    settings:
+      - key: scope
+        type: select
+        label: { ja: 数えるもの, en: Count, id: Hitung }
+        options:
+          - { value: reviews, label: { ja: 自分のレビュー待ち, en: Waiting for my review, id: Menunggu tinjauan saya } }
+          - { value: stopped, label: { ja: 止まっている自分の変更, en: My stopped changes, id: Perubahan saya yang berhenti } }
+          - { value: spec,    label: { ja: 承認待ちの仕様書, en: Specs awaiting my approval, id: Spesifikasi menunggu persetujuan saya } }
+          - { value: failed,  label: { ja: 失敗しているプロジェクト, en: Failing projects, id: Proyek yang gagal } }
+        default: reviews
+      - key: project
+        type: multi
+        label: { ja: プロジェクト, en: Projects, id: Proyek }
+        options_from: options/project
+        default: null
+
+  - id: inbox
+    type: kpi
+    name:        { ja: GitStation の未読の通知, en: GitStation unread notifications, id: Notifikasi GitStation belum dibaca }
+    description: { ja: "GitStation の通知のうち、まだ読んでいないものの数です。", en: "Number of GitStation notifications you have not read yet.", id: "Jumlah notifikasi GitStation yang belum Anda baca." }
+    sizes: [S]
+    default_size: S
+    endpoint: /api/portal-widgets/v1/inbox
+    refresh_sec: 60
+    required_role: access
+
+  - id: menu
+    type: links
+    name:        { ja: GitStation のメニュー, en: GitStation menu, id: Menu GitStation }
+    description: { ja: "開発・レビュー・仕様・運用・管理の用途ごとに、よく使う GitStation の画面へのリンクを並べます。", en: "Links to the GitStation screens each role uses most: development, review, specifications, operations or management.", id: "Tautan ke layar GitStation yang paling sering dipakai per peran: pengembangan, tinjauan, spesifikasi, operasional, atau manajemen." }
+    sizes: [S, M]
+    default_size: S
+    endpoint: /api/portal-widgets/v1/menu
+    refresh_sec: 3600
+    required_role: access
+    settings:
+      - key: purpose
+        type: select
+        label: { ja: 用途, en: Purpose, id: Keperluan }
+        options:
+          - { value: developer,  label: { ja: 開発, en: Development, id: Pengembangan } }
+          - { value: reviewer,   label: { ja: レビュー, en: Review, id: Tinjauan } }
+          - { value: spec,       label: { ja: 仕様, en: Specifications, id: Spesifikasi } }
+          - { value: operations, label: { ja: 運用, en: Operations, id: Operasional } }
+          - { value: manager,    label: { ja: 管理, en: Management, id: Manajemen } }
+        default: developer
+      - key: project
+        type: select
+        label: { ja: プロジェクト, en: Project, id: Proyek }
+        options_from: options/project
+        default: null
+```
+
+`widget_status` は P1 の受け入れ後に `pilot`。ボード（`catalog/boards/`）の更新は設計 §5 のとおり（`attention-count?scope=deploy` と
+`deploy-approvals` / `merge-queue` / `spec-status` は P2 で足す）。

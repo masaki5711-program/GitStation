@@ -46,6 +46,11 @@ const REVIEW_OPTIONS: &str = "/api/portal-widgets/v1/my-reviews/options/project"
 const PIPELINES: &str = "/api/portal-widgets/v1/pipelines";
 const PIPELINE_OPTIONS: &str = "/api/portal-widgets/v1/pipelines/options/project";
 const STOPPED: &str = "/api/portal-widgets/v1/stopped-count";
+const ATTENTION: &str = "/api/portal-widgets/v1/attention-count";
+const ATTENTION_OPTIONS: &str = "/api/portal-widgets/v1/attention-count/options/project";
+const INBOX: &str = "/api/portal-widgets/v1/inbox";
+const MENU: &str = "/api/portal-widgets/v1/menu";
+const MENU_OPTIONS: &str = "/api/portal-widgets/v1/menu/options/project";
 
 struct NoBranches;
 
@@ -295,7 +300,8 @@ impl World {
                 BrowseLimits::default(),
             ),
             Arc::new(OpenMarks),
-        ));
+        ))
+        .with_notifications(forge_notify::Settings::new(db.clone()));
         if let Some(portal) = &self.portal {
             state = state.with_portal(Arc::clone(portal));
         }
@@ -642,4 +648,475 @@ async fn the_widget_routes_are_gated_before_the_token_is_checked() {
     let none = w.get(REVIEWS, &[]).await;
     assert_eq!(none.0, StatusCode::UNAUTHORIZED);
     assert_eq!(refused(&none), "FG-AUTH-0026");
+}
+
+// ------------------------------------------------------------ widget design P1
+
+/// The id of merge request `iid` of `project`.
+async fn mr_id(t: &FreshDb, project: ProjectId, iid: i64) -> i64 {
+    let rows = t
+        .json_rows(&format!(
+            "SELECT id FROM forge.merge_requests WHERE project_id = {} AND iid = {iid}",
+            project.get()
+        ))
+        .await;
+    rows[0]["id"].as_i64().expect("id")
+}
+
+/// The `href`s of a body's items.
+fn hrefs(body: &Value) -> Vec<String> {
+    body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|i| i["href"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_menu_links_the_purpose_and_a_readable_project_only() {
+    let w = World::new().await;
+    // Default purpose (developer), no project: one "choose a project" link
+    // in place of the project's screens.
+    let a = w.as_token(MENU, "t-dave").await;
+    let body = data(&a, "links");
+    assert_eq!(a.1["data"]["href"], "/");
+    let links = hrefs(&body);
+    assert!(
+        links.contains(&"/-/merge-requests?scope=authored".to_owned()),
+        "{body}"
+    );
+    assert!(
+        links.contains(&"/-/projects?tab=member".to_owned()),
+        "{body}"
+    );
+    assert!(links.iter().all(|h| !h.contains("acme")), "{body}");
+    // A project dave reads: its screens.
+    let mine = data(
+        &w.as_token(&format!("{MENU}?project={}", w.web.get()), "t-dave")
+            .await,
+        "links",
+    );
+    assert!(
+        hrefs(&mine).contains(&"/acme/web/-/pipelines".to_owned()),
+        "{mine}"
+    );
+    // A private project dave holds no role on: as if none were chosen
+    // (no path, no hint that it exists).
+    let hidden = data(
+        &w.as_token(&format!("{MENU}?project={}", w.secret.get()), "t-dave")
+            .await,
+        "links",
+    );
+    assert_eq!(hrefs(&hidden), links, "{hidden}");
+    // Every purpose answers, in the person's language.
+    for purpose in ["developer", "reviewer", "spec", "operations", "manager"] {
+        let a = w
+            .as_token(&format!("{MENU}?purpose={purpose}&locale=ja"), "t-eve")
+            .await;
+        let body = data(&a, "links");
+        let items = body["items"].as_array().expect("items");
+        assert!(!items.is_empty() && items.len() <= 20, "{purpose}");
+        assert!(
+            a.1["data"]["title"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("GitStation")),
+            "{purpose}"
+        );
+    }
+    let manager = data(
+        &w.as_token(&format!("{MENU}?purpose=manager"), "t-dave")
+            .await,
+        "links",
+    );
+    assert!(hrefs(&manager).contains(&"/-/activity".to_owned()));
+    // The options: dave's project only.
+    for uri in [MENU_OPTIONS, ATTENTION_OPTIONS] {
+        let a = w.as_token(uri, "t-dave").await;
+        assert_eq!(a.0, StatusCode::OK, "{}", a.1);
+        let options = a.1["data"]["options"].as_array().expect("options").clone();
+        assert_eq!(options.len(), 1, "{uri}: {}", a.1);
+        assert_eq!(options[0]["label"], "acme/web");
+    }
+}
+
+#[tokio::test]
+async fn the_inbox_counts_only_what_the_person_may_see_without_admin_rights() {
+    let mut w = World::new().await;
+    let ada = users::create(
+        &w.t.db,
+        &ctx("req-user-ada"),
+        &NewUser {
+            is_admin: true,
+            ..NewUser::human("ada", "ada", "ada@example.test")
+        },
+    )
+    .await
+    .expect("admin")
+    .user_id;
+    let mut tokens = HashMap::new();
+    tokens.insert("t-dave", Stand::Is(identity(w.dave)));
+    tokens.insert("t-ada", Stand::Is(identity(ada)));
+    w.portal = Some(Arc::new(FakePortal(tokens)));
+    let note = |user: UserId, project: ProjectId, read: bool| {
+        format!(
+            "INSERT INTO forge.in_app_notifications (user_id, kind, event_id, event_seq, \
+             project_id, merge_request_iid, actor_user_id, read_at) VALUES ({}, 'mr_approved', \
+             gen_random_uuid(), 1, {}, 1, NULL, {})",
+            user.get(),
+            project.get(),
+            if read {
+                "now() + interval '1 second'"
+            } else {
+                "NULL"
+            }
+        )
+    };
+    for sql in [
+        note(w.dave, w.web, false),
+        note(w.dave, w.web, false),
+        note(w.dave, w.web, true),
+        // dave holds no role on the hidden project: not counted.
+        note(w.dave, w.secret, false),
+        // ada is an administrator without a role there: not counted either.
+        note(ada, w.secret, false),
+    ] {
+        w.t.exec_superuser(&sql).await;
+    }
+    let a = w.as_token(INBOX, "t-dave").await;
+    let kpi = data(&a, "kpi");
+    assert_eq!(kpi["value"], 2, "{kpi}");
+    assert_eq!(kpi["display"], "2 unread");
+    assert_eq!(a.1["data"]["href"], "/-/notifications?unread=1");
+    let admin = data(&w.as_token(INBOX, "t-ada").await, "kpi");
+    assert_eq!(admin["value"], 0, "no administrator override: {admin}");
+    let ja = w.as_token(&format!("{INBOX}?locale=ja"), "t-dave").await;
+    assert_eq!(ja.1["data"]["title"], "未読の通知");
+}
+
+#[tokio::test]
+async fn attention_count_counts_each_scope_and_refuses_deploy_for_now() {
+    let w = World::new().await;
+    // reviews (default): dave reviews olga's change.
+    let a = w.as_token(ATTENTION, "t-dave").await;
+    let kpi = data(&a, "kpi");
+    assert_eq!(kpi["value"], 1, "{kpi}");
+    assert_eq!(kpi["delta"]["tone"], "warn");
+    assert_eq!(a.1["data"]["href"], "/-/merge-requests?scope=approvable");
+    // stopped: olga's stopped auto-merge.
+    let stopped = data(
+        &w.as_token(&format!("{ATTENTION}?scope=stopped"), "t-olga")
+            .await,
+        "kpi",
+    );
+    assert_eq!(stopped["value"], 1);
+    assert_eq!(stopped["delta"]["tone"], "stop");
+    // The project filter narrows: the hidden project shows nothing.
+    let narrowed = data(
+        &w.as_token(
+            &format!("{ATTENTION}?scope=reviews&project={}", w.secret.get()),
+            "t-dave",
+        )
+        .await,
+        "kpi",
+    );
+    assert_eq!(narrowed["value"], 0);
+    let spec = data(
+        &w.as_token(&format!("{ATTENTION}?scope=spec"), "t-dave")
+            .await,
+        "kpi",
+    );
+    assert_eq!(spec["value"], 0);
+    // failed: main's newest pipeline failed in dave's project (and in the
+    // hidden one, which is never counted).
+    for p in [w.web, w.secret] {
+        w.t.exec_superuser(&format!(
+            "INSERT INTO forge.ci_pipelines (project_id, ref, sha, source, status, \
+               request_id, protected, copy_mark) VALUES ({}, 'refs/heads/main', '{}', \
+               'push', 'failed', 'req-pipe', true, 'open')",
+            p.get(),
+            "c".repeat(40)
+        ))
+        .await;
+    }
+    let a = w
+        .as_token(&format!("{ATTENTION}?scope=failed&locale=en"), "t-dave")
+        .await;
+    let failed = data(&a, "kpi");
+    assert_eq!(failed["value"], 1, "{failed}");
+    assert_eq!(failed["display"], "1 projects");
+    assert_eq!(a.1["data"]["href"], "/-/projects?tab=member");
+    let asked_hidden = data(
+        &w.as_token(
+            &format!("{ATTENTION}?scope=failed&project={}", w.secret.get()),
+            "t-dave",
+        )
+        .await,
+        "kpi",
+    );
+    assert_eq!(asked_hidden["value"], 0);
+    // pipelines' only_problems: the failed lamp only; none for eve.
+    let problems = data(
+        &w.as_token(&format!("{PIPELINES}?only_problems=true"), "t-dave")
+            .await,
+        "status",
+    );
+    assert_eq!(problems["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(problems["items"][0]["state"], "stop");
+    let none = data(
+        &w.as_token(&format!("{PIPELINES}?only_problems=true"), "t-eve")
+            .await,
+        "status",
+    );
+    assert_eq!(none["items"], Value::Array(Vec::new()));
+    // deploy waits for P2: 422 with the setting named.
+    for uri in [
+        format!("{ATTENTION}?scope=deploy"),
+        format!("{ATTENTION}?scope=everything"),
+        format!("{ATTENTION}?project=0"),
+        format!("{PIPELINES}?only_problems=1"),
+        format!("{MENU}?purpose=admin"),
+        format!("{MENU}?project=abc"),
+        format!("{INBOX}?locale=de"),
+        format!("{REVIEWS}?kind=deploy"),
+        format!("{REVIEWS}?sort=random"),
+    ] {
+        let a = w.as_token(&uri, "t-dave").await;
+        assert_eq!(a.0, StatusCode::UNPROCESSABLE_ENTITY, "{uri}: {}", a.1);
+        assert_eq!(refused(&a), "FG-WEB-0011", "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn my_reviews_threads_conflicts_and_queue() {
+    let w = World::new().await;
+    let web = w.web.get();
+    let first = mr_id(&w.t, w.web, 1).await;
+    // A second and third change of olga's, and dave's own change.
+    let second = mr(&w.t, w.web, 2, w.olga).await;
+    let third = mr(&w.t, w.web, 3, w.olga).await;
+    let daves = mr(&w.t, w.web, 4, w.dave).await;
+    let hidden = mr_id(&w.t, w.secret, 1).await;
+    let o = w.olga.get();
+    let d = w.dave.get();
+    // threads: olga's unresolved thread on dave's change got dave's reply;
+    // her thread on her own change 2 has only her note; a resolved one is
+    // not shown.
+    let thread = |id: i64, mr: i64, starter: i64, resolved: bool| {
+        format!(
+            "INSERT INTO forge.merge_request_discussions (id, merge_request_id, project_id, kind, \
+             started_by, resolved, resolved_by, resolved_at) OVERRIDING SYSTEM VALUE VALUES \
+             ({id}, {mr}, {web}, 'general', {starter}, {resolved}, {}, {})",
+            if resolved {
+                starter.to_string()
+            } else {
+                "NULL".to_owned()
+            },
+            if resolved { "now()" } else { "NULL" }
+        )
+    };
+    let note = |discussion: i64, mr: i64, author: i64| {
+        format!(
+            "INSERT INTO forge.merge_request_notes (discussion_id, merge_request_id, project_id, \
+             author_id, body) VALUES ({discussion}, {mr}, {web}, {author}, 'note')"
+        )
+    };
+    w.t.commit_audited(
+        ("project", web),
+        &[
+            thread(9001, daves, o, false),
+            note(9001, daves, o),
+            note(9001, daves, d),
+            thread(9002, second, o, false),
+            note(9002, second, o),
+            thread(9003, third, o, true),
+            note(9003, third, o),
+            note(9003, third, d),
+        ],
+    )
+    .await;
+    let threads = data(
+        &w.as_token(&format!("{REVIEWS}?kind=threads"), "t-olga")
+            .await,
+        "list",
+    );
+    assert_eq!(threads["total"], 1, "{threads}");
+    assert_eq!(threads["items"][0]["sub"], "acme/web !4");
+    assert_eq!(threads["items"][0]["badge"]["tone"], "info");
+    assert_eq!(threads["items"][0]["href"], "/acme/web/-/pull/4");
+    // eve started nothing: empty.
+    let none = data(
+        &w.as_token(&format!("{REVIEWS}?kind=threads"), "t-eve")
+            .await,
+        "list",
+    );
+    assert_eq!(none["total"], 0);
+
+    // conflicts: change 1 cannot be merged, change 2 is predicted to
+    // conflict with dave's change 4, change 3's scan did not finish (never
+    // "no conflict").
+    w.t.commit_audited(
+        ("project", web),
+        &[
+            format!(
+                "INSERT INTO forge.merge_request_mergeability (merge_request_id, project_id, \
+                 status, checked_head_sha) VALUES ({first}, {web}, 'cannot_be_merged', '{}')",
+                head(1)
+            ),
+            format!(
+                "INSERT INTO forge.merge_request_conflict_pairs (low_mr_id, high_mr_id, \
+                 project_id, low_head_sha, high_head_sha, target_branch, outcome) VALUES \
+                 ({second}, {daves}, {web}, '{}', '{}', 'refs/heads/main', 'conflict')",
+                head(2),
+                head(4)
+            ),
+            format!(
+                "INSERT INTO forge.merge_request_conflict_scans (merge_request_id, project_id, \
+                 status, reason) VALUES ({third}, {web}, 'incomplete', 'peer_cap')"
+            ),
+        ],
+    )
+    .await;
+    let conflicts = data(
+        &w.as_token(&format!("{REVIEWS}?kind=conflicts&locale=en"), "t-olga")
+            .await,
+        "list",
+    );
+    assert_eq!(conflicts["total"], 3, "{conflicts}");
+    let items = conflicts["items"].as_array().expect("items");
+    // Oldest first by default.
+    assert_eq!(items[0]["badge"]["label"], "Conflict");
+    assert_eq!(items[0]["badge"]["tone"], "stop");
+    assert_eq!(items[0]["href"], "/acme/web/-/pull/1/changes");
+    assert_eq!(items[1]["badge"]["tone"], "warn");
+    assert_eq!(items[1]["sub"], "acme/web !2 \u{2194} !4");
+    assert_eq!(items[2]["badge"]["label"], "Not fully checked");
+    assert_eq!(items[2]["badge"]["tone"], "neutral");
+    // Newest first on request.
+    let newest = data(
+        &w.as_token(&format!("{REVIEWS}?kind=conflicts&sort=newest"), "t-olga")
+            .await,
+        "list",
+    );
+    assert_eq!(newest["items"][0]["sub"], "acme/web !3");
+    // dave's change 4 is the other side of the prediction: listed for him.
+    let daves_conflicts = data(
+        &w.as_token(&format!("{REVIEWS}?kind=conflicts"), "t-dave")
+            .await,
+        "list",
+    );
+    assert_eq!(daves_conflicts["total"], 1, "{daves_conflicts}");
+    assert_eq!(
+        daves_conflicts["items"][0]["sub"],
+        "acme/web !4 \u{2194} !2"
+    );
+
+    // queue: dave's change 4 then olga's change 1 queued (olga's is 2nd),
+    // change 2 dequeued by a person (not shown), change 3 removed by the
+    // queue itself.
+    let entry = |id: i64, mr: i64, iid: i64, state: &str, removed_by: &str| {
+        let finished = if state == "queued" { "NULL" } else { "now()" };
+        let reason = if state == "removed" {
+            "'checks_failed'"
+        } else {
+            "NULL"
+        };
+        format!(
+            "INSERT INTO forge.merge_queue_entries (queue_id, project_id, merge_request_id, \
+             state, head_sha, method, message, enqueued_by, credential_kind, credential_id, \
+             request_id, removed_by, reason, finished_at) VALUES ((SELECT id FROM \
+             forge.merge_queues WHERE project_id = {web}), {web}, {mr}, '{state}', '{}', \
+             'merge_commit', 'm', {o}, 'session', 1, 'req-q{id}', {removed_by}, {reason}, \
+             {finished})",
+            head(iid)
+        )
+    };
+    w.t.commit_audited(
+        ("project", web),
+        &[
+            format!(
+                "INSERT INTO forge.merge_queues (project_id, target_branch) VALUES ({web}, \
+                 'refs/heads/main')"
+            ),
+            entry(1, daves, 4, "queued", "NULL"),
+            entry(2, first, 1, "queued", "NULL"),
+            entry(3, second, 2, "removed", &o.to_string()),
+            entry(4, third, 3, "removed", "NULL"),
+        ],
+    )
+    .await;
+    let queue = data(
+        &w.as_token(&format!("{REVIEWS}?kind=queue&locale=en"), "t-olga")
+            .await,
+        "list",
+    );
+    assert_eq!(queue["total"], 2, "{queue}");
+    assert_eq!(queue["items"][0]["badge"]["label"], "No. 2 in line");
+    assert_eq!(queue["items"][0]["badge"]["tone"], "info");
+    assert_eq!(
+        queue["items"][0]["href"],
+        "/acme/web/-/merge-queue?target=main"
+    );
+    assert_eq!(queue["items"][1]["badge"]["tone"], "stop");
+    assert_eq!(queue["items"][1]["sub"], "acme/web !3");
+
+    // Another person's private project never appears in any P1 list.
+    w.t.commit_audited(
+        ("project", w.secret.get()),
+        &[format!(
+            "INSERT INTO forge.merge_request_mergeability (merge_request_id, project_id, \
+             status, checked_head_sha) VALUES ({hidden}, {}, 'cannot_be_merged', '{}')",
+            w.secret.get(),
+            head(1)
+        )],
+    )
+    .await;
+    for kind in ["threads", "conflicts", "queue"] {
+        for token in ["t-olga", "t-dave", "t-eve"] {
+            let body = data(
+                &w.as_token(&format!("{REVIEWS}?kind={kind}"), token).await,
+                "list",
+            );
+            assert!(
+                body["items"]
+                    .as_array()
+                    .expect("items")
+                    .iter()
+                    .all(|i| !i["sub"].as_str().unwrap_or("").contains("hidden")),
+                "{kind} {token}: {body}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_p1_routes_are_decided_by_authorize() {
+    let w = World::new().await;
+    for (token, status, code) in [
+        ("t-norole", StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        ("t-otherparty", StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        ("t-disabled", StatusCode::FORBIDDEN, "FG-AUTH-0004"),
+        ("t-unlinked", StatusCode::FORBIDDEN, "FG-AUTH-0027"),
+        ("t-forged", StatusCode::UNAUTHORIZED, "FG-AUTH-0026"),
+    ] {
+        for uri in [ATTENTION, ATTENTION_OPTIONS, INBOX, MENU, MENU_OPTIONS] {
+            let a = w.as_token(uri, token).await;
+            assert_eq!(a.0, status, "{token} {uri}: {}", a.1);
+            assert_eq!(refused(&a), code, "{token} {uri}");
+        }
+    }
+    // A session cookie is no portal credential on the new routes either.
+    let cookie = w.get(MENU, &[("cookie", "__Host-gstn_session=abc")]).await;
+    assert_eq!(refused(&cookie), "FG-AUTH-0026");
+    // Answers are kept as before; failures are not.
+    for uri in [ATTENTION, INBOX, MENU] {
+        let a = w.as_token_with_headers(uri, "t-dave").await;
+        assert_eq!(a.answer.0, StatusCode::OK, "{uri}: {}", a.answer.1);
+        assert_eq!(a.cache_control.as_deref(), Some("private, max-age=30"));
+        let bad = w
+            .as_token_with_headers(&format!("{uri}?locale=xx"), "t-dave")
+            .await;
+        assert_eq!(bad.answer.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(bad.cache_control.as_deref(), Some("no-store"));
+    }
 }

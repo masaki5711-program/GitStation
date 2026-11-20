@@ -88,6 +88,25 @@ impl Pipelines {
             .collect())
     }
 
+    /// One project a widget's setting names (the `menu`'s `project`), when
+    /// the person may read it through the portal; `None` for one they may
+    /// not read or that is not there (alike: never a hint).
+    pub async fn portal_project(
+        &self,
+        proof: &Authorized<PortalWidgetCtx>,
+        project: ProjectId,
+    ) -> Result<Option<ProjectOption>, ForgeError> {
+        require(proof.action(), Action::PortalWidgetRead)?;
+        let records = forge_db::lists::project_records(&self.db, &[project], *proof.id()).await?;
+        Ok(Self::visible(proof, records)
+            .into_iter()
+            .find(|r| r.id == project)
+            .map(|r| ProjectOption {
+                project: r.id,
+                path: r.path.full_path(),
+            }))
+    }
+
     /// The widget's lamps: `projects` (the setting; `None`: the projects the
     /// person holds a role on), each decided, at most 24, in the order
     /// asked (newest first without a setting). A project asked for that the

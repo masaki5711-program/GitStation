@@ -883,6 +883,49 @@ fn portal_widget_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::stopped_count,
         )
         .queries(Verb::Get, p::STOPPED_COUNT, p::STOPPED_COUNT_QUERY)
+        .route_with(
+            Verb::Get,
+            p::ATTENTION_COUNT,
+            Action::PortalWidgetRead,
+            "Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0; scope=deploy is 422 until P2)",
+            p::PortalWidgets,
+            p::attention_count,
+        )
+        .queries(Verb::Get, p::ATTENTION_COUNT, p::ATTENTION_COUNT_QUERY)
+        .route_with(
+            Verb::Get,
+            p::ATTENTION_COUNT_OPTIONS,
+            Action::PortalWidgetRead,
+            "Portal widget attention-count: the project options (projects the person holds a role on and may read, at most 200)",
+            p::PortalWidgets,
+            p::project_options,
+        )
+        .route_with(
+            Verb::Get,
+            p::INBOX,
+            Action::PortalWidgetRead,
+            "Portal widget inbox (kpi): the person's unread notifications they may see now",
+            p::PortalWidgets,
+            p::inbox,
+        )
+        .queries(Verb::Get, p::INBOX, p::INBOX_QUERY)
+        .route_with(
+            Verb::Get,
+            p::MENU,
+            Action::PortalWidgetRead,
+            "Portal widget menu (links): the links of a purpose (developer, reviewer, spec, operations, manager), a chosen project's screens when the person may read it",
+            p::PortalWidgets,
+            p::menu,
+        )
+        .queries(Verb::Get, p::MENU, p::MENU_QUERY)
+        .route_with(
+            Verb::Get,
+            p::MENU_OPTIONS,
+            Action::PortalWidgetRead,
+            "Portal widget menu: the project options (projects the person holds a role on and may read, at most 200)",
+            p::PortalWidgets,
+            p::project_options,
+        )
 }
 
 /// The merge requests of the caller's own work across projects (plan 15

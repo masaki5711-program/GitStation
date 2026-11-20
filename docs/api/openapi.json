@@ -13622,14 +13622,218 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/api/portal-widgets/v1/attention-count": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_attention_count",
+        "parameters": [
+          {
+            "description": "reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval) or failed (projects whose main build or test failed); deploy is not available yet (422)",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Project ids, repeated (at most 24); none: every project the person may see (failed: the projects they hold a role on)",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0; scope=deploy is 422 until P2)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/attention-count/options/project": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_attention_count_options_project",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget attention-count: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/inbox": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_inbox",
+        "parameters": [
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget inbox (kpi): the person's unread notifications they may see now",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/menu": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_menu",
+        "parameters": [
+          {
+            "description": "developer (default), reviewer, spec, operations or manager: whose links",
+            "in": "query",
+            "name": "purpose",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One project id (an option of options/project): the project the project links open; none: they ask to choose a project",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget menu (links): the links of a purpose (developer, reviewer, spec, operations, manager), a chosen project's screens when the person may read it",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/menu/options/project": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_menu_options_project",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget menu: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
     "/api/portal-widgets/v1/my-reviews": {
       "get": {
         "operationId": "get_api_portal_widgets_v1_my_reviews",
         "parameters": [
           {
-            "description": "review (waiting for my review, default), mine (my open changes), stopped (stopped auto-merges I wrote or approved) or spec (specs awaiting my approval)",
+            "description": "review (waiting for my review, default), mine (my open changes), stopped (stopped auto-merges I wrote or approved), spec (specs awaiting my approval), threads (my unresolved comments that got a reply), conflicts (my changes with a conflict, a likely one, or one not ruled out) or queue (my changes in the merge queue, and those it removed)",
             "in": "query",
             "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "oldest (what has waited longest first, default) or newest",
+            "in": "query",
+            "name": "sort",
             "required": false,
             "schema": {
               "type": "string"
@@ -13730,6 +13934,15 @@
             "description": "pipeline (the newest pipeline of main, default) or deploy (the newest deployment)",
             "in": "query",
             "name": "show",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "true: only the projects whose lamp is stop or warn (default false)",
+            "in": "query",
+            "name": "only_problems",
             "required": false,
             "schema": {
               "type": "string"
