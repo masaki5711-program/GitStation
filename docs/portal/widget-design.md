@@ -164,6 +164,7 @@ S は 4 つで 1 行（12 列）、M は 2 つで 1 行。
 ## 8. 進め方
 
 1. **P1（GitStation だけで完結）**: `menu`、`inbox`、`attention-count`（`stopped` / `reviews` / `spec` / `failed`）、`my-reviews` の `threads` / `conflicts` / `queue`、`pipelines` の `only_problems`。
+   実装済み（契約は [widgets.md](widgets.md)。§4 の「新しい仕様を書く `/{p}/-/new`」は SPA に画面が無いので入れず、代わりに「自分の承認待ち」。`attention-count?scope=deploy` は P2 まで 422）。
 2. **P2**: 不足 2（配備の承認待ち）→ `deploy-approvals`、`attention-count?scope=deploy`、`merge-queue`、`spec-status`。
 3. **P3**: 新着の穴（不足 4）、`agent-sessions` と `setup-health` の検討。
 4. 各段の終わりに PFS セッションへ台帳とボードの更新を依頼する（PFS のリポジトリはこちらでは変えない）。
