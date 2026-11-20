@@ -919,6 +919,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "mr status",
             "mr merge-status",
             "mr revert",
+            "mr run-pipeline",
             "mr discussions",
             "mr comment",
             "mr resolve",

@@ -777,6 +777,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/pipelines",
         Coverage::Command("pipeline run"),
     ),
+    // Plan 18 S5: run the merge request pipeline on the current target.
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/pipeline",
+        Coverage::Command("mr run-pipeline"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/pipelines/{pipeline_id}",

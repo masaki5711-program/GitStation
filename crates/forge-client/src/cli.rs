@@ -1036,6 +1036,15 @@ pub enum MrCommand {
         #[arg(long, value_parser = parse_id, value_name = "IID")]
         iid: i64,
     },
+    /// Run the merge request pipeline on the current target (plan 18 S5):
+    /// queued, exists (asked already) or computing (the merge result first).
+    #[command(name = "run-pipeline")]
+    RunPipeline {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
     /// Approve the head you reviewed (--sha; M3 R5). The answer says
     /// whether the approval counts now.
     Approve {

@@ -795,6 +795,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["merge_request","reverted_iid","commit_sha","parent_sha"],"properties":{"merge_request":{"type":"object","required":["iid","source_branch","target_branch","draft"]}}}"#,
     },
     CommandSpec {
+        name: "mr run-pipeline",
+        summary: "Run the merge request pipeline (ci/pipeline) on the merge result of the current target (Developer, as a manual run): queued (its job was enqueued), exists (asked for already; nothing written) or computing (the merge result is written first; the pipeline follows). 409 FG-CI-0003 when it is not open, has no version or conflicts with the target; 404 FG-REPO-0005 without the merge request.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr run-pipeline --project 7 --iid 3 --json"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/merge-requests/{iid}/pipeline"],
+        output: r#"{"type":"object","required":["iid","outcome","merge_result_sha","target_sha","check_seq"],"properties":{"outcome":{"type":"string","enum":["queued","exists","computing"]},"merge_result_sha":{"type":["string","null"]},"target_sha":{"type":["string","null"]},"check_seq":{"type":["integer","null"]}}}"#,
+    },
+    CommandSpec {
         name: "mr discussions",
         summary: "List a merge request's discussions with their notes, oldest first; an inline thread is `outdated` when a later version rewrote its line.",
         args: &[
