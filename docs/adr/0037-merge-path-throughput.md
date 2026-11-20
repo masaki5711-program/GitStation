@@ -881,3 +881,71 @@ forge では、すべてのプロジェクトの target にマージキューが
   同じ引き継ぎ: `request_check_asking_on`）。
 - `forge.review.merge_result_updated` の `pipeline` / `pipeline_enqueued` が「積まなかった理由」の証拠。証明 `c`（MR パイプライン
   ≤ 45）の数え方は `SELECT count(*) FROM forge.jobs WHERE kind = 'ci.pipeline_create' AND payload->>'source' = 'merge_request'`。
+
+## 追記（2026-11-19、負荷試験の後）— 「準備できたらマージ」の早い断り、承認の変更パスの再利用、人のエントリの除外を自動マージが守る
+
+**何が分かったか（2026-11-19 の負荷試験）。** `POST …/merge-queue` は、必須チェックが走っているだけの 409
+（FG-REVIEW-0007）でも p50 3.5 s かかっていた（201 は p50 1.6 s）。`Review::enqueue` が、データベースだけで断れる
+場合でも先に git を読んでいた: 2 つの枝の先端（`resolve_ref`）、承認のための `facts()`（`merge-tree`、`diff-tree`、
+`rev-list`、CODEOWNERS の `ls-tree`）、その後でやっとロックの中の `evaluate()`。負荷の下では `merge-tree` 1 回で
+p50 1.2 s かかった。調べ直して 1 点直した: 枝の先端は毎回の git ではなく、ブラウズ API の ref 一覧のキャッシュ
+（`forge_refs` で捨てる）から読まれていた。git が走るのはキャッシュが冷えたときの `for-each-ref` 1 回だけ。
+
+**変えたこと**
+
+1. **早い断り**（`forge-review/src/merges/queue/early.rs`）。経路の `authorize()` と古い画面の確認（FG-REVIEW-0008）の
+   後、git の前に、データベースだけの事実をロックなしで読む: MR の状態と下書き、先頭の必須チェック、未解決のスレッド、
+   作業項目のリンク。それに `evaluate_merge()` をそのまま掛け、git が決める事実（ソース枝、試しのマージ、承認の
+   コミッター・変更パス・CODEOWNERS、マージ結果に載っているかもしれないチェック）には一番通しやすい値を入れる。
+   残す理由は git の値で変わらないものだけ（`decided_without_git`、網羅の `match`）。1 つでも残れば、同じ `blocked()`
+   の誤り（同じコード、同じ文脈のキー、同じ `user_message`）を返す。何も残らなければ今までどおりの全体の判定に進み、
+   ロックの中の `evaluate()` が最後に決める。生きているマージの試みがあれば早い断りはせず、全体の経路が
+   FG-REVIEW-0011 を返す。
+2. **201 の経路の git を 1 回減らした**（`approvals/load.rs`）。マージ可能性の確認が (head, target の先端) に
+   ちょうど書いたマージ結果（`refs/merge-requests/<iid>/merge`）は、同じ組の `merge-tree` の木のコミットなので、
+   その先端との差分が「マージで target が変わるパス」そのもの。あればそれを `diff-tree` で読み、`merge-tree` を
+   しない。読めなければ（コミットが掃除された）試しのマージに戻る（「分からない」にはしない）。S4 の `head_files` は
+   head 自身の差分で、別の先端で計算された持ち越しもあるので、承認には使わない（ちょうどではないから）。
+3. **人のエントリの除外を自動マージが守る**（`forge-core/src/auto_merge.rs` の `removal_binds_every_entry`）。
+   今までは自動マージのエントリの除外だけが同じ head を止めていた。人が入れた MR !33 を列車の lint が外しても
+   （`doc_lint_failed`、FG-CI-0032）、自動マージ（`full`）が 30 s 後に同じ head を入れ直し、もう一度外されてから
+   FG-REVIEW-0026 で止まっていた（列車が 1 本むだ）。head と target が証明する除外 — `checks_failed`、
+   `doc_lint_failed`、`doc_lint_unavailable`、`doc_lint_base_not_clean`、`doc_lint_repo_config_invalid` — は、
+   誰が入れたエントリでも同じ head を止める。同じ head という条件は残す。マージ結果のリスクによる除外は自動マージの
+   エントリにしか起きないので、今までどおり。
+
+**`dequeued` の決定。** 人が自分のエントリをキューから出したら、自動マージはその head を入れ直さない
+（`held`、`dequeued_by_person`）。人がはっきり外したものを機械が戻すのは、人の判断を上書きすることになるから。
+新しい head（push）で、自動マージはまた判定する。人はいつでも自分で入れ直せる。
+
+**git の回数**（テストの世界: CODEOWNERS なし、ref 一覧は冷えている）
+
+| 経路 | 前 | 後 |
+|---|---|---|
+| 409（データベースが断る: チェック・下書き・閉じている・スレッド・リンク） | 5 | 0 |
+| 201 | 5（`for-each-ref`、`merge-tree`、`diff-tree`、`rev-list`、`ls-tree`） | 4（`merge-tree` なし） |
+
+**分かっていて残す限界**
+
+- 早い断りの `reasons` と `details` は、データベースだけで決まる理由しか持たない。承認や試しのマージの理由が
+  同時にあれば、全体の判定はそれも並べ、順番で先頭（`reason`）が変わることがある（例: `approvals_missing` が
+  先）。コードは同じ FG-REVIEW-0007（`required_check_stale` は列車が決める `ci/pipeline` でしか起きないので、
+  早い断りには出ない）。利用者に見えるのは `user_message` と `request_id` だけ。
+- 早い読みはロックなしなので、読んだ直後に緑になったチェックで断ることがある。その時点で頼まれたのと同じで、
+  もう一度押せば全体の判定に進む。
+- 枝の 2 つの先端は並べずに順に読む: 2 つ目は 1 つ目が読んだ ref 一覧のキャッシュから答えるので、並べると冷えた
+  キャッシュで `for-each-ref` が 2 回になる。
+- 201 の経路の残りの git（`diff-tree`、`rev-list`、`ls-tree`）は順に走る。並べるのは S6（準備のジョブ）の範囲。
+
+**レビューの後（同じ日）**
+
+- 早い 409 の `reason` が全体の判定と違いうること（上の限界の 1 つ目）は、そのままにした。409 の本文は
+  `error_code`・`user_message`・`request_id` だけで（`forge-web/src/error.rs`）、画面の「止まっている理由」と
+  `queueProves` は `GET …/status` の理由を読む。`gstn` も本文を出すだけ。`reason` を読むのはログだけなので、
+  FG-REVIEW-0007 の `diagnosis`（`errors.toml`）に違いを書き、カタログを作り直した。テスト
+  `the_early_refusal_names_only_the_reasons_the_database_decides` が、同じ状態の全体の評価（状態の読み取り）と早い断りで
+  コードと `user_message` が同じこと、`approvals_missing` が先に来るときだけ `reason` が違うことを確かめる。
+- 早い断りは何も書かない: エントリ・キューの行・監査の行は 0。チェックが緑になった後の同じ enqueue は受け付けられる
+  （`a_running_required_check_refuses_enqueue_without_git`）。
+- `checks_failed` は、人のエントリでも同じ head について止まったままになる（新しい push か、人が自分で入れ直すまで）。
+  自動マージ自身のエントリの今までの決まりと同じ。

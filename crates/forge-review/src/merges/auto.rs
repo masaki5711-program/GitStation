@@ -359,7 +359,15 @@ impl AutoMerger {
             Some((e, _)) if e.state.is_live() => QueueFacts::Live {
                 auto: e.credential.is_auto_merge(),
             },
-            Some((e, _)) if e.credential.is_auto_merge() && &e.head_sha == head => {
+            // Load test 2026-11-19: a removal the head and target prove
+            // (or a person's dequeue) binds whoever enqueued the entry.
+            Some((e, _))
+                if &e.head_sha == head
+                    && (e.credential.is_auto_merge()
+                        || e.reason
+                            .as_deref()
+                            .is_some_and(forge_core::auto_merge::removal_binds_every_entry)) =>
+            {
                 QueueFacts::Removed {
                     reason: e.reason.unwrap_or_default(),
                 }

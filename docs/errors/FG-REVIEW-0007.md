@@ -20,7 +20,7 @@ evaluate_merge() (ADR-0024 §7) returned at least one blocking reason, at the me
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reasons` (the names, in the fixed order of ADR-0024 §7), `merge_request_id`, `head_sha` and, inside the job, `merge_id`. The HTTP answer's request_id finds the line. `gstn mr view` / `gstn mr mergeability` show the state, draft flag and the check.
+The log event carries `reasons` (the names, in the fixed order of ADR-0024 §7), `merge_request_id`, `head_sha` and, inside the job, `merge_id`. The HTTP answer's request_id finds the line. `gstn mr view` / `gstn mr mergeability` show the state, draft flag and the check. From `POST …/merge-queue` (ADR-0037 addendum 2026-11-19): when the database alone refuses (not_open, draft, required_check_missing / required_check_not_successful on the head, unresolved_discussions, work_item_link_missing) the refusal is answered before any git call, and its `reason` / `reasons` / `details` hold only those reasons — a reason git decides (approvals, CODEOWNERS, mergeability, the source branch) is not evaluated, so the full status may list one more and name it first (e.g. `approvals_missing` before `required_check_not_successful`). The code and the user_message are the same. `gstn mr merge-status --project ID --iid N` evaluates every reason.
 
 ## 対処 (fix)
 

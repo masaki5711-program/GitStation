@@ -33,6 +33,7 @@ use crate::{
     account, caller, change_context, loaded, locked, require, shape_mismatch, Review, ReviewRequest,
 };
 
+mod early;
 mod worker;
 
 pub use worker::{
@@ -380,9 +381,8 @@ impl Review {
         let (project, Some(iid)) = *proof.id() else {
             return Err(shape_mismatch("merge_queue_enqueue"));
         };
-        let settings = super::conditions::settings_of(
-            &forge_db::review::merge_settings(&self.db, project).await?,
-        );
+        let stored_settings = forge_db::review::merge_settings(&self.db, project).await?;
+        let settings = super::conditions::settings_of(&stored_settings);
         let method = ask.method.unwrap_or_else(|| settings.default_method());
         settings.check(method)?;
         let user = caller(proof)?;
@@ -397,6 +397,21 @@ impl Review {
                     .with_context("merge_request_id", current.id.get()),
             );
         }
+        // Load test 2026-11-19: what the database alone refuses is answered
+        // before any git call (`early.rs`), with the full path's error —
+        // after the checks the full path makes first without git (the
+        // repository is ready, the review git is configured).
+        crate::ready(project, repo)?;
+        self.review_git()?;
+        if let Some(refused) = self
+            .refused_without_git(&current, &ask.sha, method, &stored_settings)
+            .await?
+        {
+            return Err(refused.with_context("merge_request_id", current.id.get()));
+        }
+        // The tips through the browse API's ref list (cached until a ref
+        // write is announced, `forge_refs`): sequential, so the second
+        // name is answered by the list the first one read.
         let mut tips = Vec::with_capacity(2);
         for (which, name) in [
             ("source_branch", &current.source_branch),
