@@ -144,6 +144,10 @@ pub struct StatusApprovalBody {
     pub counted: bool,
     #[schema(required = true)]
     pub uncounted_reason: Option<String>,
+    /// The approver's primary department code (ADR-0021 amendment
+    /// 2026-11-20, added within `schema_version` 1); `null` without one.
+    #[schema(required = true)]
+    pub primary_org_code: Option<String>,
 }
 
 /// The approval side.
@@ -400,6 +404,8 @@ pub(super) fn status_body(
                     username: a.username.clone(), // clone: as above
                     counted: a.counted,
                     uncounted_reason: a.uncounted_reason.map(|r| r.as_str().to_owned()),
+                    // Filled by the route (one read for every approver).
+                    primary_org_code: None,
                 })
                 .collect(),
             codeowners: report
@@ -540,6 +546,19 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
         });
         let act_as = w.proof.ctx().act_as_viewer(principal);
         let mut body = status_body(iid, &answer, viewer, principal.user(), act_as);
+        if let Some(approvals) = body.approvals.as_mut() {
+            let ids: Vec<UserId> = approvals
+                .approvals
+                .iter()
+                .map(|a| UserId::new(a.approver_id))
+                .collect();
+            let codes =
+                crate::routes::org_profiles::OrgCodes::of(&state, review.primary_org_codes(&ids))
+                    .await?;
+            for a in &mut approvals.approvals {
+                a.primary_org_code = codes.code(UserId::new(a.approver_id));
+            }
+        }
         body.viewer.can_revert = can_revert(principal, w.proof.ctx(), record.as_ref(), iid);
         body.viewer.can_run_pipeline = can_run_pipeline(principal, record.as_ref());
         json(body)

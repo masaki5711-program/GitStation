@@ -486,6 +486,15 @@
     "word": "fixed"
   },
   {
+    "action": "UserOrgAdminRead",
+    "method": "GET",
+    "path": "/api/v1/admin/users/{id}/org-profile",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "AdminSessionList",
     "method": "GET",
     "path": "/api/v1/admin/users/{id}/sessions",
@@ -2100,6 +2109,15 @@
     "action": "NotificationInboxUpdate",
     "method": "POST",
     "path": "/api/v1/user/notifications/{id}/read",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserSelfRead",
+    "method": "GET",
+    "path": "/api/v1/user/org-profile",
     "people_only": false,
     "public": false,
     "scope": "fixed",

@@ -7611,6 +7611,90 @@
         ],
         "type": "object"
       },
+      "OrgProfileBody": {
+        "additionalProperties": false,
+        "description": "The snapshot of the identity provider's org claims.",
+        "properties": {
+          "changed_at": {
+            "description": "UTC, RFC 3339: the values last changed.",
+            "type": "string"
+          },
+          "confirmed_at": {
+            "description": "UTC, RFC 3339: the provider last sent these values.",
+            "type": "string"
+          },
+          "invalid_since": {
+            "description": "UTC, RFC 3339: the provider's claims fail validation since then (the\nvalues shown are the last valid ones).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "org_units": {
+            "items": {
+              "$ref": "#/components/schemas/OrgUnitBody"
+            },
+            "type": "array"
+          },
+          "plant_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "position_rank": {
+            "description": "0..=999.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "positions": {
+            "description": "Position codes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "org_units",
+          "positions",
+          "position_rank",
+          "plants",
+          "plant_code",
+          "confirmed_at",
+          "changed_at",
+          "invalid_since"
+        ],
+        "type": "object"
+      },
+      "OrgUnitBody": {
+        "additionalProperties": false,
+        "description": "One department.",
+        "properties": {
+          "code": {
+            "description": "The PFS org code (`^[A-Z0-9][A-Z0-9_-]{0,19}$`).",
+            "type": "string"
+          },
+          "primary": {
+            "description": "The person's main department (at most one; listed first).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "primary"
+        ],
+        "type": "object"
+      },
       "OwnerBody": {
         "additionalProperties": false,
         "description": "The person a service account belongs to.",
@@ -11225,6 +11309,13 @@
           "counted": {
             "type": "boolean"
           },
+          "primary_org_code": {
+            "description": "The approver's primary department code (ADR-0021 amendment\n2026-11-20, added within `schema_version` 1); `null` without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "uncounted_reason": {
             "type": [
               "string",
@@ -11239,7 +11330,8 @@
           "approver_id",
           "username",
           "counted",
-          "uncounted_reason"
+          "uncounted_reason",
+          "primary_org_code"
         ],
         "type": "object"
       },
@@ -12334,7 +12426,7 @@
       },
       "UserName": {
         "additionalProperties": false,
-        "description": "One search match: names only.",
+        "description": "One search match: names, and the primary department code.",
         "properties": {
           "display_name": {
             "type": "string"
@@ -12344,6 +12436,13 @@
             "minimum": 1,
             "type": "integer"
           },
+          "primary_org_code": {
+            "description": "The primary department's code from the identity provider's org\nclaims (ADR-0021 amendment 2026-11-20); `null` without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "username": {
             "type": "string"
           }
@@ -12351,7 +12450,8 @@
         "required": [
           "id",
           "username",
-          "display_name"
+          "display_name",
+          "primary_org_code"
         ],
         "type": "object"
       },
@@ -12385,6 +12485,32 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "UserOrgProfile": {
+        "additionalProperties": false,
+        "description": "One user's snapshot (`org` is `null` without one).",
+        "properties": {
+          "org": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgProfileBody"
+              }
+            ]
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "org"
         ],
         "type": "object"
       },
@@ -14676,6 +14802,47 @@
         },
         "summary": "Disable a user (administrators, never an agent; the administration guard always holds)",
         "x-forge-action": "UserDisable"
+      }
+    },
+    "/api/v1/admin/users/{id}/org-profile": {
+      "get": {
+        "operationId": "get_api_v1_admin_users_id_org_profile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOrgProfile"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A user's org claims snapshot (administrators, people only)",
+        "x-forge-action": "UserOrgAdminRead"
       }
     },
     "/api/v1/admin/users/{id}/sessions": {
@@ -23912,6 +24079,35 @@
         },
         "summary": "Mark one of the caller's in-app notifications read (another person's or an absent one is not found)",
         "x-forge-action": "NotificationInboxUpdate"
+      }
+    },
+    "/api/v1/user/org-profile": {
+      "get": {
+        "operationId": "get_api_v1_user_org_profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOrgProfile"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own org claims snapshot (departments, positions, rank, plants)",
+        "x-forge-action": "UserSelfRead"
       }
     },
     "/api/v1/user/sessions": {

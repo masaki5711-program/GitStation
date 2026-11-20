@@ -1400,7 +1400,9 @@ pub fn registry_without_content_routes() -> Registry<AppState> {
 /// Tokens, sessions, the user search and the user administration (M2 MR6,
 /// plan 10 §5, ADR-0021 §17).
 fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
-    use routes::{directory as d, ssh_keys as k, tokens as t, user_sessions as s};
+    use routes::{
+        directory as d, org_profiles as o, ssh_keys as k, tokens as t, user_sessions as s,
+    };
     registry
         // M4 C13 (ADR-0033 §2): the caller's SSH keys.
         .route_with(
@@ -1522,6 +1524,24 @@ fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
             d::disable,
         )
         .responds::<d::Disabled>(Verb::Post, d::DISABLE)
+        // ADR-0021 amendment 2026-11-20: the org claims' snapshot.
+        .route(
+            Verb::Get,
+            o::OWN,
+            Action::UserSelfRead,
+            "The caller's own org claims snapshot (departments, positions, rank, plants)",
+            o::own,
+        )
+        .responds::<o::UserOrgProfile>(Verb::Get, o::OWN)
+        .route_with(
+            Verb::Get,
+            o::ADMIN,
+            Action::UserOrgAdminRead,
+            "A user's org claims snapshot (administrators, people only)",
+            o::OrgProfileTarget,
+            o::admin,
+        )
+        .responds::<o::UserOrgProfile>(Verb::Get, o::ADMIN)
 }
 
 /// Service accounts and their tokens (M3 S0, plan 11 §5 S0, ADR-0019

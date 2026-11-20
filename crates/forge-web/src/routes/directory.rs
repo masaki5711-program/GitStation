@@ -3,7 +3,8 @@
 //! - `GET /api/v1/users?search=` (`UserSearch`, `read_api`): active users
 //!   whose username starts with the term or whose display name contains
 //!   it — **names only** (id, username, display name), at most 20, the
-//!   term 2..=64 characters. For the member picker; every active
+//!   term 2..=64 characters, with each one's primary department code
+//!   (ADR-0021 amendment 2026-11-20). For the member picker; every active
 //!   signed-in user may ask, [`SEARCH_LIMIT`] times a minute
 //!   (`FG-WEB-0010 route=user_search`).
 //! - `GET /api/v1/admin/users` (`UserAdminList`, `read_api` + administrator
@@ -80,7 +81,7 @@ pub const ADMIN_QUERY: &[QueryParam] = &[
     },
 ];
 
-/// One search match: names only.
+/// One search match: names, and the primary department code.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UserName {
@@ -88,6 +89,10 @@ pub struct UserName {
     pub id: i64,
     pub username: String,
     pub display_name: String,
+    /// The primary department's code from the identity provider's org
+    /// claims (ADR-0021 amendment 2026-11-20); `null` without one.
+    #[schema(required = true)]
+    pub primary_org_code: Option<String>,
 }
 
 /// The matches of a search.
@@ -188,11 +193,18 @@ pub async fn search(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
             hosting(&state)?.search_users(&w.proof, &term),
         )
         .await?;
+        let ids: Vec<UserId> = found.iter().map(|m| m.id).collect();
+        let codes = crate::routes::org_profiles::OrgCodes::of(
+            &state,
+            hosting(&state)?.primary_org_codes(&ids),
+        )
+        .await?;
         json(UserNames {
             items: found
                 .into_iter()
                 .map(|m| UserName {
                     id: m.id.get(),
+                    primary_org_code: codes.code(m.id),
                     username: m.username,
                     display_name: m.display_name,
                 })

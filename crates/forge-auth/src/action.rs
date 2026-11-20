@@ -262,6 +262,11 @@ actions! {
     /// `GET /api/v1/admin/users` (M2 MR6): every user with its state
     /// (administrators; a token needs the `admin` scope).
     UserAdminList,
+    /// `GET /api/v1/admin/users/{id}/org-profile` (ADR-0021 amendment
+    /// 2026-11-20): anyone's org claims snapshot — departments, positions,
+    /// rank, plants. Administrators, a person's credential only (an agent's
+    /// token is refused); a token needs `read_api` and the `admin` scope.
+    UserOrgAdminRead,
     /// Change a user's username and personal namespace path
     /// (`Resource::UserRename`, ADR-0015, D5): administrators only.
     UserRename,
@@ -742,6 +747,9 @@ impl Action {
                 | Action::ProjectRestore
                 | Action::MemberManage
                 | Action::UserDisable
+                // ADR-0021 amendment 2026-11-20: another person's positions
+                // and rank are read by a person only.
+                | Action::UserOrgAdminRead
                 | Action::AdminSessionRevoke
                 | Action::MergeRequestVersionRefsPurge
                 | Action::DiscussionResolve
@@ -871,6 +879,7 @@ impl Action {
             | Action::AdminSessionList
             | Action::UserSearch
             | Action::UserAdminList
+            | Action::UserOrgAdminRead
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::PathResolve
@@ -1040,6 +1049,7 @@ impl Action {
             | Action::UserDisable
             | Action::UserSearch
             | Action::UserAdminList
+            | Action::UserOrgAdminRead
             | Action::UserRename
             | Action::ServiceAccountCreate
             | Action::ServiceAccountList
@@ -1207,6 +1217,7 @@ impl Action {
             | Action::UserDisable
             | Action::UserSearch
             | Action::UserAdminList
+            | Action::UserOrgAdminRead
             | Action::UserRename
             | Action::ServiceAccountCreate
             | Action::ServiceAccountList

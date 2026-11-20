@@ -824,6 +824,13 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             people_only()?;
             admin_only()
         }
+        // Another person's org claims snapshot (ADR-0021 amendment
+        // 2026-11-20): positions and rank are personal; administrators, and
+        // a person's credential only.
+        (Action::UserOrgAdminRead, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
         // Finding users by name (the member picker): every active signed-in
         // user (the scope was checked above); names only.
         (Action::UserSearch, Resource::Instance) => Ok(()),
@@ -1641,6 +1648,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::UserDisable
             | Action::UserSearch
             | Action::UserAdminList
+            | Action::UserOrgAdminRead
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

@@ -38,6 +38,8 @@ pub mod repo_copy;
 pub mod in_app_notifications;
 pub mod namespaces;
 pub mod notifications;
+// ADR-0021 amendment 2026-11-20: the org claims' snapshot.
+pub mod org_profiles;
 pub mod project_writes;
 pub mod projects;
 pub mod protected_ref_merge_rules;
