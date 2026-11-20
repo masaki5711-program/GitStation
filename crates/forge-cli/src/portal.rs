@@ -80,6 +80,14 @@ pub(crate) fn news_sender(cfg: &Config, db: &Db) -> Result<Option<NewsSender>, F
     NewsSender::new(db, registry, tokens, transport).map(Some)
 }
 
+/// The org facts' maximum ages of the database (ADR-0038 §4).
+pub(crate) fn org_ages(cfg: &Config) -> forge_db::org_master::MaxAges {
+    forge_db::org_master::MaxAges {
+        profile: cfg.org.max_profile_age,
+        master: cfg.org.master_max_age,
+    }
+}
+
 /// The org master's sync of `forge worker`, or `None` when it is off.
 pub(crate) fn org_master_sync(cfg: &Config, db: &Db) -> Result<Option<OrgMasterSync>, ForgeError> {
     if !cfg.org.master_sync_enabled {
@@ -109,7 +117,15 @@ pub(crate) fn org_master_sync(cfg: &Config, db: &Db) -> Result<Option<OrgMasterS
         ca.as_deref(),
         cfg.org.master_timeout,
     )?);
-    Ok(Some(OrgMasterSync::new(db, registry, tokens, transport)))
+    Ok(Some(OrgMasterSync::new(
+        db,
+        registry,
+        tokens,
+        transport,
+        forge_db::org_master::ReplacePolicy {
+            allow_large_shrink: cfg.org.allow_large_shrink,
+        },
+    )))
 }
 
 #[cfg(test)]

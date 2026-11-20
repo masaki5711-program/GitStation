@@ -238,6 +238,12 @@ ADR-0038 §1（段 A）。worker の `org_master_sync` が PFS registry-api の�
   （件数だけ。名前や社員番号は残さない）。失敗したら **何も書かず、前の写しを残す**。次の試行は 1 分、2 分、… と倍にして
   `org.master_sync_interval_secs` まで待つ。
 - 組織の一覧が空の応答は受け付けない（FG-INT-0027 `reason=empty`）。registry の障害で写しが消えることはない。
+- 書く前に一覧の全体を確かめる: 親（`parentCode`）が同じ工場の組織に無い（`missing_parent`）、親の `level` が同じか下
+  （`level_order`）は拒否。さらに `org.allow_large_shrink`（既定 false）でない限り、急な縮小も拒否する: 組織の半分より多くが
+  消える（`shrink`、`before`・`after`・`removed`）、今ある工場の組織か職位が 0 件になる（`plant_emptied`、`list`・`plant`）、
+  職位が 1 件も無い（`positions_empty`）。どれも FG-INT-0027 で、前の写しを残す。
+- 変わった行だけを書き、同期の時刻は 1 行の表 `forge.org_master_state` に残す。worker が複数でも同期は 1 つずつ
+  （advisory lock。取れなければ `forge.org.master_sync_busy` を info で出して飛ばす）。
 - 写しが `org.master_max_age_hours` より古い（または一度も同期していない）と、組織から求めるもの（課・部）は
   **「不明」** として閉じる（ADR-0038 §4）。表示は写しの名前を使い続け、写しに無いコードはコードのまま出す。
 
@@ -254,7 +260,7 @@ ADR-0038 §1（段 A）。worker の `org_master_sync` が PFS registry-api の�
    - 回復: `forge.org.master_sync_recovered`。変化: `forge.org.master_synced`（件数）。
    - 写しが古くなった: `forge.org.master_stale`（FG-INT-0028、失敗が続く間に 1 回）。
 3. DB（読み取りだけ）:
-   `SELECT max(synced_at), count(*) FROM forge.org_units_master;`
+   `SELECT synced_at, units, positions FROM forge.org_master_state;`（最後に成功した同期）
    `SELECT plant_code, code, level, parent_code FROM forge.org_units_master WHERE parent_code IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM forge.org_units_master p WHERE p.plant_code = org_units_master.plant_code
     AND p.code = org_units_master.parent_code);`（親が台帳に無い組織。その下の人の課・部は「不明」になる）
@@ -267,6 +273,10 @@ ADR-0038 §1（段 A）。worker の `org_master_sync` が PFS registry-api の�
   `service_token` なら runbook `portal-widgets` の FG-INT-0024 と同じ手順。
 - FG-INT-0027: PFS の台帳の該当する値（`field` と `index`）を PFS 側で直してもらう。契約が合意の上で変わったなら、
   GitStation の解析（forge-integ `org_master`）を直す。
+- FG-INT-0027 `shrink` / `plant_emptied` / `positions_empty`: PFS の運用者に、本当の組織改編（工場の閉鎖など）か
+  を確かめる。本当なら（承認された手順として）`org.allow_large_shrink = true` で worker を再起動し、1 回の同期が通ったら
+  （`forge.org.master_synced`、監査 `org.master_synced` の `allow_large_shrink: true`）すぐ false に戻して再起動する。
+  本当でなければ PFS 側のデータを直してもらう。
 - 同期を止めたいとき（承認された手順として）: `org.master_sync_enabled = false` にして worker を再起動する。写しは残るが、
   古くなると組織から求めるものは「不明」になる。
 
@@ -274,4 +284,5 @@ ADR-0038 §1（段 A）。worker の `org_master_sync` が PFS registry-api の�
 
 - 本人の「所属」: 写しにある部署は「部 / 課 / 職場」の名前とコード。無いものはコードだけ。
 - 人を選ぶ画面と MR の承認者の一覧: 主所属の「部 / 課」の名前（画面の言語。英語・インドネシア語の名前が無ければ日本語）。
-  写しに無ければ今までどおりコード。社員番号（`head_staff_id`）は読み取りのプール（`forge_ro`）からも見えない。
+  写しに無ければ今までどおりコード。その人の写しが不正・古い、または台帳の写しが古いときは、名前の横に
+  「最終確認時点」と出す（API の `stale: true`。判定には使わない）。社員番号（`head_staff_id`）は読み取りのプール（`forge_ro`）からも見えない。

@@ -47,21 +47,25 @@ web のセッションだけ・本人と変更者は不可（ADR-0031）。文�
 ## 1. 組織の台帳（新しい写し）
 
 - 表 `org_units_master`（工場、コード、`level`、親のコード、名前 ja/en/id、`cost_center`、`head_staff_id`、`valid_from`、
-  `version`、`synced_at`）と `org_positions_master`（工場、コード、名前 ja/en/id、`rank`、`sort_order`、`active`、`version`、
-  `synced_at`）。キーは（工場, コード）。migration `20261231100000`、tables.toml では `derived`（外の台帳の写し）。
+  `version`、`changed_at`）と `org_positions_master`（工場、コード、名前 ja/en/id、`rank`、`sort_order`、`active`、`version`、
+  `changed_at`）。キーは（工場, コード）。最後に成功した同期の時刻は 1 行の表 `org_master_state`。migration `20261231100000`、tables.toml では `derived`（外の台帳の写し）。
   読み取りのプール（`forge_ro`）は名前・階層・`level` を読めるが、`head_staff_id`（個人の情報）と `cost_center` は読めない。
 - worker `org_master_sync` が 15 分ごとに `GET /api/v1/org/units` と `/api/v1/org/positions` を GitStation の
   クライアント（`auth.oidc.client_id`）の client credentials のトークンで読む（PFS は役割ではなく `ORG_READER_CLIENTS`
   の許可リストで受ける、§8）。タイムアウト 5 秒、失敗は指数バックオフ（1 分から倍に、間隔まで）、前の写しを保つ。
-  すべての項目を確かめてから 1 つのトランザクションで置き換え、変わったときだけ監査 `org.master_synced`（件数だけ）。
-  組織の一覧が空の応答は受けない（registry の障害で写しを消さない）。
+  すべての項目を確かめてから 1 つのトランザクションで置き換え（変わった行だけを書く。worker が複数でも advisory lock で
+  1 つずつ）、変わったときだけ監査 `org.master_synced`（件数だけ）。組織の一覧が空の応答は受けない（registry の障害で
+  写しを消さない）。書く前に一覧の全体で、親が同じ工場にあり `level` が上であることを確かめる。急な縮小（組織の半分より
+  多くが消える、今ある工場の組織・職位が 0 件になる、職位が 1 件も無い）は、運用者が `org.allow_large_shrink`（既定 false）
+  を一時的に有効にしない限り拒否する（FG-INT-0027）。
 - 設定は新しい節 `[org]`（`org.master_sync_enabled` 既定 false、`org.master_sync_interval_secs` 900、`org.master_timeout_ms`
-  5000、`org.master_max_age_hours` 24、`org.max_profile_age_hours` 24）。registry の URL と CA は `[portal]` のもの
+  5000、`org.master_max_age_hours` 24、`org.max_profile_age_hours` 24、`org.allow_large_shrink` false）。registry の URL と CA は `[portal]` のもの
   （`portal.registry_url`、`portal.ca_file`）を使う。`[portal]` の下に置かないのは、写しの古さの上限が権限の判定
   （§2・§3）にも効き、ポータルの新着・ウィジェットとは別の関心だから。
 - 台帳の写しが 24 時間より古ければ `doctor` の `org.master` が FG-INT-0028 を出し、結び付けと承認者の資格は **閉じる**（§4）。
   同期の失敗は FG-INT-0025（届かない）・FG-INT-0026（拒否）・FG-INT-0027（中身が不正）。runbook `oidc-login`「組織の台帳の写し」。
-- 名前（部・課の名前）は画面の表示にも使う（Phase 1b の「名前」はこれで満たす）。表示は写しの古さにかかわらず名前を使い、
+- 名前（部・課の名前）は画面の表示にも使う（Phase 1b の「名前」はこれで満たす）。表示も `derive` と同じ条件（本人の写しが
+  正しく新しい、台帳の写しが新しい）を確かめ、満たさないときも名前は出すが「最終確認時点」と示す（API の `stale: true`）。
   写しで求められないコードはコードのまま出す（表示だけで、判定には使わない）。
 
 利用者ごとの **派生した所属** をこの台帳で作る:
@@ -182,6 +186,10 @@ approver_selector:
 ## 6. 個人情報の扱い
 
 - 職位・ランクは本人と管理者だけが見る（Phase 1 のまま）。ほかの人に見せるのは部・課の名前と「承認できる/できない」だけ。
+- **段 A から（2026-11-20）**: サインインした利用者は **だれでも**、ほかの利用者の主所属の部・課の名前（とコード）を見られる。
+  見える場所は人を選ぶ画面（`GET /api/v1/users?search=`、`UserSearch`）と MR の承認者の一覧（`MergeRequestRead`）。
+  兼務の所属、職位・ランク、工場、部署の長の社員番号（`head_staff_id`）は見せない（本人と管理者だけ。`head_staff_id` は
+  読み取りのプールにも出さない）。
 - 承認の行に残す写しは、コード・ランク・`digest` だけ（名前は台帳から引く）。
 
 ## 7. 進め方

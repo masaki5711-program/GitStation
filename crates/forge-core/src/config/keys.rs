@@ -399,6 +399,7 @@ pub const KEYS: &[Key] = &[
         "org.max_profile_age_hours",
         "FORGE_ORG_MAX_PROFILE_AGE_HOURS",
     ),
+    boolean("org.allow_large_shrink", "FORGE_ORG_ALLOW_LARGE_SHRINK"),
     // M4 C11: deployments over SSH (ADR-0031).
     text("deploy.ssh_key_file", "FORGE_DEPLOY_SSH_KEY_FILE"),
     text("deploy.ssh_program", "FORGE_DEPLOY_SSH_PROGRAM"),

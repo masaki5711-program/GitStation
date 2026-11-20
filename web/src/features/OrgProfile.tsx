@@ -51,6 +51,14 @@ export function useOwnOrgProfile(enabled = true) {
   });
 }
 
+/** 「最終確認時点」: the names are the last known ones (ADR-0038 §4: the
+ * person's snapshot or the copy of the org master is invalid or old). */
+function LastKnown({ path }: { path: OrgPathBody }) {
+  const { t } = useTranslation();
+  if (!path.stale) return null;
+  return <span className={styles.lastKnown}>{t('org.lastKnown')}</span>;
+}
+
 /** A person's primary department next to their name: the department and
  * section names when the org master resolves them, else the code. */
 export function OrgCode({
@@ -66,6 +74,7 @@ export function OrgCode({
       <span className={styles.code} title={t('org.codeTitle', { code: path.unit.code })}>
         <span className={styles.srOnly}>{t('org.unit')} </span>
         {orgPathNames(path, i18n.language).join(' / ')}
+        <LastKnown path={path} />
       </span>
     );
   }
@@ -86,7 +95,10 @@ function Units({ org }: { org: OrgProfileBody }) {
         <li key={u.code} className={styles.unit}>
           {u.primary && <span className={styles.primary}>{t('org.primary')}</span>}
           {u.path !== null && (
-            <span className={styles.name}>{orgPathNames(u.path, i18n.language, true).join(' / ')}</span>
+            <span className={styles.name}>
+              {orgPathNames(u.path, i18n.language, true).join(' / ')}
+              <LastKnown path={u.path} />
+            </span>
           )}
           <code>{u.code}</code>
         </li>

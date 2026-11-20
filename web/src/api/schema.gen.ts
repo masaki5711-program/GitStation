@@ -6063,6 +6063,12 @@ export interface components {
         OrgPathBody: {
             department: null | components["schemas"]["OrgNameBody"];
             section: null | components["schemas"]["OrgNameBody"];
+            /**
+             * @description The names are the last known ones (「最終確認時点」): the person's
+             *     org snapshot is invalid or older than `org.max_profile_age_hours`,
+             *     or the copy is older than `org.master_max_age_hours` (ADR-0038 §4).
+             */
+            stale: boolean;
             unit: components["schemas"]["OrgNameBody"];
         };
         /** @description The snapshot of the identity provider's org claims. */

@@ -1003,6 +1003,14 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             "forge.org_positions_master",
             [dml("forge_app"), ro("org_positions_master")?].concat(),
         ),
+        (
+            "forge.org_master_state",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:UPDATE"]),
+                ro("org_master_state")?,
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -1216,6 +1224,7 @@ const LATER_TABLES: &[&str] = &[
     // ── ADR-0038 §1: the PFS org master's copy (20261231100000) ──
     "org_units_master",
     "org_positions_master",
+    "org_master_state",
 ];
 
 /// Every table the first migration creates.

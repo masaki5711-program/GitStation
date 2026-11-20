@@ -1786,6 +1786,7 @@
     "explain": "PFS の認証サーバーがログインのときに知らせた所属です（表示だけで、権限には使いません）。",
     "primary": "主",
     "unit": "所属",
+    "lastKnown": "最終確認時点",
     "codeTitle": "部署コード: {{code}}",
     "departmentCode": "部署コード",
     "departments": "部署",

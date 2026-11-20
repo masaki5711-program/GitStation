@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use forge_core::config::{load, Env, OrgConfig};
 use forge_core::portal::{ServiceToken, ServiceTokenFuture, ServiceTokenSource};
+use forge_db::org_master::ReplacePolicy;
 use forge_db::test_support::FreshDb;
 use forge_integ::org_master::{HttpMasterTransport, OrgMasterSync};
 use serde_json::json;
@@ -173,6 +174,7 @@ impl World {
             &registry.origin,
             Arc::clone(&tokens) as Arc<dyn ServiceTokenSource>,
             transport,
+            ReplacePolicy::default(),
         );
         Self {
             t,
@@ -296,6 +298,7 @@ async fn an_unreachable_registry_keeps_the_previous_copy() {
         "http://127.0.0.1:9",
         Arc::clone(&w.tokens) as Arc<dyn ServiceTokenSource>,
         Arc::new(HttpMasterTransport::new(None, Duration::from_millis(800)).expect("transport")),
+        ReplacePolicy::default(),
     );
     let err = closed
         .run_once(&RequestId::generate())
@@ -350,7 +353,7 @@ async fn a_stale_copy_is_logged_once_per_streak() {
     // A success clears it; an old copy and a failure log it again.
     w.registry.answer(units("合成課"), positions());
     assert!(lane.step(&w.t.db, &w.sync).await.ok);
-    w.t.exec_superuser("UPDATE forge.org_units_master SET synced_at = now() - interval '25 hours'")
+    w.t.exec_superuser("UPDATE forge.org_master_state SET synced_at = now() - interval '25 hours'")
         .await;
     w.registry
         .answer(Answer::Json(403, "{}".to_owned()), positions());

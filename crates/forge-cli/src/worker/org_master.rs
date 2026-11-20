@@ -3,8 +3,9 @@
 //! copied ([`forge_integ::org_master::OrgMasterSync::run_once`]). Present
 //! only with `org.master_sync_enabled`.
 //!
-//! - A failed run keeps the previous copy; the next one waits 1 min,
-//!   doubling up to the interval ([`Backoff`] from [`FIRST_RETRY`]). The failure is logged when
+//! - A failed run keeps the previous copy; the next one waits
+//!   [`RETRY_BASE`] × 2^n after the n-th failure in a row (1 min, 2 min,
+//!   4 min, …), at most the interval ([`Backoff`]). The failure is logged when
 //!   a streak starts or changes and again at most every minute
 //!   (`FG-INT-0025` / `0026` / `0027`, or the database's code), with the
 //!   run's request id; the first success after a streak is logged
@@ -13,12 +14,15 @@
 //!   written) after a failed run, `FG-INT-0028` is logged once until the
 //!   next success: everything derived from the copy now fails closed.
 //! - A sync that changed the copy is logged (`forge.org.master_synced`,
-//!   counts only). Tokens and names are never logged.
+//!   counts only). Another worker syncing at the same moment (the advisory
+//!   lock is held) is skipped with an info log
+//!   (`forge.org.master_sync_busy`). Tokens and names are never logged.
 
 use std::time::Duration;
 
 use forge_core::config::OrgConfig;
 use forge_core::{telemetry, RequestId};
+use forge_db::org_master::Replaced;
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_integ::org_master::OrgMasterSync;
@@ -28,9 +32,10 @@ use tokio::time::Instant;
 
 use super::backoff::{Backoff, Next, Signature};
 
-/// The backoff's base: the n-th failure in a row waits `FIRST_RETRY × 2^n`
-/// (1 min, 2 min, …), at most the interval.
-pub(crate) const FIRST_RETRY: Duration = Duration::from_secs(30);
+/// The backoff's base (30 s): the n-th failure in a row waits
+/// `RETRY_BASE × 2^n` — 1 min after the first, 2 min after the second —
+/// at most the interval.
+pub(crate) const RETRY_BASE: Duration = Duration::from_secs(30);
 
 /// The task's state between runs.
 #[derive(Debug)]
@@ -59,7 +64,7 @@ pub(crate) struct Stepped {
 impl Lane {
     pub(crate) fn new(cfg: &OrgConfig) -> Self {
         Self {
-            backoff: Backoff::new(FIRST_RETRY, cfg.master_sync_interval.max(FIRST_RETRY)),
+            backoff: Backoff::new(RETRY_BASE, cfg.master_sync_interval.max(RETRY_BASE)),
             interval: cfg.master_sync_interval,
             max_age: cfg.master_max_age,
             stale_logged: false,
@@ -71,7 +76,21 @@ impl Lane {
     pub(crate) async fn step(&mut self, db: &Db, sync: &OrgMasterSync) -> Stepped {
         let request_id = RequestId::generate();
         let e = match sync.run_once(&request_id).await {
-            Ok(done) => {
+            Ok(Replaced::Busy) => {
+                tracing::info!(
+                    target: "forge_cli",
+                    event = "forge.org.master_sync_busy",
+                    request_id = %request_id,
+                    "another worker is syncing the org master; this run was skipped"
+                );
+                return Stepped {
+                    delay: self.interval,
+                    ok: true,
+                    logged: false,
+                    stale: false,
+                };
+            }
+            Ok(Replaced::Synced(done)) => {
                 let decision = self.backoff.success(Next::AfterPeriod);
                 self.stale_logged = false;
                 self.health_logged = false;

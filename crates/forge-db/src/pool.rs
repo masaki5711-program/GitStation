@@ -68,6 +68,9 @@ pub struct Db {
     /// (`forge serve` / `forge worker` set it from the configuration;
     /// off by default, so nothing is written to the news outbox).
     portal_news: Option<crate::portal::NewsPolicy>,
+    /// How old a person's org snapshot and the org master's copy may be
+    /// (ADR-0038 §4, `org.*_age_hours`; 24 h each by default).
+    org_ages: crate::org_master::MaxAges,
     /// The wake hub of this process and the safety-net period of its job
     /// runners (plan 18 S2, ADR-0037 (a)); `None`: nothing in this process
     /// listens — every waiter polls (`forge serve` / `forge worker` attach
@@ -143,6 +146,7 @@ impl Db {
             ping_timeout: cfg.acquire_timeout,
             op_timeout: cfg.acquire_timeout.saturating_add(cfg.statement_timeout),
             portal_news: None,
+            org_ages: crate::org_master::MaxAges::default(),
             wake: None,
         })
     }
@@ -153,6 +157,18 @@ impl Db {
     pub fn with_portal_news(mut self, policy: Option<crate::portal::NewsPolicy>) -> Self {
         self.portal_news = policy;
         self
+    }
+
+    /// The same pools, with the org facts' maximum ages (ADR-0038 §4).
+    #[must_use]
+    pub fn with_org_ages(mut self, ages: crate::org_master::MaxAges) -> Self {
+        self.org_ages = ages;
+        self
+    }
+
+    /// The org facts' maximum ages ([`Db::with_org_ages`]).
+    pub fn org_ages(&self) -> crate::org_master::MaxAges {
+        self.org_ages
     }
 
     /// The same pools, with the wake hub of this process

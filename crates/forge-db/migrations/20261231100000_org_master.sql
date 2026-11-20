@@ -4,11 +4,13 @@
 -- It gives the codes of the org claims (forge.user_org_profiles) a level, a
 -- parent and names. The codes' shape is never parsed for a hierarchy.
 --
--- Both tables are a mirror (tables.toml kind = "derived"): each successful
--- sync replaces them in one transaction (upsert + delete of the rows no
--- longer listed; every row's synced_at is the sync's time) and writes one
--- `org.master_synced` audit row when anything changed. A failed sync writes
--- nothing: the previous copy stays.
+-- The tables are a mirror (tables.toml kind = "derived"): each successful
+-- sync replaces them in one transaction under an advisory lock (upsert of
+-- the rows that differ, delete of the rows no longer listed; changed_at is
+-- the time a row last changed), records its time in the one-row
+-- forge.org_master_state and writes one `org.master_synced` audit row when
+-- anything changed. A failed or refused sync (a broken hierarchy, a sharp
+-- shrink) writes nothing: the previous copy stays.
 --
 -- forge.org_units_master   one row per (plant_code, code): level
 --                          (division | department | section | team), the
@@ -43,7 +45,7 @@ CREATE TABLE forge.org_units_master (
     valid_from     date,
     version        integer NOT NULL CONSTRAINT org_units_master_version
         CHECK (version >= 0),
-    synced_at      timestamptz NOT NULL DEFAULT now(),
+    changed_at     timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (plant_code, code)
 );
 -- The walk from a unit to its parent stays on the primary key; the walk
@@ -67,8 +69,17 @@ CREATE TABLE forge.org_positions_master (
     active         boolean NOT NULL,
     version        integer NOT NULL CONSTRAINT org_positions_master_version
         CHECK (version >= 0),
-    synced_at      timestamptz NOT NULL DEFAULT now(),
+    changed_at     timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (plant_code, code)
+);
+
+-- The last successful sync (one row): derive, the display reads and doctor
+-- read the copy's age here.
+CREATE TABLE forge.org_master_state (
+    id         boolean PRIMARY KEY DEFAULT true CONSTRAINT org_master_state_one CHECK (id),
+    synced_at  timestamptz NOT NULL,
+    units      integer NOT NULL CONSTRAINT org_master_state_units CHECK (units >= 0),
+    positions  integer NOT NULL CONSTRAINT org_master_state_positions CHECK (positions >= 0)
 );
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON forge.org_units_master TO forge_app;
@@ -76,9 +87,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON forge.org_positions_master TO forge_app;
 -- The read pool: names, levels and the hierarchy (shown next to people's
 -- names); never the head's staff id (personal data) or the cost center.
 GRANT SELECT (plant_code, code, level, parent_code, name_ja, name_en, name_id, valid_from,
-              version, synced_at)
+              version, changed_at)
     ON forge.org_units_master TO forge_ro;
 GRANT SELECT ON forge.org_positions_master TO forge_ro;
+GRANT SELECT, INSERT, UPDATE ON forge.org_master_state TO forge_app;
+GRANT SELECT ON forge.org_master_state TO forge_ro;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',

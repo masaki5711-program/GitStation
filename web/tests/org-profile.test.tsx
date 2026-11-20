@@ -46,6 +46,7 @@ const PATH = {
   unit: NAME('SYN-T-0001', 'team', '合成職場', 'Synthetic Team'),
   section: NAME('SYN-S-0001', 'section', '合成課', 'Synthetic Section'),
   department: NAME('SYN-D-0001', 'department', '合成部', null),
+  stale: false,
 };
 
 describe('org claims snapshot', () => {
@@ -136,6 +137,19 @@ describe('org claims snapshot', () => {
     expect(items[0]?.textContent).toBe('主合成部 / 合成課 / 合成職場SYN-T-0001');
     // Not in the master: the code only.
     expect(items[1]?.textContent).toBe('SYN-B-0002');
+  });
+
+  it('marks names that are the last known ones', async () => {
+    const named = {
+      ...ORG,
+      org_units: [{ code: 'SYN-T-0001', primary: true, path: { ...PATH, stale: true } }],
+    };
+    const server = mockServer(account(named));
+    await renderApp({ fetch: server.fetch, path: '/taro/-/settings' });
+    const section = (await screen.findByRole('heading', { name: '所属' })).closest('section') as HTMLElement;
+    await within(section).findByText('最終確認時点');
+    const items = within(section).getAllByRole('listitem');
+    expect(items[0]?.textContent).toBe('主合成部 / 合成課 / 合成職場最終確認時点SYN-T-0001');
   });
 
   it('the member picker shows the department and section names, in the UI language', async () => {

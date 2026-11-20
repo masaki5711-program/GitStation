@@ -8,6 +8,7 @@
 //! | `org.master_sync_interval_secs` | 900 | between two successful syncs; 60 ..= 86 400 |
 //! | `org.master_timeout_ms` | 5 000 | one GET, connect and answer; 500 ..= 30 000 |
 //! | `org.master_max_age_hours` | 24 | a copy older than this is stale: derived org facts are `unknown` (fail closed), doctor raises `FG-INT-0028`; 1 ..= 720 |
+//! | `org.allow_large_shrink` | `false` | let one sync remove more than half of the units, empty a plant or leave no positions (otherwise refused, `FG-INT-0027 reason=shrink`); an operator's deliberate, temporary opt-in |
 //! | `org.max_profile_age_hours` | 24 | a person's org-claims snapshot (`user_org_profiles.confirmed_at`) older than this is not used for derived org facts; 1 ..= 720 |
 //!
 //! The registry's origin and CA are the portal's (`portal.registry_url`,
@@ -27,6 +28,7 @@ const INTERVAL_KEY: &str = "org.master_sync_interval_secs";
 const TIMEOUT_KEY: &str = "org.master_timeout_ms";
 const MASTER_AGE_KEY: &str = "org.master_max_age_hours";
 const PROFILE_AGE_KEY: &str = "org.max_profile_age_hours";
+const SHRINK_KEY: &str = "org.allow_large_shrink";
 
 /// `[org]` as loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +38,7 @@ pub struct OrgConfig {
     pub master_timeout: Duration,
     pub master_max_age: Duration,
     pub max_profile_age: Duration,
+    pub allow_large_shrink: bool,
 }
 
 impl Default for OrgConfig {
@@ -46,6 +49,7 @@ impl Default for OrgConfig {
             master_timeout: Duration::from_millis(5_000),
             master_max_age: Duration::from_secs(24 * 3600),
             max_profile_age: Duration::from_secs(24 * 3600),
+            allow_large_shrink: false,
         }
     }
 }
@@ -68,15 +72,18 @@ fn ranged<'a>(
 
 impl OrgConfig {
     pub(super) fn load<'a>(get: impl Fn(&str) -> Option<&'a str>) -> Result<Self, ForgeError> {
-        let master_sync_enabled = match get(ENABLED_KEY).map(str::trim) {
-            None | Some("false") => false,
-            Some("true") => true,
-            Some("") => return Err(invalid(ENABLED_KEY, "empty")),
-            Some(_) => return Err(invalid(ENABLED_KEY, "invalid")),
+        let flag = |key: &'static str| match get(key).map(str::trim) {
+            None | Some("false") => Ok(false),
+            Some("true") => Ok(true),
+            Some("") => Err(invalid(key, "empty")),
+            Some(_) => Err(invalid(key, "invalid")),
         };
+        let master_sync_enabled = flag(ENABLED_KEY)?;
+        let allow_large_shrink = flag(SHRINK_KEY)?;
         let hours = |key, default| ranged(&get, key, default, (1, 720)).map(|h| h * 3600);
         Ok(Self {
             master_sync_enabled,
+            allow_large_shrink,
             master_sync_interval: Duration::from_secs(ranged(
                 &get,
                 INTERVAL_KEY,
@@ -151,8 +158,11 @@ mod tests {
             (TIMEOUT_KEY, "30000"),
             (MASTER_AGE_KEY, "2"),
             (PROFILE_AGE_KEY, "720"),
+            (SHRINK_KEY, "true"),
         ])
         .expect("set");
+        assert!(cfg.allow_large_shrink);
+        assert!(reason(&[(SHRINK_KEY, "1")]).contains("org.allow_large_shrink"));
         assert!(cfg.master_sync_enabled);
         assert_eq!(cfg.master_sync_interval, Duration::from_secs(60));
         assert_eq!(cfg.master_timeout, Duration::from_secs(30));

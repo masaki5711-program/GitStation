@@ -1786,6 +1786,7 @@
     "explain": "Organisasi yang dilaporkan penyedia identitas PFS saat Anda masuk (hanya tampilan; tidak memberi hak akses).",
     "primary": "Utama",
     "unit": "Organisasi",
+    "lastKnown": "per konfirmasi terakhir",
     "codeTitle": "Kode departemen: {{code}}",
     "departmentCode": "Kode departemen",
     "departments": "Departemen",

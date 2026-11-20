@@ -24,7 +24,7 @@ use axum::response::{IntoResponse, Response};
 use forge_auth::{InstanceCtx, UserTargetCtx};
 use forge_core::{parse_positive_id, UserId};
 use forge_errors::ForgeError;
-use forge_hosting::accounts::{OrgPath, OrgProfile, OrgRef};
+use forge_hosting::accounts::{OrgProfile, OrgRef, ShownPath};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -67,6 +67,10 @@ pub struct OrgPathBody {
     /// `null`: no department at or above the unit.
     #[schema(required = true)]
     pub department: Option<OrgNameBody>,
+    /// The names are the last known ones (「最終確認時点」): the person's
+    /// org snapshot is invalid or older than `org.max_profile_age_hours`,
+    /// or the copy is older than `org.master_max_age_hours` (ADR-0038 §4).
+    pub stale: bool,
 }
 
 fn name_body(r: OrgRef) -> OrgNameBody {
@@ -79,11 +83,13 @@ fn name_body(r: OrgRef) -> OrgNameBody {
     }
 }
 
-pub(crate) fn path_body(p: OrgPath) -> OrgPathBody {
+pub(crate) fn path_body(shown: ShownPath) -> OrgPathBody {
+    let p = shown.path;
     OrgPathBody {
         unit: name_body(p.unit),
         section: p.section.map(name_body),
         department: p.department.map(name_body),
+        stale: shown.stale,
     }
 }
 
@@ -134,7 +140,7 @@ pub struct UserOrgProfile {
     pub org: Option<OrgProfileBody>,
 }
 
-fn body(profile: OrgProfile, mut paths: HashMap<String, OrgPath>) -> OrgProfileBody {
+fn body(profile: OrgProfile, mut paths: HashMap<String, ShownPath>) -> OrgProfileBody {
     let s = profile.snapshot;
     OrgProfileBody {
         org_units: s
@@ -156,20 +162,17 @@ fn body(profile: OrgProfile, mut paths: HashMap<String, OrgPath>) -> OrgProfileB
     }
 }
 
-/// The body of a snapshot the route read, with its units' names.
+/// The body of a snapshot the route read, with its units' names (read
+/// through `paths`, the same proof's lookup, only when there is one).
 async fn with_paths(
     state: &AppState,
     profile: Option<OrgProfile>,
+    paths: impl std::future::Future<Output = Result<HashMap<String, ShownPath>, ForgeError>>,
 ) -> Result<Option<OrgProfileBody>, ForgeError> {
     let Some(profile) = profile else {
         return Ok(None);
     };
-    let paths = bounded(
-        state,
-        "org_unit_paths",
-        hosting(state)?.org_unit_paths(&profile),
-    )
-    .await?;
+    let paths = bounded(state, "org_unit_paths", paths).await?;
     Ok(Some(body(profile, paths)))
 }
 
@@ -197,7 +200,7 @@ pub async fn own(state: AppState, request: Dispatched<InstanceCtx>) -> Response 
         .await?;
         json(UserOrgProfile {
             user_id: user.get(),
-            org: with_paths(&state, profile).await?,
+            org: with_paths(&state, profile, hosting(&state)?.own_org_paths(&w.proof)).await?,
         })
     }
     .await;
@@ -247,7 +250,7 @@ pub async fn admin(state: AppState, request: Dispatched<UserTargetCtx>) -> Respo
         .await?;
         json(UserOrgProfile {
             user_id: w.proof.id().get(),
-            org: with_paths(&state, profile).await?,
+            org: with_paths(&state, profile, hosting(&state)?.admin_org_paths(&w.proof)).await?,
         })
     }
     .await;
@@ -278,14 +281,14 @@ impl OrgCodes {
 
 /// The names of the primary units of the users a route shows (ADR-0038 §1:
 /// the people pickers, the approval list), next to [`OrgCodes`].
-pub(crate) struct OrgPaths(HashMap<UserId, OrgPath>);
+pub(crate) struct OrgPaths(HashMap<UserId, ShownPath>);
 
 impl OrgPaths {
     /// Read them through `read` (forge-hosting's or forge-review's lookup;
     /// at most a page's worth of users), bounded like every read.
     pub(crate) async fn of(
         state: &AppState,
-        read: impl std::future::Future<Output = Result<HashMap<UserId, OrgPath>, ForgeError>>,
+        read: impl std::future::Future<Output = Result<HashMap<UserId, ShownPath>, ForgeError>>,
     ) -> Result<Self, ForgeError> {
         Ok(Self(bounded(state, "primary_org_paths", read).await?))
     }

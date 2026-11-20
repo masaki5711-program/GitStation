@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-The PFS registry-api answered 200 but the body breaks the contract GitStation checks before anything is written (ADR-0038 §1): not JSON or not the envelope `{success: true, data: {items: [...]}}` (`reason=envelope`), more than 10 000 items or 8 MiB (`too_many`), an item with a missing or malformed field (`reason=field`, with `field`: plantCode `^[A-Z0-9]{1,4}$`, code `^[A-Z0-9][A-Z0-9_-]{0,19}$` for units and `^[a-z][a-z0-9_]{0,63}$` for positions, level division|department|section|team, parentCode, name, costCenter, headStaffId, validFrom, version, rank 0..=999, sortOrder, active), a unit that is its own parent (`self_parent`), the same plant and code twice (`duplicate`), or no unit at all (`empty`: refused so an outage of the registry never wipes the copy). Nothing is written: the previous copy stays.
+The PFS registry-api answered 200 but the body breaks the contract GitStation checks before anything is written (ADR-0038 §1): not JSON or not the envelope `{success: true, data: {items: [...]}}` (`reason=envelope`), more than 10 000 items or 8 MiB (`too_many`), an item with a missing or malformed field (`reason=field`, with `field`: plantCode `^[A-Z0-9]{1,4}$`, code `^[A-Z0-9][A-Z0-9_-]{0,19}$` for units and `^[a-z][a-z0-9_]{0,63}$` for positions, level division|department|section|team, parentCode, name, costCenter, headStaffId, validFrom, version, rank 0..=999, sortOrder, active), a unit that is its own parent (`self_parent`), the same plant and code twice (`duplicate`), or no unit at all (`empty`: refused so an outage of the registry never wipes the copy). Checked on the whole lists before writing: a `parentCode` that names no unit of the same plant (`missing_parent`, with `index` and `plant`) or a parent at the same or a lower level (`level_order`); and, unless `org.allow_large_shrink = true`, a sharp shrink of the copy (`shrink`: more than half of the stored units removed, with `before`, `after`, `removed`; `plant_emptied`: a plant that has units or positions today would have none, with `list` and `plant`; `positions_empty`: no positions at all). Nothing is written: the previous copy stays.
 
 ## 調べ方 (diagnosis)
 
@@ -24,4 +24,4 @@ The log event `forge.org.master_sync_failed` with `reason`, `field`, `list` and 
 
 ## 対処 (fix)
 
-Runbook oidc-login, 「組織の台帳の写し」: the PFS org master holds a value GitStation does not accept (or the contract changed). Correct it in PFS, or update GitStation's parser (forge-integ `org_master`) if the contract changed by agreement.
+Runbook oidc-login, 「組織の台帳の写し」: the PFS org master holds a value GitStation does not accept (or the contract changed). Correct it in PFS, or update GitStation's parser (forge-integ `org_master`) if the contract changed by agreement. For `shrink` / `plant_emptied` / `positions_empty`: confirm with the PFS operators that the reorganisation is real, then set `org.allow_large_shrink = true` for one sync (an approved runbook step) and turn it off again.

@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-The copy of the PFS org master (forge.org_units_master) was last synced more than `org.master_max_age_hours` (default 24 h) ago, or was never synced although `org.master_sync_enabled` is on (ADR-0038 §4). Everything derived from it fails closed: the derived section / department of a person is `unknown` (org bindings and approver selectors stop matching once they exist); names fall back to codes only where the copy is missing. Raised by `forge doctor` (row `org.master`) and logged once by the worker when its copy crosses the age.
+The copy of the PFS org master (forge.org_units_master; the sync's time is forge.org_master_state.synced_at) was last synced more than `org.master_max_age_hours` (default 24 h) ago, or was never synced although `org.master_sync_enabled` is on (ADR-0038 §4). Everything derived from it fails closed: the derived section / department of a person is `unknown` (org bindings and approver selectors stop matching once they exist); names fall back to codes only where the copy is missing. Raised by `forge doctor` (row `org.master`) and logged once by the worker when its copy crosses the age.
 
 ## 調べ方 (diagnosis)
 
-`forge doctor` row `org.master` (last sync, age, unit and position counts); the worker's `forge.org.master_sync_failed` events (FG-INT-0025 / 0026 / 0027) say why the syncs fail. On the database (read-only): `SELECT max(synced_at), count(*) FROM forge.org_units_master`.
+`forge doctor` row `org.master` (last sync, age, unit and position counts); the worker's `forge.org.master_sync_failed` events (FG-INT-0025 / 0026 / 0027) say why the syncs fail. On the database (read-only): `SELECT synced_at, units, positions FROM forge.org_master_state`.
 
 ## 対処 (fix)
 

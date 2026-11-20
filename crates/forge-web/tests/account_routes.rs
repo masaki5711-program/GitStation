@@ -903,7 +903,7 @@ async fn snapshot(t: &FreshDb, who: UserId) {
 }
 
 async fn master(t: &FreshDb) {
-    use forge_db::org_master::{replace, LocalizedName, MasterUnit, UnitLevel};
+    use forge_db::org_master::{replace, LocalizedName, MasterUnit, ReplacePolicy, UnitLevel};
     let unit = |code: &str, level, parent: Option<&str>, ja: &str, en: &str| MasterUnit {
         plant_code: "P001".to_owned(),
         code: code.to_owned(),
@@ -939,6 +939,10 @@ async fn master(t: &FreshDb) {
             ),
         ],
         &[],
+        // No positions in this fixture: the shrink guard's opt-in.
+        ReplacePolicy {
+            allow_large_shrink: true,
+        },
     )
     .await
     .expect("master");
@@ -1042,6 +1046,7 @@ async fn the_org_profile_is_the_owners_and_the_administrators_and_others_see_the
     assert_eq!(path["unit"]["name_ja"], "合成課", "{}", own.json);
     assert_eq!(path["section"]["code"], "SYN-A-0001");
     assert_eq!(path["department"]["code"], "SYN-D-0001");
+    assert_eq!(path["stale"], false);
     assert_eq!(own.json["org"]["org_units"][1]["path"], Value::Null);
     let found = call(
         &t.db,

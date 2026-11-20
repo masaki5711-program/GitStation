@@ -96,7 +96,7 @@ impl Review {
         &self,
         approvers: &[forge_core::UserId],
     ) -> Result<
-        std::collections::HashMap<forge_core::UserId, forge_db::org_master::OrgPath>,
+        std::collections::HashMap<forge_core::UserId, forge_db::org_master::ShownPath>,
         ForgeError,
     > {
         forge_db::org_master::primary_paths(&self.db, approvers).await

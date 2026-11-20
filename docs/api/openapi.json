@@ -7673,6 +7673,10 @@
               }
             ]
           },
+          "stale": {
+            "description": "The names are the last known ones (「最終確認時点」): the person's\norg snapshot is invalid or older than `org.max_profile_age_hours`,\nor the copy is older than `org.master_max_age_hours` (ADR-0038 §4).",
+            "type": "boolean"
+          },
           "unit": {
             "$ref": "#/components/schemas/OrgNameBody"
           }
@@ -7680,7 +7684,8 @@
         "required": [
           "unit",
           "section",
-          "department"
+          "department",
+          "stale"
         ],
         "type": "object"
       },

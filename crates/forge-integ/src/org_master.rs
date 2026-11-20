@@ -31,7 +31,7 @@ use forge_core::portal::ServiceTokenSource;
 use forge_core::RequestId;
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::org_master::{
-    self as master, LocalizedName, MasterPosition, MasterUnit, Synced, UnitLevel,
+    self as master, LocalizedName, MasterPosition, MasterUnit, ReplacePolicy, Replaced, UnitLevel,
 };
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
@@ -204,17 +204,21 @@ fn items(body: &[u8]) -> Result<Vec<Value>, Invalid> {
     if body.len() > MAX_BODY_BYTES {
         return Err(Invalid::of("too_many"));
     }
-    let doc: Value = serde_json::from_slice(body).map_err(|_| Invalid::of("envelope"))?;
+    let mut doc: Value = serde_json::from_slice(body).map_err(|_| Invalid::of("envelope"))?;
     if doc.get("success") != Some(&Value::Bool(true)) {
         return Err(Invalid::of("envelope"));
     }
-    let Some(Value::Array(items)) = doc.get("data").and_then(|d| d.get("items")) else {
+    let Some(Value::Array(items)) = doc
+        .get_mut("data")
+        .and_then(|d| d.get_mut("items"))
+        .map(Value::take)
+    else {
         return Err(Invalid::of("envelope"));
     };
     if items.len() > MAX_ITEMS {
         return Err(Invalid::of("too_many"));
     }
-    Ok(items.clone()) // clone: the items outlive the document
+    Ok(items)
 }
 
 fn hidden(c: char) -> bool {
@@ -479,6 +483,7 @@ pub struct OrgMasterSync {
     positions_url: String,
     tokens: Arc<dyn ServiceTokenSource>,
     transport: Arc<dyn MasterTransport>,
+    policy: ReplacePolicy,
 }
 
 impl std::fmt::Debug for OrgMasterSync {
@@ -490,12 +495,14 @@ impl std::fmt::Debug for OrgMasterSync {
 }
 
 impl OrgMasterSync {
-    /// `registry_url`: `portal.registry_url` (an origin).
+    /// `registry_url`: `portal.registry_url` (an origin); `policy`:
+    /// `org.allow_large_shrink`.
     pub fn new(
         db: &Db,
         registry_url: &str,
         tokens: Arc<dyn ServiceTokenSource>,
         transport: Arc<dyn MasterTransport>,
+        policy: ReplacePolicy,
     ) -> Self {
         let origin = registry_url.trim_end_matches('/');
         Self {
@@ -504,6 +511,7 @@ impl OrgMasterSync {
             positions_url: format!("{origin}{POSITIONS_PATH}"),
             tokens,
             transport,
+            policy,
         }
     }
 
@@ -537,13 +545,13 @@ impl OrgMasterSync {
     /// Read both lists, validate them and replace the copy. Any failure
     /// writes nothing (the previous copy stays) and is returned for the
     /// caller to log; the database's own failures keep their codes.
-    pub async fn run_once(&self, request_id: &RequestId) -> Result<Synced, ForgeError> {
+    pub async fn run_once(&self, request_id: &RequestId) -> Result<Replaced, ForgeError> {
         let units = self.fetch("units", &self.units_url).await?;
         let units = parse_units(&units).map_err(|why| invalid("units", why))?;
         let positions = self.fetch("positions", &self.positions_url).await?;
         let positions = parse_positions(&positions).map_err(|why| invalid("positions", why))?;
         let ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the context owns it
-        master::replace(&self.db, &ctx, &units, &positions).await
+        master::replace(&self.db, &ctx, &units, &positions, self.policy).await
     }
 }
 

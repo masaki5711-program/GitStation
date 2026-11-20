@@ -948,9 +948,15 @@ txn_audited_columns = []
 [tables.org_units_master]
 guarded = false
 kind = "derived"
-ro_columns = ["plant_code", "code", "level", "parent_code", "name_ja", "name_en", "name_id", "valid_from", "version", "synced_at"]
+ro_columns = ["plant_code", "code", "level", "parent_code", "name_ja", "name_en", "name_id", "valid_from", "version", "changed_at"]
 
 [tables.org_positions_master]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# The last successful sync of the copy (one row).
+[tables.org_master_state]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]

@@ -29,7 +29,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{caller, change_context, require, Hosting, WriteRequest};
 
-pub use forge_db::org_master::{LocalizedName, OrgPath, OrgRef, UnitLevel};
+pub use forge_db::org_master::{LocalizedName, OrgPath, OrgRef, ShownPath, UnitLevel};
 pub use forge_db::org_profiles::{OrgProfile, OrgSnapshot, OrgUnit};
 pub use forge_db::sessions::{
     is_public_id as is_session_public_id, RevokeOutcome as SessionRevokeOutcome, SessionInfo,
@@ -302,22 +302,27 @@ impl Hosting {
         org_profiles::primary_codes(&self.db, users).await
     }
 
-    /// The names of the units of a snapshot the route already read (its
-    /// own action decided: `UserSelfRead` / `UserOrgAdminRead`), from the
-    /// org master's copy (ADR-0038 §1, display only): the codes that do not
-    /// resolve are left out (the caller shows the code).
-    pub async fn org_unit_paths(
+    /// The names of the caller's own units (`UserSelfRead` was proved on
+    /// the instance), from the org master's copy (ADR-0038 §1, display
+    /// only; marked stale past the age gates). Codes that do not resolve
+    /// are left out (the caller shows the code).
+    pub async fn own_org_paths(
         &self,
-        profile: &OrgProfile,
-    ) -> Result<std::collections::HashMap<String, OrgPath>, ForgeError> {
-        let codes: Vec<String> = profile
-            .snapshot
-            .org_units
-            .iter()
-            .map(|u| u.code.clone()) // clone: the lookup owns its keys
-            .collect();
-        forge_db::org_master::unit_paths(&self.db, profile.snapshot.plant_code.as_deref(), &codes)
-            .await
+        proof: &Authorized<InstanceCtx>,
+    ) -> Result<std::collections::HashMap<String, ShownPath>, ForgeError> {
+        require(proof.action(), Action::UserSelfRead)?;
+        let user = caller(proof)?;
+        forge_db::org_master::unit_paths(&self.db, user).await
+    }
+
+    /// The names of the proof's user's units (`UserOrgAdminRead`), as
+    /// [`Self::own_org_paths`].
+    pub async fn admin_org_paths(
+        &self,
+        proof: &Authorized<UserTargetCtx>,
+    ) -> Result<std::collections::HashMap<String, ShownPath>, ForgeError> {
+        require(proof.action(), Action::UserOrgAdminRead)?;
+        forge_db::org_master::unit_paths(&self.db, *proof.id()).await
     }
 
     /// The primary unit's names of each of `users` whose primary code
@@ -326,7 +331,7 @@ impl Hosting {
     pub async fn primary_org_paths(
         &self,
         users: &[UserId],
-    ) -> Result<std::collections::HashMap<UserId, OrgPath>, ForgeError> {
+    ) -> Result<std::collections::HashMap<UserId, ShownPath>, ForgeError> {
         forge_db::org_master::primary_paths(&self.db, users).await
     }
 

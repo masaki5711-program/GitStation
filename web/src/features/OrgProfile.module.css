@@ -18,6 +18,13 @@
   color: var(--gs-color-text);
 }
 
+/* 「最終確認時点」 after names that are the last known ones. */
+.lastKnown {
+  margin-left: var(--gs-space-1);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
 .list {
   display: grid;
   grid-template-columns: max-content 1fr;
