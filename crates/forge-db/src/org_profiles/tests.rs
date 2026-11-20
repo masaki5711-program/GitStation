@@ -312,3 +312,149 @@ fn the_digest_follows_the_values() {
     assert_eq!(da, a.clone().digest().expect("again"));
     assert_ne!(da, b.digest().expect("b"));
 }
+
+#[test]
+fn the_digest_of_a_fixed_snapshot_is_pinned() {
+    // The canonical JSON is the fields in declaration order; reordering
+    // them (or renaming one) changes every stored digest and turns the next
+    // sign-in of everyone into an audited change. Computed outside Rust:
+    // sha256 of {"org_units":[{"code":"SYN-A-0001","primary":true},
+    // {"code":"SYN-B-0002","primary":false}],"positions":["member"],
+    // "position_rank":3,"plants":["P001"],"plant_code":"P001"}.
+    let s = snapshot("SYN-A-0001", Some("SYN-B-0002"));
+    assert_eq!(
+        s.digest().expect("digest"),
+        "03264d2904736f2d484e989a1b2a1e3e055ae07591f401fd57717be2c50dc833"
+    );
+}
+
+#[tokio::test]
+async fn the_table_refuses_values_that_break_the_registry_rules() {
+    let t = FreshDb::migrated().await;
+    let frank = person(&t, "frank").await;
+    let _created = record(
+        &t.db,
+        &ctx(Actor::User(frank)),
+        frank,
+        ISSUER,
+        Observed::Valid(&snapshot("SYN-A-0001", None)),
+    )
+    .await
+    .expect("recorded");
+    let mut su = t.superuser().await;
+    let cases = [
+        (
+            "org_units = '[\"SYN-A-0001\"]'",
+            "user_org_profiles_org_units",
+        ),
+        (
+            "org_units = '[{\"code\": \"syn-a\", \"primary\": true}]'",
+            "user_org_profiles_org_units",
+        ),
+        (
+            "org_units = '[{\"code\": \"SYN-A\"}]'",
+            "user_org_profiles_org_units",
+        ),
+        (
+            "org_units = '[{\"code\": \"SYN-A\", \"primary\": \"true\"}]'",
+            "user_org_profiles_org_units",
+        ),
+        (
+            "org_units = '[{\"code\": \"SYN-A\", \"primary\": true, \"x\": 1}]'",
+            "user_org_profiles_org_units",
+        ),
+        (
+            "org_units = '[{\"code\": \"SYN-A\", \"primary\": true}, \
+             {\"code\": \"SYN-B\", \"primary\": true}]'",
+            "user_org_profiles_org_units",
+        ),
+        ("org_units = '{}'", "user_org_profiles_org_units"),
+        ("positions = '{Member}'", "user_org_profiles_positions"),
+        (
+            "positions = ARRAY[NULL]::text[]",
+            "user_org_profiles_positions",
+        ),
+        ("plants = '{P0001}'", "user_org_profiles_plants"),
+        ("plants = ARRAY['P1', NULL]", "user_org_profiles_plants"),
+    ];
+    for (set, constraint) in cases {
+        let sql = format!(
+            "UPDATE forge.user_org_profiles SET {set} WHERE user_id = {}",
+            frank.get()
+        );
+        let err = sqlx::raw_sql(&sql).execute(&mut su).await.expect_err(&sql);
+        let db_err = err.as_database_error().expect("a database error");
+        assert_eq!(db_err.code().as_deref(), Some("23514"), "{sql}: {db_err}");
+        assert_eq!(db_err.constraint(), Some(constraint), "{sql}");
+    }
+    // The rules accept what forge-oidc writes (no primary, several units).
+    let rows = t
+        .json_rows(
+            "SELECT forge.org_units_valid('[{\"code\": \"SYN-A\", \"primary\": false}, \
+             {\"code\": \"S1_B-2\", \"primary\": false}]') \
+             AND forge.codes_match('{lead,a_1}', '^[a-z][a-z0-9_]{0,63}$') \
+             AND forge.codes_match('{}', '^[A-Z0-9]{1,4}$') AS ok",
+        )
+        .await;
+    assert_eq!(rows[0]["ok"], true);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn an_update_does_not_wait_for_the_users_row_and_a_first_snapshot_waits_bounded() {
+    let t = FreshDb::migrated().await;
+    let gina = person(&t, "gina").await;
+    let hal = person(&t, "hal").await;
+    let s = snapshot("SYN-A-0001", None);
+    let _created = record(
+        &t.db,
+        &ctx(Actor::User(gina)),
+        gina,
+        ISSUER,
+        Observed::Valid(&s),
+    )
+    .await
+    .expect("recorded");
+    // A stuck writer holds both users' rows (as an UPDATE of forge.users does).
+    let mut holder = t.superuser().await;
+    sqlx::raw_sql(&format!(
+        "BEGIN; SELECT id FROM forge.users WHERE id IN ({}, {}) FOR NO KEY UPDATE",
+        gina.get(),
+        hal.get()
+    ))
+    .execute(&mut holder)
+    .await
+    .expect("hold the users' rows");
+    let moved = snapshot("SYN-C-0003", None);
+    let done = record(
+        &t.db,
+        &ctx(Actor::System),
+        gina,
+        ISSUER,
+        Observed::Valid(&moved),
+    )
+    .await
+    .expect("an existing snapshot never locks the user's row");
+    assert_eq!(done, Recorded::Changed);
+    let started = std::time::Instant::now();
+    let err = record(
+        &t.db,
+        &ctx(Actor::User(hal)),
+        hal,
+        ISSUER,
+        Observed::Valid(&s),
+    )
+    .await
+    .expect_err("the first snapshot waits for the user's row");
+    assert_reason(&err, ErrorCode::DbQueryFailed, "lock_timeout");
+    let waited = started.elapsed();
+    assert!(
+        waited < std::time::Duration::from_millis(RECORD_LOCK_WAIT_MS + 1_500),
+        "{waited:?}"
+    );
+    sqlx::raw_sql("ROLLBACK")
+        .execute(&mut holder)
+        .await
+        .expect("release");
+    t.drop_now().await;
+}

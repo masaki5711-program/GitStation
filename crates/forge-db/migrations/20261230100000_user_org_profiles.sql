@@ -24,18 +24,55 @@
 -- confirmed_at and invalid_since are unaudited; every other change commits
 -- with a `user.org_profile_changed` audit row on the user.
 
+-- The table's CHECKs mirror forge-oidc's validation (the backstop: a
+-- write that bypasses it is refused). A CHECK cannot hold a subquery, so
+-- the element rules live in two IMMUTABLE helpers (not SECURITY DEFINER;
+-- pinned search_path).
+--
+-- org_units: an array of at most 64 objects, each exactly {"code": "...",
+-- "primary": true|false} with code ^[A-Z0-9][A-Z0-9_-]{0,19}$, and at most
+-- one primary.
+CREATE FUNCTION forge.org_units_valid(units jsonb) RETURNS boolean
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    SET search_path = pg_catalog, pg_temp
+AS $$
+    SELECT CASE WHEN jsonb_typeof(units) <> 'array' THEN false
+                WHEN jsonb_array_length(units) > 64 THEN false
+                ELSE NOT EXISTS (
+                         SELECT 1 FROM jsonb_array_elements(units) AS u(v)
+                         WHERE CASE WHEN jsonb_typeof(u.v) <> 'object' THEN true
+                                    ELSE jsonb_typeof(u.v -> 'code') IS DISTINCT FROM 'string'
+                                      OR NOT ((u.v ->> 'code') ~ '^[A-Z0-9][A-Z0-9_-]{0,19}$')
+                                      OR jsonb_typeof(u.v -> 'primary') IS DISTINCT FROM 'boolean'
+                                      OR (u.v - 'code' - 'primary') <> '{}'::jsonb
+                               END)
+                     AND (SELECT count(*) FROM jsonb_array_elements(units) AS u(v)
+                          WHERE jsonb_typeof(u.v) = 'object'
+                            AND u.v -> 'primary' = 'true'::jsonb) <= 1
+           END
+$$;
+
+-- Every element of codes is non-null and matches pattern.
+CREATE FUNCTION forge.codes_match(codes text[], pattern text) RETURNS boolean
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    SET search_path = pg_catalog, pg_temp
+AS $$
+    SELECT NOT EXISTS (SELECT 1 FROM unnest(codes) AS c(v) WHERE c.v IS NULL OR c.v !~ pattern)
+$$;
+
 CREATE TABLE forge.user_org_profiles (
     user_id        bigint PRIMARY KEY REFERENCES forge.users (id),
     issuer         text NOT NULL CONSTRAINT user_org_profiles_issuer_length
         CHECK (char_length(issuer) BETWEEN 1 AND 255),
     org_units      jsonb NOT NULL DEFAULT '[]'::jsonb CONSTRAINT user_org_profiles_org_units
-        CHECK (jsonb_typeof(org_units) = 'array' AND jsonb_array_length(org_units) <= 64),
+        CHECK (forge.org_units_valid(org_units)),
     positions      text[] NOT NULL DEFAULT '{}' CONSTRAINT user_org_profiles_positions
-        CHECK (cardinality(positions) <= 64),
+        CHECK (cardinality(positions) <= 64
+               AND forge.codes_match(positions, '^[a-z][a-z0-9_]{0,63}$')),
     position_rank  integer CONSTRAINT user_org_profiles_position_rank
         CHECK (position_rank BETWEEN 0 AND 999),
     plants         text[] NOT NULL DEFAULT '{}' CONSTRAINT user_org_profiles_plants
-        CHECK (cardinality(plants) <= 64),
+        CHECK (cardinality(plants) <= 64 AND forge.codes_match(plants, '^[A-Z0-9]{1,4}$')),
     plant_code     text CONSTRAINT user_org_profiles_plant_code
         CHECK (plant_code ~ '^[A-Z0-9]{1,4}$'),
     digest         text NOT NULL CONSTRAINT user_org_profiles_digest
@@ -58,6 +95,9 @@ CREATE CONSTRAINT TRIGGER audited_change_present
 ALTER TABLE forge.user_org_profiles ENABLE ALWAYS TRIGGER audited_change_present;
 
 GRANT SELECT, INSERT, UPDATE ON forge.user_org_profiles TO forge_app;
+-- The CHECKs run the helpers as the writer (PUBLIC has no EXECUTE here).
+GRANT EXECUTE ON FUNCTION forge.org_units_valid(jsonb), forge.codes_match(text[], text)
+    TO forge_app;
 -- The read pool: the department codes (the people pickers' primary code)
 -- and doctor's columns; never the positions, the rank or the plants.
 GRANT SELECT (user_id, org_units, confirmed_at, invalid_since)

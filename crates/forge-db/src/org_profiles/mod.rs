@@ -315,8 +315,9 @@ async fn write_values(
 
 /// Record what the provider sent for `user` (see the module documentation).
 /// `ctx` is the sign-in's (the person) or the refresh check's (`system`).
-/// The user's row is locked first so two sign-ins of one person write one
-/// row. An unknown user is `FG-REPO-0005`.
+/// Two sign-ins of one person write one row (see the locking note in
+/// `record_steps`); a lock wait is bounded by [`RECORD_LOCK_WAIT_MS`]. An
+/// unknown user is `FG-REPO-0005`.
 pub async fn record(
     db: &Db,
     ctx: &ChangeContext,
@@ -329,39 +330,69 @@ pub async fn record(
     tx.settle(CHANGED_ACTION, outcome).await
 }
 
+/// The longest wait for a row lock in [`record`] (shorter than the pool's
+/// session `lock_timeout`): a sign-in never stalls behind a stuck writer;
+/// beyond it `55P03` is `FG-DB-0002 reason=lock_timeout`, which the caller
+/// logs and lets the sign-in go on.
+pub const RECORD_LOCK_WAIT_MS: u64 = 3_000;
+
+async fn read_stored(tx: &mut ChangeTx, user: UserId) -> Result<Option<StoredRow>, ForgeError> {
+    tx.step(|c| async move {
+        sqlx::query_as(
+            "SELECT issuer, org_units::text, positions, position_rank, plants, plant_code, \
+             digest, invalid_since IS NOT NULL \
+             FROM forge.user_org_profiles WHERE user_id = $1 FOR UPDATE",
+        )
+        .bind(user.get())
+        .fetch_optional(c)
+        .await
+        .map_err(|e| query_error("org_profiles.record.read", e))
+    })
+    .await
+}
+
 async fn record_steps(
     tx: &mut ChangeTx,
     user: UserId,
     issuer: &str,
     observed: Observed<'_>,
 ) -> Result<Settle<Recorded>, ForgeError> {
-    let known: Option<i64> = tx
-        .step(|c| async move {
-            sqlx::query_scalar("SELECT id FROM forge.users WHERE id = $1 FOR NO KEY UPDATE")
-                .bind(user.get())
-                .fetch_optional(c)
-                .await
-                .map_err(|e| query_error("org_profiles.record.user", e))
-        })
-        .await?;
-    if known.is_none() {
-        return Err(ForgeError::new(ErrorCode::NotFound)
-            .with_context("resource", RESOURCE)
-            .with_context("reason", "absent"));
+    tx.step(|c| async move {
+        sqlx::query(&format!(
+            "SET LOCAL lock_timeout = '{RECORD_LOCK_WAIT_MS}ms'"
+        ))
+        .execute(c)
+        .await
+        .map(|_| ())
+        .map_err(|e| query_error("org_profiles.record.lock_timeout", e))
+    })
+    .await?;
+    // Locking: the profile row itself (FOR UPDATE) serializes two sign-ins
+    // of one person once the row exists — the common path takes no lock on
+    // forge.users, so an admin's long write to the user never delays a
+    // sign-in. Only the first snapshot (no row to lock yet) locks the
+    // user's row (FOR NO KEY UPDATE): two concurrent first sign-ins would
+    // otherwise both INSERT and one fail on the primary key. The second
+    // waits there, then reads the row the first committed (READ COMMITTED:
+    // a new snapshot per statement) and goes on as an update.
+    let mut stored = read_stored(tx, user).await?;
+    if stored.is_none() {
+        let known: Option<i64> = tx
+            .step(|c| async move {
+                sqlx::query_scalar("SELECT id FROM forge.users WHERE id = $1 FOR NO KEY UPDATE")
+                    .bind(user.get())
+                    .fetch_optional(c)
+                    .await
+                    .map_err(|e| query_error("org_profiles.record.user", e))
+            })
+            .await?;
+        if known.is_none() {
+            return Err(ForgeError::new(ErrorCode::NotFound)
+                .with_context("resource", RESOURCE)
+                .with_context("reason", "absent"));
+        }
+        stored = read_stored(tx, user).await?;
     }
-    let stored: Option<StoredRow> = tx
-        .step(|c| async move {
-            sqlx::query_as(
-                "SELECT issuer, org_units::text, positions, position_rank, plants, plant_code, \
-                 digest, invalid_since IS NOT NULL \
-                 FROM forge.user_org_profiles WHERE user_id = $1 FOR UPDATE",
-            )
-            .bind(user.get())
-            .fetch_optional(c)
-            .await
-            .map_err(|e| query_error("org_profiles.record.read", e))
-        })
-        .await?;
     let Some((
         stored_issuer,
         org_units,

@@ -637,6 +637,11 @@ PFS と同じ形（`basic` + `iotpf-identity`）の realm は後で足す。`for
      `org_units` の値は JSON の文字列でもオブジェクトでも受け、素のコードは主でない部署として受ける。主の部署を先頭に並べる。
    - 同じ値（ダイジェストと issuer が同じ）: `confirmed_at` だけ進める。変わった（と最初の写し）: 値を書き、監査
      `user.org_profile_changed`（変わった項目の前後とダイジェスト。6 KiB を超えるときは項目名とダイジェストだけ）。
+     プライバシー: 監査の前後には役職・ランク・工場の値も入る。`forge.audit_log` を読めるのはサーバー（`forge_app`）と
+     運用のロール（`forge_seq`・`forge_purge`・`forge_maint`）だけで、監査の行を利用者に見せる API はない（読み取りの
+     プール `forge_ro` にも権限はない）。監査の行を API や画面で見せるときは、この 3 項目を項目名とダイジェストだけにする。
+   - 表の CHECK が forge-oidc と同じ規則を持つ（`forge.org_units_valid`・`forge.codes_match`、IMMUTABLE）。書き込みの
+     ロックは写しの行だけ（最初の写しだけ利用者の行）、待ちは `SET LOCAL lock_timeout = 3s` まで。
    - 規則に合わない値は**ログインを止めない**: 前の正しい値を残して `invalid_since` を立て、新しい **FG-AUTH-0028
      OrgClaimsInvalid**（warn、`field` と `reason` = format / too_many / multiple_primary / type。値は出さない）を
      `invalid_since` を立てた 1 回だけログに出す。claim がまったくないのは空の正しい写し。
