@@ -32,8 +32,8 @@ P1 は設計（[widget-design.md](widget-design.md) §8）の第 1 段。PFS の
 | | | `stopped` | | 現在の head で自動マージが止まった MR のうち、自分が作者か承認者のもの |
 | | | `spec` | | 承認待ちの仕様書: 仕様を公開したことのあるプロジェクト（`spec.released`）の `review` |
 | | | `threads` | | 自分が始めた未解決のコメントのうち、いちばん新しい書き込みが自分以外のもの（返事が来た）がある、開いている MR（だれの MR でもよい）。バッジは 返事あり（`info`） |
-| | | `conflicts` | | 自分が出した、開いている MR のうち 衝突（`stop`）/ 衝突の見込み（`warn`、相手の番号を `sub` に `↔ !n` で付ける）/ 調べきれていない（`neutral`: 衝突の調べが `incomplete` / `failed`、マージできるかの確認が `check_failed`、相手との組が `failed`）。調べが終わっていないものを「衝突なし」とは出さない |
-| | | `queue` | | 自分が出した MR のうち、マージ待ちの列に入っているもの（バッジ `n 番目`、`info`）と、列が自分で外したもの（人が外したものは出さない。`stop`） |
+| | | `conflicts` | | 自分が出した、開いている MR のうち 衝突（`stop`）/ 衝突の見込み（`warn`、相手の番号を `sub` に `↔ !n` で付ける）/ 調べきれていない（`neutral`: 衝突の調べがまだ・途中（`pending` / `scanning`）か `incomplete` / `failed`、マージできるかの確認がまだ・途中（`unchecked` / `checking`）か `check_failed`、相手との組が `failed`）。調べが終わっていないものを「衝突なし」とは出さない |
+| | | `queue` | | 自分が出した MR のうち、マージ待ちの列に入っているもの（バッジ `n 番目`、`info`）と、列が自分で外したもの（人が外したものは出さない。`stop`）。外されたものは、もう一度列に入れるか MR を閉じる・マージするまで出し続ける |
 | `sort` | select | `oldest` / `newest` | `oldest` | 古い順（待たせている順）/ 新しい順 |
 | `project` | select（`options_from: options/project`） | プロジェクトの id | なし = 見られるすべて | 1 つのプロジェクトに絞る |
 | `limit` | number | 3〜10 | 5 | 件数。`total` は見える件数（100 で頭打ち） |
@@ -47,7 +47,7 @@ P1 は設計（[widget-design.md](widget-design.md) §8）の第 1 段。PFS の
 |---|---|---|---|---|
 | `project` | multi（`options_from: options/project`） | プロジェクトの id（繰り返す、最大 24） | なし = 自分がロールを持つプロジェクト | 表示するプロジェクト |
 | `show` | select | `pipeline` / `deploy` | `pipeline` | `refs/heads/main` の最新のパイプライン / 最新の配備 |
-| `only_problems` | toggle | `true` / `false` | `false` | `true` のとき `stop` と `warn` のランプだけを出す。無ければ空（ポータルが「問題なし」の空の状態を出す） |
+| `only_problems` | toggle | `true` / `false` | `false` | `true` のとき `stop` と `warn` のランプだけを出す（24 件の上限より先に絞るので、新しい正常なプロジェクトの後ろにある失敗も落ちない）。無ければ空（ポータルが「問題なし」の空の状態を出す） |
 
 ランプ: パイプライン 成功 → `ok`、失敗・不正・エラー → `stop`、取り消し → `warn`、待ち・実行中・該当なし → `info`、まだ無い → `unknown`。
 配備 成功 → `ok`、失敗・戻せなかった → `stop`、戻した・止められた → `warn`、承認待ち・待ち・実行中 → `info`。`state_label` は環境（`prod` など）付き。
@@ -74,7 +74,7 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
 | `project` | multi（`options_from: options/project`） | プロジェクトの id（繰り返す、最大 24） | なし | 数えるプロジェクトを絞る。見られないプロジェクトは数えない |
 
 `value` = 件数、`reference` = 標準 0。件数は 100 で頭打ち（`100+`）。`failed` を `project` なしで数えるときは自分がロールを持つ
-プロジェクトの先頭 24 件だけを見る（24 件あれば `n+` と出す）。カードの `href`: `reviews` / `spec` → `/-/merge-requests?scope=approvable`、
+プロジェクト（最大 200）から失敗しているものを 24 件まで数える（24 件あれば `n+` と出す）。カードの `href`: `reviews` / `spec` → `/-/merge-requests?scope=approvable`、
 `stopped` → `/-/merge-requests`、`failed` → `/-/projects?tab=member`。
 
 ### inbox（kpi、P1）
@@ -124,6 +124,8 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
 - 成功の応答は `Cache-Control: private, max-age=30`、失敗の応答は `Cache-Control: no-store`。
 - 見せるのは本人が GitStation の画面で見られるものだけ（管理者の権限は使わない）。
 - このトークンはウィジェットの経路でだけ受ける。ほかの API は 401 のまま。
+- 1 つのウィジェットの読み取りは 2.5 秒で打ち切る（`server.lookup_timeout` がそれより長くても。ポータルの上限は 3 秒）。
+  件数だけのウィジェット（`stopped-count`、`attention-count`）は表示しない事実（衝突・検査）を読まない。
 
 ## 新着（ポータルへ送る）
 

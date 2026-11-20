@@ -896,6 +896,7 @@ async fn my_reviews_threads_conflicts_and_queue() {
     let second = mr(&w.t, w.web, 2, w.olga).await;
     let third = mr(&w.t, w.web, 3, w.olga).await;
     let daves = mr(&w.t, w.web, 4, w.dave).await;
+    let fifth = mr(&w.t, w.web, 5, w.olga).await;
     let hidden = mr_id(&w.t, w.secret, 1).await;
     let o = w.olga.get();
     let d = w.dave.get();
@@ -932,6 +933,13 @@ async fn my_reviews_threads_conflicts_and_queue() {
             thread(9003, third, o, true),
             note(9003, third, o),
             note(9003, third, d),
+            // dave replied, then olga answered: the newest note is hers,
+            // nothing waits for her. (Notes are people's comments only:
+            // resolving, reopening and pushing write no note.)
+            thread(9004, second, o, false),
+            note(9004, second, o),
+            note(9004, second, d),
+            note(9004, second, o),
         ],
     )
     .await;
@@ -953,8 +961,8 @@ async fn my_reviews_threads_conflicts_and_queue() {
     assert_eq!(none["total"], 0);
 
     // conflicts: change 1 cannot be merged, change 2 is predicted to
-    // conflict with dave's change 4, change 3's scan did not finish (never
-    // "no conflict").
+    // conflict with dave's change 4, change 3's scan did not finish and
+    // change 5's has not run yet (never "no conflict").
     w.t.commit_audited(
         ("project", web),
         &[
@@ -974,6 +982,10 @@ async fn my_reviews_threads_conflicts_and_queue() {
                 "INSERT INTO forge.merge_request_conflict_scans (merge_request_id, project_id, \
                  status, reason) VALUES ({third}, {web}, 'incomplete', 'peer_cap')"
             ),
+            format!(
+                "INSERT INTO forge.merge_request_conflict_scans (merge_request_id, project_id, \
+                 status) VALUES ({fifth}, {web}, 'pending')"
+            ),
         ],
     )
     .await;
@@ -982,7 +994,7 @@ async fn my_reviews_threads_conflicts_and_queue() {
             .await,
         "list",
     );
-    assert_eq!(conflicts["total"], 3, "{conflicts}");
+    assert_eq!(conflicts["total"], 4, "{conflicts}");
     let items = conflicts["items"].as_array().expect("items");
     // Oldest first by default.
     assert_eq!(items[0]["badge"]["label"], "Conflict");
@@ -992,13 +1004,15 @@ async fn my_reviews_threads_conflicts_and_queue() {
     assert_eq!(items[1]["sub"], "acme/web !2 \u{2194} !4");
     assert_eq!(items[2]["badge"]["label"], "Not fully checked");
     assert_eq!(items[2]["badge"]["tone"], "neutral");
+    assert_eq!(items[3]["sub"], "acme/web !5");
+    assert_eq!(items[3]["badge"]["label"], "Not fully checked");
     // Newest first on request.
     let newest = data(
         &w.as_token(&format!("{REVIEWS}?kind=conflicts&sort=newest"), "t-olga")
             .await,
         "list",
     );
-    assert_eq!(newest["items"][0]["sub"], "acme/web !3");
+    assert_eq!(newest["items"][0]["sub"], "acme/web !5");
     // dave's change 4 is the other side of the prediction: listed for him.
     let daves_conflicts = data(
         &w.as_token(&format!("{REVIEWS}?kind=conflicts"), "t-dave")
@@ -1119,4 +1133,51 @@ async fn the_p1_routes_are_decided_by_authorize() {
         assert_eq!(bad.answer.0, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(bad.cache_control.as_deref(), Some("no-store"));
     }
+}
+
+/// Review (widget P1): the lamp filter runs before the cap of 24, so a
+/// failing project behind 24 newer healthy ones is still shown and counted.
+#[tokio::test]
+async fn a_failing_project_past_the_first_24_is_never_dropped() {
+    let w = World::new().await;
+    // 24 newer projects of dave's with no pipeline (lamp unknown).
+    for n in 0..24 {
+        project(&w.t, &format!("g{n:02}"), w.dave, &[]).await;
+    }
+    // acme/web (the oldest of dave's projects) fails on main.
+    w.t.exec_superuser(&format!(
+        "INSERT INTO forge.ci_pipelines (project_id, ref, sha, source, status, \
+           request_id, protected, copy_mark) VALUES ({}, 'refs/heads/main', '{}', \
+           'push', 'failed', 'req-pipe', true, 'open')",
+        w.web.get(),
+        "d".repeat(40)
+    ))
+    .await;
+    let all = data(&w.as_token(PIPELINES, "t-dave").await, "status");
+    let labels: Vec<&str> = all["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|i| i["label"].as_str())
+        .collect();
+    assert_eq!(labels.len(), 24);
+    assert!(!labels.contains(&"acme/web"), "the cap keeps the newest");
+    let problems = data(
+        &w.as_token(&format!("{PIPELINES}?only_problems=true"), "t-dave")
+            .await,
+        "status",
+    );
+    assert_eq!(
+        problems["items"].as_array().map(Vec::len),
+        Some(1),
+        "{problems}"
+    );
+    assert_eq!(problems["items"][0]["label"], "acme/web");
+    let failed = data(
+        &w.as_token(&format!("{ATTENTION}?scope=failed"), "t-dave")
+            .await,
+        "kpi",
+    );
+    assert_eq!(failed["value"], 1, "{failed}");
+    assert_eq!(failed["display"], "1 projects");
 }

@@ -50,7 +50,7 @@ use crate::app::AppState;
 use crate::registry::{Dispatched, LoadFuture, Loader, Lookup, QueryParam};
 use crate::routes::namespaces::CallerLimiter;
 use crate::routes::specs::{InFlight, Running};
-use crate::routes::write::{absent_because, bounded};
+use crate::routes::write::absent_because;
 
 pub const MY_REVIEWS: &str = "/api/portal-widgets/v1/my-reviews";
 pub const MY_REVIEWS_OPTIONS: &str = "/api/portal-widgets/v1/my-reviews/options/project";
@@ -266,6 +266,27 @@ impl Loader<AppState> for PortalWidgets {
 
 // ------------------------------------------------------------ the query
 
+/// The most one widget's reads may take: the portal cuts a widget off at
+/// 3 s (contract §6.5), so the reads stop well before it whatever
+/// `server.lookup_timeout` says (the same `RequestTimeout` as every bounded
+/// read, logged with the operation).
+pub const WIDGET_READ_BUDGET: Duration = Duration::from_millis(2_500);
+
+/// [`crate::routes::write::bounded`] under [`WIDGET_READ_BUDGET`].
+async fn widget_bounded<T>(
+    state: &AppState,
+    operation: &'static str,
+    read: impl std::future::Future<Output = Result<T, ForgeError>>,
+) -> Result<T, ForgeError> {
+    let limit = state.lookup_timeout.min(WIDGET_READ_BUDGET);
+    match tokio::time::timeout(limit, read).await {
+        Ok(result) => result,
+        Err(_) => Err(ForgeError::new(ErrorCode::RequestTimeout)
+            .with_context("operation", operation)
+            .with_context("timeout_ms", limit.as_millis())),
+    }
+}
+
 /// `FG-WEB-0011` for `param` with `rule`.
 fn invalid(param: &'static str, rule: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::PortalWidgetSettingInvalid)
@@ -336,11 +357,11 @@ fn multi_projects(pairs: &[(String, String)]) -> Result<Option<Vec<ProjectId>>, 
     for (_, value) in pairs.iter().filter(|(k, _)| k == "project") {
         let id = project_id(value)?;
         if !projects.contains(&id) {
+            if projects.len() == MAX_PROJECTS {
+                return Err(invalid("project", "too_many"));
+            }
             projects.push(id);
         }
-    }
-    if projects.len() > MAX_PROJECTS {
-        return Err(invalid("project", "too_many"));
     }
     Ok((!projects.is_empty()).then_some(projects))
 }
@@ -668,7 +689,7 @@ pub async fn my_reviews(state: AppState, request: Dispatched<PortalWidgetCtx>) -
             .review
             .as_deref()
             .ok_or_else(|| unconfigured("review_unconfigured"))?;
-        let page = bounded(
+        let page = widget_bounded(
             &state,
             "portal_widget_my_reviews",
             review.portal_merge_requests(
@@ -692,6 +713,21 @@ pub async fn my_reviews(state: AppState, request: Dispatched<PortalWidgetCtx>) -
     answer(&w.ctx, built)
 }
 
+/// Every lamp (`pipelines` without `only_problems`).
+fn any_lamp(_: Lamp) -> bool {
+    true
+}
+
+/// `stop` and `warn` (`pipelines?only_problems=true`).
+fn is_problem(lamp: Lamp) -> bool {
+    matches!(lamp, Lamp::Stop | Lamp::Warn)
+}
+
+/// `stop` (`attention-count?scope=failed`).
+fn is_stop(lamp: Lamp) -> bool {
+    lamp == Lamp::Stop
+}
+
 /// `GET pipelines` → the `status` widget.
 pub async fn pipelines(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Response {
     let query = pipelines_query(request.raw_query());
@@ -702,15 +738,23 @@ pub async fn pipelines(state: AppState, request: Dispatched<PortalWidgetCtx>) ->
             .pipelines
             .as_deref()
             .ok_or_else(|| unconfigured("pipelines_unconfigured"))?;
-        let lamps = bounded(
+        let lamps = widget_bounded(
             &state,
             "portal_widget_pipelines",
-            pipelines.portal_lamps(&w.proof, q.projects.as_deref(), q.show),
+            pipelines.portal_lamps(
+                &w.proof,
+                q.projects.as_deref(),
+                q.show,
+                if q.only_problems {
+                    is_problem
+                } else {
+                    any_lamp
+                },
+            ),
         )
         .await?;
         let items: Vec<Value> = lamps
             .iter()
-            .filter(|l| !q.only_problems || matches!(l.lamp, Lamp::Stop | Lamp::Warn))
             .map(|l| {
                 let label = Word::of_lamp(l.lamp).in_lang(q.lang);
                 let state_label = match &l.tier {
@@ -794,7 +838,7 @@ pub async fn stopped_count(state: AppState, request: Dispatched<PortalWidgetCtx>
             .review
             .as_deref()
             .ok_or_else(|| unconfigured("review_unconfigured"))?;
-        let page = bounded(
+        let page = widget_bounded(
             &state,
             "portal_widget_stopped_count",
             review.portal_merge_requests(&w.proof, scope, None, WidgetOrder::Oldest, 0),
@@ -830,19 +874,18 @@ pub async fn attention_count(state: AppState, request: Dispatched<PortalWidgetCt
                     .pipelines
                     .as_deref()
                     .ok_or_else(|| unconfigured("pipelines_unconfigured"))?;
-                let lamps = bounded(
+                let lamps = widget_bounded(
                     &state,
                     "portal_widget_attention_count",
-                    pipelines.portal_lamps(&w.proof, projects, Show::Pipeline),
+                    pipelines.portal_lamps(&w.proof, projects, Show::Pipeline, is_stop),
                 )
                 .await?;
-                let failed = lamps.iter().filter(|l| l.lamp == Lamp::Stop).count();
+                // Only failed lamps are kept (before the cap of 24): 24 of
+                // them means more may fail (said, never silently low).
                 let count = UserListCount {
-                    count: i64::try_from(failed).unwrap_or(i64::MAX),
+                    count: i64::try_from(lamps.len()).unwrap_or(i64::MAX),
                     capped: false,
-                    // Without a setting only the first 24 projects are
-                    // read: more may fail (said, never silently low).
-                    truncated: projects.is_none() && lamps.len() >= MAX_PROJECTS,
+                    truncated: lamps.len() >= MAX_PROJECTS,
                 };
                 (
                     Word::TitleFailed,
@@ -875,7 +918,7 @@ pub async fn attention_count(state: AppState, request: Dispatched<PortalWidgetCt
                     .review
                     .as_deref()
                     .ok_or_else(|| unconfigured("review_unconfigured"))?;
-                let page = bounded(
+                let page = widget_bounded(
                     &state,
                     "portal_widget_attention_count",
                     review.portal_merge_requests(&w.proof, list, projects, WidgetOrder::Oldest, 0),
@@ -926,7 +969,7 @@ pub async fn inbox(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Res
             .inbox
             .as_deref()
             .ok_or_else(|| unconfigured("in_app_notifications_unconfigured"))?;
-        let unread = bounded(
+        let unread = widget_bounded(
             &state,
             "portal_widget_inbox",
             inbox.portal_unread_count(&w.proof),
@@ -968,7 +1011,7 @@ pub async fn menu(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Resp
                     .pipelines
                     .as_deref()
                     .ok_or_else(|| unconfigured("pipelines_unconfigured"))?;
-                bounded(
+                widget_bounded(
                     &state,
                     "portal_widget_menu",
                     pipelines.portal_project(&w.proof, id),
@@ -1002,7 +1045,7 @@ pub async fn project_options(state: AppState, request: Dispatched<PortalWidgetCt
             .pipelines
             .as_deref()
             .ok_or_else(|| unconfigured("pipelines_unconfigured"))?;
-        let options = bounded(
+        let options = widget_bounded(
             &state,
             "portal_widget_options",
             pipelines.portal_projects(&w.proof),

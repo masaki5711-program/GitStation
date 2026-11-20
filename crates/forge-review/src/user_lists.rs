@@ -436,7 +436,15 @@ impl Review {
         let mut after = None;
         for _ in 0..COUNT_SCAN_PAGES {
             let rows = user_lists::widget_merge_requests(
-                &self.db, user, list, projects, order, after, COUNT_PAGE,
+                &self.db,
+                user,
+                list,
+                projects,
+                order,
+                after,
+                COUNT_PAGE,
+                // A count (`limit` 0) never reads the facts it does not show.
+                limit == 0,
             )
             .await?;
             let full = rows.len() >= COUNT_PAGE;

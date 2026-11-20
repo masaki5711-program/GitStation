@@ -271,7 +271,9 @@ pub enum WidgetList {
     StoppedInvolved,
     /// Open merge requests (anyone's) with an unresolved thread the person
     /// started whose newest note is somebody else's: a reply waits for
-    /// them (index `merge_request_discussions_started_open`).
+    /// them (index `merge_request_discussions_started_open`). Notes are
+    /// people's comments only (resolving, reopening and pushing write no
+    /// note), so no system note can count as a reply.
     Threads,
     /// The person's open merge requests with a head where a conflict is
     /// known, predicted, or could not be ruled out (the conflict scan ended
@@ -281,7 +283,8 @@ pub enum WidgetList {
     Conflicts,
     /// The person's open merge requests whose newest queue entry is live
     /// (`queued` / `testing`) or was removed by the queue itself (no
-    /// `removed_by`: ejected, not dequeued by a person).
+    /// `removed_by`: ejected, not dequeued by a person). An ejected merge
+    /// request stays listed until it is queued again, closed or merged.
     Queue,
 }
 
@@ -356,14 +359,20 @@ fn pair_side(t: &str, me: &str, other: &str, outcome: &str, select: &str) -> Str
 }
 
 /// A conflict of `t`'s current head could not be ruled out: the latest
-/// conflict scan ended `incomplete` or `failed`, the mergeability check
-/// ended `check_failed`, or a pair with a current open peer `failed`.
+/// conflict scan has not finished (`pending`, `scanning`) or ended
+/// `incomplete` / `failed`, the mergeability check has not finished
+/// (`unchecked`, `checking`) or ended `check_failed`, or a pair with a
+/// current open peer `failed` (indexes: the scans' and the mergeability's
+/// primary key `merge_request_id`; the pairs' primary key `(low_mr_id,
+/// high_mr_id)` and `merge_request_conflict_pairs_high`).
 fn conflict_unknown(t: &str) -> String {
     format!(
         "(EXISTS (SELECT 1 FROM forge.merge_request_conflict_scans s \
-            WHERE s.merge_request_id = {t}.id AND s.status IN ('incomplete', 'failed')) \
+            WHERE s.merge_request_id = {t}.id \
+              AND s.status IN ('pending', 'scanning', 'incomplete', 'failed')) \
           OR EXISTS (SELECT 1 FROM forge.merge_request_mergeability g \
-            WHERE g.merge_request_id = {t}.id AND g.status = 'check_failed') \
+            WHERE g.merge_request_id = {t}.id \
+              AND g.status IN ('unchecked', 'checking', 'check_failed')) \
           OR EXISTS ({}) OR EXISTS ({}))",
         pair_side(t, "low", "high", "failed", "1"),
         pair_side(t, "high", "low", "failed", "1")
@@ -380,10 +389,10 @@ fn newest_entry(t: &str, cols: &str) -> String {
 
 /// The P1 facts of `list`'s rows (four columns; constants for the lists
 /// that do not show them, so nothing more is read for them).
-fn widget_extras(list: WidgetList) -> String {
+fn widget_extras(list: WidgetList, light: bool) -> String {
     let t = "merge_requests";
-    let conflicts = matches!(list, WidgetList::Conflicts);
-    let queue = matches!(list, WidgetList::Queue);
+    let conflicts = !light && matches!(list, WidgetList::Conflicts);
+    let queue = !light && matches!(list, WidgetList::Queue);
     let unknown = if conflicts {
         conflict_unknown(t)
     } else {
@@ -425,15 +434,27 @@ fn widget_extras(list: WidgetList) -> String {
     )
 }
 
-/// One widget page: as [`page_sql`], in `order`, with the P1 facts.
-fn widget_page_sql(list: WidgetList, order: WidgetOrder, ctes: &str, page: &str) -> String {
+/// The facts' columns as constants: a count reads the rows only to decide
+/// them, never the facts it does not show.
+const NO_FACTS: &str =
+    "false AS conflict, false AS conflict_predicted, ARRAY[]::text[] AS failed_checks";
+
+/// One widget page: as [`page_sql`], in `order`, with the P1 facts (none
+/// when `light`: a count).
+fn widget_page_sql(
+    list: WidgetList,
+    order: WidgetOrder,
+    light: bool,
+    ctes: &str,
+    page: &str,
+) -> String {
     format!(
         "WITH RECURSIVE {ctes}page AS ({page}) \
          SELECT {COLUMNS}, {facts}, {extras} FROM forge.merge_requests \
          WHERE merge_requests.id IN (SELECT id FROM page) \
          ORDER BY merge_requests.id {dir}",
-        facts = facts(),
-        extras = widget_extras(list),
+        facts = if light { NO_FACTS.to_owned() } else { facts() },
+        extras = widget_extras(list, light),
         dir = order.dir()
     )
 }
@@ -455,14 +476,16 @@ fn own_widget_page(order: WidgetOrder, extra: &str) -> String {
 /// The statement of `list` in `order`: `$1` the person, `$2` the cursor
 /// (the previous page's last id), `$3` the page, `$4` the failed check
 /// names per row, `$5` the projects (or NULL), then `$6` the chain cap
-/// (`Review` / `Spec`) or whether approvals count (`Stopped*`).
-pub(crate) fn widget_sql(list: WidgetList, order: WidgetOrder) -> String {
+/// (`Review` / `Spec`) or whether approvals count (`Stopped*`). `light`:
+/// without the facts (a count).
+pub(crate) fn widget_sql(list: WidgetList, order: WidgetOrder, light: bool) -> String {
     let (after, dir) = (order.after(), order.dir());
     match list {
-        WidgetList::Mine => widget_page_sql(list, order, "", &own_widget_page(order, "")),
+        WidgetList::Mine => widget_page_sql(list, order, light, "", &own_widget_page(order, "")),
         WidgetList::Review | WidgetList::Spec => widget_page_sql(
             list,
             order,
+            light,
             &related_ctes("$1", "$6"),
             &approvable_page(
                 order,
@@ -477,6 +500,7 @@ pub(crate) fn widget_sql(list: WidgetList, order: WidgetOrder) -> String {
         WidgetList::StoppedMine | WidgetList::StoppedInvolved => widget_page_sql(
             list,
             order,
+            light,
             "",
             &format!(
                 "SELECT m.id FROM forge.auto_merge_states s \
@@ -492,6 +516,7 @@ pub(crate) fn widget_sql(list: WidgetList, order: WidgetOrder) -> String {
         WidgetList::Threads => widget_page_sql(
             list,
             order,
+            light,
             "",
             &format!(
                 "SELECT m.id FROM forge.merge_requests m \
@@ -508,6 +533,7 @@ pub(crate) fn widget_sql(list: WidgetList, order: WidgetOrder) -> String {
         WidgetList::Conflicts => widget_page_sql(
             list,
             order,
+            light,
             "",
             &own_widget_page(
                 order,
@@ -522,6 +548,7 @@ pub(crate) fn widget_sql(list: WidgetList, order: WidgetOrder) -> String {
         WidgetList::Queue => widget_page_sql(
             list,
             order,
+            light,
             "",
             &own_widget_page(
                 order,
@@ -568,7 +595,8 @@ struct WidgetFactsRow {
 
 /// One page of `list`'s candidates for `user`, in `projects` when given:
 /// ids after the cursor `after` in `order`, at most `limit` (capped at
-/// [`MAX_PAGE`]).
+/// [`MAX_PAGE`]). `light`: the facts are not read (constants: a count).
+#[allow(clippy::too_many_arguments)] // one statement's parameters
 pub async fn widget_merge_requests(
     db: &Db,
     user: UserId,
@@ -577,9 +605,10 @@ pub async fn widget_merge_requests(
     order: WidgetOrder,
     after: Option<i64>,
     limit: usize,
+    light: bool,
 ) -> Result<Vec<WidgetRow>, ForgeError> {
     let query = list.query();
-    let sql = widget_sql(list, order);
+    let sql = widget_sql(list, order, light);
     let limit = i64::try_from(limit.clamp(1, MAX_PAGE)).unwrap_or(1);
     let projects: Option<Vec<i64>> = projects.map(|ids| ids.iter().map(|p| p.get()).collect());
     let rows: Vec<WidgetFactsRow> = db
