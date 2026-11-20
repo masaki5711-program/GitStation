@@ -839,6 +839,10 @@ gstn = "user sessions"
 reason = "User administration (administrators)."
 
 [[excluded]]
+gstn = "user org-profile"
+reason = "A person's org claims (positions, rank): another person's is people_only; one's own is not a task tool."
+
+[[excluded]]
 gstn = "user end-sessions"
 reason = "User administration: people_only."
 

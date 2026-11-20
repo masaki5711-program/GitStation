@@ -246,12 +246,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "GET",
         "/api/v1/admin/users/{id}/org-profile",
-        Coverage::Planned("PFS org claims phase 1b"),
+        Coverage::Command("user org-profile"),
     ),
     (
         "GET",
         "/api/v1/user/org-profile",
-        Coverage::Planned("PFS org claims phase 1b"),
+        Coverage::Command("user org-profile"),
     ),
     (
         "DELETE",

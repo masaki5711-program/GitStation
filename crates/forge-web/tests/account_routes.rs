@@ -545,7 +545,11 @@ async fn every_signed_in_user_searches_names_and_only_administrators_list_users(
     let items = found.json["items"].as_array().expect("items");
     assert_eq!(items.len(), 2);
     let keys: Vec<&String> = items[0].as_object().expect("object").keys().collect();
-    assert_eq!(keys, ["display_name", "id", "username"], "names only");
+    assert_eq!(
+        keys,
+        ["display_name", "id", "primary_org_code", "username"],
+        "names and the primary department code only"
+    );
     for (uri, code) in [
         ("/api/v1/users?search=a", "FG-WEB-0006"),
         ("/api/v1/users", "FG-WEB-0006"),
@@ -857,6 +861,121 @@ async fn the_user_search_is_rate_limited_per_caller() {
         send(bob).await.0,
         StatusCode::OK,
         "another caller has its own window"
+    );
+    t.drop_now().await;
+}
+
+// ── the org claims snapshot (ADR-0021 amendment 2026-11-20) ──────────────
+
+async fn snapshot(t: &FreshDb, who: UserId) {
+    use forge_db::org_profiles::{record, Observed, OrgSnapshot, OrgUnit};
+    let s = OrgSnapshot {
+        org_units: vec![
+            OrgUnit {
+                code: "SYN-A-0001".to_owned(),
+                primary: true,
+            },
+            OrgUnit {
+                code: "SYN-B-0002".to_owned(),
+                primary: false,
+            },
+        ],
+        positions: vec!["member".to_owned()],
+        position_rank: Some(3),
+        plants: vec!["P001".to_owned()],
+        plant_code: Some("P001".to_owned()),
+    };
+    let _done = record(
+        &t.db,
+        &ctx("req-org-snapshot"),
+        who,
+        "http://127.0.0.1:1/realms/synthetic",
+        Observed::Valid(&s),
+    )
+    .await
+    .expect("snapshot");
+}
+
+#[tokio::test]
+async fn the_org_profile_is_the_owners_and_the_administrators_and_others_see_the_primary_code() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice", false).await;
+    let bob = user(&t, "bob", false).await;
+    let root = user(&t, "root", true).await;
+
+    // Before any sign-in through the PFS Keycloak: no snapshot.
+    let own = call(
+        &t.db,
+        "GET",
+        "/api/v1/user/org-profile",
+        Some(session(alice, false)),
+        None,
+    )
+    .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.json);
+    assert_eq!(own.json, json!({"user_id": alice.get(), "org": null}));
+
+    snapshot(&t, alice).await;
+    let own = call(
+        &t.db,
+        "GET",
+        "/api/v1/user/org-profile",
+        Some(token(alice, false, &[Scope::ReadApi])),
+        None,
+    )
+    .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.json);
+    let org = &own.json["org"];
+    assert_eq!(
+        org["org_units"][0],
+        json!({"code": "SYN-A-0001", "primary": true})
+    );
+    assert_eq!(org["positions"], json!(["member"]));
+    assert_eq!(org["position_rank"], 3);
+    assert_eq!(org["plant_code"], "P001");
+    assert_eq!(org["invalid_since"], Value::Null);
+
+    let uri = format!("/api/v1/admin/users/{}/org-profile", alice.get());
+    let admin = call(&t.db, "GET", &uri, Some(session(root, true)), None).await;
+    assert_eq!(admin.status, StatusCode::OK, "{}", admin.json);
+    assert_eq!(admin.json["user_id"], alice.get());
+    assert_eq!(admin.json["org"]["positions"], json!(["member"]));
+    let admin_token = call(
+        &t.db,
+        "GET",
+        &uri,
+        Some(token(root, true, &[Scope::ReadApi, Scope::Admin])),
+        None,
+    )
+    .await;
+    assert_eq!(admin_token.status, StatusCode::OK, "{}", admin_token.json);
+
+    // Another user, an administrator's token without `admin`, a
+    // read_repository token: refused before anything is read.
+    for (who, code) in [
+        (session(bob, false), "FG-AUTH-0003"),
+        (token(root, true, &[Scope::ReadApi]), "FG-AUTH-0003"),
+        (token(bob, false, &[Scope::ReadRepository]), "FG-AUTH-0002"),
+    ] {
+        let refused = call(&t.db, "GET", &uri, Some(who), None).await;
+        assert_eq!(refused.code(), code, "{}", refused.json);
+        assert!(refused.json.get("org").is_none());
+    }
+
+    // Everyone else: the primary department code next to the name only.
+    let found = call(
+        &t.db,
+        "GET",
+        "/api/v1/users?search=alice",
+        Some(session(bob, false)),
+        None,
+    )
+    .await;
+    assert_eq!(found.status, StatusCode::OK, "{}", found.json);
+    assert_eq!(found.json["items"][0]["primary_org_code"], "SYN-A-0001");
+    assert!(
+        !found.raw.windows(6).any(|w| w == b"member"),
+        "no positions"
     );
     t.drop_now().await;
 }

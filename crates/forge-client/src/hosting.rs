@@ -544,6 +544,53 @@ pub fn user(cli: &Cli, cmd: &UserCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Re
             let human = list_human(&body, "items", "-", "", &SESSION_KEYS);
             emit(io, cli, body, &human)
         }
+        UserCommand::OrgProfile { id } => {
+            let c = client(cli, env, io)?;
+            let path = id.map_or_else(
+                || "/api/v1/user/org-profile".to_owned(),
+                |id| format!("/api/v1/admin/users/{id}/org-profile"),
+            );
+            let body = call(&c, Method::Get, &path, &[], None)?;
+            let org = body.get("org").filter(|o| !o.is_null());
+            let human = match org {
+                None => format!("User {}: no org claims snapshot", text(&body, "user_id")),
+                Some(org) => {
+                    let units: Vec<String> = org
+                        .get("org_units")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .map(|u| {
+                                    let code = u.get("code").and_then(serde_json::Value::as_str);
+                                    let primary =
+                                        u.get("primary").and_then(serde_json::Value::as_bool);
+                                    format!(
+                                        "{}{}",
+                                        code.unwrap_or("-"),
+                                        if primary == Some(true) {
+                                            " (primary)"
+                                        } else {
+                                            ""
+                                        }
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    format!(
+                        "User {}: departments {}; plant {}",
+                        text(&body, "user_id"),
+                        if units.is_empty() {
+                            "-".to_owned()
+                        } else {
+                            units.join(", ")
+                        },
+                        text(org, "plant_code"),
+                    )
+                }
+            };
+            emit(io, cli, body, &human)
+        }
         UserCommand::EndSessions { id, yes } => {
             confirm(*yes, "ending a user's sessions")?;
             let c = client(cli, env, io)?;

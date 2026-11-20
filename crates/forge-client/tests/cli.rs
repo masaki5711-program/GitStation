@@ -969,6 +969,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "user list",
             "user disable",
             "user sessions",
+            "user org-profile",
             "user end-sessions",
             "token list",
             "token revoke",

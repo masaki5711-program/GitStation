@@ -1451,6 +1451,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["items","truncated"],"properties":{"items":{"type":"array","items":{"type":"object","required":["public_id","created_at","last_seen_at","idle_expires_at","absolute_expires_at","oidc","current"]}},"truncated":{"type":"boolean"}}}"#,
     },
     CommandSpec {
+        name: "user org-profile",
+        summary: "Show the org claims snapshot: your own, or with an id another user's (administrators).",
+        args: &[arg("id", "positional", false, "The user id (administrators); omit for your own.")],
+        examples: &["gstn user org-profile --json", "gstn user org-profile 12 --json"],
+        scopes: &["read_api"],
+        routes: &[
+            "GET /api/v1/user/org-profile",
+            "GET /api/v1/admin/users/{id}/org-profile",
+        ],
+        output: r#"{"type":"object","required":["user_id","org"],"properties":{"user_id":{"type":"integer"},"org":{"type":["object","null"]}}}"#,
+    },
+    CommandSpec {
         name: "user end-sessions",
         summary: "End every web session of a user (administrators). Needs --yes.",
         args: &[
