@@ -1,0 +1,74 @@
+# OPT-IN: a forge-runner for GitStation's own CI on the PFS trial server
+# (README 「自前の CI/CD」). Not part of deploy.sh: runner.sh installs it as
+# /srv/gitstation/compose.runner.yml and runs
+#   docker compose -p gitstation-trial-runner --project-directory /srv/gitstation \
+#     -f /srv/gitstation/compose.runner.yml …
+#
+# The security model of ops/runner (ops/runner/README.md): the runner runs
+# as the unprivileged user `podman` and starts every job with rootless
+# Podman inside this container (--network=none, --read-only, --cap-drop=all
+# per job). No Docker socket, not privileged, no published port (outbound
+# only: GitStation's PUBLIC_URL and Docker Hub for the pinned job images).
+# seccomp=unconfined and /dev/fuse are what nested rootless Podman needs
+# (as in ops/runner/compose.yml); acceptable on this TRIAL server only.
+#
+# Shared server: its own project / container / network / volume names
+# (gitstation-trial-runner*), bounded CPU, memory and pids, and nothing
+# here prunes or touches another container. Never `down -v` by habit: the
+# volumes only hold the job image cache and work directories, but they are
+# ours to remove, nobody else's.
+#
+# Files (runner.sh creates the directories; README):
+#   runner/config.toml       0640 gitstation-ci  (server = PUBLIC_URL)
+#   runner/containers.conf   0644 (copy of ops/runner/containers.conf)
+#   secrets-runner/token     0640 gitstation-ci  (the fgr_… line only)
+# They are group-readable because the container user `podman` reads them
+# through the extra group RUNNER_FILES_GID (gitstation-ci's gid). The token
+# is kept out of secrets/, which serve / worker mount.
+name: gitstation-trial-runner
+
+services:
+  runner:
+    image: gitstation/forge-runner:${RUNNER_TAG:?RUNNER_TAG is required (runner.sh)}
+    container_name: gitstation-trial-runner
+    user: podman
+    group_add: ["${RUNNER_FILES_GID:?RUNNER_FILES_GID is required (runner.sh)}"]
+    security_opt:
+      - seccomp=unconfined
+    # Every capability dropped except the two newuidmap / newgidmap need to
+    # write the job containers' uid / gid maps (rootless Podman). Nothing
+    # else is granted; `runner.sh up` runs `forge-runner check` (rootless
+    # podman, job isolation) before starting, so a missing capability shows
+    # there — add one only with the reason written here.
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    devices:
+      - /dev/fuse
+    volumes:
+      - ./runner/config.toml:/etc/forge-runner/config.toml:ro
+      - ./secrets-runner/token:/etc/forge-runner/token:ro
+      - ./runner/containers.conf:/home/podman/.config/containers/containers.conf.d/50-forge-job.conf:ro
+      - gitstation-trial-runner-podman:/home/podman/.local/share/containers
+      - gitstation-trial-runner-work:/var/lib/forge-runner
+    networks: [runner]
+    # The runner and every job together (config: memory = "1g" per job).
+    mem_limit: 3g
+    cpus: 2
+    pids_limit: 2048
+    stop_grace_period: 120s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+networks:
+  runner:
+    name: gitstation-trial-runner-net
+
+volumes:
+  gitstation-trial-runner-podman:
+    name: gitstation-trial-runner-podman
+  gitstation-trial-runner-work:
+    name: gitstation-trial-runner-work

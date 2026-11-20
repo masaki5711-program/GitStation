@@ -78,3 +78,12 @@ secret_keys_file = "/run/forge/secrets/ci-secret-keys"
 [webhook]
 # No allowed target yet (no webhook can be created until one is listed).
 secret_keys_file = "/run/forge/secrets/webhook-secret-keys"
+
+[deploy]
+# forge-deploy over SSH from the worker (ADR-0031, runbook deploy). The
+# private ed25519 key setup-server.sh generates (0600, the runner user);
+# its public half /srv/gitstation/deploy-ssh-key.pub goes to the target's
+# authorized_keys behind the dispatcher (deploy-target/setup-target.sh).
+# deploy.allowed_networks comes from DEPLOY_ALLOWED_NETWORKS in .env
+# (optional; e.g. the server's own LAN address /32). Timeouts: defaults.
+ssh_key_file = "/run/forge/secrets/deploy-ssh-key"

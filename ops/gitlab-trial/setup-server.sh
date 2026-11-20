@@ -14,6 +14,10 @@
 #     step 5, the role passwords of forge_app / forge_migrator / forge_maint
 #     and the PostgreSQL superuser password
 #   - /srv/gitstation/.env (0600) from a template the operator then edits
+#   - the forge-deploy ssh key (ed25519): the private half
+#     secrets/deploy-ssh-key (0600), the public half deploy-ssh-key.pub
+#     (0644, not a secret; it goes to the deploy target's authorized_keys,
+#     deploy-target/setup-target.sh). Only the PUBLIC key is ever printed.
 # It does NOT create secrets/oidc-client-secret (the Keycloak client's
 # secret: the operator writes it) and does not register the GitLab runner
 # (README "runner の登録").
@@ -115,6 +119,43 @@ secret "$GS_DIR/secrets/db-app.pw" hex
 for name in db-migrate.pw db-maint.pw pg-superuser.pw; do
   secret "$GS_DIR/secrets-privileged/$name" hex
 done
+# The forge-deploy key (ADR-0031): generated here, never overwritten; the
+# private file is never printed, only the public key.
+DEPLOY_KEY="$GS_DIR/secrets/deploy-ssh-key"
+DEPLOY_PUB="$GS_DIR/deploy-ssh-key.pub"
+if [ -s "$DEPLOY_KEY" ]; then
+  mode="$(stat -c %a "$DEPLOY_KEY")"
+  [ "$mode" = "600" ] || log "WARNING: $DEPLOY_KEY has mode $mode (ssh and forge refuse it: chmod 600)"
+  log "kept $DEPLOY_KEY"
+elif [ "$CHECK_ONLY" -eq 1 ]; then
+  todo "secret $DEPLOY_KEY"
+elif [ -d "$GS_DIR/secrets" ]; then
+  command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen is not installed (openssh-client)"
+  keydir="$(mktemp -d "$GS_DIR/secrets/.deploy-ssh-key.XXXXXX")"
+  ssh-keygen -q -t ed25519 -N '' -C "gitstation-trial-deploy" -f "$keydir/key" </dev/null >/dev/null
+  chmod 600 "$keydir/key"
+  chown "$GS_USER:$GS_USER" "$keydir/key"
+  mv -n "$keydir/key" "$DEPLOY_KEY"
+  rm -rf "$keydir"
+  log "generated $DEPLOY_KEY"
+fi
+if [ -s "$DEPLOY_KEY" ]; then
+  # The public half, derived from the private key (kept in step with it).
+  pub="$(ssh-keygen -y -f "$DEPLOY_KEY" 2>/dev/null)" || die "cannot read the public half of $DEPLOY_KEY"
+  if [ "$(cat "$DEPLOY_PUB" 2>/dev/null)" != "$pub" ]; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      todo "$DEPLOY_PUB (the public half of $DEPLOY_KEY)"
+    else
+      printf '%s\n' "$pub" > "$DEPLOY_PUB.tmp"
+      chmod 644 "$DEPLOY_PUB.tmp"
+      chown "$GS_USER:$GS_USER" "$DEPLOY_PUB.tmp"
+      mv -f "$DEPLOY_PUB.tmp" "$DEPLOY_PUB"
+      log "wrote $DEPLOY_PUB"
+    fi
+  fi
+  log "deploy public key (for deploy-target/setup-target.sh --pubkey $DEPLOY_PUB): $pub"
+fi
+
 if [ -s "$GS_DIR/secrets/oidc-client-secret" ]; then
   log "kept $GS_DIR/secrets/oidc-client-secret"
 else
@@ -142,6 +183,9 @@ PUBLISH_PORT=3306
 PUBLIC_URL=http://<server LAN address>:3306
 # The PFS Keycloak realm, exactly as its discovery document's "issuer".
 OIDC_ISSUER=http://<server LAN address>:18180/realms/iotpf
+# Optional: where forge-deploy may connect (CIDRs, comma-separated), e.g.
+# this server's LAN address with /32 for the demo app (README 自前の CI/CD).
+#DEPLOY_ALLOWED_NETWORKS=
 EOF
   chown "$GS_USER:$GS_USER" "$tmp"
   mv -n "$tmp" "$ENV_FILE"
