@@ -87,8 +87,18 @@ for f in secrets/db-app.pw secrets/cursor-keys secrets/audit-seal-keys secrets/w
          secrets/ci-secret-keys secrets/webhook-secret-keys secrets/oidc-client-secret \
          secrets-privileged/db-migrate.pw secrets-privileged/db-maint.pw secrets-privileged/pg-superuser.pw; do
   [ -s "$DEPLOY_DIR/$f" ] || die "secret $DEPLOY_DIR/$f is missing or empty (setup-server.sh; oidc-client-secret: README 手順 3)"
-  owner_only "$DEPLOY_DIR/$f" || die "secret $DEPLOY_DIR/$f must be owned by $(id -un) with mode 600"
+  owner_only "$DEPLOY_DIR/$f" || die "secret $DEPLOY_DIR/$f must be owned by $(id -un) with mode 600 (setup-server.sh)"
 done
+# The forge-deploy key: required only when this commit's forge.toml enables
+# [deploy] with it (forge refuses to deploy without it, FG-DEPLOY-0008).
+DEPLOY_KEY=secrets/deploy-ssh-key
+if grep -Eq '^ssh_key_file = "/run/forge/secrets/deploy-ssh-key"' "$SRC/ops/gitlab-trial/forge.toml"; then
+  [ -s "$DEPLOY_DIR/$DEPLOY_KEY" ] \
+    || die "secret $DEPLOY_DIR/$DEPLOY_KEY is missing: forge.toml enables [deploy] — re-run setup-server.sh as root (README 「この版からの更新」)"
+  owner_only "$DEPLOY_DIR/$DEPLOY_KEY" || die "secret $DEPLOY_DIR/$DEPLOY_KEY must be owned by $(id -un) with mode 600 (setup-server.sh)"
+elif [ ! -s "$DEPLOY_DIR/$DEPLOY_KEY" ]; then
+  log "WARNING: no $DEPLOY_DIR/$DEPLOY_KEY ([deploy] is not enabled in forge.toml; setup-server.sh creates it)"
+fi
 # The role passwords go into SQL at the bootstrap: hex only (setup-server.sh generates them).
 for f in secrets/db-app.pw secrets-privileged/db-migrate.pw secrets-privileged/db-maint.pw; do
   grep -Eqx '[0-9a-f]{32,128}' "$DEPLOY_DIR/$f" || die "$f must be one line of hex (setup-server.sh generates it)"
