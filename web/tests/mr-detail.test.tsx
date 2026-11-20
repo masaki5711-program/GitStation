@@ -6,7 +6,7 @@
 // shown (no labels or milestone).
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { TFunction } from 'i18next';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createI18n } from '../src/i18n';
 import { approvalBadge, approvalTotals, checksBadge, checkTotals } from '../src/features/mr/MrSidePanel';
@@ -73,6 +73,18 @@ function withApprovalsAndChecks(checks = [check('ci/pipeline', 'completed', 'suc
 const never = () => new Promise<Response>(() => undefined);
 
 describe('merge request header', () => {
+  // The fixture opened the MR at 2026-10-20T01:00:00Z. Pin the clock three hours later
+  // so the relative time is always "3 hours ago" / "3 時間前" (numeric: auto turns
+  // one day into "yesterday", and today's date into "last month")
+  // (only Date is faked: timers and promises stay real for the queries).
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-20T04:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('one sentence with the time and the author, a <time> with the exact moment, and source → target', async () => {
     await open({ [`GET ${MR_API}/3`]: () => json(200, mr(3, { draft: true })) });
     const header = screen.getByRole('heading', { level: 1 }).closest('header');
