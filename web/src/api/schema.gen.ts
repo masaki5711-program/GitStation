@@ -6129,6 +6129,33 @@ export interface components {
             /** Format: int64 */
             id: number;
         };
+        /**
+         * @description One unit of the PFS org master (ADR-0038 §1): its code, level and
+         *     names.
+         */
+        OrgNameBody: {
+            code: string;
+            /** @description `division`, `department`, `section` or `team`. */
+            level: string;
+            name_en: string | null;
+            name_id: string | null;
+            name_ja: string;
+        };
+        /**
+         * @description A unit and the section and department above it, from the copy of the
+         *     PFS org master (found by the parents' levels, never by the code).
+         */
+        OrgPathBody: {
+            department: null | components["schemas"]["OrgNameBody"];
+            section: null | components["schemas"]["OrgNameBody"];
+            /**
+             * @description The names are the last known ones (「最終確認時点」): the person's
+             *     org snapshot is invalid or older than `org.max_profile_age_hours`,
+             *     or the copy is older than `org.master_max_age_hours` (ADR-0038 §4).
+             */
+            stale: boolean;
+            unit: components["schemas"]["OrgNameBody"];
+        };
         /** @description The snapshot of the identity provider's org claims. */
         OrgProfileBody: {
             /** @description UTC, RFC 3339: the values last changed. */
@@ -6155,6 +6182,7 @@ export interface components {
         OrgUnitBody: {
             /** @description The PFS org code (`^[A-Z0-9][A-Z0-9_-]{0,19}$`). */
             code: string;
+            path: null | components["schemas"]["OrgPathBody"];
             /** @description The person's main department (at most one; listed first). */
             primary: boolean;
         };
@@ -7531,6 +7559,7 @@ export interface components {
             /** Format: int64 */
             approver_id: number;
             counted: boolean;
+            primary_org: null | components["schemas"]["OrgPathBody"];
             /**
              * @description The approver's primary department code (ADR-0021 amendment
              *     2026-11-20, added within `schema_version` 1); `null` without one.
@@ -7982,6 +8011,7 @@ export interface components {
             display_name: string;
             /** Format: int64 */
             id: number;
+            primary_org: null | components["schemas"]["OrgPathBody"];
             /**
              * @description The primary department's code from the identity provider's org
              *     claims (ADR-0021 amendment 2026-11-20); `null` without one.

@@ -364,7 +364,7 @@ function AddMember({ scope, members }: { scope: Scope; members: Member[] }) {
                   <li key={u.id}>
                     <span>
                       {u.display_name} <code>{u.username}</code>
-                      <OrgCode code={u.primary_org_code} />
+                      <OrgCode code={u.primary_org_code} path={u.primary_org} />
                     </span>
                     {present.has(u.id) ? (
                       <span className={styles.muted}>{t('members.already')}</span>

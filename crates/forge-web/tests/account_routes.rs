@@ -547,8 +547,14 @@ async fn every_signed_in_user_searches_names_and_only_administrators_list_users(
     let keys: Vec<&String> = items[0].as_object().expect("object").keys().collect();
     assert_eq!(
         keys,
-        ["display_name", "id", "primary_org_code", "username"],
-        "names and the primary department code only"
+        [
+            "display_name",
+            "id",
+            "primary_org",
+            "primary_org_code",
+            "username"
+        ],
+        "names and the primary department (code and names) only"
     );
     for (uri, code) in [
         ("/api/v1/users?search=a", "FG-WEB-0006"),
@@ -896,6 +902,52 @@ async fn snapshot(t: &FreshDb, who: UserId) {
     .expect("snapshot");
 }
 
+async fn master(t: &FreshDb) {
+    use forge_db::org_master::{replace, LocalizedName, MasterUnit, ReplacePolicy, UnitLevel};
+    let unit = |code: &str, level, parent: Option<&str>, ja: &str, en: &str| MasterUnit {
+        plant_code: "P001".to_owned(),
+        code: code.to_owned(),
+        level,
+        parent_code: parent.map(str::to_owned),
+        name: LocalizedName {
+            ja: ja.to_owned(),
+            en: Some(en.to_owned()),
+            id: None,
+        },
+        cost_center: None,
+        head_staff_id: Some("SYN0009".to_owned()),
+        valid_from: None,
+        version: 1,
+    };
+    replace(
+        &t.db,
+        &ctx("req-org-master"),
+        &[
+            unit(
+                "SYN-D-0001",
+                UnitLevel::Department,
+                None,
+                "合成部",
+                "Synthetic Dept",
+            ),
+            unit(
+                "SYN-A-0001",
+                UnitLevel::Section,
+                Some("SYN-D-0001"),
+                "合成課",
+                "Synthetic Section",
+            ),
+        ],
+        &[],
+        // No positions in this fixture: the shrink guard's opt-in.
+        ReplacePolicy {
+            allow_large_shrink: true,
+        },
+    )
+    .await
+    .expect("master");
+}
+
 #[tokio::test]
 async fn the_org_profile_is_the_owners_and_the_administrators_and_others_see_the_primary_code() {
     let t = FreshDb::migrated().await;
@@ -928,7 +980,7 @@ async fn the_org_profile_is_the_owners_and_the_administrators_and_others_see_the
     let org = &own.json["org"];
     assert_eq!(
         org["org_units"][0],
-        json!({"code": "SYN-A-0001", "primary": true})
+        json!({"code": "SYN-A-0001", "primary": true, "path": null})
     );
     assert_eq!(org["positions"], json!(["member"]));
     assert_eq!(org["position_rank"], 3);
@@ -973,9 +1025,43 @@ async fn the_org_profile_is_the_owners_and_the_administrators_and_others_see_the
     .await;
     assert_eq!(found.status, StatusCode::OK, "{}", found.json);
     assert_eq!(found.json["items"][0]["primary_org_code"], "SYN-A-0001");
+    assert_eq!(found.json["items"][0]["primary_org"], Value::Null);
     assert!(
         !found.raw.windows(6).any(|w| w == b"member"),
         "no positions"
+    );
+
+    // ADR-0038 §1: once the org master is copied, the names come with the
+    // codes (the section's department found by its parent, not its code).
+    master(&t).await;
+    let own = call(
+        &t.db,
+        "GET",
+        "/api/v1/user/org-profile",
+        Some(session(alice, false)),
+        None,
+    )
+    .await;
+    let path = &own.json["org"]["org_units"][0]["path"];
+    assert_eq!(path["unit"]["name_ja"], "合成課", "{}", own.json);
+    assert_eq!(path["section"]["code"], "SYN-A-0001");
+    assert_eq!(path["department"]["code"], "SYN-D-0001");
+    assert_eq!(path["stale"], false);
+    assert_eq!(own.json["org"]["org_units"][1]["path"], Value::Null);
+    let found = call(
+        &t.db,
+        "GET",
+        "/api/v1/users?search=alice",
+        Some(session(bob, false)),
+        None,
+    )
+    .await;
+    let primary = &found.json["items"][0]["primary_org"];
+    assert_eq!(primary["department"]["name_ja"], "合成部", "{}", found.json);
+    assert_eq!(primary["section"]["name_en"], "Synthetic Section");
+    assert!(
+        !found.raw.windows(7).any(|w| w == b"SYN0009"),
+        "never the head's staff id"
     );
     t.drop_now().await;
 }

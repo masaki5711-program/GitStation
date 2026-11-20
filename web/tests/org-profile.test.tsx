@@ -1,7 +1,9 @@
 // ADR-0021 amendment 2026-11-20: the org claims' snapshot on screen — the
 // account page and the user menu show the departments (the primary first,
 // marked with the text 「主」, not colour alone), positions and plant; the
-// people pickers show the primary department code only. Synthetic codes.
+// people pickers show the primary department code only. ADR-0038 §1: once
+// the PFS org master is copied, the names of the department and section
+// replace the code (the code stays in the title). Synthetic codes and names.
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
@@ -12,8 +14,8 @@ import { docLintMigration } from './merge-settings-fixtures';
 
 const ORG = {
   org_units: [
-    { code: 'SYN-A-0001', primary: true },
-    { code: 'SYN-B-0002', primary: false },
+    { code: 'SYN-A-0001', primary: true, path: null },
+    { code: 'SYN-B-0002', primary: false, path: null },
   ],
   positions: ['member', 'line_lead'],
   position_rank: 3,
@@ -31,6 +33,21 @@ const account = (org: unknown) => ({
   'GET /api/v1/user/tokens': () => json(200, { tokens: [] }),
   [`GET ${ORG_PROFILE_PATH}`]: () => json(200, { user_id: 5, org }),
 });
+
+const NAME = (code: string, level: string, ja: string, en: string | null) => ({
+  code,
+  level,
+  name_ja: ja,
+  name_en: en,
+  name_id: null,
+});
+
+const PATH = {
+  unit: NAME('SYN-T-0001', 'team', '合成職場', 'Synthetic Team'),
+  section: NAME('SYN-S-0001', 'section', '合成課', 'Synthetic Section'),
+  department: NAME('SYN-D-0001', 'department', '合成部', null),
+  stale: false,
+};
 
 describe('org claims snapshot', () => {
   it('the account page lists the departments with the primary first and marked in text', async () => {
@@ -102,5 +119,72 @@ describe('org claims snapshot', () => {
     const results = await screen.findByRole('list', { name: 'Search results' });
     await within(results).findByText('SYN-A-0001');
     expect(within(results).getAllByText('Department code', { exact: false })).toHaveLength(1);
+  });
+
+  it('the account page shows the names from the org master, and the code', async () => {
+    const named = {
+      ...ORG,
+      org_units: [
+        { code: 'SYN-T-0001', primary: true, path: PATH },
+        { code: 'SYN-B-0002', primary: false, path: null },
+      ],
+    };
+    const server = mockServer(account(named));
+    await renderApp({ fetch: server.fetch, path: '/taro/-/settings' });
+    const section = (await screen.findByRole('heading', { name: '所属' })).closest('section') as HTMLElement;
+    await within(section).findByText('合成部 / 合成課 / 合成職場');
+    const items = within(section).getAllByRole('listitem');
+    expect(items[0]?.textContent).toBe('主合成部 / 合成課 / 合成職場SYN-T-0001');
+    // Not in the master: the code only.
+    expect(items[1]?.textContent).toBe('SYN-B-0002');
+  });
+
+  it('marks names that are the last known ones', async () => {
+    const named = {
+      ...ORG,
+      org_units: [{ code: 'SYN-T-0001', primary: true, path: { ...PATH, stale: true } }],
+    };
+    const server = mockServer(account(named));
+    await renderApp({ fetch: server.fetch, path: '/taro/-/settings' });
+    const section = (await screen.findByRole('heading', { name: '所属' })).closest('section') as HTMLElement;
+    await within(section).findByText('最終確認時点');
+    const items = within(section).getAllByRole('listitem');
+    expect(items[0]?.textContent).toBe('主合成部 / 合成課 / 合成職場最終確認時点SYN-T-0001');
+  });
+
+  it('the member picker shows the department and section names, in the UI language', async () => {
+    const server = mockServer({
+      ...signedIn(),
+      'GET /api/v1/namespaces/resolve': () => json(200, { ...RESOLVE_PROJECT }),
+      'GET /api/v1/projects/7': () => json(200, PROJECT),
+      'GET /api/v1/projects/7/protected-refs': () => json(200, { rules: [] }),
+      'GET /api/v1/projects/7/merge-settings': () => json(200, mergeSettings()),
+      'GET /api/v1/projects/7/approval-rules': () => json(200, { rules: [] }),
+      'GET /api/v1/projects/7/integration-bindings': () => json(200, { items: [] }),
+      'GET /api/v1/projects/7/doc-lint/migration': () => json(200, docLintMigration()),
+      'GET /api/v1/groups': () => page([]),
+      'GET /api/v1/projects': () => page([]),
+      'GET /api/v1/projects/7/members': () => json(200, { members: [], next_after: null }),
+      'GET /api/v1/users': () =>
+        json(200, {
+          items: [
+            {
+              id: 9,
+              username: 'hanako',
+              display_name: 'HANAKO',
+              primary_org_code: 'SYN-T-0001',
+              primary_org: PATH,
+            },
+          ],
+        }),
+    });
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/members', lang: 'en' });
+    fireEvent.change(await screen.findByLabelText('Find a user'), { target: { value: 'ha' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    const results = await screen.findByRole('list', { name: 'Search results' });
+    // en: the department has no English name, so its Japanese one is shown.
+    const label = await within(results).findByText('合成部 / Synthetic Section', { exact: false });
+    expect(label.getAttribute('title')).toBe('Department code: SYN-T-0001');
+    expect(label.textContent).toBe('Organisation 合成部 / Synthetic Section');
   });
 });
