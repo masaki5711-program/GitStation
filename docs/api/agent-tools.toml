@@ -1111,6 +1111,10 @@ gstn = "mr revert"
 reason = "M4 C10: opening a revert merge request is opening a merge request (an agent may); a tool comes with the agent's main-broken flow (plan 04 M-4)."
 
 [[deferred]]
+gstn = "mr run-pipeline"
+reason = "Plan 18 S5: asking for the merge request pipeline on the current target; a tool comes with the agent's merge flow (run_pipeline covers a branch meanwhile)."
+
+[[deferred]]
 gstn = "autofix status"
 reason = "M4 C14: a read tool waits for the M5 autofix series (the merge request screen and gstn show the line meanwhile)."
 

@@ -347,6 +347,10 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
         MrCommand::Revert { project, iid } => {
             crate::mr_revert::revert(cli, (*project, *iid), env, io)
         }
+        // Plan 18 S5: the merge request pipeline (`mr_run_pipeline.rs`).
+        MrCommand::RunPipeline { project, iid } => {
+            crate::mr_run_pipeline::run(cli, (*project, *iid), env, io)
+        }
         // M3 R6: the merge status (`mr_conditions.rs`).
         MrCommand::Status { project, iid } => {
             crate::mr_conditions::status(cli, (*project, *iid), env, io)
