@@ -29,7 +29,6 @@ variables:
   # overrides it). Used directly in `tags:`.
   GS_RUNNER_TAG: gitstation-pfs
   GS_IMAGE_REPO: gitstation/forge
-  GS_DEPLOY_DIR: /srv/gitstation
   GIT_DEPTH: "20"
 
 build:image:
@@ -45,12 +44,17 @@ build:image:
     - bash -n ops/gitlab-trial/deploy.sh
     - bash -n ops/gitlab-trial/setup-server.sh
     - IMAGE_TAG=check PUBLISH_ADDR=192.0.2.1 PUBLIC_URL=http://192.0.2.1:3306 OIDC_ISSUER=http://192.0.2.1:18180/realms/iotpf docker compose -p gitstation-trial-check -f ops/gitlab-trial/compose.yml config -q
+    # Shared server: the build steps run inside dockerd's BuildKit, so the
+    # Dockerfile itself runs npm and cargo under `nice -n 10` with 3 cargo
+    # jobs. No per-build memory cap applies there (BuildKit ignores
+    # docker build --memory); memory is bounded by the job count (about
+    # 1-1.5 GiB per rustc at the peak).
     - >
       docker build -f ops/gitlab-trial/Dockerfile
       --build-arg FORGE_UID="$(id -u)" --build-arg FORGE_GID="$(id -g)"
       --build-arg GIT_COMMIT="$CI_COMMIT_SHA"
       ${NPM_CONFIG_REGISTRY:+--build-arg NPM_CONFIG_REGISTRY="$NPM_CONFIG_REGISTRY"}
-      --label "io.gitstation.pipeline=$CI_PIPELINE_ID"
+      --label "io.gitstation.pipeline=$CI_PIPELINE_ID" --label io.gitstation.trial=1
       -t "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" .
     - docker run --rm --entrypoint /usr/local/bin/forge "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" --version
     # Bounded disk: keep this commit's image, any image a container uses, and the 3 newest others.
@@ -63,6 +67,10 @@ build:image:
             docker image rm "$img" >/dev/null || echo "could not remove $img (kept)"
           done
       docker image ls "$GS_IMAGE_REPO"
+    # Only GitStation's own leftovers: dangling images it labelled, and its
+    # own cache mounts (id gitstation-trial-*) unused for a week.
+    - docker image prune -f --filter label=io.gitstation.trial=1
+    - docker builder prune -f --filter type=exec.cachemount --filter 'description~=gitstation-trial-' --filter until=168h
 
 deploy:pfs-trial:
   stage: deploy

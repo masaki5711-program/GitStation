@@ -14,8 +14,10 @@
 # container uid.
 
 ARG RUST_IMAGE=docker.io/library/rust:1.99.1-slim-bookworm@sha256:f2c004e3d2d8b547e8cf7ffbc29205385f4e71d23e53e4e383065db5e9f822cd
-ARG NODE_IMAGE=docker.io/library/node:22.23.1-bookworm-slim
-ARG RUNTIME_IMAGE=docker.io/library/debian:bookworm-slim
+# Pinned by digest (taken from the local images 2026-11-20); change tag and
+# digest together.
+ARG NODE_IMAGE=docker.io/library/node:22.23.1-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
+ARG RUNTIME_IMAGE=docker.io/library/debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
 
 # ── 1. the web UI (web/dist, embedded into the binary by `embed-ui`) ──
 FROM ${NODE_IMAGE} AS web
@@ -24,13 +26,14 @@ WORKDIR /src/web
 ARG NPM_CONFIG_REGISTRY
 ENV NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY}
 COPY web/package.json web/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+RUN --mount=type=cache,id=gitstation-trial-npm,target=/root/.npm npm ci --no-audit --no-fund
 COPY web/ ./
-RUN npm run build && test -f dist/index.html
+RUN nice -n 10 npm run build && test -f dist/index.html
 
 # ── 2. forge (release, --features embed-ui; as ops/linux/build-release.sh) ──
 FROM ${RUST_IMAGE} AS forge
-ARG CARGO_BUILD_JOBS=4
+# 3 of the shared server's 8 CPUs, under nice (the server is shared).
+ARG CARGO_BUILD_JOBS=3
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
     CARGO_INCREMENTAL=0 \
     CARGO_TERM_COLOR=never
@@ -41,10 +44,10 @@ COPY crates ./crates
 COPY docs ./docs
 COPY ops/db ./ops/db
 COPY --from=web /src/web/dist ./web/dist
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,id=gitstation-trial-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=gitstation-trial-cargo-target,target=/src/target \
     grep -q "^channel = \"$(rustc --version | cut -d' ' -f2)\"" rust-toolchain.toml \
-    && cargo build --release --locked -p forge-cli --features embed-ui \
+    && nice -n 10 cargo build --release --locked -p forge-cli --features embed-ui \
     && install -D -m 0755 target/release/forge /out/forge
 
 # ── 3. runtime ──

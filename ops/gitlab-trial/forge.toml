@@ -31,8 +31,9 @@ root = "/var/lib/forge/repositories"
 # The compose service `db` on the project's internal network only.
 url = "postgres://forge_app@db:5432/forge"
 password_file = "/run/forge/secrets/db-app.pw"
-# The connection never leaves the private bridge network of this compose
-# project (PostgreSQL is not published), so no TLS on it.
+# No TLS: ONLY because the connection stays on the private bridge network
+# gitstation-trial-net of this compose project (PostgreSQL is not
+# published). Never reuse these two lines for a database on another host.
 tls_mode = "disable"
 tls_allow_unverified = true
 # Memory-lean pools: serve and worker each open up to 5 + 5, the server

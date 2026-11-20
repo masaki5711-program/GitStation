@@ -29,7 +29,8 @@ GitStation を PFS の試験サーバーに社内 GitLab の CI/CD（`build:imag
    ```sh
    cd /srv/gitstation
    tail -n 5 deployed.log
-   docker compose -p gitstation-trial --env-file .env -f compose.yml ps -a
+   # compose.yml needs IMAGE_TAG: the last deployed one (any value works for ps / logs)
+   IMAGE_TAG="$(tail -n 1 deployed.log | cut -d' ' -f2)" docker compose -p gitstation-trial --env-file .env -f compose.yml ps -a
    docker logs --tail 100 gitstation-trial-serve 2>&1 | grep -E '"error_code"|"level":"(WARN|ERROR)"'
    docker exec gitstation-trial-serve forge doctor
    ```
@@ -58,7 +59,14 @@ GitLab の `main` のパイプラインで `build:image` が成功したのを�
 戻したい版のパイプラインの `deploy:pfs-trial` をもう一度実行する（イメージが消えていれば、そのパイプラインの `build:image` を先に）。
 間にマイグレーションが入っていなければこれで終わり。`FG-DB-0004 reason=db_ahead` で起動しなければ「DB を戻す」。
 
-### DB を戻す `[MUTATING — needs approval]`
+配置が失敗したときの `deploy.sh` の動き: その配置でマイグレーションが 1 つも適用されていなければ、前の版を起動し直す。
+適用されていれば、前の版は新しいスキーマを拒む（`db_ahead`）ので**何も起動し直さず**（新しい版は動いたまま、または止まったまま）、
+「直した版を出す（fix forward）か DB を戻す」とログに出す。どちらにするかは人が決める。
+
+### DB を戻す（未検証） `[MUTATING — needs approval]`
+
+> **未検証の手順。** 試験サーバーではまだ一度も実行して確かめていない。実行する前に人が中身を読み、結果を障害記録に残して
+> この手順を直す。
 
 **ダンプの後に作られた DB の行は失われる**（リポジトリのファイルは戻らない）。今の DB は消さずに名前を変えて残す。
 サーバーで `gitstation-ci` として:
@@ -84,7 +92,7 @@ docker exec -i -u postgres gitstation-trial-db pg_restore --exit-on-error -d for
 ## Verify
 
 - ジョブのログの最後が `[deploy …] done: <sha> is live on http://<PUBLISH_ADDR>:3306`。`deployed.log` に 1 行増えている。
-- ブラウザで `PUBLIC_URL` を開き、Keycloak でログインできる（`gstn_session` のクッキーができる）。
+- ブラウザで `PUBLIC_URL` を開き、Keycloak でログインできる（`gstn_3306_session` のクッキーができる）。
 - `docker exec gitstation-trial-serve forge doctor` の FAIL が 0（`auth.oidc` は平文 HTTP の warn、`backup.*` は warn でよい）。
 - 試しのリポジトリに `git clone` / `git push` できる（`http://<サーバー>:3306/<グループ>/<プロジェクト>.git`、パスワードはトークン）。
 

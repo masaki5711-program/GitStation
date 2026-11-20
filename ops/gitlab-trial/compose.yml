@@ -71,6 +71,12 @@ services:
       - gitstation-trial-pgdata:/var/lib/postgresql/data
       - ./secrets-privileged/pg-superuser.pw:/run/forge/privileged/pg-superuser.pw:ro
     networks: [gitstation]
+    # The entrypoint starts as root, fixes the data directory and drops to
+    # postgres: only those capabilities (checked with this image 2026-11-20:
+    # initdb and start succeed).
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
     shm_size: 256mb
     mem_limit: 1g
     cpus: 2

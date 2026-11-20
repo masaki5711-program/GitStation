@@ -38,30 +38,60 @@ MR やブランチのパイプラインは**作られない**（`.gitlab-ci.yml`
 秘密は**リポジトリにも GitLab の CI/CD 変数にも置かない**。コンテナの利用者は `gitstation-ci` と同じ uid/gid でイメージに作る
 （`build:image` が `--build-arg FORGE_UID=$(id -u)` を渡す）ので、0600 の秘密のファイルをそのまま読める。
 
+### runner の権限（重要）
+
+runner の利用者 `gitstation-ci` は `docker` グループに入っている。**`docker` グループは、この共有サーバーの root と同じ**
+（どのコンテナも起動でき、ホストのどのファイルもマウントできる。PFS・bankmasalah のデータにも届く）。だから:
+
+- `main` は保護し、**MR の承認を必須**にし、マージできるのは Maintainer だけにする（手順 1）。`main` に入ったコードは
+  この権限で動く
+- runner は Protected（保護されたブランチのジョブだけ）、Locked、タグ付きのジョブだけ。MR・ブランチのパイプラインは作らない
+- 配置のボタンは保護環境 `trial-gitstation` の許可者だけが押せる
+- 配置先・バックアップの数は `deploy.sh` に固定（パイプライン変数では変えられない）
+
+### 外への通信（ビルドに要る）
+
+`build:image` はサーバーの Docker で、次へ出る（社内のミラー・プロキシがあればそれ。npm は CI/CD 変数 `NPM_CONFIG_REGISTRY` で替えられる）:
+
+| 行き先 | 何のため |
+|---|---|
+| `docker.io`（Docker Hub）| 土台のイメージ（rust・node・debian はダイジェストで固定、`timescale/timescaledb`） |
+| `registry.npmjs.org` | `web/` の `npm ci` |
+| `index.crates.io` / `static.crates.io` | `cargo build --locked` のクレート |
+| `deb.debian.org` | 実行イメージの `apt-get`（git・curl・tini） |
+
+動かしているとき（serve / worker）の外への通信は Keycloak（`OIDC_ISSUER`）だけ。
+
 ### 平文 HTTP について
 
 このサーバーは TLS なし。forge は既定では http の `web.base_url` を拒み、ブラウザは http のオリジンから `__Host-`・`Secure` の
 クッキーを受け取らない。そのため `forge.toml` で次の 2 つを明示している（**本番の設定には写さない**）:
 
-- `web.allow_insecure_http = true` — loopback 以外の http の base URL を許し、セッションのクッキーを `gstn_session` / `gstn_oidc`
-  （`Secure` なし、`HttpOnly`・`SameSite=Lax` は残る）で出す（ADR-0021 Amendment 2026-11-20）。起動のたびに WARN
+- `web.allow_insecure_http = true` — loopback 以外の http の base URL を許し、セッションのクッキーを `gstn_3306_session` /
+  `gstn_3306_oidc`（名前に公開のポート。`Secure` なし、`HttpOnly`・`SameSite=Lax` は残る）で出す（ADR-0021 Amendment 2026-11-20）。起動のたびに WARN
   `forge.serve.plain_http`、`forge doctor` の `auth.oidc` は warn になる。
 - `auth.oidc.allow_insecure_issuer = true` — http の Keycloak（`OIDC_ISSUER`）を許す。
 
 クッキー・トークン・git のパスワードは社内 LAN を平文で流れる。試験の利用者・データに限る。
+
+**残るリスク:** ブラウザはクッキーをポートで分けない。同じサーバー（同じアドレス）の別のアプリ（PFS、bankmasalah ほか）は、
+意図すれば GitStation のセッションのクッキーを読み、植えられる（名前にポートを入れて防げるのは偶然の衝突だけ）。同居するアプリを
+信頼できる試験の間だけの割り切り。本当の対処は GitStation 専用のホスト名か TLS（そのとき `web.allow_insecure_http` を外す）。
 `gstn`（CLI）は localhost 以外の http を受け付けないので、このサーバーには使えない（git の clone / push と Web は使える）。
 
 ## 初めて置くとき
 
 ### 手順 1. GitLab の設定（Maintainer）
 
-- 設定 → リポジトリ → 保護ブランチ: `main` を保護（push は Maintainer、force push 不可）
+- 設定 → リポジトリ → 保護ブランチ: `main` を保護（**push もマージも Maintainer だけ**、force push 不可）。`main` は GitStation 側で
+  レビュー済みのものを Maintainer が `git push gitlab main` で写す
+- 設定 → マージリクエスト: **承認を必須**（1 人以上）。承認のルールを Developer が外せないようにする
 - 設定 → CI/CD → 変数: **パイプライン変数を使える最小のロール = Maintainer**（「Minimum role to use pipeline variables」）。
   秘密の CI/CD 変数は作らない
 - 設定 → CI/CD → Runners: **共有 runner とグループ runner を無効**にし、プロジェクト runner を作る:
   タグ `gitstation-pfs`、**Protected**、**Lock to current projects**、「タグなしのジョブを実行」は**オフ**。表示された `glrt-…` のトークンを控える
 - 操作 → 環境: `trial-gitstation` を作り（最初の配置でもできる）、外部 URL に `http://<サーバー>:3306` を入れる
-- 設定 → CI/CD → 保護環境: `trial-gitstation` を保護し、配置できるのを Maintainer（または指名した人）だけにする
+- 設定 → CI/CD → 保護環境: `trial-gitstation` を**必ず**保護し、配置できるのを Maintainer（または指名した人）だけにする
 
 ### 手順 2. サーバー（root）
 

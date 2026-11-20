@@ -174,4 +174,28 @@ fn every_secret_is_mounted_created_and_checked() {
     for bad in ["down", "volume rm", "prune", "dropdb", "DROP DATABASE"] {
         assert!(!code.contains(bad), "deploy.sh must not run `{bad}`");
     }
+    // Pipeline variables never redirect the deploy, and every exit after
+    // the stop goes through the failure handler.
+    for env in ["GS_DEPLOY_DIR", "GS_KEEP_BACKUPS"] {
+        assert!(!code.contains(env), "deploy.sh must not read {env}");
+    }
+    assert!(code.contains("trap on_failure EXIT"));
+    let stop = code.find("stop serve worker").expect("the stop");
+    let trap = code.find("trap on_failure EXIT").expect("the trap");
+    let shipped = code.find("SHIPPED=").expect("the bootstrap version");
+    assert!(
+        trap < stop && shipped < stop,
+        "preconditions and the trap come before the stop"
+    );
+    // Every service runs without new privileges and with dropped capabilities.
+    assert_eq!(
+        compose.matches("cap_drop: [ALL]").count(),
+        2,
+        "db and x-forge"
+    );
+    assert_eq!(
+        compose.matches("no-new-privileges:true").count(),
+        2,
+        "db and x-forge"
+    );
 }
