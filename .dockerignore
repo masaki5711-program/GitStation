@@ -1,4 +1,5 @@
-# Build context for ops/runner/Dockerfile (context = repository root).
+# Build context for ops/runner/Dockerfile and ops/gitlab-trial/Dockerfile
+# (context = repository root).
 .git
 target
 web/node_modules

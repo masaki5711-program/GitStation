@@ -1,0 +1,79 @@
+# forge.toml — GitStation on the PFS trial server (GitLab CI/CD deploy,
+# ops/gitlab-trial/README.md). Mounted read-only at /etc/forge/forge.toml in
+# the serve / worker / migrate containers of compose.yml; deploy.sh copies
+# it from the deployed commit to /srv/gitstation/forge.toml.
+#
+# No secret, host name or address is written here. The server-specific
+# values come from /srv/gitstation/.env through the environment
+# (FORGE_<SECTION>_<KEY> overrides this file; compose.yml):
+#   web.base_url        ← PUBLIC_URL     (http://<server>:3306)
+#   auth.oidc.issuer    ← OIDC_ISSUER    (http://<server>:18180/realms/iotpf)
+# Every secret is a file of /srv/gitstation/secrets (0600, the runner user),
+# mounted at /run/forge/secrets; setup-server.sh creates them.
+#
+# Every key: crates/forge-core/src/config/keys.rs. A typo stops forge
+# (FG-SYS-0002, runbook config-invalid).
+# crates/forge-cli/tests/gitlab_trial_package.rs loads this file with the
+# real loader, so keep it valid.
+
+[server]
+# Inside the container; compose publishes it on PUBLISH_ADDR:PUBLISH_PORT.
+bind = "0.0.0.0:8080"
+# No proxy in front: the per-peer cap is per browser / git client.
+max_connections = 256
+max_connections_per_peer = 64
+
+[storage]
+# Bind mount of /srv/gitstation/data/repositories (owned by the runner user).
+root = "/var/lib/forge/repositories"
+
+[database]
+# The compose service `db` on the project's internal network only.
+url = "postgres://forge_app@db:5432/forge"
+password_file = "/run/forge/secrets/db-app.pw"
+# The connection never leaves the private bridge network of this compose
+# project (PostgreSQL is not published), so no TLS on it.
+tls_mode = "disable"
+tls_allow_unverified = true
+# Memory-lean pools: serve and worker each open up to 5 + 5, the server
+# allows 40 (compose.yml), 80 % of the usable slots covers (5 + 5) * 2 + 3.
+write_max_connections = 5
+read_max_connections = 5
+min_connections = 0
+
+[api]
+cursor_keys_file = "/run/forge/secrets/cursor-keys"
+
+[audit]
+seal_keys_file = "/run/forge/secrets/audit-seal-keys"
+
+[web]
+# base_url comes from PUBLIC_URL. Plain HTTP on this trial server only:
+# the session cookies lose `__Host-` / `Secure` (ADR-0021 Amendment
+# 2026-11-20). Never copy this line to a production configuration.
+allow_insecure_http = true
+session_key_file = "/run/forge/secrets/web-session-keys"
+
+[auth.oidc]
+# The PFS Keycloak, realm iotpf (issuer comes from OIDC_ISSUER). The trial
+# Keycloak is plain http on a LAN address: allowed for the trial only.
+allow_insecure_issuer = true
+client_id = "gitstation"
+client_secret_file = "/run/forge/secrets/oidc-client-secret"
+# PFS realm `iotpf`: claims and client roles in the access token, employee
+# number in `staff_id` (ADR-0021 amendment 2026-11-17, runbook oidc-login).
+claims_source = "access_token"
+employee_number_claim = "staff_id"
+access_role = "access"
+
+[maintenance]
+window_start = "02:00"
+window_end = "05:00"
+window_time_zone = "Asia/Tokyo"
+
+[ci]
+secret_keys_file = "/run/forge/secrets/ci-secret-keys"
+
+[webhook]
+# No allowed target yet (no webhook can be created until one is listed).
+secret_keys_file = "/run/forge/secrets/webhook-secret-keys"
