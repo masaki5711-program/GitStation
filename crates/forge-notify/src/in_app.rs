@@ -16,7 +16,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use forge_auth::{Action, Authorized, NotificationPreferencesCtx, Principal};
+use forge_auth::{Action, Authorized, NotificationPreferencesCtx, PortalWidgetCtx, Principal};
 use forge_core::ids::{ProjectId, UserId};
 use forge_core::ProjectRecord;
 use forge_db::notify::in_app::{self, COUNT_CAP};
@@ -97,6 +97,17 @@ impl Inbox {
         let Some(principal) = self.viewer(user).await? else {
             return Ok(Vec::new());
         };
+        self.visible_to(&principal, user, items).await
+    }
+
+    /// `items` that `principal` (the person `user`) may see now, in their
+    /// order.
+    async fn visible_to(
+        &self,
+        principal: &Principal,
+        user: UserId,
+        items: Vec<Item>,
+    ) -> Result<Vec<Listed>, ForgeError> {
         let keys: Vec<(ProjectId, i64)> = items.iter().map(|i| (i.project, i.iid)).collect();
         let merge_requests = in_app::merge_requests(&self.db, &keys).await?;
         // One access read per project of the page (usually one or two).
@@ -112,7 +123,7 @@ impl Inbox {
             let Some(Some(record)) = projects.get(&item.project) else {
                 continue; // the project is gone or not visible
             };
-            if let Some(view) = visible_view(&principal, record, stored) {
+            if let Some(view) = visible_view(principal, record, stored) {
                 listed.push(Listed { item, view });
             }
         }
@@ -152,6 +163,35 @@ impl Inbox {
     ) -> Result<UnreadCount, ForgeError> {
         require(proof.action(), Action::NotificationInboxRead)?;
         let user = owner(proof);
+        let Some(principal) = self.viewer(user).await? else {
+            return Ok(UnreadCount {
+                count: 0,
+                capped: false,
+            });
+        };
+        self.count_unread(&principal, user).await
+    }
+
+    /// The PFS portal's `inbox` widget (ADR-0036, widget design §3.8;
+    /// `PortalWidgetRead` on the widget route): the person's unread count,
+    /// every item decided for them as a session **without administrator
+    /// rights** (`forge_auth::portal_reader`), so the portal never counts
+    /// what their own roles would not show.
+    pub async fn portal_unread_count(
+        &self,
+        proof: &Authorized<PortalWidgetCtx>,
+    ) -> Result<UnreadCount, ForgeError> {
+        require(proof.action(), Action::PortalWidgetRead)?;
+        let principal = forge_auth::portal_reader(proof)?;
+        self.count_unread(&principal, *proof.id()).await
+    }
+
+    /// The unread items `principal` (the person `user`) may see, bounded.
+    async fn count_unread(
+        &self,
+        principal: &Principal,
+        user: UserId,
+    ) -> Result<UnreadCount, ForgeError> {
         let mut count: i64 = 0;
         let mut before = None;
         // Bounded: at most COUNT_SCAN_PAGES pages, stop at COUNT_CAP visible.
@@ -168,7 +208,7 @@ impl Inbox {
             .await?;
             let full = i64::try_from(rows.len()).unwrap_or(i64::MAX) >= COUNT_CAP;
             before = rows.last().map(|i| i.id);
-            let seen = self.visible(user, rows).await?.len();
+            let seen = self.visible_to(principal, user, rows).await?.len();
             count = count.saturating_add(i64::try_from(seen).unwrap_or(i64::MAX));
             if count >= COUNT_CAP {
                 return Ok(UnreadCount {

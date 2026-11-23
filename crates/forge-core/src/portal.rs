@@ -196,10 +196,40 @@ pub enum Word {
     UnitChanges,
     DeltaAtStandard,
     DeltaAboveStandard,
+    TitleThreads,
+    TitleConflicts,
+    TitleQueue,
+    TitleFailed,
+    TitleInbox,
+    TitleMenu,
+    BadgeReply,
+    BadgeConflictPredicted,
+    BadgeConflictUnknown,
+    BadgeQueuePosition,
+    BadgeQueueRemoved,
+    UnitProjects,
+    UnitUnread,
+    PurposeDeveloper,
+    PurposeReviewer,
+    PurposeSpec,
+    PurposeOperations,
+    PurposeManager,
+    MenuMyChanges,
+    MenuAttention,
+    MenuApprovable,
+    MenuPipelines,
+    MenuMergeQueue,
+    MenuNotifications,
+    MenuProjects,
+    MenuChooseProject,
+    MenuDocuments,
+    MenuChangesWaiting,
+    MenuGroups,
+    MenuActivity,
 }
 
 impl Word {
-    pub const ALL: [Word; 24] = [
+    pub const ALL: [Word; 54] = [
         Self::TitleReview,
         Self::TitleMine,
         Self::TitleStopped,
@@ -224,6 +254,36 @@ impl Word {
         Self::UnitChanges,
         Self::DeltaAtStandard,
         Self::DeltaAboveStandard,
+        Self::TitleThreads,
+        Self::TitleConflicts,
+        Self::TitleQueue,
+        Self::TitleFailed,
+        Self::TitleInbox,
+        Self::TitleMenu,
+        Self::BadgeReply,
+        Self::BadgeConflictPredicted,
+        Self::BadgeConflictUnknown,
+        Self::BadgeQueuePosition,
+        Self::BadgeQueueRemoved,
+        Self::UnitProjects,
+        Self::UnitUnread,
+        Self::PurposeDeveloper,
+        Self::PurposeReviewer,
+        Self::PurposeSpec,
+        Self::PurposeOperations,
+        Self::PurposeManager,
+        Self::MenuMyChanges,
+        Self::MenuAttention,
+        Self::MenuApprovable,
+        Self::MenuPipelines,
+        Self::MenuMergeQueue,
+        Self::MenuNotifications,
+        Self::MenuProjects,
+        Self::MenuChooseProject,
+        Self::MenuDocuments,
+        Self::MenuChangesWaiting,
+        Self::MenuGroups,
+        Self::MenuActivity,
     ];
 
     /// `[ja, en, id]`.
@@ -285,6 +345,82 @@ impl Word {
                 "{n} above the standard",
                 "{n} di atas standar",
             ],
+            Self::TitleThreads => [
+                "返事が来た自分のコメント",
+                "Replies to my comments",
+                "Balasan untuk komentar saya",
+            ],
+            Self::TitleConflicts => [
+                "衝突している自分の変更",
+                "My changes with conflicts",
+                "Perubahan saya yang berkonflik",
+            ],
+            Self::TitleQueue => [
+                "マージ待ちの列にある自分の変更",
+                "My changes in the merge queue",
+                "Perubahan saya di antrean merge",
+            ],
+            Self::TitleFailed => [
+                "ビルドかテストが失敗しているプロジェクト",
+                "Projects whose build or test failed",
+                "Proyek yang build atau ujinya gagal",
+            ],
+            Self::TitleInbox => [
+                "未読の通知",
+                "Unread notifications",
+                "Notifikasi belum dibaca",
+            ],
+            Self::TitleMenu => [
+                "GitStation（{purpose}）",
+                "GitStation ({purpose})",
+                "GitStation [{purpose}]",
+            ],
+            Self::BadgeReply => ["返事あり", "Replied", "Dibalas"],
+            Self::BadgeConflictPredicted => {
+                ["衝突の見込み", "Likely conflict", "Kemungkinan konflik"]
+            }
+            Self::BadgeConflictUnknown => [
+                "調べきれていない",
+                "Not fully checked",
+                "Belum tuntas dicek",
+            ],
+            Self::BadgeQueuePosition => ["{n} 番目", "No. {n} in line", "Urutan ke-{n}"],
+            Self::BadgeQueueRemoved => [
+                "列から外された",
+                "Removed from queue",
+                "Dikeluarkan dari antrean",
+            ],
+            Self::UnitProjects => ["件", "projects", "proyek"],
+            Self::UnitUnread => ["件", "unread", "belum dibaca"],
+            Self::PurposeDeveloper => ["開発", "Development", "Pengembangan"],
+            Self::PurposeReviewer => ["レビュー", "Review", "Tinjauan"],
+            Self::PurposeSpec => ["仕様", "Specifications", "Spesifikasi"],
+            Self::PurposeOperations => ["運用", "Operations", "Operasional"],
+            Self::PurposeManager => ["管理", "Management", "Manajemen"],
+            Self::MenuMyChanges => ["自分が出した変更", "My changes", "Perubahan saya"],
+            Self::MenuAttention => [
+                "対応が必要な変更",
+                "Changes that need me",
+                "Perubahan yang perlu saya tangani",
+            ],
+            Self::MenuApprovable => [
+                "自分の承認待ち",
+                "Waiting for my approval",
+                "Menunggu persetujuan saya",
+            ],
+            Self::MenuPipelines => ["ビルドとテスト", "Builds and tests", "Build dan uji"],
+            Self::MenuMergeQueue => ["マージ待ちの列", "Merge queue", "Antrean merge"],
+            Self::MenuNotifications => ["通知", "Notifications", "Notifikasi"],
+            Self::MenuProjects => ["プロジェクト", "Projects", "Proyek"],
+            Self::MenuChooseProject => ["プロジェクトを選ぶ", "Choose a project", "Pilih proyek"],
+            Self::MenuDocuments => ["仕様書", "Specification documents", "Dokumen spesifikasi"],
+            Self::MenuChangesWaiting => [
+                "承認待ちの変更",
+                "Changes awaiting approval",
+                "Perubahan menunggu persetujuan",
+            ],
+            Self::MenuGroups => ["グループ", "Groups", "Grup"],
+            Self::MenuActivity => ["最近の動き", "Recent activity", "Aktivitas terbaru"],
         }
     }
 
@@ -385,6 +521,174 @@ pub fn tags_href(project_path: &str) -> String {
 
 /// The caller's own merge requests (`/-/merge-requests`).
 pub const MY_MERGE_REQUESTS_HREF: &str = "/-/merge-requests";
+/// "My work": the merge requests waiting for the caller's approval.
+pub const APPROVABLE_HREF: &str = "/-/merge-requests?scope=approvable";
+/// "My work": the caller's merge requests that wait on them.
+pub const ATTENTION_HREF: &str = "/-/merge-requests?scope=attention";
+/// "My work": the merge requests the caller wrote.
+pub const AUTHORED_HREF: &str = "/-/merge-requests?scope=authored";
+/// The caller's unread notifications.
+pub const UNREAD_NOTIFICATIONS_HREF: &str = "/-/notifications?unread=1";
+/// The projects the caller is a member of (where a project is chosen).
+pub const MEMBER_PROJECTS_HREF: &str = "/-/projects?tab=member";
+/// GitStation's home.
+pub const HOME_HREF: &str = "/";
+
+/// A merge request's changes (`/{path}/-/pull/{iid}/changes`): where a
+/// conflict is seen.
+pub fn merge_request_changes_href(project_path: &str, iid: i64) -> String {
+    format!("/{project_path}/-/pull/{iid}/changes")
+}
+
+/// A project's merge queue for `target_branch` (`refs/heads/x` or `x`):
+/// `/{path}/-/merge-queue?target=x`, the branch percent-encoded.
+pub fn merge_queue_href(project_path: &str, target_branch: &str) -> String {
+    let short = target_branch
+        .strip_prefix("refs/heads/")
+        .unwrap_or(target_branch);
+    let encoded: String = short
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/' | b'~') {
+                char::from(b).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    format!("/{project_path}/-/merge-queue?target={encoded}")
+}
+
+// ------------------------------------------------------------ the menu
+
+/// The `menu` widget's `purpose` (who the links are for).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MenuPurpose {
+    Developer,
+    Reviewer,
+    Spec,
+    Operations,
+    Manager,
+}
+
+impl MenuPurpose {
+    pub const ALL: [MenuPurpose; 5] = [
+        Self::Developer,
+        Self::Reviewer,
+        Self::Spec,
+        Self::Operations,
+        Self::Manager,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Developer => "developer",
+            Self::Reviewer => "reviewer",
+            Self::Spec => "spec",
+            Self::Operations => "operations",
+            Self::Manager => "manager",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.as_str() == raw)
+    }
+
+    /// The purpose's name (in the card's title).
+    pub fn word(self) -> Word {
+        match self {
+            Self::Developer => Word::PurposeDeveloper,
+            Self::Reviewer => Word::PurposeReviewer,
+            Self::Spec => Word::PurposeSpec,
+            Self::Operations => Word::PurposeOperations,
+            Self::Manager => Word::PurposeManager,
+        }
+    }
+}
+
+/// One link of the menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuLink {
+    pub label: Word,
+    pub href: String,
+}
+
+/// Where a menu entry points.
+#[derive(Clone, Copy)]
+enum Target {
+    /// A screen of the whole application.
+    Fixed(&'static str),
+    /// A screen of the chosen project (`/{path}/-/<suffix>`).
+    Project(&'static str),
+}
+
+fn entries(purpose: MenuPurpose) -> &'static [(Word, Target)] {
+    use Target::{Fixed, Project};
+    match purpose {
+        MenuPurpose::Developer => &[
+            (Word::MenuMyChanges, Fixed(AUTHORED_HREF)),
+            (Word::MenuAttention, Fixed(ATTENTION_HREF)),
+            (Word::MenuPipelines, Project("pipelines")),
+            (Word::MenuMergeQueue, Project("merge-queue")),
+            (Word::MenuNotifications, Fixed(UNREAD_NOTIFICATIONS_HREF)),
+            (Word::MenuProjects, Fixed(MEMBER_PROJECTS_HREF)),
+        ],
+        MenuPurpose::Reviewer => &[
+            (Word::MenuApprovable, Fixed(APPROVABLE_HREF)),
+            (Word::MenuAttention, Fixed(ATTENTION_HREF)),
+            (Word::MenuNotifications, Fixed(UNREAD_NOTIFICATIONS_HREF)),
+            (Word::MenuProjects, Fixed(MEMBER_PROJECTS_HREF)),
+        ],
+        MenuPurpose::Spec => &[
+            (Word::MenuDocuments, Project("documents")),
+            (Word::MenuChangesWaiting, Project("pulls?state=open")),
+            (Word::MenuApprovable, Fixed(APPROVABLE_HREF)),
+            (Word::MenuNotifications, Fixed(UNREAD_NOTIFICATIONS_HREF)),
+        ],
+        MenuPurpose::Operations => &[
+            (Word::MenuPipelines, Project("pipelines")),
+            (Word::MenuMergeQueue, Project("merge-queue")),
+            (Word::MenuNotifications, Fixed(UNREAD_NOTIFICATIONS_HREF)),
+            (Word::MenuProjects, Fixed(MEMBER_PROJECTS_HREF)),
+        ],
+        MenuPurpose::Manager => &[
+            (Word::MenuAttention, Fixed(ATTENTION_HREF)),
+            (Word::MenuApprovable, Fixed(APPROVABLE_HREF)),
+            (Word::MenuProjects, Fixed("/-/projects")),
+            (Word::MenuGroups, Fixed("/-/groups")),
+            (Word::MenuActivity, Fixed("/-/activity")),
+        ],
+    }
+}
+
+/// The links of `purpose` (design §4): a project's screens point at
+/// `project_path` when one is chosen; without one they become a single
+/// "choose a project" link (the member projects). A link whose address an
+/// earlier one already has is left out. At most 20 (the contract).
+pub fn menu_links(purpose: MenuPurpose, project_path: Option<&str>) -> Vec<MenuLink> {
+    let mut links: Vec<MenuLink> = Vec::new();
+    for (label, target) in entries(purpose) {
+        let link = match (target, project_path) {
+            (Target::Fixed(href), _) => MenuLink {
+                label: *label,
+                href: (*href).to_owned(),
+            },
+            (Target::Project(suffix), Some(path)) => MenuLink {
+                label: *label,
+                href: format!("/{path}/-/{suffix}"),
+            },
+            (Target::Project(_), None) => MenuLink {
+                label: Word::MenuChooseProject,
+                href: MEMBER_PROJECTS_HREF.to_owned(),
+            },
+        };
+        if !links.iter().any(|l| l.href == link.href) {
+            links.push(link);
+        }
+    }
+    links.truncate(20);
+    links
+}
 
 // ------------------------------------------------------------ news
 
@@ -660,6 +964,55 @@ mod tests {
         for bad in ["", "/Asia", "Asia//Tokyo", "Asia/To kyo", "../etc", "1Zone"] {
             assert!(!valid_tz(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_menu_points_at_the_chosen_project_or_asks_for_one() {
+        for purpose in MenuPurpose::ALL {
+            assert_eq!(MenuPurpose::parse(purpose.as_str()), Some(purpose));
+            for project in [Some("acme/web"), None] {
+                let links = menu_links(purpose, project);
+                assert!(!links.is_empty() && links.len() <= 20, "{purpose:?}");
+                let mut hrefs: Vec<&str> = links.iter().map(|l| l.href.as_str()).collect();
+                assert!(hrefs
+                    .iter()
+                    .all(|h| h.starts_with('/') && !h.starts_with("//")));
+                let n = hrefs.len();
+                hrefs.dedup();
+                assert_eq!(hrefs.len(), n, "{purpose:?}: no address twice");
+                if project.is_none() {
+                    assert!(links.iter().all(|l| !l.href.contains("acme")));
+                }
+            }
+        }
+        let dev = menu_links(MenuPurpose::Developer, Some("acme/web"));
+        assert!(dev.iter().any(|l| l.href == "/acme/web/-/pipelines"));
+        assert!(dev.iter().any(|l| l.href == "/acme/web/-/merge-queue"));
+        let none = menu_links(MenuPurpose::Developer, None);
+        assert_eq!(
+            none.iter()
+                .filter(|l| l.href == MEMBER_PROJECTS_HREF)
+                .map(|l| l.label)
+                .collect::<Vec<_>>(),
+            [Word::MenuChooseProject]
+        );
+        assert_eq!(MenuPurpose::parse("deploy"), None);
+    }
+
+    #[test]
+    fn queue_and_changes_links_are_app_paths() {
+        assert_eq!(
+            merge_queue_href("acme/web", "refs/heads/main"),
+            "/acme/web/-/merge-queue?target=main"
+        );
+        assert_eq!(
+            merge_queue_href("acme/web", "refs/heads/rel/1.0 x&y"),
+            "/acme/web/-/merge-queue?target=rel/1.0%20x%26y"
+        );
+        assert_eq!(
+            merge_request_changes_href("acme/web", 4),
+            "/acme/web/-/pull/4/changes"
+        );
     }
 
     #[test]

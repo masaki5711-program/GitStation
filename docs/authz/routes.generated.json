@@ -236,6 +236,51 @@
   {
     "action": "PortalWidgetRead",
     "method": "GET",
+    "path": "/api/portal-widgets/v1/attention-count",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/attention-count/options/project",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/inbox",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/menu",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/menu/options/project",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
     "path": "/api/portal-widgets/v1/my-reviews",
     "people_only": false,
     "public": false,
