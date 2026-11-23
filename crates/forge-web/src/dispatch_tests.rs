@@ -1249,6 +1249,9 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         "routes/context.rs",
         // Plan 13 stage 3: the browse API only (resolve_ref, the tree read).
         "routes/documents.rs",
+        // Plan 13 stage 4 part A: the browse API only (refs, the tree read,
+        // blob_ids_at) for a document's versions.
+        "routes/document_revisions.rs",
         // Simple editor E1: forge-git's file_commit / refs API only (the
         // commit, the compare-and-swap), decided like a push.
         "routes/file_commit.rs",

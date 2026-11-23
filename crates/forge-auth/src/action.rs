@@ -438,6 +438,19 @@ actions! {
     /// Maintainer and above; `api`; never acting for a person. Reading it
     /// is `ProjectRead` (`GET …/doc-lint/migration`).
     DocLintMigrationManage,
+    // --- document revisions (plan 13 §7.5 stage 4 part A, ADR-0027) ---
+    /// `PUT|DELETE /api/v1/projects/{id}/documents/{doc_id}/edit-claim`:
+    /// take or extend the caller's own edit claim ("編集中", 30 minutes),
+    /// or release it. Whoever may push may edit: Developer and above,
+    /// people only (a bot or an agent follows the claims, it does not take
+    /// them; ADR-0027 §6), `api`, never acting for a person. Reading the
+    /// claims and open revisions is `RepoBrowse` (`GET …/status`).
+    DocumentEditClaim,
+    /// `POST /api/v1/projects/{id}/documents/{doc_id}/edit-claim/revoke`:
+    /// remove another person's live claim (a holder on leave must not stop
+    /// a document, ADR-0027 §3). People only, Maintainer and above, `api`,
+    /// never acting for a person; audited `document.edit_claim.revoked`.
+    DocumentEditClaimRevoke,
     // --- CI pipelines (M4 C2, plan 14 §4.2) ---
     /// `GET /api/v1/projects/{id}/pipelines` and `…/pipelines/{pipeline_id}`:
     /// a project's pipelines and their jobs. As `RepoBrowse` (Reporter, or
@@ -786,6 +799,8 @@ impl Action {
                 | Action::PushMirrorRead
                 | Action::PushMirrorManage
                 | Action::DocLintMigrationManage
+                | Action::DocumentEditClaim
+                | Action::DocumentEditClaimRevoke
                 | Action::RunnerRegister
                 | Action::RunnerManage
                 // M4 C8: the queue merges for a person (ADR-0030 §2, §9).
@@ -957,6 +972,8 @@ impl Action {
             | Action::WebhookRedeliver
             | Action::PushMirrorManage
             | Action::DocLintMigrationManage
+            | Action::DocumentEditClaim
+            | Action::DocumentEditClaimRevoke
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
@@ -1098,6 +1115,8 @@ impl Action {
             | Action::PushMirrorManage
             // Plan 13 Q13: a governance setting, a person's own decision.
             | Action::DocLintMigrationManage
+            | Action::DocumentEditClaim
+            | Action::DocumentEditClaimRevoke
             // M4 C2: pipelines are no act-as action (ADR-0025 §4).
             | Action::PipelineRead
             // M4 C5: nor are their outputs.
@@ -1264,6 +1283,8 @@ impl Action {
             | Action::PushMirrorRead
             | Action::PushMirrorManage
             | Action::DocLintMigrationManage
+            | Action::DocumentEditClaim
+            | Action::DocumentEditClaimRevoke
             // M4 C2: a job never reads or changes pipelines (plan 14 §4.2);
             // M4 C5: nor their outputs (its own log goes through the runner).
             | Action::PipelineRead

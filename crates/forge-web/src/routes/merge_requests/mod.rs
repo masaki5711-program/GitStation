@@ -38,7 +38,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use forge_auth::{MergeRequestCtx, Principal, ProjectCtx};
 use forge_core::{
-    parse_positive_id, MergeRequestState, ProjectId, ProjectRepository, RefName, UserId,
+    parse_positive_id, MergeRequestState, ObjectId, ProjectId, ProjectRepository, RefName, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use forge_review::{
@@ -570,13 +570,152 @@ pub async fn create(
             title: w.input.title.clone(), // clone: the input stays borrowed by the parts
             description: w.input.description.clone(), // clone: as the title
         };
+        let repo = repo?;
+        // Plan 13 stage 4 part A: one open revision per document. The
+        // refusal, the create and the record run under the project's
+        // revision lock (two creates of this process never both pass).
+        let planned = plan_revision(&state, &w, repo).await;
+        let _serialized = match (&planned, state.doc_revisions.as_deref()) {
+            (Some((_, revised)), Some(revisions)) if !revised.keys.is_empty() => {
+                let (project, _) = *w.proof.id();
+                let guard = revisions.serialize(project, &w.ctx.request_id).await;
+                refuse_second(revisions, &w, &revised.keys).await?;
+                Some(guard)
+            }
+            _ => None,
+        };
         let opened = review(&state)?
-            .open(&review_request(&w), &w.proof, repo?, &fields)
+            .open(&review_request(&w), &w.proof, repo, &fields)
             .await?;
+        if let Some((head, revised)) = planned {
+            record_revision(&state, &w, &opened, &head, &revised).await;
+        }
         json(body_of(&opened))
     }
     .await;
     respond(&w.ctx, StatusCode::CREATED, built)
+}
+
+/// The documents a new merge request would revise (plan 13 §7.5, stage 4
+/// part A, ADR-0027 §1). **Fails open** (review HIGH 1): nothing to check
+/// (`None`) without the document revisions or git configured, with a
+/// repository that is not ready, without type definitions
+/// (`.forge/doctypes/`: system code repositories pay one small listing),
+/// or when deriving them fails or takes longer than
+/// `forge_checks::doc_revision::REVISION_BUDGET` (logged
+/// `forge.doc_revision.unavailable` with its code; the version job
+/// records the documents later). A bound hit is logged and refuses nothing
+/// for what was not read.
+async fn plan_revision(
+    state: &AppState,
+    w: &WriteParts<MergeRequestCtx, CreateMergeRequest>,
+    repo: ProjectRepository,
+) -> Option<(ObjectId, forge_checks::doc_revision::Revised)> {
+    let (Some(_), Some(smart)) = (state.doc_revisions.as_deref(), state.smart_http.as_ref()) else {
+        return None;
+    };
+    if repo.state != forge_core::RepositoryState::Ready {
+        return None;
+    }
+    let wanted = w.proof.ctx().merge_request();
+    let (project, _) = *w.proof.id();
+    let (head, revised) = forge_checks::doc_revision::revised_for_open(
+        &smart.browse,
+        repo.id,
+        (&wanted.source_branch, &wanted.target_branch),
+        project,
+        &w.ctx.request_id,
+    )
+    .await?;
+    if let Some(bound) = revised.incomplete {
+        tracing::info!(
+            target: "forge_web",
+            event = "forge.doc_revision.incomplete",
+            error_code = ErrorCode::DocIndexBounded.id(),
+            request_id = %w.ctx.request_id,
+            project_id = project.get(),
+            head_sha = head.as_str(),
+            bound,
+            documents = revised.keys.len(),
+            "the documents a new merge request revises were read within a bound"
+        );
+    }
+    Some((head, revised))
+}
+
+/// `FG-DOC-0006` when an open merge request revises one of `keys`. A
+/// database failure of the check fails open (logged with its code): only
+/// the rule's own refusal stops the create.
+async fn refuse_second(
+    revisions: &forge_checks::DocRevisions,
+    w: &WriteParts<MergeRequestCtx, CreateMergeRequest>,
+    keys: &[forge_core::doc_revision::DocKey],
+) -> Result<(), ForgeError> {
+    let (project, _) = *w.proof.id();
+    match revisions.refuse_second(project, keys).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.code() == ErrorCode::DocRevisionOpen => Err(e),
+        Err(e) => {
+            tracing::warn!(
+                target: "forge_web",
+                event = "forge.doc_revision.unavailable",
+                error_code = e.code().id(),
+                error = %e,
+                request_id = %w.ctx.request_id,
+                project_id = project.get(),
+                at = "refuse",
+                "the open revisions could not be read; the one-revision rule is skipped this time"
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Record what the new merge request revises and release its author's
+/// claims on those documents. The merge request is committed already: a
+/// failure here is logged (`error`, with its code) and not answered — the
+/// version job records the documents again for the first version.
+async fn record_revision(
+    state: &AppState,
+    w: &WriteParts<MergeRequestCtx, CreateMergeRequest>,
+    opened: &StoredMergeRequest,
+    head: &ObjectId,
+    revised: &forge_checks::doc_revision::Revised,
+) {
+    let Some(revisions) = state.doc_revisions.as_deref() else {
+        return;
+    };
+    let recorded = revisions
+        .record_opened(
+            opened.project_id,
+            opened.id,
+            opened.author,
+            head,
+            &revised.keys,
+        )
+        .await;
+    match recorded {
+        Ok(released) => tracing::info!(
+            target: "forge_web",
+            event = "forge.doc_revision.recorded",
+            request_id = %w.ctx.request_id,
+            project_id = opened.project_id.get(),
+            iid = opened.iid,
+            documents = revised.keys.len(),
+            claims_released = released,
+            "the documents the new merge request revises were recorded"
+        ),
+        Err(e) => tracing::error!(
+            target: "forge_web",
+            event = "forge.doc_revision.record_failed",
+            error_code = e.code().id(),
+            error = %e,
+            request_id = %w.ctx.request_id,
+            project_id = opened.project_id.get(),
+            iid = opened.iid,
+            "the documents of a new merge request could not be recorded; the version job records them again"
+        ),
+    }
 }
 
 /// `PATCH …/merge-requests/{iid}` → `200` the merge request as it is now

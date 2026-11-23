@@ -749,7 +749,7 @@ pub(crate) fn view_parts(
 
 /// A document or block id: a reference's id (ASCII letters, digits, `.`,
 /// `_`, `-`; at most 128 bytes) — `FG-WEB-0006 param=<name>`.
-fn ref_id(name: &'static str, raw: &str) -> Result<String, ForgeError> {
+pub(crate) fn ref_id(name: &'static str, raw: &str) -> Result<String, ForgeError> {
     match reference_of(raw, 0) {
         Some(r) if r.repo.is_none() && r.block.is_none() && r.doc == raw => Ok(r.doc),
         _ => Err(param_invalid(name, "invalid")),
@@ -814,7 +814,7 @@ fn limit_param(params: &[(&'static str, String)]) -> Result<usize, ForgeError> {
 }
 
 /// The documents of `rev` (one read of its tree).
-async fn index_at(t: &Target, rev: &ResolvedRev) -> Result<DocIndex, ForgeError> {
+pub(crate) async fn index_at(t: &Target, rev: &ResolvedRev) -> Result<DocIndex, ForgeError> {
     let tree = read_tree(
         &t.smart.browse,
         t.repository.id,
@@ -850,7 +850,7 @@ impl TipMarks {
 }
 
 /// [`TipMarks`] of `rev` for `who`.
-async fn tip_marks(
+pub(crate) async fn tip_marks(
     state: &AppState,
     caller: UserId,
     t: &Target,
@@ -923,7 +923,7 @@ impl Resolver for AgentResolver<'_> {
 /// measured too), or the absent document's 404: `document_not_found`, or
 /// `doc_confidential` with the withheld event (review stage 3 LOW: decided
 /// before a translation or a block is looked up).
-fn visible_original<'i>(
+pub(crate) fn visible_original<'i>(
     request: &Dispatched<ProjectCtx>,
     route: &'static str,
     who: Audience,

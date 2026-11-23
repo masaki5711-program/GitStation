@@ -776,6 +776,32 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}",
         Coverage::Command("doc show"),
     ),
+    // Plan 13 stage 4 part A: document revisions and edit claims.
+    (
+        "GET",
+        "/api/v1/projects/{id}/documents/{doc_id}/status",
+        Coverage::Command("doc status"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/documents/{doc_id}/versions",
+        Coverage::Command("doc versions"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/documents/{doc_id}/edit-claim",
+        Coverage::Command("doc claim"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/documents/{doc_id}/edit-claim",
+        Coverage::Command("doc release"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/documents/{doc_id}/edit-claim/revoke",
+        Coverage::Command("doc release"),
+    ),
     // Plan 13 Q13 (ADR-0026): the document lint migration setting.
     (
         "GET",

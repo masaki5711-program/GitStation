@@ -1425,6 +1425,18 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             need(Role::Maintainer, p.role)
         }
 
+        // --- document revisions (plan 13 §7.5 stage 4 part A, ADR-0027) ---
+        // The edit claim: whoever may push a branch may say they are
+        // editing; revoking another person's claim is a Maintainer's.
+        (Action::DocumentEditClaim, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Developer, p.role)
+        }
+        (Action::DocumentEditClaimRevoke, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+
         // --- CI pipelines (M4 C2, plan 14 §4.2) ---
         // Reading: as RepoBrowse (an agent audience too: metadata only,
         // CI outputs are decided on their marks from C5). Running by hand,
@@ -1717,6 +1729,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PushMirrorRead
             | Action::PushMirrorManage
             | Action::DocLintMigrationManage
+            | Action::DocumentEditClaim
+            | Action::DocumentEditClaimRevoke
             | Action::PipelineRead
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
