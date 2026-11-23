@@ -134,14 +134,15 @@ export function useDeleteDelegation() {
   });
 }
 
-/** Org units by code prefix or name (the unit picker; `term` empty: none). */
+/** Org units by code prefix or name (the unit picker, the same route as the
+ * org bindings' picker; `term` empty: none). */
 export function useOrgUnitSearch(term: string) {
   const api = useApi();
   return useQuery({
     queryKey: approverKeys.units(term),
     enabled: term !== '',
     queryFn: ({ signal }) =>
-      call(() => api.GET('/api/v1/org/units', { signal, params: { query: { search: term } } })),
+      call(() => api.GET('/api/v1/org-units', { signal, params: { query: { search: term, limit: 20 } } })),
   });
 }
 

@@ -1011,6 +1011,23 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── ADR-0038 §2: org bindings (20270101100000) ──
+        (
+            "forge.org_bindings",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("org_bindings")?,
+            ]
+            .concat(),
+        ),
+        (
+            "forge.org_access_policy",
+            [
+                plain(&["forge_app:SELECT", "forge_app:UPDATE"]),
+                ro("org_access_policy")?,
+            ]
+            .concat(),
+        ),
         // ── ADR-0038 §3 (step C): approvers and delegations (20270102100000) ──
         ("forge.deploy_environment_approvers", operational()),
         // Written once, never changed (review of step C): no UPDATE.
@@ -1237,6 +1254,9 @@ const LATER_TABLES: &[&str] = &[
     "org_units_master",
     "org_positions_master",
     "org_master_state",
+    // ── ADR-0038 §2: org bindings (20270101100000) ──
+    "org_bindings",
+    "org_access_policy",
     // ── ADR-0038 §3 (step C): approvers and delegations (20270102100000) ──
     "deploy_environment_approvers",
     "deployment_approvals",

@@ -991,6 +991,14 @@ gstn = "member list"
 reason = "Read; not asked for yet."
 
 [[deferred]]
+gstn = "member org-bindings"
+reason = "Read; not asked for yet."
+
+[[deferred]]
+gstn = "member org-units"
+reason = "Read; not asked for yet."
+
+[[deferred]]
 gstn = "approval-rule list"
 reason = "Read; get_merge_request_status already names the approval blockers."
 

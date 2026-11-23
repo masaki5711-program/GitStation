@@ -372,6 +372,42 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/members/{user_id}",
         Coverage::Command("member remove"),
     ),
+    // ADR-0038 §2: org bindings (changing them is a web session's).
+    (
+        "GET",
+        "/api/v1/projects/{id}/org-bindings",
+        Coverage::Command("member org-bindings"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/org-bindings",
+        Coverage::BrowserOnly("sessions only: a token never adds an org binding (FG-AUTH-0002 session_required); add it in the project's members settings"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/org-bindings/{binding_id}",
+        Coverage::BrowserOnly("sessions only: a token never removes an org binding (FG-AUTH-0002 session_required); remove it in the project's members settings"),
+    ),
+    (
+        "GET",
+        "/api/v1/groups/{id}/org-bindings",
+        Coverage::Command("member org-bindings"),
+    ),
+    (
+        "POST",
+        "/api/v1/groups/{id}/org-bindings",
+        Coverage::BrowserOnly("sessions only: a token never adds an org binding (FG-AUTH-0002 session_required); add it in the group's members settings"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/groups/{id}/org-bindings/{binding_id}",
+        Coverage::BrowserOnly("sessions only: a token never removes an org binding (FG-AUTH-0002 session_required); remove it in the group's members settings"),
+    ),
+    (
+        "GET",
+        "/api/v1/org-units",
+        Coverage::Command("member org-units"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/repository/refs",
@@ -1129,11 +1165,6 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         Coverage::BrowserOnly("a deployment is approved in a web session only (every tier): tokens are refused (FG-AUTH-0002 session_required); runbook deploy"),
     ),
     // ADR-0038 §3.4–§3.6 (step C): approvers and delegations.
-    (
-        "GET",
-        "/api/v1/org/units",
-        Coverage::NotForCli("the unit picker of the web's selector form (ADR-0038 step C): `gstn approval-rule set --selector` and `gstn deploy approvers-set --selector` take the unit code itself"),
-    ),
     (
         "GET",
         "/api/v1/projects/{id}/deploy/approvers",

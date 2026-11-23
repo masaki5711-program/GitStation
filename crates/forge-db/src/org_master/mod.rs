@@ -32,10 +32,7 @@ mod read;
 mod replace;
 mod selectors;
 
-pub use people::{
-    person_orgs, plant_people, search_units, unit_chain, FoundUnit, MAX_PLANT_PEOPLE,
-    MAX_UNIT_RESULTS,
-};
+pub use people::{person_orgs, plant_people, unit_chain, MAX_PLANT_PEOPLE};
 pub use read::{derive, health, primary_paths, unit_paths, ShownPath, MAX_UNIT_CODES};
 pub use replace::{replace, ReplacePolicy, Replaced, SYNCED_ACTION};
 pub use selectors::{resolve_selectors, Resolution, ResolvedSelector};

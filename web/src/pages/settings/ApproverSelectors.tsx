@@ -82,16 +82,16 @@ function UnitPicker({ chosen, onChoose }: { chosen: string; onChoose: (code: str
       {found.isSuccess && found.data.items.length > 0 && (
         <ul className={styles.results} aria-label={t('approvers.editor.unitResults')}>
           {found.data.items.map((u) => (
-            <li key={`${u.plant_code}-${u.code}`}>
+            <li key={`${u.plant_code}-${u.unit.code}`}>
               <span>
-                {name(u)} <code>{u.code}</code> <span className={styles.muted}>{u.level}</span>
+                {name(u.unit)} <code>{u.unit.code}</code> <span className={styles.muted}>{u.unit.level}</span>
               </span>
               <button
                 type="button"
                 className={controls.button}
-                aria-label={t('approvers.editor.chooseUnitOf', { name: name(u) })}
+                aria-label={t('approvers.editor.chooseUnitOf', { name: name(u.unit) })}
                 onClick={() => {
-                  onChoose(u.code);
+                  onChoose(u.unit.code);
                 }}
               >
                 {t('approvers.editor.chooseUnit')}

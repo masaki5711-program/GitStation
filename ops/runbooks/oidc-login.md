@@ -1,4 +1,4 @@
-# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0025 / FG-AUTH-0028 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0014 / FG-AUTH-0017 / FG-AUTH-0018 / FG-INT-0025 / FG-INT-0026 / FG-INT-0027 / FG-INT-0028）
+# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0025 / FG-AUTH-0028 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0014 / FG-AUTH-0017 / FG-AUTH-0018 / FG-INT-0025 / FG-INT-0026 / FG-INT-0027 / FG-INT-0028 / FG-AUTH-0030）
 
 ブラウザのログイン（Keycloak の OIDC、ADR-0021 §3・§9）が失敗するとき、バックチャネルのログアウト（FG-AUTH-0017、ADR-0021 §8）が
 断られるとき、5 分ごとのリフレッシュの確認でセッションが切れるとき（ADR-0021 §7、M2 MR5）の診断。
@@ -20,6 +20,8 @@
   （`iat` が 2 分より古い）、`missing_claim`（`claim`: iat、jti、events、sid_or_sub）、`events`、`nonce_present`、`replayed`、
   `replay_table_full`。
 - `error_code=FG-INT-0025`〜`FG-INT-0028`（PFS の組織の台帳の写し、ADR-0038 §1）: 下の「組織の台帳の写し」を見る。
+- 「組織の結び付けで入れたはずの人が入れない」「`FG-AUTH-0029`〜`FG-AUTH-0031` で結び付けを足せない」（ADR-0038 §2）:
+  下の「組織による所属（結び付け）」を見る。
 - 「ログインしていたのに急に出された」の問い合わせ: ログの `forge.auth.session_refresh_revoked`（`why`: invalid_grant、
   session_continue_denied、id_token_invalid、id_token_missing、refresh_token_unreadable、`revoked_reason`）か
   `forge.auth.backchannel_logout`（`revoked`）。
@@ -286,3 +288,55 @@ ADR-0038 §1（段 A）。worker の `org_master_sync` が PFS registry-api の�
 - 人を選ぶ画面と MR の承認者の一覧: 主所属の「部 / 課」の名前（画面の言語。英語・インドネシア語の名前が無ければ日本語）。
   写しに無ければ今までどおりコード。その人の写しが不正・古い、または台帳の写しが古いときは、名前の横に
   「最終確認時点」と出す（API の `stale: true`。判定には使わない）。社員番号（`head_staff_id`）は読み取りのプール（`forge_ro`）からも見えない。
+
+## 組織による所属（結び付け）
+
+ADR-0038 §2（段 B）。グループ・プロジェクトに「この組織（配下を含む）の人は Reporter / Developer」という結び付け
+（`forge.org_bindings`）を置く。実効ロールは「手で付けたメンバーのロール（グループからの継承を含む）」と「当てはまる
+結び付けのロール」の高い方。**結び付けで付くのは Developer まで**（Maintainer・Owner・配備の承認は手で付ける）。
+
+- 管理: メンバーの画面の「組織による所属」。足す・外すはそのグループ・プロジェクトの Owner と管理者だけ、web のセッション
+  だけ（`OrgBindingManage`。トークンは FG-AUTH-0002 `session_required`）。変更は監査 `org_binding.created` /
+  `org_binding.deleted`（グループかプロジェクトに。理由は文字数だけ）。一覧は `gstn member org-bindings --project <id>`。
+- 当てはまる人: 組織の台帳の写しで、その人の所属（主所属と兼務。`membership = primary` なら主所属だけ）から **親と
+  `level` をたどって** 結び付けの組織に届くこと（`include_descendants = false` ならその組織そのものだけ）。`min_rank` が
+  あれば職位ランクがそれ以上。
+- **閉じる条件**（ADR-0038 §4。どれかなら結び付けは何も与えない。手で付けたメンバーはそのまま効く）:
+  写しが無い・`invalid_since` がある・`org.max_profile_age_hours` より古い（個人トークン・エージェントだけで働く人は
+  24 時間に 1 回 web でサインインが要る）、台帳の写しが `org.master_max_age_hours` より古い（FG-INT-0028）、その所属が
+  台帳に無い・まだ有効でない・親のたどりが切れている。
+- 判定は今までどおり `authorize()`。ロールを読む SQL（`forge_db::roles` の `chain_role_columns!`）が
+  `forge.org_binding_role()` を呼び、上の条件をそこで確かめる。年齢の上限は `forge serve` / `forge worker` の起動時に
+  設定から `forge.org_access_policy` に写される（設定を変えたら再起動する）。
+
+### 見分け方（読み取りだけ）
+
+1. 「入れない」: メンバーの画面の「組織から入っている人」にその人がいるか（いなければ結び付けが効いていない）。
+2. その人の写し（管理者の画面、または DB）:
+   `SELECT invalid_since, confirmed_at, plant_code FROM forge.user_org_profiles WHERE user_id = <id>;`
+   `invalid_since` がある（FG-AUTH-0028）、`confirmed_at` が古い、`plant_code` が無い → 本人に web で一度サインインしてもらう。
+3. 台帳の写しの古さ: `forge doctor` の `org.master`（上の「組織の台帳の写し」）。
+4. 結び付けと条件:
+   `SELECT id, plant_code, org_code, include_descendants, membership, min_rank, role FROM forge.org_bindings
+    WHERE target_kind = 'project' AND target_id = <id>;`
+   その人の所属が結び付けの組織の配下か: 上の「組織の台帳の写し」の親のたどり（`parent_code`）で確かめる。
+5. 年齢の上限: `SELECT * FROM forge.org_access_policy;`（設定の `org.*_age_hours` と違えば、プロセスの再起動が済んでいない）。
+6. 足せない:
+   - FG-AUTH-0029: `reason` = `plant_code_invalid` / `org_code_invalid` / `min_rank_out_of_range` / `reason_invalid` /
+     `role_not_allowed`（guest）/ `duplicate`（同じ組織・範囲・条件が既にある）/ `too_many`（100 件）。
+   - FG-AUTH-0030: `reason` = `not_in_master` / `not_yet_valid` / `master_missing`（台帳の写しが一度も同期していない）。
+   - FG-AUTH-0031: `role_above_cap`（Maintainer・Owner は結び付けでは付けない）。
+
+### 直し方
+
+- 本人の写しが古い・不正: 本人に web で一度サインインしてもらう（5 分ごとの更新で新しくなる）。不正が続くなら上の
+  「PFS の組織の claim」。
+- 台帳の写しが古い: 上の「組織の台帳の写し」の直し方。
+- 条件の誤り: Owner が結び付けを外して、正しい条件で足し直す（変更はできない。外して足す）。
+- 結び付けを今すぐ全部止めたい（事故のとき、承認された手順として）: Owner が画面で外す。DB を直接書かない。
+
+### 見え方
+
+- メンバーの画面: 手で付けたメンバーの表とは別に「組織から入っている人」（「組織から（<部・課の名前>）」）。ここでは外せない。
+- 結び付けの一覧: 組織の名前とコード、範囲（配下を含む・主所属だけ・職位ランク）、ロール、理由。台帳に無くなった組織は
+  「台帳にありません」と出る（その結び付けは何も与えない）。

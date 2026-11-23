@@ -175,7 +175,7 @@ fn collection_id(raw_path: &str, prefix: &str) -> Result<i64, ForgeError> {
 // ── loaders ──
 
 /// The project of `id` for `viewer` (`None` = absent), checked to be it.
-async fn project_of(
+pub(crate) async fn project_of(
     state: &AppState,
     id: ProjectId,
     viewer: Option<UserId>,
@@ -193,7 +193,7 @@ async fn project_of(
 }
 
 /// The group of `id` for `viewer` (`None` = absent), checked to be it.
-async fn group_of(
+pub(crate) async fn group_of(
     state: &AppState,
     id: GroupId,
     viewer: Option<UserId>,
@@ -215,7 +215,7 @@ async fn group_of(
     }))
 }
 
-fn found<R>(ctx: R) -> Lookup<R> {
+pub(crate) fn found<R>(ctx: R) -> Lookup<R> {
     Lookup::Found {
         ctx,
         canonical: None,

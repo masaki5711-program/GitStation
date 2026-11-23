@@ -281,6 +281,24 @@
   {
     "action": "PortalWidgetRead",
     "method": "GET",
+    "path": "/api/portal-widgets/v1/merge-queue",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/merge-queue/options/project",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
     "path": "/api/portal-widgets/v1/my-reviews",
     "people_only": false,
     "public": false,
@@ -309,6 +327,24 @@
     "action": "PortalWidgetRead",
     "method": "GET",
     "path": "/api/portal-widgets/v1/pipelines/options/project",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/spec-status",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/spec-status/options/project",
     "people_only": false,
     "public": false,
     "scope": "fixed",
@@ -630,6 +666,33 @@
     "word": "fixed"
   },
   {
+    "action": "MemberList",
+    "method": "GET",
+    "path": "/api/v1/groups/{id}/org-bindings",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "OrgBindingManage",
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/org-bindings",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "OrgBindingManage",
+    "method": "DELETE",
+    "path": "/api/v1/groups/{id}/org-bindings/{binding_id}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "SubgroupCreate",
     "method": "POST",
     "path": "/api/v1/groups/{id}/subgroups",
@@ -758,7 +821,7 @@
   {
     "action": "UserSearch",
     "method": "GET",
-    "path": "/api/v1/org/units",
+    "path": "/api/v1/org-units",
     "people_only": false,
     "public": false,
     "scope": "fixed",
@@ -1542,6 +1605,33 @@
     "action": "CodeownersEnforcementToggle",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/merge-settings/codeowners-enforcement",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberList",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/org-bindings",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "OrgBindingManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/org-bindings",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "OrgBindingManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/org-bindings/{binding_id}",
     "people_only": true,
     "public": false,
     "scope": "fixed",

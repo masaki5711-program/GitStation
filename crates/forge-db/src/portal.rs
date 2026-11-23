@@ -477,6 +477,13 @@ pub async fn sweep_orphaned(db: &Db, limit: i64) -> Result<Vec<SweptNews>, Forge
 /// again with `authorize()` when it is sent). More than that is logged once
 /// (`forge.portal.news_audience_truncated`): the people beyond the limit
 /// are not told.
+///
+/// ADR-0038 §2.5: the hand-made memberships only — the people an org
+/// binding brings in are not addressed (a bound department would flood the
+/// audience cap; they still find the release on the portal, where every
+/// read is decided by `authorize()` with the org-derived role). Errs on
+/// the side of telling fewer people, never of telling someone without a
+/// role.
 pub(crate) async fn project_people(
     conn: &mut PgConnection,
     project: ProjectId,
@@ -744,6 +751,220 @@ pub async fn latest_deployments(
     Ok(rows
         .into_iter()
         .map(|(id, status, tier)| (ProjectId::new(id), status.zip(tier)))
+        .collect())
+}
+
+// ------------------------------------------------------------ widget design P2a
+
+/// The most a `merge-queue` / `spec-status` count reads (`n+` at it).
+pub const MAX_STATUS_COUNT: i64 = 100;
+
+/// One merge queue of the `merge-queue` widget (counts at most
+/// [`MAX_STATUS_COUNT`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueStatus {
+    pub project: ProjectId,
+    /// `refs/heads/…`.
+    pub target_branch: String,
+    /// The emergency stop is on.
+    pub paused: bool,
+    /// Entries waiting for a batch (`queued`).
+    pub queued: i64,
+    /// Entries in the batch under test (`testing`).
+    pub testing: i64,
+    /// Open merge requests whose newest entry of this queue was removed by
+    /// the queue itself (no `removed_by`) — as `my-reviews?kind=queue`
+    /// shows them: until queued again, closed or merged.
+    pub ejected: i64,
+}
+
+/// The merge queues of `projects` (candidates: the caller has decided
+/// them), in the projects' order, `main` first then by branch, at most
+/// [`MAX_STATUS_ITEMS`] (a project without a queue has no row). One
+/// statement; each count reads at most [`MAX_STATUS_COUNT`] rows — the
+/// live entries through `merge_queue_entries_live`, the ejected ones from
+/// the project's open merge requests (`merge_requests_open_project`) and
+/// each one's newest entry (`merge_queue_entries_merge_request`), never the
+/// queue's whole history.
+pub async fn merge_queue_status(
+    db: &Db,
+    projects: &[ProjectId],
+) -> Result<Vec<QueueStatus>, ForgeError> {
+    const QUERY: &str = "portal.merge_queue_status";
+    let ids: Vec<i64> = projects
+        .iter()
+        .take(MAX_STATUS_ITEMS)
+        .map(|p| p.get())
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<(i64, String, bool, i64, i64, i64)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT p.id, q.target_branch, q.paused, \
+                   (SELECT count(*) FROM (SELECT 1 FROM forge.merge_queue_entries e \
+                      WHERE e.queue_id = q.id AND e.state = 'queued' LIMIT $2) x) AS queued, \
+                   (SELECT count(*) FROM (SELECT 1 FROM forge.merge_queue_entries e \
+                      WHERE e.queue_id = q.id AND e.state = 'testing' LIMIT $2) x) AS testing, \
+                   (SELECT count(*) FROM (SELECT 1 FROM forge.merge_requests m \
+                      CROSS JOIN LATERAL (SELECT e.queue_id, e.state, e.removed_by \
+                        FROM forge.merge_queue_entries e WHERE e.merge_request_id = m.id \
+                        ORDER BY e.id DESC LIMIT 1) l \
+                      WHERE m.project_id = q.project_id AND m.state = 'open' \
+                        AND l.queue_id = q.id AND l.state = 'removed' AND l.removed_by IS NULL \
+                      LIMIT $2) x) AS ejected \
+                 FROM unnest($1::bigint[]) WITH ORDINALITY AS p(id, n) \
+                 JOIN forge.merge_queues q ON q.project_id = p.id \
+                 ORDER BY p.n, (q.target_branch <> 'refs/heads/main'), q.target_branch \
+                 LIMIT $3",
+            )
+            .bind(&ids)
+            .bind(MAX_STATUS_COUNT)
+            .bind(i64::try_from(MAX_STATUS_ITEMS).unwrap_or(i64::MAX))
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, target_branch, paused, queued, testing, ejected)| QueueStatus {
+                project: ProjectId::new(id),
+                target_branch,
+                paused,
+                queued,
+                testing,
+                ejected,
+            },
+        )
+        .collect())
+}
+
+/// Those of `projects` that released a specification (a `spec.released`
+/// in their audit trail, `audit_log_spec_releases`; ADR-0023: a project
+/// has a specification by its content, not by a kind), in their order.
+pub async fn spec_projects(db: &Db, projects: &[ProjectId]) -> Result<Vec<ProjectId>, ForgeError> {
+    const QUERY: &str = "portal.spec_projects";
+    let ids: Vec<i64> = projects.iter().map(|p| p.get()).collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<i64> = db
+        .within(QUERY, async {
+            sqlx::query_scalar(
+                "SELECT p.id FROM unnest($1::bigint[]) WITH ORDINALITY AS p(id, n) \
+                 WHERE EXISTS (SELECT 1 FROM forge.audit_log al \
+                   WHERE al.project_id = p.id AND al.action = 'spec.released') \
+                 ORDER BY p.n",
+            )
+            .bind(&ids)
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(rows.into_iter().map(ProjectId::new).collect())
+}
+
+/// One specification project of the `spec-status` widget: facts of its
+/// open, non-draft merge requests (the changes awaiting approval) at their
+/// current heads. Counts at most [`MAX_STATUS_COUNT`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecStatus {
+    pub project: ProjectId,
+    /// Open, non-draft merge requests with a head.
+    pub awaiting: i64,
+    /// Distinct places (path, line) of `forge/doc-lint` annotations of the
+    /// undecided rule ([`forge_core::portal::UNDECIDED_RULE`]) on those
+    /// heads.
+    pub undecided: i64,
+    /// A `forge/doc-lint` run on those heads holds the most annotations a
+    /// run keeps: more undecided items may exist than were counted.
+    pub undecided_partial: bool,
+    /// Of those changes, the ones whose `forge/spec-lint` or
+    /// `forge/doc-lint` run on the head concluded `failure`.
+    pub failing: i64,
+    /// Of those changes, the ones whose head lacks a completed run of
+    /// either check, or whose run answered `error` (never "no finding").
+    pub unchecked: i64,
+}
+
+/// The facts of `projects` (candidates: the caller has decided them), in
+/// their order, at most [`MAX_STATUS_ITEMS`]. One statement; the open
+/// merge requests through `merge_requests_open_project`, their runs by
+/// `check_runs_one_per_name` (project, head, name) and the annotations by
+/// their primary key.
+pub async fn spec_status(db: &Db, projects: &[ProjectId]) -> Result<Vec<SpecStatus>, ForgeError> {
+    use forge_core::checks::{DOC_LINT_CHECK, MAX_CHECK_ANNOTATIONS, SPEC_LINT_CHECK};
+    const QUERY: &str = "portal.spec_status";
+    let ids: Vec<i64> = projects
+        .iter()
+        .take(MAX_STATUS_ITEMS)
+        .map(|p| p.get())
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let checks = [SPEC_LINT_CHECK, DOC_LINT_CHECK];
+    let rows: Vec<(i64, i64, i64, bool, i64, i64)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "WITH opened AS ( \
+                   SELECT p.id AS project_id, p.n, m.head_sha FROM \
+                     unnest($1::bigint[]) WITH ORDINALITY AS p(id, n) \
+                   CROSS JOIN LATERAL (SELECT m.head_sha FROM forge.merge_requests m \
+                     WHERE m.project_id = p.id AND m.state = 'open' AND NOT m.draft \
+                       AND m.head_sha IS NOT NULL ORDER BY m.id DESC LIMIT $2) m) \
+                 SELECT p.id, \
+                   (SELECT count(*) FROM opened o WHERE o.project_id = p.id) AS awaiting, \
+                   (SELECT count(*) FROM (SELECT DISTINCT a.path, a.start_line FROM opened o \
+                      JOIN forge.check_runs r ON r.project_id = o.project_id \
+                        AND r.head_sha = o.head_sha AND r.name = $4 \
+                      JOIN forge.check_annotations a ON a.check_run_id = r.id \
+                      WHERE o.project_id = p.id \
+                        AND a.message LIKE a.path || ':' || a.start_line || ' ' || $5 || '%' \
+                      LIMIT $2) u) AS undecided, \
+                   EXISTS (SELECT 1 FROM opened o JOIN forge.check_runs r \
+                       ON r.project_id = o.project_id AND r.head_sha = o.head_sha AND r.name = $4 \
+                     WHERE o.project_id = p.id AND (SELECT count(*) FROM forge.check_annotations a \
+                       WHERE a.check_run_id = r.id) >= $6) AS undecided_partial, \
+                   (SELECT count(*) FROM opened o WHERE o.project_id = p.id AND EXISTS ( \
+                      SELECT 1 FROM forge.check_runs r WHERE r.project_id = o.project_id \
+                        AND r.head_sha = o.head_sha AND r.name = ANY($3) \
+                        AND r.conclusion = 'failure')) AS failing, \
+                   (SELECT count(*) FROM opened o WHERE o.project_id = p.id AND ( \
+                      SELECT count(*) FROM forge.check_runs r WHERE r.project_id = o.project_id \
+                        AND r.head_sha = o.head_sha AND r.name = ANY($3) \
+                        AND r.status = 'completed' AND r.conclusion <> 'error') \
+                      < cardinality($3)) AS unchecked \
+                 FROM unnest($1::bigint[]) WITH ORDINALITY AS p(id, n) \
+                 ORDER BY p.n",
+            )
+            .bind(&ids)
+            .bind(MAX_STATUS_COUNT)
+            .bind(&checks[..])
+            .bind(DOC_LINT_CHECK)
+            .bind(forge_core::portal::UNDECIDED_RULE)
+            .bind(i64::try_from(MAX_CHECK_ANNOTATIONS).unwrap_or(i64::MAX))
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, awaiting, undecided, undecided_partial, failing, unchecked)| SpecStatus {
+                project: ProjectId::new(id),
+                awaiting,
+                undecided,
+                undecided_partial,
+                failing,
+                unchecked,
+            },
+        )
         .collect())
 }
 

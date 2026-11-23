@@ -150,6 +150,11 @@ fn authored_sql() -> String {
 /// `user`'s personal namespace, and the projects `user` is a direct member
 /// of. `user` and `cap` are the statement's placeholders (`$n`). Shared by
 /// `approvable` and the activity list (plan 15 MR 8).
+///
+/// ADR-0038 §2.5: hand-made memberships only; a project reached through an
+/// org binding alone is not listed (the lists stay a person's own
+/// projects, bounded; every row is still decided by `authorize()`).
+/// Approval through the org (step C) brings its own approver lists.
 pub(crate) fn related_ctes(user: &str, cap: &str) -> String {
     format!(
         "roots AS (            SELECT n.id FROM forge.group_members gm              JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = gm.group_id              WHERE gm.user_id = {user}            UNION SELECT n.id FROM forge.namespaces n WHERE n.kind = 'user' AND n.owner_id = {user}),          down (id, step) AS (            SELECT id, 1 FROM roots            UNION ALL            SELECT n.id, d.step + 1 FROM forge.namespaces n JOIN down d ON n.parent_id = d.id              WHERE d.step < {cap}),          related AS (            SELECT n.owner_id AS project_id FROM down d              JOIN forge.namespaces n ON n.id = d.id AND n.kind = 'project'            UNION SELECT pm.project_id FROM forge.project_members pm WHERE pm.user_id = {user}), "

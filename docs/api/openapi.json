@@ -7783,6 +7783,60 @@
         ],
         "type": "object"
       },
+      "NewOrgBinding": {
+        "additionalProperties": false,
+        "description": "`POST …/org-bindings`.",
+        "properties": {
+          "include_descendants": {
+            "description": "Also the units below it (by the org master's hierarchy). Default\n`false`.",
+            "type": "boolean"
+          },
+          "membership": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgMembershipName",
+                "description": "Default `any`."
+              }
+            ]
+          },
+          "min_rank": {
+            "description": "Only people whose position rank is at least this (0..=999).",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "org_code": {
+            "description": "The unit's code in the org master (`^[A-Z0-9][A-Z0-9_-]{0,19}$`).",
+            "type": "string"
+          },
+          "plant_code": {
+            "description": "The unit's plant (`^[A-Z0-9]{1,4}$`).",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why (1..=500 characters), shown with the binding.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/RoleName",
+            "description": "`reporter` or `developer` (a binding never gives more)."
+          }
+        },
+        "required": [
+          "plant_code",
+          "org_code",
+          "role"
+        ],
+        "type": "object"
+      },
       "NewPipelineRun": {
         "additionalProperties": false,
         "description": "`POST …/pipelines`.",
@@ -7896,6 +7950,239 @@
         ],
         "type": "object"
       },
+      "OrgBindingAuthorBody": {
+        "additionalProperties": false,
+        "description": "Who added a binding.",
+        "properties": {
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username"
+        ],
+        "type": "object"
+      },
+      "OrgBindingBody": {
+        "additionalProperties": false,
+        "description": "One binding.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/OrgBindingAuthorBody"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "include_descendants": {
+            "type": "boolean"
+          },
+          "membership": {
+            "description": "`primary` or `any`.",
+            "type": "string"
+          },
+          "min_rank": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "org_code": {
+            "type": "string"
+          },
+          "plant_code": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "`reporter` or `developer`.",
+            "type": "string"
+          },
+          "unit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgBindingUnitBody",
+                "description": "The unit in the org master's copy; `null` when the copy no longer\nhas it (the binding then gives nothing: show the code)."
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "plant_code",
+          "org_code",
+          "include_descendants",
+          "membership",
+          "min_rank",
+          "role",
+          "reason",
+          "created_by",
+          "created_at",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "OrgBindingMemberBody": {
+        "additionalProperties": false,
+        "description": "A person a binding gives a role to now.",
+        "properties": {
+          "binding_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "org_code": {
+            "description": "The bound unit (the person is in it or below it).",
+            "type": "string"
+          },
+          "role": {
+            "description": "The highest role the bindings give (`reporter` / `developer`).",
+            "type": "string"
+          },
+          "unit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgBindingUnitBody"
+              }
+            ]
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "display_name",
+          "role",
+          "binding_id",
+          "org_code",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "OrgBindingUnitBody": {
+        "additionalProperties": false,
+        "description": "A unit's level and names as a binding shows them.",
+        "properties": {
+          "level": {
+            "description": "`division`, `department`, `section` or `team`.",
+            "type": "string"
+          },
+          "name_en": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name_ja": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "name_ja",
+          "name_en",
+          "name_id"
+        ],
+        "type": "object"
+      },
+      "OrgBindingsBody": {
+        "additionalProperties": false,
+        "description": "A group's or project's bindings and the people they bring in.",
+        "properties": {
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/OrgBindingBody"
+            },
+            "type": "array"
+          },
+          "members": {
+            "description": "In user id order; people without a valid, recent org snapshot are\nnot listed (a binding gives them nothing).",
+            "items": {
+              "$ref": "#/components/schemas/OrgBindingMemberBody"
+            },
+            "type": "array"
+          },
+          "members_limited": {
+            "description": "`true` unless the caller has administrator rights: `members` then\nlists only the people reached through their primary unit by\nbindings without `min_rank`, with the highest role among those\n(rank and concurrent units are the person's and the\nadministrators', ADR-0038 §6). The roles themselves are unchanged.",
+            "type": "boolean"
+          },
+          "members_truncated": {
+            "description": "More people than listed (200).",
+            "type": "boolean"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/OrgBindingsViewerBody"
+          }
+        },
+        "required": [
+          "bindings",
+          "members",
+          "members_truncated",
+          "members_limited",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "OrgBindingsViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do now (a hint; the route decides again).",
+        "properties": {
+          "can_manage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_manage"
+        ],
+        "type": "object"
+      },
+      "OrgMembershipName": {
+        "description": "Which of a person's units a binding looks at.",
+        "enum": [
+          "primary",
+          "any"
+        ],
+        "type": "string"
+      },
       "OrgNameBody": {
         "additionalProperties": false,
         "description": "One unit of the PFS org master (ADR-0038 §1): its code, level and\nnames.",
@@ -7971,6 +8258,30 @@
           "section",
           "department",
           "stale"
+        ],
+        "type": "object"
+      },
+      "OrgPickUnitBody": {
+        "additionalProperties": false,
+        "description": "One unit of the org master's copy, for the picker.",
+        "properties": {
+          "parent_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plant_code": {
+            "type": "string"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/OrgNameBody"
+          }
+        },
+        "required": [
+          "plant_code",
+          "unit",
+          "parent_code"
         ],
         "type": "object"
       },
@@ -8070,53 +8381,13 @@
         ],
         "type": "object"
       },
-      "OrgUnitFoundBody": {
+      "OrgUnitsBody": {
         "additionalProperties": false,
-        "description": "One org unit of the master's copy.",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "level": {
-            "description": "`division`, `department`, `section` or `team`.",
-            "type": "string"
-          },
-          "name_en": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name_ja": {
-            "type": "string"
-          },
-          "plant_code": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "plant_code",
-          "code",
-          "level",
-          "name_ja",
-          "name_en",
-          "name_id"
-        ],
-        "type": "object"
-      },
-      "OrgUnits": {
-        "additionalProperties": false,
-        "description": "The units a search found (at most 50).",
+        "description": "`GET /api/v1/org-units`.",
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/OrgUnitFoundBody"
+              "$ref": "#/components/schemas/OrgPickUnitBody"
             },
             "type": "array"
           }
@@ -14403,6 +14674,75 @@
         "x-forge-action": "PortalWidgetRead"
       }
     },
+    "/api/portal-widgets/v1/merge-queue": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_merge_queue",
+        "parameters": [
+          {
+            "description": "Project ids, repeated (at most 24); none: the projects the person holds a role on",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget merge-queue (status): the merge queues of the chosen projects the person may read - removed changes, paused, waiting or running, at most 24",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/merge-queue/options/project": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_merge_queue_options_project",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget merge-queue: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
     "/api/portal-widgets/v1/my-reviews": {
       "get": {
         "operationId": "get_api_portal_widgets_v1_my_reviews",
@@ -14585,6 +14925,84 @@
           }
         },
         "summary": "Portal widget pipelines: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/spec-status": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_spec_status",
+        "parameters": [
+          {
+            "description": "Project ids, repeated (at most 24); none: the projects the person holds a role on that released a specification",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "approval (changes awaiting approval, default), undecided (required decisions still open) or lint (changes whose spec or document check found a problem)",
+            "in": "query",
+            "name": "show",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget spec-status (status): per specification project the person may read - changes awaiting approval, undecided items or check findings, at most 24",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/spec-status/options/project": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_spec_status_options_project",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget spec-status: the project options (projects the person holds a role on and may read, at most 200)",
         "x-forge-action": "PortalWidgetRead"
       }
     },
@@ -16130,6 +16548,141 @@
         "x-forge-max-body-bytes": 1024
       }
     },
+    "/api/v1/groups/{id}/org-bindings": {
+      "get": {
+        "operationId": "get_api_v1_groups_id_org_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgBindingsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A group's org bindings and the people they give a role to now (as the member list)",
+        "x-forge-action": "MemberList"
+      },
+      "post": {
+        "operationId": "post_api_v1_groups_id_org_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrgBinding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgBindingBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Bind an org unit to a group as Reporter or Developer (never above; inherited by everything below; the Owner, people only, a web session); audited",
+        "x-forge-action": "OrgBindingManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/groups/{id}/org-bindings/{binding_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_groups_id_org_bindings_binding_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a group's org binding (the Owner, people only, a web session); audited",
+        "x-forge-action": "OrgBindingManage"
+      }
+    },
     "/api/v1/groups/{id}/subgroups": {
       "post": {
         "operationId": "post_api_v1_groups_id_subgroups",
@@ -16870,17 +17423,37 @@
         "x-forge-max-body-bytes": 4096
       }
     },
-    "/api/v1/org/units": {
+    "/api/v1/org-units": {
       "get": {
         "operationId": "get_api_v1_org_units",
         "parameters": [
           {
-            "description": "1..=64 characters: a unit code prefix or part of a unit name (ja / en / id)",
+            "description": "1..=64 characters: a code prefix or part of a name (ja / en / id; ASCII case folded)",
             "in": "query",
             "name": "search",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Only this plant's units (^[A-Z0-9]{1,4}$)",
+            "in": "query",
+            "name": "plant",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many units, 1..=50 (default 20)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -16889,7 +17462,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OrgUnits"
+                  "$ref": "#/components/schemas/OrgUnitsBody"
                 }
               }
             },
@@ -16906,7 +17479,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Find org units of the PFS org master's copy by code prefix or name (code, level and names only, at most 50)",
+        "summary": "The org master's units for the binding picker (names, level, parent; at most 50)",
         "x-forge-action": "UserSearch"
       }
     },
@@ -21502,6 +22075,141 @@
         "summary": "Suspend CODEOWNERS enforcement for 1 to 1440 minutes or enforce it again (people only; Maintainer at or above every protection of the project)",
         "x-forge-action": "CodeownersEnforcementToggle",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/org-bindings": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_org_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgBindingsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's org bindings and the people they give a role to now (as the member list)",
+        "x-forge-action": "MemberList"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_org_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrgBinding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgBindingBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Bind an org unit to a project as Reporter or Developer (never above; the Owner, people only, a web session); audited",
+        "x-forge-action": "OrgBindingManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/org-bindings/{binding_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_org_bindings_binding_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a project's org binding (the Owner, people only, a web session); audited",
+        "x-forge-action": "OrgBindingManage"
       }
     },
     "/api/v1/projects/{id}/pipeline-schedules": {

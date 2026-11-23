@@ -1452,6 +1452,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_revert::REVERT_ROWS,
         crate::matrix_rows_auto_merge::AUTO_MERGE_ROWS.as_slice(),
         crate::matrix_rows_ai_assets::AI_ASSETS_ROWS,
+        crate::matrix_rows_org_bindings::ORG_BINDING_ROWS,
         &crate::matrix_rows_auto_merge::generated_denies(),
         crate::matrix_rows_autofix::AUTOFIX_ROWS.as_slice(),
         &crate::matrix_rows_autofix::generated_denies(),

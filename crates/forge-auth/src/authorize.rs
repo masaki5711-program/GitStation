@@ -720,6 +720,17 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             people_only()?;
             need(Role::Owner, *role)
         }
+        // ADR-0038 §2, §5: who the organisation brings in is the Owner's
+        // decision, a person's in a session (`is_session_only`). The role a
+        // binding gives is capped at Developer by the command and the table.
+        (Action::OrgBindingManage, Resource::Group { role, .. }) => {
+            people_only()?;
+            need(Role::Owner, *role)
+        }
+        (Action::OrgBindingManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Owner, p.role)
+        }
 
         (Action::TokenCreate, Resource::TokenRequest { owner, scopes }) => {
             // A token never mints tokens: a leaked token could otherwise
@@ -1784,6 +1795,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::AutoMergeFullAutoManage
             | Action::AutofixSettingsManage
             | Action::AiAssetsSettingManage
+            | Action::OrgBindingManage
             | Action::CiVariableManage
             | Action::DeployRead
             | Action::DeployEnvironmentManage

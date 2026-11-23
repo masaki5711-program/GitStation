@@ -16,14 +16,19 @@ use crate::versions::VersionRefs;
 /// already — a decision, or a `check_failed` whose reason a rerun would
 /// repeat (`CheckReason::is_deterministic`; git or job trouble never
 /// answers). The check's seq when one was requested.
+///
+/// `backstop` (plan 18 S6, the prepare job; `Some(ask)`): the check's job
+/// waits behind the prepare job's own run
+/// ([`review::request_check_backstop`]). The seq, and whether its merge
+/// result gets the pipeline as asked for (always `false` for the job).
 pub(crate) async fn after_version(
     db: &Db,
     refs: &VersionRefs,
     lock: &RefsLock,
-    mr: MergeRequestId,
-    repo: RepoId,
+    (mr, repo): (MergeRequestId, RepoId),
+    backstop: Option<bool>,
     request_id: &RequestId,
-) -> Result<Option<i64>, ForgeError> {
+) -> Result<Option<(i64, bool)>, ForgeError> {
     let Some(now) = review::refresh_target(db, mr).await? else {
         return Ok(None);
     };
@@ -73,5 +78,17 @@ pub(crate) async fn after_version(
     if answered {
         return Ok(None);
     }
-    review::request_check(db, mr, request_id.clone()).await // clone: the job keeps its origin
+    let origin = request_id.clone(); // clone: the job keeps its origin
+    match backstop {
+        None => Ok(review::request_check(db, mr, origin)
+            .await?
+            .map(|seq| (seq, false))),
+        Some(ask) => {
+            Ok(
+                review::request_check_backstop(db, mr, origin, ask, review::BACKSTOP_DELAY)
+                    .await?
+                    .map(|c| (c.check_seq, c.asked)),
+            )
+        }
+    }
 }

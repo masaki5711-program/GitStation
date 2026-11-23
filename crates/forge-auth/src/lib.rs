@@ -74,6 +74,8 @@ mod matrix_rows_autofix;
 mod matrix_rows_portal;
 // Plan 17 P17-3: ai_assets.enabled.
 mod matrix_rows_ai_assets;
+// ADR-0038 §2: org bindings.
+mod matrix_rows_org_bindings;
 // M4 C13: the SSH git transport and SSH keys (ADR-0033).
 mod matrix_rows_pipelines;
 mod matrix_rows_ssh;

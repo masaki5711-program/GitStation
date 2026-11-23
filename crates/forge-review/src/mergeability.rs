@@ -90,6 +90,10 @@ pub const MAX_STORED_FILES: usize = 100;
 /// Bytes of stored paths at most (one path is cut to fit, never stored
 /// half; the table's CHECK allows 64 KiB).
 pub const MAX_STORED_BYTES: usize = 16 * 1024;
+/// The pipeline definition the merge request pipeline reads
+/// (`forge_pipelines::CI_FILE`; forge-review does not depend on
+/// forge-pipelines).
+const CI_DEFINITION: &str = ".forge-ci.yml";
 /// The ref read and `merge-base` of a check.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// The merge result's `commit-tree` and its ref update (M4 C7).
@@ -120,6 +124,12 @@ pub struct Mergeability {
     /// written because the target moved gets its own pipeline (`false`,
     /// the default: only a new head's first merge result does).
     pipeline_on_target_move: bool,
+    /// Plan 18 S6 (ADR-0037 (f)): before a clean result's merge request
+    /// pipeline is enqueued, look whether the merged tree has a
+    /// `.forge-ci.yml` at all (one `ls-tree`); without one no pipeline job
+    /// is enqueued (it would write nothing). A person's ask is never
+    /// looked at: its job runs and says `no_definition` itself.
+    ci_definition_probe: bool,
 }
 
 impl std::fmt::Debug for Mergeability {
@@ -127,6 +137,7 @@ impl std::fmt::Debug for Mergeability {
         f.debug_struct("Mergeability")
             .field("limits", &self.limits)
             .field("pipeline_on_target_move", &self.pipeline_on_target_move)
+            .field("ci_definition_probe", &self.ci_definition_probe)
             .finish_non_exhaustive()
     }
 }
@@ -228,7 +239,16 @@ impl Mergeability {
             limits: MergeTreeLimits::default(),
             paths_max: None,
             pipeline_on_target_move: false,
+            ci_definition_probe: false,
         }
+    }
+
+    /// Plan 18 S6: look for the merged tree's `.forge-ci.yml` before the
+    /// merge request pipeline is enqueued (`forge worker` turns it on).
+    #[must_use]
+    pub fn with_ci_definition_probe(mut self, on: bool) -> Self {
+        self.ci_definition_probe = on;
+        self
     }
 
     /// Other trial-merge limits (tests).
@@ -697,6 +717,9 @@ impl Mergeability {
             }
             return Ok((None, Some(change)));
         };
+        let pipeline = self
+            .definition_policy(lock, (repo, mr, seq), tree, pipeline, request_id)
+            .await;
         // Once per pair: an earlier run's result is reused (no commit) —
         // while its commit exists (`gc` may have pruned it once the ref moved
         // on; then a fresh one replaces it in the row, review MEDIUM).
@@ -772,6 +795,44 @@ impl Mergeability {
             );
         }
         Ok((Some(recorded.result), Some(change)))
+    }
+
+    /// Plan 18 S6: `pipeline`, or [`MergeRequestPipeline::NoDefinition`]
+    /// when the probe is on and the merged `tree` has no `.forge-ci.yml`.
+    /// A probe that fails costs only the saving: the policy stays (the
+    /// pipeline job reads the file itself), and the failure is logged.
+    async fn definition_policy(
+        &self,
+        lock: &RefsLock,
+        (repo, mr, seq): (RepoId, forge_core::MergeRequestId, i64),
+        tree: &ObjectId,
+        pipeline: MergeRequestPipeline,
+        request_id: &RequestId,
+    ) -> MergeRequestPipeline {
+        if !self.ci_definition_probe || pipeline == MergeRequestPipeline::Requested {
+            return pipeline;
+        }
+        match self
+            .git
+            .root_entry(&self.storage, repo, None, tree, CI_DEFINITION, left(lock))
+            .await
+        {
+            Ok(None) => MergeRequestPipeline::NoDefinition,
+            Ok(Some(_)) => pipeline,
+            Err(e) => {
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.review.ci_definition_unread",
+                    request_id = %request_id,
+                    error_code = e.code().id(),
+                    merge_request_id = mr.get(),
+                    check_seq = seq,
+                    tree = tree.as_str(),
+                    "the merged tree could not be looked at for .forge-ci.yml; the pipeline job decides"
+                );
+                pipeline
+            }
+        }
     }
 
     /// Whether `seq` is still `mr`'s latest request (the ref belongs to it).

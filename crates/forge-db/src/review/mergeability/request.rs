@@ -6,7 +6,9 @@ use forge_errors::ForgeError;
 use sqlx::postgres::PgConnection;
 
 use super::{job_of, ASKED_JOB, LIVE_JOB, MERGEABILITY_JOB};
-use crate::jobs::{enqueue_superseding_on, supersede_queued_on, Enqueued};
+use crate::jobs::{
+    enqueue_superseding_after_on, enqueue_superseding_on, supersede_queued_on, Enqueued,
+};
 use crate::{query_error, Db};
 
 /// The most merge requests one target push marks `unchecked` past the
@@ -183,6 +185,124 @@ pub async fn request_check(
         let seq = request_check_on(&mut tx, mr, ProjectId::new(project), origin, None).await?;
         tx.commit().await.map_err(|e| query_error(QUERY, e))?;
         Ok(Some(seq))
+    })
+    .await
+}
+
+/// A check requested by the prepare job (plan 18 S6,
+/// [`request_check_backstop`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackstopCheck {
+    /// The request's seq (the prepare job checks it itself).
+    pub check_seq: i64,
+    /// Its merge result gets the merge request pipeline as asked for
+    /// (plan 18 S5): the prepare job's own ask, or one a live mergeability
+    /// job of the merge request carried (inherited, as
+    /// [`request_check_asking_on`] does).
+    pub asked: bool,
+}
+
+/// [`request_check`] for the prepare job (plan 18 S6, `review::prepare`):
+/// the row is bumped as always and the mergeability job of the new seq is
+/// enqueued (superseding the queued ones of older seqs), but ready only
+/// after `delay` — the prepare job checks the seq itself and then settles
+/// the job ([`settle_backstop`]). `Ok(None)`: the merge request is gone or
+/// not open.
+pub async fn request_check_backstop(
+    db: &Db,
+    mr: MergeRequestId,
+    origin: RequestId,
+    ask: bool,
+    delay: std::time::Duration,
+) -> Result<Option<BackstopCheck>, ForgeError> {
+    const QUERY: &str = "review.mergeability_request_backstop";
+    db.within(QUERY, async {
+        let mut tx = db
+            .write_pool()
+            .begin()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        let project: Option<i64> = sqlx::query_scalar(
+            "SELECT project_id FROM forge.merge_requests WHERE id = $1 AND state = 'open'",
+        )
+        .bind(mr.get())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let Some(project) = project else {
+            return Ok(None);
+        };
+        let (seq, inherited) = bump_on(&mut tx, mr, ProjectId::new(project)).await?;
+        let asked = ask || inherited;
+        let job = job_of(mr, seq, (origin, None), asked)?;
+        let _enqueued = enqueue_superseding_after_on(&mut tx, &job, mr.get(), Some(delay)).await?;
+        tx.commit().await.map_err(|e| query_error(QUERY, e))?;
+        Ok(Some(BackstopCheck {
+            check_seq: seq,
+            asked,
+        }))
+    })
+    .await
+}
+
+/// What becomes of the mergeability job behind a prepare job's check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backstop {
+    /// The check ran (stored, or found its seq superseded): the job is
+    /// deleted while it is still queued.
+    Drop,
+    /// The check failed: the job is ready now and retries the request (and
+    /// ends it on its last attempt) as the mergeability job always did.
+    Wake,
+}
+
+/// Settle the queued mergeability job of request `check_seq` of `mr`
+/// (`how`); whether a queued job was found. A job a runner already claimed
+/// (the delay ran out), or one a newer request replaced, is left alone.
+pub async fn settle_backstop(
+    db: &Db,
+    mr: MergeRequestId,
+    check_seq: i64,
+    how: Backstop,
+) -> Result<bool, ForgeError> {
+    const QUERY: &str = "review.mergeability_backstop";
+    let key = super::dedup_key(mr, check_seq);
+    db.within(QUERY, async {
+        let mut conn = db
+            .write_pool()
+            .acquire()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        let found: Option<i64> = match how {
+            Backstop::Drop => {
+                sqlx::query_scalar(
+                    "DELETE FROM ONLY forge.jobs WHERE kind = $1 AND dedup_key = $2 \
+                 AND state = 'queued' RETURNING id",
+                )
+                .bind(MERGEABILITY_JOB)
+                .bind(&key)
+                .fetch_optional(&mut *conn)
+                .await
+            }
+            // Notified like a new job: an idle runner claims it at once.
+            Backstop::Wake => {
+                sqlx::query_scalar(
+                    "WITH woken AS ( \
+                     UPDATE forge.jobs SET run_after = pg_catalog.now() \
+                      WHERE kind = $1 AND dedup_key = $2 AND state = 'queued' \
+                     RETURNING id, kind) \
+                 SELECT w.id FROM woken AS w, \
+                        LATERAL (SELECT pg_catalog.pg_notify($3, w.kind)) AS n",
+                )
+                .bind(MERGEABILITY_JOB)
+                .bind(&key)
+                .bind(crate::wake::Channel::Jobs.name())
+                .fetch_optional(&mut *conn)
+                .await
+            }
+        }
+        .map_err(|e| query_error(QUERY, e))?;
+        Ok(found.is_some())
     })
     .await
 }

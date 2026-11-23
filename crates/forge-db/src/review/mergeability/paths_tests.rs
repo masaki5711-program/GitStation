@@ -1025,3 +1025,112 @@ async fn the_sql_twin_decides_the_named_cases() {
     drop(conn);
     t.drop_now().await;
 }
+
+/// Plan 18 S6 (ADR-0037 (f)): the conflict scan's peers are the open merge
+/// requests whose paths may interact — the one that changes the same file,
+/// and the one whose set is unknown — never the disjoint one; without the
+/// filter every open one, as before.
+#[tokio::test]
+async fn conflict_scan_tries_only_interacting_peers() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let me = open_at_a(&t, alice, p, "me", "main").await;
+    let same = open_at_a(&t, alice, p, "same", "main").await;
+    let apart = open_at_a(&t, alice, p, "apart", "main").await;
+    let unknown = open_at_a(&t, alice, p, "unknown", "main").await;
+    let can = MergeabilityStatus::CanBeMerged;
+    checked(&t, me.id, can, 'c', Some(files(&["docs/a.md"]))).await;
+    checked(&t, same.id, can, 'c', Some(files(&["docs/a.md"]))).await;
+    checked(&t, apart.id, can, 'c', Some(files(&["docs/b.md"]))).await;
+    checked(&t, unknown.id, can, 'c', None).await;
+    let ids = |peers: &Peers| {
+        let mut ids: Vec<i64> = peers.peers.iter().map(|p| p.merge_request.get()).collect();
+        ids.sort_unstable();
+        ids
+    };
+    let main = branch("main");
+    let filtered = scan_peers(&t.db, p, &main, me.id, 50, true)
+        .await
+        .expect("peers");
+    let mut want = vec![same.id.get(), unknown.id.get()];
+    want.sort_unstable();
+    assert_eq!(ids(&filtered), want);
+    assert_eq!(filtered.total, 2);
+    assert_eq!(filtered.passed_over, 1, "the disjoint one");
+    let all = scan_peers(&t.db, p, &main, me.id, 50, false)
+        .await
+        .expect("peers");
+    assert_eq!(all.peers.len(), 3);
+    assert_eq!((all.total, all.passed_over), (3, 0));
+    // Its own set unknown: every peer is scanned.
+    let from_unknown = scan_peers(&t.db, p, &main, unknown.id, 50, true)
+        .await
+        .expect("peers");
+    assert_eq!(from_unknown.total, 3);
+    t.drop_now().await;
+}
+
+/// The queued mergeability jobs: (seq, ready now, carries the ask).
+async fn backstops(t: &FreshDb) -> Vec<(i64, bool, bool)> {
+    sqlx::query_as(
+        "SELECT (payload ->> 'check_seq')::bigint, run_after <= now(),          coalesce((payload ->> 'pipeline')::boolean, false) FROM forge.jobs          WHERE kind = 'merge_request.mergeability' AND state = 'queued' ORDER BY id",
+    )
+    .fetch_all(&mut t.superuser().await)
+    .await
+    .expect("jobs")
+}
+
+/// Plan 18 S6: the prepare job's check request enqueues its mergeability
+/// job ready only after the delay (the request's live job meanwhile);
+/// `Drop` deletes it, `Wake` makes it ready now, a newer request replaces
+/// it, and the S5 ask is carried into it.
+#[tokio::test]
+async fn a_prepare_check_waits_behind_its_backstop_job() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let mr = open_at_a(&t, alice, web.project_id, "feature", "main").await;
+    let delay = std::time::Duration::from_secs(120);
+    let first = request_check_backstop(&t.db, mr.id, rid("req-p1"), false, delay)
+        .await
+        .expect("request")
+        .expect("open");
+    assert!(!first.asked);
+    assert_eq!(backstops(&t).await, [(first.check_seq, false, false)]);
+    assert_eq!(
+        row(&t, mr.id).await.status,
+        MergeabilityStatus::Unchecked,
+        "requested as always"
+    );
+    assert!(
+        settle_backstop(&t.db, mr.id, first.check_seq, Backstop::Drop)
+            .await
+            .expect("drop")
+    );
+    assert!(backstops(&t).await.is_empty());
+    assert!(
+        !settle_backstop(&t.db, mr.id, first.check_seq, Backstop::Drop)
+            .await
+            .expect("gone")
+    );
+    let second = request_check_backstop(&t.db, mr.id, rid("req-p2"), true, delay)
+        .await
+        .expect("request")
+        .expect("open");
+    assert!(second.asked, "the prepare job's own ask");
+    assert!(
+        settle_backstop(&t.db, mr.id, second.check_seq, Backstop::Wake)
+            .await
+            .expect("wake")
+    );
+    assert_eq!(backstops(&t).await, [(second.check_seq, true, true)]);
+    // A request behind a queued ask inherits it and replaces the job,
+    // keeping its place in line (that one was ready: so is this one).
+    let third = request_check_backstop(&t.db, mr.id, rid("req-p3"), false, delay)
+        .await
+        .expect("request")
+        .expect("open");
+    assert!(third.asked, "inherited");
+    assert_eq!(backstops(&t).await, [(third.check_seq, true, true)]);
+    t.drop_now().await;
+}

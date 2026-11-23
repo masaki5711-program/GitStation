@@ -78,14 +78,15 @@ mod run;
 mod stale;
 
 pub use confirm::{confirm_live, decided_candidates, DecidedRow};
-pub(crate) use paths::{carry_forward_on, settled_on};
+pub(crate) use paths::{carry_forward_on, paths_rule, peer_interacts_sql, settled_on};
 pub use paths::{interacts_sql, recheck_if_carried, stored_paths};
 pub use request::DEFER_MAX;
 pub(crate) use request::{
     defer_checks_on, downgrade_on, request_check_asking_on, request_check_on,
 };
 pub use request::{
-    request_check, sweep_missing_merge_results, sweep_unchecked, MISSING_RESULT_AFTER, SWEEP_BATCH,
+    request_check, request_check_backstop, settle_backstop, sweep_missing_merge_results,
+    sweep_unchecked, Backstop, BackstopCheck, MISSING_RESULT_AFTER, SWEEP_BATCH,
 };
 pub use run::{begin_check, record_check, CheckResult, CheckStart, CheckSubject, Recorded};
 pub use stale::{
@@ -261,7 +262,7 @@ fn invalid_job(reason: &'static str) -> ForgeError {
 
 /// The dedup key of request `check_seq` of `mr` (the live-job predicate of
 /// the sweep and the reaper builds the same string in SQL).
-fn dedup_key(mr: MergeRequestId, check_seq: i64) -> String {
+pub(super) fn dedup_key(mr: MergeRequestId, check_seq: i64) -> String {
     format!("mr_mergeability:{}:{check_seq}", mr.get())
 }
 

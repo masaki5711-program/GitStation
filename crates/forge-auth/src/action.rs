@@ -84,6 +84,14 @@ actions! {
     /// `GET /api/v1/projects/{id}/protected-refs`: the protection rules
     /// (M1 phase 8b MR8), as `ProjectRead`.
     ProtectedRefList,
+    /// `POST /api/v1/{projects|groups}/{id}/org-bindings`, `DELETE
+    /// …/org-bindings/{binding_id}` (ADR-0038 §2, §5): add or remove an org
+    /// binding ("the people of this unit are Reporter / Developer here").
+    /// The group's or project's Owner, administrators pass; people only, a
+    /// web session only. A binding never gives more than Developer (the
+    /// command's FG-AUTH-0031 and the table's CHECK). Read with
+    /// `GET …/org-bindings` (`MemberList`).
+    OrgBindingManage,
     // --- REST API: merge requests (M3 R1a, ADR-0024 §12) ---
     /// `POST /api/v1/projects/{id}/merge-requests`: open a merge request
     /// (Developer and above, like `RepoPush`; opening one is not a push, so
@@ -736,6 +744,7 @@ impl Action {
                 | Action::AutoMergeSettingsManage
                 | Action::AutoMergeFullAutoManage
                 | Action::AiAssetsSettingManage
+                | Action::OrgBindingManage
                 // M4 C11 review: an approval is a person's in the browser.
                 | Action::DeployApprove
                 // Plan 15 MR 3: who may see a group is decided in a session.
@@ -805,6 +814,7 @@ impl Action {
                 // M4 C9: auto-merge's mode and emergency stops are a person's.
                 | Action::AutoMergeSettingsManage
                 | Action::AiAssetsSettingManage
+                | Action::OrgBindingManage
                 | Action::AutoMergeStopToggle
                 | Action::AutoMergeInstanceStopToggle
                 | Action::AutoMergeFullAutoManage
@@ -860,6 +870,7 @@ impl Action {
             | Action::AutoMergeSettingsManage
             | Action::AutoMergeFullAutoManage
                 | Action::AiAssetsSettingManage
+                | Action::OrgBindingManage
             // M4 C3: the runner API is a runner's (`ci_rule`); no person's
             // token reaches it (`authorize()`: `runner_only`).
             | Action::RunnerJobRequest
@@ -1131,6 +1142,7 @@ impl Action {
             // M4 C9: nor is auto-merge.
             | Action::AutoMergeSettingsManage
                 | Action::AiAssetsSettingManage
+                | Action::OrgBindingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
             | Action::AutoMergeFullAutoManage
@@ -1297,6 +1309,7 @@ impl Action {
             // M4 C9: nor auto-merge.
             | Action::AutoMergeSettingsManage
                 | Action::AiAssetsSettingManage
+                | Action::OrgBindingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
             | Action::AutoMergeFullAutoManage

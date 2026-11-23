@@ -57,6 +57,7 @@ use tokio::sync::watch;
 
 use super::ci_schedules::ScheduleFireHandler;
 use super::pipelines::PipelineHandler;
+use super::prepare::PrepareHandler;
 use super::provision::{ProvisionHandler, Storage};
 use super::review::{ConflictScanHandler, MergeabilityHandler, RefreshHandler};
 use super::risk::RiskHandler;
@@ -78,6 +79,8 @@ pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 /// listed: 1). The conflict scan is the slow one (seconds of git per run).
 pub(crate) const KIND_CAPS: &[(&str, usize)] = &[
     (forge_db::review::REFRESH_JOB, 2),
+    // Plan 18 S6: a version's refresh, check, risk and spec runs in one.
+    (forge_db::review::PREPARE_JOB, 3),
     (forge_db::review::MERGEABILITY_JOB, 3),
     (forge_db::review::CONFLICT_SCAN_JOB, 1),
     (forge_db::pipelines::PIPELINE_CREATE_JOB, 2),
@@ -121,6 +124,9 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
     // clone: the handler owns its storage handles (paths and an Arc)
     let provision = ProvisionHandler::new(db, storage.clone())?;
     let refresh = RefreshHandler::new(db, storage)?;
+    // Plan 18 S6: `merge_request.prepare` (a version and its checks in one
+    // job; the version job stays for jobs enqueued before it).
+    let prepare = PrepareHandler::new(db, storage)?;
     let mergeability = MergeabilityHandler::new(db, storage)?;
     let conflicts = ConflictScanHandler::new(db, storage)?;
     let spec_drift = SpecDriftHandler::new(db, storage)?;
@@ -137,6 +143,7 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
     Ok(vec![
         Arc::new(provision),
         Arc::new(refresh),
+        Arc::new(prepare),
         Arc::new(mergeability),
         Arc::new(conflicts),
         Arc::new(spec_drift),

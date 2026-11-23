@@ -349,3 +349,32 @@ fn a_migration_never_lowers_another_rule() {
     let run = assess_doc_lint_with(&cut, Some("2026-12-31")).expect("run");
     assert_eq!(run.conclusion, Some(CheckConclusion::Neutral));
 }
+
+/// The portal's `spec-status?show=undecided` counts the annotations whose
+/// message starts `<path>:<line> decisions_resolved` (forge-db
+/// `portal::spec_status`): the shape is kept here.
+#[test]
+fn an_open_required_decision_is_annotated_under_its_rule() {
+    const URS_T: &str =
+        include_str!("../../../docs/plan/13-examples/.forge/doctypes/equipment.urs.yml");
+    const URS: &str = include_str!("../../../docs/plan/13-examples/equipment/URS-L3-001.md");
+    let t = tree(
+        &[(".forge/doctypes/equipment.urs.yml", URS_T)],
+        &[("equipment/URS-L3-001.md", URS.to_owned())],
+    );
+    let run = assess_doc_lint(&t).expect("run");
+    let undecided: Vec<_> = run
+        .annotations
+        .iter()
+        .filter(|a| {
+            a.message.starts_with(&format!(
+                "{}:{} {} ",
+                a.path,
+                a.start_line,
+                forge_core::portal::UNDECIDED_RULE
+            ))
+        })
+        .collect();
+    assert_eq!(undecided.len(), 1, "{:?}", run.annotations);
+    assert_eq!(undecided[0].path, "equipment/URS-L3-001.md");
+}

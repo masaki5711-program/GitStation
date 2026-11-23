@@ -351,6 +351,31 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["removed","target","target_id","user_id"],"properties":{"removed":{"const":true},"target":{"enum":["project","group"]},"target_id":{"type":"integer"},"user_id":{"type":"integer"}}}"#,
     },
     CommandSpec {
+        name: "member org-bindings",
+        summary: "A project's or group's org bindings (ADR-0038: the people of an org unit are Reporter / Developer there) and the people they bring in now. Adding or removing one is the browser's (a web session only).",
+        args: &[
+            arg("--project", "option", false, "The project id (exactly one of --project, --group)."),
+            arg("--group", "option", false, "The group id (exactly one of --project, --group)."),
+        ],
+        examples: &["gstn member org-bindings --project 7 --json", "gstn member org-bindings --group 3"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/org-bindings", "GET /api/v1/groups/{id}/org-bindings"],
+        output: r#"{"type":"object","required":["bindings","members","members_truncated","members_limited","viewer"],"properties":{"bindings":{"type":"array","items":{"type":"object","required":["id","plant_code","org_code","include_descendants","membership","min_rank","role","reason","created_by","created_at","unit"]}},"members":{"type":"array","items":{"type":"object","required":["user_id","username","display_name","role","binding_id","org_code","unit"]}},"members_truncated":{"type":"boolean"},"members_limited":{"type":"boolean"},"viewer":{"type":"object","required":["can_manage"]}}}"#,
+    },
+    CommandSpec {
+        name: "member org-units",
+        summary: "The org master's units (plant, code, level, names), to name a binding's unit.",
+        args: &[
+            arg("--search", "option", false, "A code prefix or part of a name (1..=64 characters)."),
+            arg("--plant", "option", false, "Only this plant's units."),
+            arg("--limit", "option", false, "At most this many units, 1..=50 (server default 20)."),
+        ],
+        examples: &["gstn member org-units --search SEC --plant P001", "gstn member org-units --search 品質 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/org-units"],
+        output: r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["plant_code","unit","parent_code"]}}}}"#,
+    },
+    CommandSpec {
         name: "protected-ref list",
         summary: "List a project's protected ref rules.",
         args: &[arg("--project", "option", true, "The project id.")],

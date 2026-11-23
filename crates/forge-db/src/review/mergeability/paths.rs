@@ -182,6 +182,44 @@ pub(crate) async fn settled_on(
     .map_err(|e| query_error("review.mergeability_settled", e))
 }
 
+/// Plan 18 S6 (ADR-0037 (f)): the SQL of "the open merge request `m` may
+/// interact with merge request `{me}`" for the conflict scan's peers — the
+/// S4 predicate ([`interacts_sql`]) between the two head path sets, each
+/// counted only when it is its row's own ([`OWN_SET`]), of the current rule
+/// version (`{rule}`) and for the merge request's current head. Unknown on
+/// either side (no row, another head, incomplete) is "may interact": the
+/// pair is scanned, as before the filter. Never NULL.
+pub(crate) fn peer_interacts_sql(me: &str, rule: &str) -> String {
+    let own = |alias: &str, mr: &str| {
+        format!(
+            "{alias}.paths_head_sha = {alias}.checked_head_sha AND {alias}.paths_seq = {alias}.check_seq              AND {alias}.paths_rule = {rule} AND {alias}.checked_head_sha = {mr}.head_sha"
+        )
+    };
+    let mine = |column: &str| {
+        format!(
+            "(SELECT s.{column} FROM forge.merge_request_mergeability s              JOIN forge.merge_requests sm ON sm.id = s.merge_request_id              WHERE s.merge_request_id = {me} AND {})",
+            own("s", "sm")
+        )
+    };
+    let interacts = interacts_sql(
+        &mine("head_files"),
+        &mine("head_dirs"),
+        &mine("head_deleted_dirs"),
+        &mine("paths_complete"),
+    );
+    format!(
+        "(NOT EXISTS (SELECT 1 FROM forge.merge_request_mergeability g           WHERE g.merge_request_id = m.id AND {})          OR EXISTS (SELECT 1 FROM forge.merge_request_mergeability g           WHERE g.merge_request_id = m.id AND {} AND {interacts}))",
+        own("g", "m"),
+        own("g", "m"),
+    )
+}
+
+/// The current rule version as the bound value of
+/// [`peer_interacts_sql`]'s `rule`.
+pub(crate) fn paths_rule() -> i32 {
+    rule_version()
+}
+
 /// The stored changed-path set of `mr`'s checked head (`None`: no row, or
 /// unknown — never read, stored before the columns existed, not the
 /// row's own ([`OWN_SET`]) or built for another rule version). One

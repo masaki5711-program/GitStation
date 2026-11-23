@@ -644,7 +644,9 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
                     notification_routes(check_routes(dev_status_routes(feed_routes(
                         integration_routes(service_account_routes(account_routes(history_routes(
                             browse_routes(git_routes(shell_routes(merge_request_routes(
-                                member_routes(move_routes(hosting_routes(fixed))),
+                                org_binding_routes(member_routes(move_routes(hosting_routes(
+                                    fixed,
+                                )))),
                             )))),
                         )))),
                     )))),
@@ -923,6 +925,40 @@ fn portal_widget_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::MENU_OPTIONS,
             Action::PortalWidgetRead,
             "Portal widget menu: the project options (projects the person holds a role on and may read, at most 200)",
+            p::PortalWidgets,
+            p::project_options,
+        )
+        .route_with(
+            Verb::Get,
+            p::MERGE_QUEUE,
+            Action::PortalWidgetRead,
+            "Portal widget merge-queue (status): the merge queues of the chosen projects the person may read - removed changes, paused, waiting or running, at most 24",
+            p::PortalWidgets,
+            p::merge_queue,
+        )
+        .queries(Verb::Get, p::MERGE_QUEUE, p::MERGE_QUEUE_QUERY)
+        .route_with(
+            Verb::Get,
+            p::MERGE_QUEUE_OPTIONS,
+            Action::PortalWidgetRead,
+            "Portal widget merge-queue: the project options (projects the person holds a role on and may read, at most 200)",
+            p::PortalWidgets,
+            p::project_options,
+        )
+        .route_with(
+            Verb::Get,
+            p::SPEC_STATUS,
+            Action::PortalWidgetRead,
+            "Portal widget spec-status (status): per specification project the person may read - changes awaiting approval, undecided items or check findings, at most 24",
+            p::PortalWidgets,
+            p::spec_status,
+        )
+        .queries(Verb::Get, p::SPEC_STATUS, p::SPEC_STATUS_QUERY)
+        .route_with(
+            Verb::Get,
+            p::SPEC_STATUS_OPTIONS,
+            Action::PortalWidgetRead,
+            "Portal widget spec-status: the project options (projects the person holds a role on and may read, at most 200)",
             p::PortalWidgets,
             p::project_options,
         )
@@ -1607,16 +1643,6 @@ fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<d::UserNames>(Verb::Get, d::SEARCH)
         .queries(Verb::Get, d::SEARCH, d::SEARCH_QUERY)
-        // ADR-0038 §3.1 (step C): the unit picker of an approver selector.
-        .route(
-            Verb::Get,
-            d::ORG_UNITS,
-            Action::UserSearch,
-            "Find org units of the PFS org master's copy by code prefix or name (code, level and names only, at most 50)",
-            d::org_units,
-        )
-        .responds::<d::OrgUnits>(Verb::Get, d::ORG_UNITS)
-        .queries(Verb::Get, d::ORG_UNITS, d::ORG_UNITS_QUERY)
         .route(
             Verb::Get,
             d::ADMIN_USERS,
@@ -2448,6 +2474,80 @@ fn content_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
             );
     }
     registry
+}
+
+/// Org bindings (ADR-0038 §2, §5): read like the members (`MemberList`),
+/// added and removed by the Owner in a web session (`OrgBindingManage`,
+/// decided again in forge-hosting on the locked target), and the org
+/// master's units to pick them from (`UserSearch`).
+fn org_binding_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::org_bindings as o;
+    registry
+        .route_with(
+            Verb::Get,
+            o::PROJECT_COLLECTION,
+            Action::MemberList,
+            "A project's org bindings and the people they give a role to now (as the member list)",
+            o::ProjectBindings,
+            o::list_project,
+        )
+        .responds::<o::OrgBindingsBody>(Verb::Get, o::PROJECT_COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            o::PROJECT_COLLECTION,
+            Action::OrgBindingManage,
+            "Bind an org unit to a project as Reporter or Developer (never above; the Owner, people only, a web session); audited",
+            o::MAX_BODY,
+            o::ProjectBindings,
+            o::create_project,
+        )
+        .responds_created::<o::OrgBindingBody>(Verb::Post, o::PROJECT_COLLECTION)
+        .route_with(
+            Verb::Delete,
+            o::PROJECT_ONE,
+            Action::OrgBindingManage,
+            "Remove a project's org binding (the Owner, people only, a web session); audited",
+            o::ProjectBinding,
+            o::delete_project,
+        )
+        .responds_no_content(Verb::Delete, o::PROJECT_ONE)
+        .route_with(
+            Verb::Get,
+            o::GROUP_COLLECTION,
+            Action::MemberList,
+            "A group's org bindings and the people they give a role to now (as the member list)",
+            o::GroupBindings,
+            o::list_group,
+        )
+        .responds::<o::OrgBindingsBody>(Verb::Get, o::GROUP_COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            o::GROUP_COLLECTION,
+            Action::OrgBindingManage,
+            "Bind an org unit to a group as Reporter or Developer (never above; inherited by everything below; the Owner, people only, a web session); audited",
+            o::MAX_BODY,
+            o::GroupBindings,
+            o::create_group,
+        )
+        .responds_created::<o::OrgBindingBody>(Verb::Post, o::GROUP_COLLECTION)
+        .route_with(
+            Verb::Delete,
+            o::GROUP_ONE,
+            Action::OrgBindingManage,
+            "Remove a group's org binding (the Owner, people only, a web session); audited",
+            o::GroupBinding,
+            o::delete_group,
+        )
+        .responds_no_content(Verb::Delete, o::GROUP_ONE)
+        .route(
+            Verb::Get,
+            o::UNITS,
+            Action::UserSearch,
+            "The org master's units for the binding picker (names, level, parent; at most 50)",
+            o::units,
+        )
+        .responds::<o::OrgUnitsBody>(Verb::Get, o::UNITS)
+        .queries(Verb::Get, o::UNITS, o::UNITS_QUERY)
 }
 
 /// Members and protected refs (M1 phase 8b MR8): the lists decided on the
