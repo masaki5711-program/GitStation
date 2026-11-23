@@ -1128,6 +1128,37 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/deployments/{deployment_id}/approve",
         Coverage::BrowserOnly("a deployment is approved in a web session only (every tier): tokens are refused (FG-AUTH-0002 session_required); runbook deploy"),
     ),
+    // ADR-0038 §3.4–§3.6 (step C): approvers and delegations.
+    (
+        "GET",
+        "/api/v1/org/units",
+        Coverage::Planned("ADR-0038 step D: the unit picker of the web's selector form; gstn api for now"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/deploy/approvers",
+        Coverage::Command("deploy approvers"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/deploy/environments/{tier}/approvers",
+        Coverage::Command("deploy approvers-set"),
+    ),
+    (
+        "GET",
+        "/api/v1/user/approval-delegation",
+        Coverage::Command("delegation show"),
+    ),
+    (
+        "PUT",
+        "/api/v1/user/approval-delegation",
+        Coverage::BrowserOnly("a delegation lets someone approve for you: set in a web session only (FG-AUTH-0002 session_required); 個人設定 → 代理の承認"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/user/approval-delegation",
+        Coverage::BrowserOnly("removed in a web session only, like setting it (FG-AUTH-0002 session_required)"),
+    ),
 ];
 
 /// Commands that call no API route, and why: local work only (C-1 counts

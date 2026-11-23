@@ -103,6 +103,7 @@ impl World {
             (self.web.project_id, self.mr.iid),
             who,
             None,
+            &crate::review::ApproveAs::own_unknown(),
             |_| Ok(()),
             |_, facts, id| {
                 assert!(facts.approvals.iter().any(|a| a.approval.id == id));
@@ -334,6 +335,7 @@ async fn an_approval_past_the_cap_is_refused() {
         (w.web.project_id, w.mr.iid),
         w.bob,
         None,
+        &crate::review::ApproveAs::own_unknown(),
         |_| Ok(()),
         |_, _, _| (true, None),
     )
@@ -351,6 +353,7 @@ async fn approval_rules_are_put_replaced_and_removed() {
         required_approvals: required,
         users,
         groups: Vec::new(),
+        selectors: Vec::new(),
     };
     let put = |new: NewApprovalRule, request: &'static str| {
         let db = w.t.db.clone();

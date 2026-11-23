@@ -267,6 +267,19 @@ impl Hosting {
         users::search(&self.db, term).await
     }
 
+    /// Org units of the master's copy by code prefix or name (ADR-0038
+    /// §3.1: the unit picker of an approver selector; `UserSearch` was
+    /// proved on the instance; names and levels only, what every
+    /// signed-in user may see).
+    pub async fn search_org_units(
+        &self,
+        proof: &Authorized<InstanceCtx>,
+        term: &str,
+    ) -> Result<Vec<forge_db::org_master::FoundUnit>, ForgeError> {
+        require(proof.action(), Action::UserSearch)?;
+        forge_db::org_master::search_units(&self.db, term).await
+    }
+
     // ── the org claims' snapshot (ADR-0021 amendment 2026-11-20) ──
 
     /// The caller's own snapshot (`UserSelfRead` was proved on the

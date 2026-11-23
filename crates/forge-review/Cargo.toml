@@ -13,6 +13,8 @@ publish.workspace = true
 # open the transaction and hand the facts to `authorize()` here. It never
 # depends on another feature crate (forge-hosting, forge-checks).
 [dependencies]
+# ADR-0038 §3.1: approver selectors arrive as JSON objects.
+serde_json.workspace = true
 forge-auth.workspace = true
 # M4 C14: the fixers of the target branch's `.forge-ci.yml` (pure).
 forge-ci.workspace = true

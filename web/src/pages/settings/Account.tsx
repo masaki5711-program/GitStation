@@ -20,6 +20,7 @@ import { formatDateTime } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { SESSION_KEY, useSession } from '../../session/session';
 import { AdminUsers } from './AdminUsers';
+import { DelegationSection } from './Delegation';
 import { Integrations } from './Integrations';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
@@ -61,6 +62,7 @@ export function Account({ path }: { path: string }) {
     <>
       <PageHeader title={t('account.title')} />
       <OrgSection />
+      <DelegationSection />
       <nav aria-label={t('account.tabs')}>
         <ul className={styles.tabs}>
           {tabs.map((x) => (

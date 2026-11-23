@@ -3,6 +3,7 @@
 //! behind the SHA kept from approving it, prod only from a succeeded
 //! pipeline).
 
+use forge_core::approver::PersonOrg;
 use forge_core::deploy::{DeployChange, DeployTier, DeploymentStatus};
 use forge_core::{ProjectId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
@@ -43,6 +44,9 @@ pub struct StoredDeployment {
     /// email). Read on the write pool only (the read pool cannot see
     /// emails); empty in lists.
     pub change_authors: Vec<i64>,
+    /// ADR-0038 §3: the approvals given so far (a deployment is `queued`
+    /// once they reach the environment's `approvals_required`).
+    pub approvals: i64,
 }
 
 /// The commit as read from git when a person requested it.
@@ -76,6 +80,7 @@ struct DeploymentRow {
     commit_author_name: Option<String>,
     commit_author_email: Option<String>,
     change_authors: Vec<i64>,
+    approvals: i64,
 }
 
 /// The people behind deployment `a`'s SHA (write pool only: emails).
@@ -108,7 +113,9 @@ pub(crate) fn deployment_columns(a: &str, authors: bool) -> String {
         "{a}.id, {a}.project_id, {a}.tier, {a}.sha, {a}.status, {a}.requested_by, \
          {a}.merge_request_author, {a}.approved_by, {}, {}, {a}.previous_sha, {a}.error_code, \
          {a}.failed_target, {}, {}, {}, {a}.commit_subject, {a}.commit_author_name, \
-         {a}.commit_author_email, {change} AS change_authors",
+         {a}.commit_author_email, {change} AS change_authors, \
+         (SELECT count(*) FROM forge.deployment_approvals x WHERE x.deployment_id = {a}.id) \
+         AS approvals",
         ts("approved_at"),
         ts("approval_expires_at"),
         ts("created_at"),
@@ -139,6 +146,7 @@ fn deployment_of(r: DeploymentRow) -> Result<StoredDeployment, ForgeError> {
         commit_author_name: r.commit_author_name,
         commit_author_email: r.commit_author_email,
         change_authors: r.change_authors,
+        approvals: r.approvals,
     })
 }
 
@@ -476,18 +484,41 @@ struct LockedRow {
     in_window: bool,
 }
 
+/// What one approval of a deployment records (ADR-0038 §3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeployApprovalInput {
+    /// The delegator the approver approves for (checked active under the
+    /// lock, `FG-REVIEW-0033` otherwise).
+    pub on_behalf_of: Option<UserId>,
+    /// The organisation of the person the approval counts for, read just
+    /// before (recorded with the row).
+    pub org: PersonOrg,
+    /// The environment's approvers version the decision was taken on
+    /// (`EnvironmentApprovers::version`): another one under the lock is
+    /// `FG-DEPLOY-0010 reason=approvers_changed`.
+    pub version: String,
+}
+
 /// A person's approval of deployment `id` of `project`, under the row's
 /// lock, decided again (`decide`: the locked project's facts and the
 /// locked deployment with the people behind its SHA). Errors (nothing
 /// written): `decide`'s, `FG-REPO-0005 resource=deployment`,
-/// `FG-DEPLOY-0010` (not `pending_approval`), `FG-DEPLOY-0001
-/// reason=approval_window_passed`, `FG-DEPLOY-0009` (a backstop: the
-/// approver is the requester or behind the SHA), the database's.
+/// `FG-DEPLOY-0010` (not `pending_approval`; the approvers changed; the
+/// caller — or the person they approve for — already approved),
+/// `FG-DEPLOY-0001 reason=approval_window_passed`, `FG-DEPLOY-0009` (a
+/// backstop: the approver is the requester or behind the SHA),
+/// `FG-REVIEW-0033` (no active delegation), the database's.
+///
+/// ADR-0038 §3: each approval is a `deployment_approvals` row; the
+/// deployment moves to `queued` (with `approved_by` = this approver) once
+/// the people approvals count for reach the environment's
+/// `approvals_required` (1 by default: as before).
 pub async fn approve_decided(
     db: &Db,
     ctx: &ChangeContext,
     project: ProjectId,
     id: i64,
+    input: &DeployApprovalInput,
     decide: impl FnOnce(&ProjectUpdateFacts, &StoredDeployment) -> Result<(), ForgeError>,
 ) -> Result<StoredDeployment, ForgeError> {
     const QUERY: &str = "deploy.approve";
@@ -536,6 +567,94 @@ pub async fn approve_decided(
                 .with_context("deployment_id", id)
                 .with_context("reason", "approval_window_passed"));
         }
+        let conflict = |reason: &'static str| {
+            ForgeError::new(ErrorCode::DeploymentStateConflict)
+                .with_context("deployment_id", id)
+                .with_context("project_id", project.get())
+                .with_context("status", current.status.as_str())
+                .with_context("reason", reason)
+        };
+        let env_id: i64 = tx
+            .step(|c| async move {
+                sqlx::query_scalar("SELECT environment_id FROM forge.deployments WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(c)
+                    .await
+                    .map_err(|e| query_error(QUERY, e))
+            })
+            .await?;
+        let (version, required, _) = tx
+            .step(|c| async move { super::approvers::version_on(c, env_id).await })
+            .await?;
+        if version != input.version {
+            return Err(conflict("approvers_changed"));
+        }
+        let me = UserId::new(user);
+        if let Some(delegator) = input.on_behalf_of {
+            let active = tx
+                .step(|c| async move {
+                    crate::review::delegation_active_on(c, delegator, me).await
+                })
+                .await?;
+            if !active {
+                return Err(crate::review::delegation_inactive(
+                    "no_delegation",
+                    delegator,
+                    me,
+                ));
+            }
+        }
+        let org = input.org.to_value().to_string();
+        let on_behalf_of = input.on_behalf_of.map(UserId::get);
+        let inserted: u64 = tx
+            .step(|c| async move {
+                sqlx::query(
+                    "INSERT INTO forge.deployment_approvals (deployment_id, project_id, \
+                     approver_id, on_behalf_of, approver_org) VALUES ($1, $2, $3, $4, $5::jsonb) \
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(id)
+                .bind(project.get())
+                .bind(user)
+                .bind(on_behalf_of)
+                .bind(org)
+                .execute(c)
+                .await
+                .map(|r| r.rows_affected())
+                .map_err(|e| query_error(QUERY, e))
+            })
+            .await?;
+        if inserted == 0 {
+            // ON CONFLICT: the caller (or the person they approve for)
+            // already approved this deployment.
+            return Err(conflict("already_approved"));
+        }
+        let approvals: i64 = tx
+            .step(|c| async move {
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM forge.deployment_approvals WHERE deployment_id = $1",
+                )
+                .bind(id)
+                .fetch_one(c)
+                .await
+                .map_err(|e| query_error(QUERY, e))
+            })
+            .await?;
+        if approvals < i64::from(required) {
+            let change = DeployChange::Approved {
+                project,
+                deployment: id,
+                tier: current.tier,
+                sha: current.sha.clone(), // clone: the audit row owns it
+                on_behalf_of: input.on_behalf_of,
+                approvals,
+                required,
+                queued: false,
+            };
+            let mut waiting = current.clone(); // clone: the answer
+            waiting.approvals = approvals;
+            return Ok(Settle::Commit(record(change), waiting));
+        }
         let sql = format!(
             "WITH up AS (UPDATE forge.deployments d SET status = 'queued', approved_by = $3, \
                approved_at = now(), approval_expires_at = now() + make_interval(mins => \
@@ -565,6 +684,10 @@ pub async fn approve_decided(
             deployment: id,
             tier: stored.tier,
             sha: stored.sha.clone(), // clone: the audit row owns it
+            on_behalf_of: input.on_behalf_of,
+            approvals,
+            required,
+            queued: true,
         };
         Ok(Settle::Commit(record(change), stored))
     }

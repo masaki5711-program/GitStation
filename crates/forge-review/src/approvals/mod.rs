@@ -36,14 +36,19 @@ pub mod carry;
 pub mod codeowners;
 mod commands;
 pub mod committers;
+mod delegation;
 pub mod evaluate;
 mod load;
 
 pub use codeowners::{Codeowners, CodeownersError, Owner};
-pub use commands::{ApprovalAnswer, ApprovalState, RuleAsk};
+pub use commands::{
+    ApprovalAnswer, ApprovalState, EligiblePerson, RuleAsk, RuleEligibility, MAX_ELIGIBLE,
+};
+pub use delegation::Delegations;
 pub use evaluate::{
-    evaluate, is_config_path, ApprovalInputs, ApprovalReport, ApprovalStatus, ChangedPathsFact,
-    CodeownerStatus, CodeownersFact, Committers, OwnerRef, RuleStatus, PROTECTED_BRANCH_RULE,
+    counts_for, evaluate, is_config_path, ApprovalInputs, ApprovalReport, ApprovalStatus,
+    ChangedPathsFact, CodeownerStatus, CodeownersFact, Committers, OwnerRef, RuleStatus,
+    SelectorTargets, PROTECTED_BRANCH_RULE,
 };
 
 /// The most changed paths evaluated (decided in R5; ADR-0024 未決): more is
@@ -154,6 +159,11 @@ pub struct GitFacts {
     pub committers: Committers,
     pub changed: ChangedPathsFact,
     pub codeowners: CodeownersFact,
+    /// ADR-0038 §3.1: the units the project's selectors name for the
+    /// merge request's author (read with the git facts, before the
+    /// decision's transaction; a selector of a rule changed meanwhile is
+    /// absent: it matches nothing).
+    pub targets: SelectorTargets,
 }
 
 impl GitFacts {
@@ -180,6 +190,7 @@ impl GitFacts {
             committers: self.committers,
             changed: self.changed,
             codeowners: self.codeowners,
+            targets: self.targets,
             committer_approvals_excluded,
             codeowners_enforced,
             minimum,

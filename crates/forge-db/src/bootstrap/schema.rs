@@ -1011,6 +1011,10 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── ADR-0038 §3 (step C): approvers and delegations (20270102100000) ──
+        ("forge.deploy_environment_approvers", operational()),
+        ("forge.deployment_approvals", operational()),
+        ("forge.approval_delegations", operational()),
     ])
 }
 
@@ -1225,6 +1229,10 @@ const LATER_TABLES: &[&str] = &[
     "org_units_master",
     "org_positions_master",
     "org_master_state",
+    // ── ADR-0038 §3 (step C): approvers and delegations (20270102100000) ──
+    "deploy_environment_approvers",
+    "deployment_approvals",
+    "approval_delegations",
 ];
 
 /// Every table the first migration creates.

@@ -1240,6 +1240,7 @@ dependencies = [
  "forge-db",
  "forge-errors",
  "forge-git",
+ "serde_json",
  "sqlx",
  "tempfile",
  "tokio",

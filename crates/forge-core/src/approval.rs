@@ -108,6 +108,8 @@ pub enum ApprovalRuleChange {
         required_approvals: i32,
         users: Vec<UserId>,
         groups: Vec<GroupId>,
+        /// ADR-0038 §3.1: the selectors' canonical forms (codes only).
+        selectors: Vec<serde_json::Value>,
         created: bool,
     },
     Removed {
@@ -133,6 +135,7 @@ impl ApprovalRuleChange {
                 required_approvals,
                 users,
                 groups,
+                selectors,
                 created,
             } => serde_json::json!({
                 "approval_rule_id": rule.get(),
@@ -141,6 +144,7 @@ impl ApprovalRuleChange {
                 "required_approvals": required_approvals,
                 "user_ids": users.iter().map(|u| u.get()).collect::<Vec<_>>(),
                 "group_ids": groups.iter().map(|g| g.get()).collect::<Vec<_>>(),
+                "selectors": selectors,
                 "created": created,
             }),
             Self::Removed { rule, name } => serde_json::json!({

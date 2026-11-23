@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 
+use forge_core::approver::ApproverSelector;
 use forge_core::ids::{ApprovalRuleId, GroupId, ProjectId, UserId};
 use forge_core::{ApprovalRuleChange, AuditDetails, RefPattern};
 use forge_errors::{ErrorCode, ForgeError};
@@ -37,6 +38,8 @@ pub struct NewApprovalRule {
     pub required_approvals: i32,
     pub users: Vec<UserId>,
     pub groups: Vec<GroupId>,
+    /// ADR-0038 §3.1 (validated by the caller).
+    pub selectors: Vec<ApproverSelector>,
 }
 
 /// What a put or a remove did.
@@ -59,6 +62,7 @@ struct RuleRow {
     updated_at: String,
     user_id: Option<i64>,
     group_id: Option<i64>,
+    selector: Option<String>,
 }
 
 fn invalid_rule(id: i64) -> ForgeError {
@@ -78,7 +82,7 @@ pub(super) async fn rules_on(
     let rows: Vec<RuleRow> = sqlx::query_as(
         "SELECT r.id, r.name, r.target_pattern, r.required_approvals, \
          to_char(r.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
-         AS updated_at, a.user_id, a.group_id \
+         AS updated_at, a.user_id, a.group_id, a.selector::text AS selector \
          FROM forge.approval_rules r \
          LEFT JOIN forge.approval_rule_approvers a ON a.rule_id = r.id \
          WHERE r.project_id = $1 ORDER BY r.name, a.id",
@@ -108,6 +112,7 @@ pub(super) async fn rules_on(
                         required_approvals: row.required_approvals,
                         users: Vec::new(),
                         groups: Vec::new(),
+                        selectors: Vec::new(),
                         updated_at: row.updated_at.clone(), // clone: as above
                     })
             }
@@ -117,6 +122,15 @@ pub(super) async fn rules_on(
         }
         if let Some(g) = row.group_id {
             rule.groups.push(GroupId::new(g));
+        }
+        if let Some(raw) = row.selector.as_deref() {
+            // A stored selector that no longer parses is a defect, never
+            // "anyone" (fail closed: the rule cannot be read).
+            let parsed = serde_json::from_str::<serde_json::Value>(raw)
+                .ok()
+                .and_then(|v| ApproverSelector::from_value(&v).ok())
+                .ok_or_else(|| invalid_rule(rule.id.get()).with_context("field", "selector"))?;
+            rule.selectors.push(parsed);
         }
     }
     Ok(by_name.into_values().collect())
@@ -144,6 +158,7 @@ fn write_error(query: &'static str) -> impl FnOnce(sqlx::Error) -> ForgeError {
             }
             Some("approval_rules_name") => param_invalid("name", "format"),
             Some("approval_rules_required") => param_invalid("required_approvals", "range"),
+            Some("approval_rule_approvers_selector_shape") => param_invalid("selectors", "shape"),
             Some(_) | None => query_error(query, e),
         }
     }
@@ -206,6 +221,7 @@ fn same(stored: &StoredApprovalRule, new: &NewApprovalRule) -> bool {
             == sorted(&new.users.iter().map(|u| u.get()).collect::<Vec<_>>())
         && sorted(&stored.groups.iter().map(|g| g.get()).collect::<Vec<_>>())
             == sorted(&new.groups.iter().map(|g| g.get()).collect::<Vec<_>>())
+        && stored.selectors == new.selectors
 }
 
 /// Create rule `new.name` of `project`, or replace it (its approvers
@@ -225,7 +241,7 @@ pub async fn put_approval_rule_mr_decided<P>(
     decide: impl FnOnce(&MergeRequestFacts) -> Result<P, ForgeError>,
 ) -> Result<(RuleOutcome, StoredApprovalRule, P), ForgeError> {
     const ACTION: &str = "approval_rule.put";
-    if new.users.len() + new.groups.len() > MAX_RULE_APPROVERS {
+    if new.users.len() + new.groups.len() + new.selectors.len() > MAX_RULE_APPROVERS {
         return Err(param_invalid("users", "too_many_approvers"));
     }
     // R5 review: duplicates are dropped before the comparison and the
@@ -235,6 +251,14 @@ pub async fn put_approval_rule_mr_decided<P>(
     new.users.dedup();
     new.groups.sort_unstable_by_key(|g| g.get());
     new.groups.dedup();
+    let mut seen: Vec<ApproverSelector> = Vec::with_capacity(new.selectors.len());
+    new.selectors.retain(|s| {
+        let fresh = !seen.contains(s);
+        if fresh {
+            seen.push(s.clone()); // clone: the dedup set
+        }
+        fresh
+    });
     let new = &new;
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
@@ -323,6 +347,18 @@ pub async fn put_approval_rule_mr_decided<P>(
                 .await
                 .map_err(write_error("review.approval_rule_group"))?;
             }
+            for selector in &new.selectors {
+                sqlx::query(
+                    "INSERT INTO forge.approval_rule_approvers (rule_id, project_id, selector) \
+                     VALUES ($1, $2, $3::jsonb)",
+                )
+                .bind(id)
+                .bind(project.get())
+                .bind(selector.to_value().to_string())
+                .execute(&mut *c)
+                .await
+                .map_err(write_error("review.approval_rule_selector"))?;
+            }
             Ok(())
         })
         .await?;
@@ -341,6 +377,11 @@ pub async fn put_approval_rule_mr_decided<P>(
                 required_approvals: stored.required_approvals,
                 users: stored.users.clone(),
                 groups: stored.groups.clone(),
+                selectors: stored
+                    .selectors
+                    .iter()
+                    .map(ApproverSelector::to_value)
+                    .collect(),
                 created: existing_id.is_none(),
             },
         );

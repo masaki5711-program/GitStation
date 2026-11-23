@@ -205,6 +205,12 @@ pub enum Command {
         #[command(subcommand)]
         command: DeployCommand,
     },
+    /// Your delegation of approvals (ADR-0038 §3.5).
+    #[command(disable_help_subcommand = true)]
+    Delegation {
+        #[command(subcommand)]
+        command: DelegationCommand,
+    },
     /// The context API (M3 X5): a work item's, a requirement's or a merge
     /// request's context, every item with its source.
     #[command(disable_help_subcommand = true)]
@@ -359,6 +365,15 @@ pub fn parse_text(raw: &str) -> Result<String, String> {
     }
     check_text(raw)?;
     Ok(raw.to_string())
+}
+
+/// An approver selector (ADR-0038 §3.1): a JSON object, checked again by
+/// the server.
+pub fn parse_selector(raw: &str) -> Result<String, String> {
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::Object(_)) => Ok(raw.to_owned()),
+        _ => Err("a selector is a JSON object, e.g. {\"relation\":\"requester_section\"}".to_owned()),
+    }
 }
 
 /// A free text that may be empty (a description).
@@ -651,6 +666,10 @@ pub enum ApprovalRuleCommand {
         /// A group full path whose direct members may approve (repeatable).
         #[arg(long, value_parser = parse_text)]
         group: Vec<String>,
+        /// An organisation selector as a JSON object (repeatable, at most
+        /// 5), e.g. '{"relation":"requester_section","min_rank":55}'.
+        #[arg(long, value_parser = parse_selector, value_name = "JSON")]
+        selector: Vec<String>,
     },
     /// Remove a rule.
     Remove {
@@ -1056,6 +1075,10 @@ pub enum MrCommand {
         /// is refused (FG-REVIEW-0008).
         #[arg(long, value_parser = parse_oid, value_name = "SHA")]
         sha: String,
+        /// Approve for this person (a username) who delegated to you for
+        /// now (FG-REVIEW-0033 otherwise).
+        #[arg(long, value_parser = parse_text, value_name = "USERNAME")]
+        on_behalf_of: Option<String>,
     },
     /// Withdraw your approval.
     Unapprove {
@@ -2488,6 +2511,42 @@ pub enum DeployCommand {
         #[arg(value_parser = parse_oid)]
         sha: String,
     },
+    /// Each environment's approvers (ADR-0038 §3.4).
+    Approvers {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Set who may approve an environment's deployments (an Owner, a
+    /// person). No --user, --group or --selector: any Maintainer.
+    ApproversSet {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(value_enum)]
+        tier: DeployEnv,
+        /// A username (repeatable, at most 20); approves from Reporter.
+        #[arg(long, value_parser = parse_text)]
+        user: Vec<String>,
+        /// A group full path (repeatable, at most 10).
+        #[arg(long, value_parser = parse_text)]
+        group: Vec<String>,
+        /// An organisation selector as a JSON object (repeatable, at most 5).
+        #[arg(long, value_parser = parse_selector, value_name = "JSON")]
+        selector: Vec<String>,
+        /// How many of them must approve (1..=20).
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(i32).range(1..=20))]
+        required: i32,
+        /// A delegate may approve for a named person.
+        #[arg(long)]
+        allow_delegation: bool,
+    },
+}
+
+/// `gstn delegation` (ADR-0038 §3.5): your delegation of approvals.
+#[derive(Subcommand, Debug)]
+pub enum DelegationCommand {
+    /// Your delegation and the people who delegate to you (setting one is
+    /// done in the browser: 個人設定 → 代理の承認).
+    Show,
 }
 
 /// The event of `gstn ci plan`.

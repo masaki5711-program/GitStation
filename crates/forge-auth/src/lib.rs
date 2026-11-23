@@ -109,7 +109,7 @@ pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest,
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
     AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject,
-    CodeownersToggle, CopyMark, Credential, DeploymentView, GroupSight, IntegrationFeedView,
+    ApproverGate, CodeownersToggle, CopyMark, Credential, DeploymentView, GroupSight, IntegrationFeedView,
     JobCredential, JobTokenState, MembershipChange, MembershipScope, MergeRequestEdit,
     MergeRequestState, NamespaceView, PersonalDisclosure, PinnedCopy, PortalCredential, Principal,
     ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential,

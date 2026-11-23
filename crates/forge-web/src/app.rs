@@ -1154,11 +1154,32 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Post,
             d::APPROVE,
             Action::DeployApprove,
-            "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
+            "Approve a deployment waiting for one: 200 queued until approval_expires_at once the environment's approvals_required is reached (pending_approval with approvals until then); 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); 403 FG-DEPLOY-0014 when the environment names approvers and the caller is not one; ?on_behalf_of= for a delegator (403 FG-REVIEW-0033 without an active delegation); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer, or a named approver)",
             d::OF_APPROVAL,
             d::approve,
         )
         .responds::<d::DeploymentBody>(Verb::Post, d::APPROVE)
+        .queries(Verb::Post, d::APPROVE, d::APPROVE_QUERY)
+        // ADR-0038 §3.4–§3.6 (step C): the environments' approvers.
+        .route_with(
+            Verb::Get,
+            d::APPROVERS,
+            Action::DeployRead,
+            "Each deployment environment's approvers: named users, groups, organisation selectors, how many approvals a deployment needs and whether a delegate may approve; unrestricted = any Maintainer (project readers)",
+            d::OF_PROJECT,
+            d::approvers,
+        )
+        .responds::<d::ApproversList>(Verb::Get, d::APPROVERS)
+        .route_with_body(
+            Verb::Put,
+            d::ENVIRONMENT_APPROVERS,
+            Action::DeployApproversManage,
+            "Set who may approve an environment's deployments ({\"users\", \"groups\", \"selectors\", \"approvals_required\", \"allow_delegation\"?}): named users approve from Reporter, group members and people a selector finds from Maintainer; nobody else once any is named (403 FG-DEPLOY-0014); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 for an unknown user or group, an invalid selector or too many; audited (people only; Owner)",
+            d::MAX_BODY,
+            d::OF_PROJECT,
+            d::put_approvers,
+        )
+        .responds::<d::ApproversBody>(Verb::Put, d::ENVIRONMENT_APPROVERS)
 }
 
 /// A project's CI pipelines (M4 C2, plan 14 §4.2): read (metadata only),
@@ -1453,7 +1474,37 @@ fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
     use routes::{
         directory as d, org_profiles as o, ssh_keys as k, tokens as t, user_sessions as s,
     };
+    use routes::approval_delegation as ad;
     registry
+        // ADR-0038 §3.5 (step C): the caller's delegation of approvals.
+        .route_with(
+            Verb::Get,
+            ad::PATH,
+            Action::ApprovalDelegationRead,
+            "The caller's delegation of approvals (who approves for them and when; null without one) and the people who delegate to the caller and whose period has not ended",
+            ad::OwnDelegation,
+            ad::get,
+        )
+        .responds::<ad::DelegationState>(Verb::Get, ad::PATH)
+        .route_with_body(
+            Verb::Put,
+            ad::PATH,
+            Action::ApprovalDelegationManage,
+            "Set the caller's delegation ({\"delegate\", \"starts_at\", \"ends_at\"}: an active person, not oneself, at most 30 days; replaces any): the delegate may approve merge requests for the caller, and deployments where the environment allows it (web sessions only; audited)",
+            ad::MAX_BODY,
+            ad::OwnDelegation,
+            ad::put,
+        )
+        .responds::<ad::DelegationBody>(Verb::Put, ad::PATH)
+        .route_with(
+            Verb::Delete,
+            ad::PATH,
+            Action::ApprovalDelegationManage,
+            "Remove the caller's delegation of approvals (204, also when there was none; web sessions only; audited)",
+            ad::OwnDelegation,
+            ad::delete,
+        )
+        .responds_no_content(Verb::Delete, ad::PATH)
         // M4 C13 (ADR-0033 §2): the caller's SSH keys.
         .route_with(
             Verb::Get,
@@ -1556,6 +1607,16 @@ fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<d::UserNames>(Verb::Get, d::SEARCH)
         .queries(Verb::Get, d::SEARCH, d::SEARCH_QUERY)
+        // ADR-0038 §3.1 (step C): the unit picker of an approver selector.
+        .route(
+            Verb::Get,
+            d::ORG_UNITS,
+            Action::UserSearch,
+            "Find org units of the PFS org master's copy by code prefix or name (code, level and names only, at most 50)",
+            d::org_units,
+        )
+        .responds::<d::OrgUnits>(Verb::Get, d::ORG_UNITS)
+        .queries(Verb::Get, d::ORG_UNITS, d::ORG_UNITS_QUERY)
         .route(
             Verb::Get,
             d::ADMIN_USERS,

@@ -34,12 +34,15 @@ fn approver(user: UserId, role: Role) -> ApproverFacts {
             created_at: "2026-11-03T00:00:00Z".to_owned(),
             revoked_at: None,
             revoked_reason: None,
+            on_behalf_of: None,
+            approver_org: None,
         },
         username: format!("user{}", user.get()),
         active: true,
         kind: UserKind::Human,
         role: Some(role),
         groups: BTreeSet::new(),
+        delegator: None,
     }
 }
 
@@ -51,6 +54,7 @@ fn rule(name: &str, required: i32, users: Vec<UserId>) -> StoredApprovalRule {
         required_approvals: required,
         users,
         groups: Vec::new(),
+        selectors: Vec::new(),
         updated_at: "2026-11-03T00:00:00.000000Z".to_owned(),
     }
 }
@@ -71,6 +75,7 @@ fn inputs(approvals: Vec<ApproverFacts>, rules: Vec<StoredApprovalRule>) -> Appr
         committer_approvals_excluded: true,
         codeowners_enforced: true,
         minimum: 0,
+        targets: SelectorTargets::default(),
     }
 }
 
@@ -430,3 +435,6 @@ fn the_protected_minimum_counts_any_valid_approval() {
     ];
     assert_eq!(evaluate(&i).blocks.len(), 1);
 }
+
+#[path = "evaluate_org_tests.rs"]
+mod org;

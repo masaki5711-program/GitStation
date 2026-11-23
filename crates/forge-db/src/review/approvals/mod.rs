@@ -20,6 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use forge_core::approver::{ApproverSelector, PersonOrg};
 use forge_core::ids::{ApprovalId, ApprovalRuleId, GroupId, MergeRequestId, ProjectId, UserId};
 use forge_core::{ObjectId, RefName, RefPattern, RepoId, Role, UnapproveReason, UserKind};
 use forge_errors::{ErrorCode, ForgeError};
@@ -28,9 +29,18 @@ use sqlx::postgres::PgConnection;
 use crate::{query_error, read_query_error, Db};
 
 mod commands;
+mod delegations;
+mod eligible;
+pub(crate) use delegations::active_on as delegation_active_on;
 mod rules;
 
-pub use commands::{approve_mr_decided, unapprove_mr_decided, ApproveOutcome, Classify};
+pub use commands::{approve_mr_decided, unapprove_mr_decided, ApproveAs, ApproveOutcome, Classify};
+pub use eligible::{group_members, people_facts, PersonFacts, MAX_PEOPLE};
+pub use delegations::{
+    active_delegation, delegation_of, delegations_to, inactive as delegation_inactive,
+    remove_delegation_decided,
+    set_delegation_decided, DelegationOutcome, StoredDelegation,
+};
 pub(crate) use commands::{carry_some_on, revoke_on};
 pub use rules::{
     put_approval_rule_mr_decided, remove_approval_rule_mr_decided, NewApprovalRule, RuleOutcome,
@@ -50,6 +60,26 @@ pub struct StoredApproval {
     pub created_at: String,
     pub revoked_at: Option<String>,
     pub revoked_reason: Option<UnapproveReason>,
+    /// ADR-0038 §3.5: the person the approver approved for (a delegation
+    /// active at approval time); `None`: for themself.
+    pub on_behalf_of: Option<UserId>,
+    /// ADR-0038 §3.1: the organisation of the person the approval counts
+    /// for (`on_behalf_of`, else the approver) **at approval time**;
+    /// `None` for an approval given before step C (it matches no
+    /// selector). A stored form that does not parse is
+    /// `Unknown("stored_org_invalid")` (fail closed).
+    pub approver_org: Option<PersonOrg>,
+}
+
+/// The person an approval was given for (ADR-0038 §3.5), as they are now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DelegatorFacts {
+    pub user: UserId,
+    pub username: String,
+    pub active: bool,
+    pub kind: UserKind,
+    /// The groups the delegator is a direct member of now.
+    pub groups: BTreeSet<GroupId>,
 }
 
 /// A live approval and its approver as they are now (ADR-0024 §8.6: the
@@ -65,6 +95,8 @@ pub struct ApproverFacts {
     pub role: Option<Role>,
     /// The groups the approver is a direct member of now.
     pub groups: BTreeSet<GroupId>,
+    /// ADR-0038 §3.5: the delegator of an approval given on their behalf.
+    pub delegator: Option<DelegatorFacts>,
 }
 
 /// One approval rule of a project.
@@ -75,9 +107,11 @@ pub struct StoredApprovalRule {
     /// `None`: every target.
     pub target_pattern: Option<RefPattern>,
     pub required_approvals: i32,
-    /// Who may approve for it (both empty: any eligible person).
+    /// Who may approve for it (all empty: any eligible person).
     pub users: Vec<UserId>,
     pub groups: Vec<GroupId>,
+    /// ADR-0038 §3.1: organisation selectors (step C).
+    pub selectors: Vec<ApproverSelector>,
     /// UTC, RFC 3339 to the microsecond: the token a rule write's
     /// `expected_updated_at` compares (U2 follow-up, FG-REVIEW-0018).
     pub updated_at: String,
@@ -195,7 +229,8 @@ pub(crate) fn approval_columns() -> String {
     format!(
         "id, merge_request_id, approver_id, head_sha, target_branch, \
          to_char(created_at AT TIME ZONE 'UTC', {TS}) AS created_at, \
-         to_char(revoked_at AT TIME ZONE 'UTC', {TS}) AS revoked_at, revoked_reason"
+         to_char(revoked_at AT TIME ZONE 'UTC', {TS}) AS revoked_at, revoked_reason, \
+         on_behalf_of, approver_org::text AS approver_org"
     )
 }
 
@@ -209,6 +244,19 @@ pub(crate) struct ApprovalRow {
     created_at: String,
     revoked_at: Option<String>,
     revoked_reason: Option<String>,
+    on_behalf_of: Option<i64>,
+    approver_org: Option<String>,
+}
+
+/// A stored organisation snapshot read back (ADR-0038 §3.1): one that does
+/// not parse counts as unknown, never as known.
+pub(crate) fn stored_org(raw: Option<&str>) -> Option<PersonOrg> {
+    raw.map(|raw| {
+        serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .and_then(|v| PersonOrg::from_value(&v))
+            .unwrap_or_else(|| PersonOrg::Unknown("stored_org_invalid".to_owned()))
+    })
 }
 
 fn stored_invalid(reason: &'static str, id: i64) -> ForgeError {
@@ -237,6 +285,8 @@ impl ApprovalRow {
                         .ok_or_else(|| stored_invalid("stored_revoked_reason_invalid", id))
                 })
                 .transpose()?,
+            on_behalf_of: self.on_behalf_of.map(UserId::new),
+            approver_org: stored_org(self.approver_org.as_deref()),
         })
     }
 }
@@ -367,7 +417,11 @@ async fn approvers_on(
     project: ProjectId,
     live: Vec<StoredApproval>,
 ) -> Result<Vec<ApproverFacts>, ForgeError> {
-    let ids: Vec<i64> = live.iter().map(|a| a.approver.get()).collect();
+    let ids: Vec<i64> = live
+        .iter()
+        .flat_map(|a| [Some(a.approver.get()), a.on_behalf_of.map(UserId::get)])
+        .flatten()
+        .collect();
     let accounts: Vec<(i64, String, bool, String)> = sqlx::query_as(
         "SELECT id, username, state = 'active', kind FROM forge.users WHERE id = ANY($1)",
     )
@@ -397,17 +451,43 @@ async fn approvers_on(
                 .with_context("reason", "unknown_user_kind")
                 .with_context("user_id", user.get())
         })?;
+        let groups_of = |u: UserId| -> BTreeSet<GroupId> {
+            memberships
+                .iter()
+                .filter(|(m, _)| *m == u.get())
+                .map(|(_, g)| GroupId::new(*g))
+                .collect()
+        };
+        let delegator = match approval.on_behalf_of {
+            None => None,
+            Some(d) => {
+                let Some((_, name, active, kind)) = accounts.iter().find(|(id, ..)| *id == d.get())
+                else {
+                    return Err(ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "delegator_missing")
+                        .with_context("user_id", d.get()));
+                };
+                Some(DelegatorFacts {
+                    user: d,
+                    username: name.clone(), // clone: each delegator owns its name
+                    active: *active,
+                    kind: UserKind::parse(kind).ok_or_else(|| {
+                        ForgeError::new(ErrorCode::Internal)
+                            .with_context("reason", "unknown_user_kind")
+                            .with_context("user_id", d.get())
+                    })?,
+                    groups: groups_of(d),
+                })
+            }
+        };
         out.push(ApproverFacts {
             approval,
             username: username.clone(), // clone: each approver owns its name
             active: *active,
             kind,
             role: roles.remove(&user).flatten(),
-            groups: memberships
-                .iter()
-                .filter(|(u, _)| *u == user.get())
-                .map(|(_, g)| GroupId::new(*g))
-                .collect(),
+            groups: groups_of(user),
+            delegator,
         });
     }
     Ok(out)

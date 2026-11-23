@@ -15,7 +15,7 @@ use super::codeowners::{self, Codeowners, CodeownersError, Owner};
 use super::committers;
 use super::{
     warn_unread, Asker, Budget, ChangedPathsFact, CodeownersFact, Committers, GitFacts, OwnerRef,
-    ReviewGit, MATCH_BUDGET, MAX_CHANGED_PATHS,
+    ReviewGit, SelectorTargets, MATCH_BUDGET, MAX_CHANGED_PATHS,
 };
 
 /// The longest changed path evaluated (a CODEOWNERS line is at most 4 KiB):
@@ -85,6 +85,7 @@ impl ReviewGit {
                 committers: Committers::Unknown("target_missing"),
                 changed: ChangedPathsFact::Unknown("target_missing"),
                 codeowners: CodeownersFact::Invalid(CodeownersError::file("read_failed")),
+                targets: SelectorTargets::default(),
             });
         };
         // Load test 2026-11-19: the merge result the mergeability check
@@ -99,10 +100,12 @@ impl ReviewGit {
         let codeowners = self
             .codeowners(db, asker, mr, tip, &changed, budget)
             .await?;
+        let targets = selector_targets(db, mr).await?;
         Ok(GitFacts {
             committers,
             changed,
             codeowners,
+            targets,
         })
     }
 
@@ -343,6 +346,42 @@ impl ReviewGit {
         }
         Ok(fact)
     }
+}
+
+/// The units the project's approval rules' selectors name for `mr`'s
+/// author now (ADR-0038 §3.1): nothing is read when no rule has a
+/// selector. Candidates are people with Developer and above, never the
+/// author (`escalate: parent` when none is in the base unit).
+pub(crate) async fn selector_targets(
+    db: &Db,
+    mr: &StoredMergeRequest,
+) -> Result<SelectorTargets, ForgeError> {
+    let rules = review::approval_rules(db, mr.project_id).await?;
+    let mut selectors: Vec<forge_core::approver::ApproverSelector> = Vec::new();
+    for s in rules.iter().flat_map(|r| r.selectors.iter()) {
+        if !selectors.contains(s) {
+            selectors.push(s.clone()); // clone: the resolution owns its selectors
+        }
+    }
+    if selectors.is_empty() {
+        return Ok(SelectorTargets::default());
+    }
+    let resolution = forge_db::org_master::resolve_selectors(
+        db,
+        mr.project_id,
+        Some(mr.author),
+        &selectors,
+        forge_core::Role::Developer,
+        &[mr.author],
+    )
+    .await?;
+    Ok(SelectorTargets(
+        resolution
+            .selectors
+            .into_iter()
+            .map(|r| (r.selector, r.target))
+            .collect(),
+    ))
 }
 
 /// The CODEOWNERS lines the changed paths need (line → paths), computed in

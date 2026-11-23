@@ -14,6 +14,13 @@
 //! The registry proves the action on what the loader read; forge-review
 //! decides again inside the transaction.
 //!
+//! ADR-0038 §3 (step C): a rule's approvers mix users, groups and
+//! organisation `selectors` (§3.1); an approval may be given
+//! `on_behalf_of` a person who delegated to the caller (§3.5,
+//! FG-REVIEW-0033 otherwise); `GET …/approvals` lists who can approve for
+//! each rule that names approvers (`eligible`), with the reason when no one
+//! can (§3.3).
+//!
 //! U2 follow-up: a rule names its approvers (`users`, `groups`: id and
 //! name, at the rule's own visibility — no lookup route) and its
 //! `updated_at`; a rule write names the `updated_at` it read
@@ -64,6 +71,10 @@ pub struct ApproveMergeRequest {
     /// The head commit the approver reviewed (required): another head is
     /// refused (FG-REVIEW-0008 stale_view).
     pub sha: String,
+    /// ADR-0038 §3.5: approve for this person (a username) who delegated
+    /// to the caller for now (FG-REVIEW-0033 otherwise).
+    #[serde(default)]
+    pub on_behalf_of: Option<String>,
 }
 
 /// One approval.
@@ -79,6 +90,9 @@ pub struct ApprovalBody {
     pub target_branch: String,
     /// UTC, RFC 3339.
     pub created_at: String,
+    /// ADR-0038 §3.5: the person it was given for.
+    #[schema(required = true)]
+    pub on_behalf_of_id: Option<i64>,
 }
 
 /// What an approve or unapprove did.
@@ -116,6 +130,51 @@ pub struct ApprovalStatusBody {
     /// commit of the merge request (runbook merge-blocked).
     #[schema(required = true)]
     pub committer_push_audit_id: Option<i64>,
+    /// ADR-0038 §3.5: the username of the person it was given for.
+    #[schema(required = true)]
+    pub on_behalf_of: Option<String>,
+}
+
+/// One person who can approve for a rule now (ADR-0038 §3.3).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EligiblePersonBody {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    pub username: String,
+    pub display_name: String,
+    /// `user`, `group` or `selector`.
+    pub via: String,
+    /// The primary unit, section and department names (`null`: unknown).
+    #[schema(required = true)]
+    pub primary_org: Option<crate::routes::org_profiles::OrgPathBody>,
+}
+
+/// A selector that names no unit for this merge request's author.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnresolvedBody {
+    /// `requester_org_unknown`, `requester_no_section`,
+    /// `requester_no_department` or `unit_not_in_master`.
+    pub reason: String,
+    /// The ADR-0038 §4 reason behind `requester_org_unknown`
+    /// (`no_snapshot`, `stale_snapshot`, `master_stale`, …).
+    #[schema(required = true)]
+    pub detail: Option<String>,
+}
+
+/// Who can approve for one rule (ADR-0038 §3.3).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuleEligibilityBody {
+    pub rule: String,
+    /// At most 20, by username.
+    pub people: Vec<EligiblePersonBody>,
+    /// More people than listed.
+    pub more: bool,
+    pub unresolved: Vec<UnresolvedBody>,
+    /// Some selector's people could not be read (the list may be short).
+    pub incomplete: bool,
 }
 
 /// One approval rule's state on this merge request.
@@ -175,6 +234,9 @@ pub struct ApprovalStateBody {
     /// the merge request cannot merge whatever the approvals say (the
     /// conflict itself is the mergeability's and the merge's to report).
     pub conflict: bool,
+    /// ADR-0038 §3.3: who can approve, for each rule that applies and
+    /// names approvers (empty: none names any).
+    pub eligible: Vec<RuleEligibilityBody>,
 }
 
 /// `PUT …/approval-rules/{name}`.
@@ -190,9 +252,17 @@ pub struct PutApprovalRule {
     #[serde(default)]
     pub users: Vec<String>,
     /// Group full paths whose direct members may approve for the rule
-    /// (no users and no groups: any eligible person).
+    /// (no users, no groups and no selectors: any eligible person).
     #[serde(default)]
     pub groups: Vec<String>,
+    /// ADR-0038 §3.1: organisation selectors (at most 5), e.g.
+    /// `{"relation": "requester_section", "min_rank": 55}`; keys
+    /// `relation` (`requester_section` | `requester_department` | `unit`),
+    /// `unit`, `include_descendants`, `min_rank` or `positions`,
+    /// `escalate` (`none` | `parent`).
+    #[serde(default)]
+    #[schema(value_type = Vec<Object>)]
+    pub selectors: Vec<serde_json::Value>,
     /// The rule's `updated_at` the caller read, echoed verbatim (an opaque
     /// string), or `null` to create a rule no rule has the name of.
     /// Required (U2 follow-up): another rule under the lock — changed,
@@ -241,6 +311,9 @@ pub struct ApprovalRuleBody {
     /// `user_ids` / `group_ids`.
     pub users: Vec<ApproverUserBody>,
     pub groups: Vec<ApproverGroupBody>,
+    /// ADR-0038 §3.1: the selectors in their canonical form.
+    #[schema(value_type = Vec<Object>)]
+    pub selectors: Vec<serde_json::Value>,
     /// UTC, RFC 3339 to the microsecond: an opaque token — send it back
     /// verbatim as `expected_updated_at`.
     pub updated_at: String,
@@ -280,6 +353,11 @@ fn rule_body(r: &StoredApprovalRule, names: &ApproverNames) -> ApprovalRuleBody 
                 full_path: g.full_path.clone(), // clone: as above
                 display_name: g.display_name.clone(),
             })
+            .collect(),
+        selectors: r
+            .selectors
+            .iter()
+            .map(forge_core::approver::ApproverSelector::to_value)
             .collect(),
         updated_at: r.updated_at.clone(),
     }
@@ -364,11 +442,46 @@ fn answer_body(iid: i64, a: &ApprovalAnswer) -> ApprovalAnswerBody {
                 .unwrap_or(s.target_branch.as_str())
                 .to_owned(),
             created_at: s.created_at.clone(), // clone: the row is borrowed
+            on_behalf_of_id: s.on_behalf_of.map(|u| u.get()),
         }),
     }
 }
 
-fn state_body(iid: i64, s: &ApprovalState) -> ApprovalStateBody {
+fn eligible_body(
+    e: &forge_review::approvals::RuleEligibility,
+    paths: &crate::routes::org_profiles::OrgPaths,
+) -> RuleEligibilityBody {
+    RuleEligibilityBody {
+        rule: e.rule.clone(), // clone: the state is borrowed
+        people: e
+            .people
+            .iter()
+            .map(|p| EligiblePersonBody {
+                id: p.user.get(),
+                username: p.username.clone(), // clone: as above
+                display_name: p.display_name.clone(),
+                via: p.via.to_owned(),
+                primary_org: paths.path_of(p.user),
+            })
+            .collect(),
+        more: e.more,
+        unresolved: e
+            .unresolved
+            .iter()
+            .map(|(reason, detail)| UnresolvedBody {
+                reason: reason.clone(), // clone: as above
+                detail: detail.clone(),
+            })
+            .collect(),
+        incomplete: e.incomplete,
+    }
+}
+
+fn state_body(
+    iid: i64,
+    s: &ApprovalState,
+    paths: &crate::routes::org_profiles::OrgPaths,
+) -> ApprovalStateBody {
     let target = s
         .target_branch
         .branch()
@@ -385,6 +498,7 @@ fn state_body(iid: i64, s: &ApprovalState) -> ApprovalStateBody {
             config_change_approved: None,
             blocked_by: Vec::new(),
             conflict: s.conflict,
+            eligible: Vec::new(),
         };
     };
     ApprovalStateBody {
@@ -401,6 +515,7 @@ fn state_body(iid: i64, s: &ApprovalState) -> ApprovalStateBody {
                 counted: a.counted,
                 uncounted_reason: a.uncounted_reason.map(|r| r.as_str().to_owned()),
                 committer_push_audit_id: a.committer_push,
+                on_behalf_of: a.on_behalf_of.as_ref().map(|(_, name)| name.clone()), // clone: as above
             })
             .collect(),
         rules: report
@@ -434,6 +549,11 @@ fn state_body(iid: i64, s: &ApprovalState) -> ApprovalStateBody {
             })
             .collect(),
         conflict: s.conflict,
+        eligible: s
+            .eligible
+            .iter()
+            .map(|e| eligible_body(e, paths))
+            .collect(),
     }
 }
 
@@ -528,7 +648,13 @@ pub async fn approve(
         let sha =
             ObjectId::parse(&w.input.sha).map_err(|_| param_invalid("sha", "not_an_object_id"))?;
         let answer = review(&state)?
-            .approve(&review_request(&w), &w.proof, repo?, &sha)
+            .approve(
+                &review_request(&w),
+                &w.proof,
+                repo?,
+                &sha,
+                w.input.on_behalf_of.as_deref(),
+            )
             .await?;
         json(answer_body(iid, &answer))
     }
@@ -561,7 +687,17 @@ pub async fn approvals(state: AppState, request: Dispatched<MergeRequestCtx>) ->
         let answer = review(&state)?
             .approval_state(&w.ctx.request_id, &w.proof, repo?)
             .await?;
-        json(state_body(iid, &answer))
+        let ids: Vec<UserId> = answer
+            .eligible
+            .iter()
+            .flat_map(|e| e.people.iter().map(|p| p.user))
+            .collect();
+        let paths = crate::routes::org_profiles::OrgPaths::of(
+            &state,
+            crate::routes::write::hosting(&state)?.primary_org_paths(&ids),
+        )
+        .await?;
+        json(state_body(iid, &answer, &paths))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
@@ -671,6 +807,7 @@ pub async fn put_rule(
             required_approvals: w.input.required_approvals,
             users: w.input.users.clone(),   // clone: as above
             groups: w.input.groups.clone(), // clone: as above
+            selectors: w.input.selectors.clone(), // clone: as above
         };
         let (outcome, rule) = review(&state)?
             .put_approval_rule(

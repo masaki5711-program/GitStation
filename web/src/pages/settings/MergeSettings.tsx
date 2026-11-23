@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type S
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 
+import { asSelector, type ApproverSelector } from '../../api/approvers';
 import { call } from '../../api/client';
 import { useApi } from '../../api/context';
 import {
@@ -32,16 +33,18 @@ import {
   usePutMergeSettings,
   type MergeMethod,
 } from '../../api/mergeSettings';
-import type { ApprovalRule, MergeSettings, ProtectedRef } from '../../api/types';
+import type { ApprovalRule, MergeSettings, ProtectedRef, PutApprovalRuleBody } from '../../api/types';
 import { SelectField, TextField } from '../../components/Field';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { OrgCode } from '../../features/OrgProfile';
+import { selectorText } from '../../features/approvers';
 import { isStale } from '../../features/mr/ActionError';
 import { formatDateTime, mergeMethodLabel } from '../../features/labels';
 import { Modal } from '../../ui/Modal';
 import { focusWhenNoDialog } from '../../ui/focus';
+import { SelectorEditor } from './ApproverSelectors';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading } from './common';
 import { patternProblem } from './patterns';
 import styles from './Settings.module.css';
@@ -405,7 +408,7 @@ function parseCount(raw: string, min: number, max: number): number | null {
 
 type GroupName = { id: number; path: string; display_name: string };
 
-interface GroupChoices {
+export interface GroupChoices {
   groups: GroupName[];
   /** The list was read (a rule dialog's form starts then). */
   ready: boolean;
@@ -413,7 +416,7 @@ interface GroupChoices {
   retry: () => void;
 }
 
-function useChoices(enabled: boolean): GroupChoices {
+export function useChoices(enabled: boolean): GroupChoices {
   const groups = useGroupChoices(enabled);
   return {
     groups: groups.data ?? [],
@@ -428,6 +431,15 @@ function useChoices(enabled: boolean): GroupChoices {
 /** Who may approve for a rule, by the names the rule answers with. */
 function approverNames(r: ApprovalRule): { users: string[]; groups: string[] } {
   return { users: r.users.map((u) => u.username), groups: r.groups.map((g) => g.full_path) };
+}
+
+/** A rule's organisation selectors (ADR-0038 §3.1); one the screen cannot
+ * read is left out (and the rule cannot be saved here, like an unnamed
+ * approver). */
+function selectorsOf(r: ApprovalRule): { selectors: ApproverSelector[]; unreadable: boolean } {
+  const raw = r.selectors as unknown[];
+  const selectors = raw.map(asSelector).filter((x): x is ApproverSelector => x !== null);
+  return { selectors, unreadable: selectors.length !== raw.length };
 }
 
 export function ApprovalRulesSection({ projectId, canManage }: { projectId: number; canManage: boolean }) {
@@ -449,7 +461,7 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
 
   const who = (r: ApprovalRule) => {
     const { users, groups } = approverNames(r);
-    const people = [...users, ...groups];
+    const people = [...users, ...groups, ...selectorsOf(r).selectors.map((s) => selectorText(t, s))];
     return people.length === 0 ? t('settings.rules.anyone') : people.join(', ');
   };
 
@@ -662,10 +674,15 @@ function RuleForm({
   // approver the answer could not name (its ids are longer than its names)
   // would be dropped by a save, so none is offered then.
   const known = rule === null ? { users: [], groups: [] } : approverNames(rule);
+  const knownSelectors = rule === null ? { selectors: [], unreadable: false } : selectorsOf(rule);
   const unnamed =
-    rule !== null && (rule.users.length !== rule.user_ids.length || rule.groups.length !== rule.group_ids.length);
+    rule !== null &&
+    (rule.users.length !== rule.user_ids.length ||
+      rule.groups.length !== rule.group_ids.length ||
+      knownSelectors.unreadable);
   const [users, setUsers] = useState<string[]>(known.users);
   const [groups, setGroups] = useState<string[]>(known.groups);
+  const [selectors, setSelectors] = useState<ApproverSelector[]>(knownSelectors.selectors);
   const [attempt, setAttempt] = useState(0);
 
   // Names are lower case only (the server's rule), so they compare as they are.
@@ -696,6 +713,7 @@ function RuleForm({
           target_pattern: target.trim() === '' ? null : target.trim(),
           users,
           groups,
+          selectors: selectors as unknown as PutApprovalRuleBody['selectors'],
           // Verbatim; null: a new rule (refused when the name exists by then).
           expected_updated_at: rule?.updated_at ?? null,
         },
@@ -754,6 +772,7 @@ function RuleForm({
             setGroups(groups.filter((x) => x !== g));
           }}
         />
+        <SelectorEditor selectors={selectors} onChange={setSelectors} />
         <p className={styles.hint}>{t('settings.rules.anyoneHelp')}</p>
         {unnamed && (
           <p role="note" className={styles.warning}>
@@ -815,7 +834,7 @@ function Chosen({ items, onRemove }: { items: string[]; onRemove: (item: string)
   );
 }
 
-function UserPicker({
+export function UserPicker({
   chosen,
   onAdd,
   onRemove,
@@ -915,7 +934,7 @@ function UserPicker({
   );
 }
 
-function GroupPicker({
+export function GroupPicker({
   groups,
   chosen,
   onAdd,

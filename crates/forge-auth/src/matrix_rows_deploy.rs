@@ -12,6 +12,7 @@ use forge_errors::ErrorCode as E;
 use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Fixture as F, Row};
 use crate::matrix_review::MrProject as P;
+use crate::model::ApproverGate as G;
 
 const fn row(action: A, actor: W, fixture: F, expect: Expect) -> Row {
     Row {
@@ -36,8 +37,36 @@ const fn dep(prod: bool, mine: bool, mr_mine: bool, project: P) -> F {
         requested_by_me: mine,
         mr_author_me: mr_mine,
         project,
+        approvers: G::Unrestricted,
+        for_requester: false,
     }
 }
+
+/// ADR-0038 §3.4: a prod deployment of an environment that names
+/// approvers, the caller matching them as `gate`.
+const fn listed(gate: G) -> F {
+    F::Deployment {
+        prod: true,
+        requested_by_me: false,
+        mr_author_me: false,
+        project: P::Private,
+        approvers: gate,
+        for_requester: false,
+    }
+}
+/// ADR-0038 §3.5: approving as the delegate of the requester.
+const PROD_FOR_REQUESTER: F = F::Deployment {
+    prod: true,
+    requested_by_me: false,
+    mr_author_me: false,
+    project: P::Private,
+    approvers: G::Named,
+    for_requester: true,
+};
+const NAMED: F = listed(G::Named);
+const MATCHED: F = listed(G::Matched);
+const NOT_LISTED: F = listed(G::NotListed("not_listed"));
+const DELEGATION_OFF: F = listed(G::NotListed("delegation_off"));
 pub(crate) const STG: F = dep(false, false, false, P::Private);
 const PROD: F = dep(true, false, false, P::Private);
 const PROD_MINE: F = dep(true, true, false, P::Private);
@@ -124,6 +153,49 @@ pub(crate) const DEPLOY_ROWS: &[Row] = &[
     row(A::DeployApprove, W::Developer, STG, deny(E::Forbidden)),
     row(A::DeployApprove, W::Developer, PROD, deny(E::Forbidden)),
     row(A::DeployApprove, W::NonMember, PROD_INTERNAL, deny(E::Forbidden)),
+    // ADR-0038 §3.4: an environment with approvers — named people from
+    // Reporter, groups and selectors from Maintainer, nobody else (an
+    // Owner and an administrator included).
+    row(A::DeployApprove, W::Reporter, NAMED, Allow),
+    row(A::DeployApprove, W::Developer, NAMED, Allow),
+    row(A::DeployApprove, W::Guest, NAMED, deny(E::Forbidden)),
+    row(A::DeployApprove, W::Maintainer, MATCHED, Allow),
+    row(A::DeployApprove, W::Developer, MATCHED, deny(E::Forbidden)),
+    row(A::DeployApprove, W::Reporter, MATCHED, deny(E::Forbidden)),
+    row(A::DeployApprove, W::Maintainer, NOT_LISTED, deny(E::DeployApproverNotListed)),
+    row(A::DeployApprove, W::Owner, NOT_LISTED, deny(E::DeployApproverNotListed)),
+    row(A::DeployApprove, W::Admin, NOT_LISTED, deny(E::DeployApproverNotListed)),
+    row(A::DeployApprove, W::Guest, NOT_LISTED, deny(E::Forbidden)),
+    row(A::DeployApprove, W::Maintainer, DELEGATION_OFF, deny(E::DeployApproverNotListed)),
+    row(A::DeployApprove, W::MaintainerTokenApi, NAMED, deny(E::InsufficientScope)),
+    row(A::DeployApprove, W::BotAdminSession, NAMED, deny(E::Forbidden)),
+    // ADR-0038 §3.5: a delegate never approves the delegator's own request.
+    row(A::DeployApprove, W::Maintainer, PROD_FOR_REQUESTER, deny(E::DeploySelfApprovalRefused)),
+    // --- DeployApproversManage: Owner, people only ---
+    row(A::DeployApproversManage, W::Owner, F::PrivateProject, Allow),
+    row(A::DeployApproversManage, W::OwnerTokenApi, F::PrivateProject, Allow),
+    row(A::DeployApproversManage, W::Admin, F::PrivateProject, Allow),
+    row(A::DeployApproversManage, W::Maintainer, F::PrivateProject, deny(E::Forbidden)),
+    row(A::DeployApproversManage, W::MaintainerTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    row(A::DeployApproversManage, W::Developer, F::PrivateProject, deny(E::Forbidden)),
+    row(A::DeployApproversManage, W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    row(A::DeployApproversManage, W::Owner, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::DeployApproversManage, W::AgentOwnerTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    row(A::DeployApproversManage, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
+    row(A::DeployApproversManage, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+    // --- ApprovalDelegationRead / Manage (ADR-0038 §3.5): one's own only;
+    // setting it is a person's, in a session ---
+    row(A::ApprovalDelegationRead, W::Reporter, F::OwnToken, Allow),
+    row(A::ApprovalDelegationRead, W::OwnerTokenReadApi, F::OwnToken, Allow),
+    row(A::ApprovalDelegationRead, W::Admin, F::ForeignToken, deny(E::NotFound)),
+    row(A::ApprovalDelegationRead, W::DevTokenReadRepository, F::OwnToken, deny(E::InsufficientScope)),
+    row(A::ApprovalDelegationRead, W::Anonymous, F::OwnToken, deny(E::Unauthenticated)),
+    row(A::ApprovalDelegationManage, W::Reporter, F::OwnToken, Allow),
+    row(A::ApprovalDelegationManage, W::Admin, F::OwnToken, Allow),
+    row(A::ApprovalDelegationManage, W::DevTokenApi, F::OwnToken, deny(E::InsufficientScope)),
+    row(A::ApprovalDelegationManage, W::Admin, F::ForeignToken, deny(E::NotFound)),
+    row(A::ApprovalDelegationManage, W::Disabled, F::OwnToken, deny(E::AccountDisabled)),
+    row(A::ApprovalDelegationManage, W::Anonymous, F::OwnToken, deny(E::Unauthenticated)),
     row(A::DeployApprove, W::NonMember, PROD, deny(E::NotFound)),
     // Automation never approves: an agent token (refused as a token), a
     // service account (the kind of the auto-merge principal) or a bot,

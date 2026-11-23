@@ -669,11 +669,20 @@ async fn finish_steps(
     )
     .await?;
     // M4 C11: deployments, then targets, then environments (audited on
-    // the project: the project.purged row covers them).
+    // the project: the project.purged row covers them). ADR-0038 §3: the
+    // approvals of the deployments and the environments' approvers first.
     for (sql, query) in [
+        (
+            "DELETE FROM forge.deployment_approvals WHERE project_id = $1",
+            "projects.purge.finish.deployment_approvals",
+        ),
         (
             "DELETE FROM forge.deployments WHERE project_id = $1",
             "projects.purge.finish.deployments",
+        ),
+        (
+            "DELETE FROM forge.deploy_environment_approvers WHERE project_id = $1",
+            "projects.purge.finish.deploy_environment_approvers",
         ),
         (
             "DELETE FROM forge.deploy_targets WHERE project_id = $1",

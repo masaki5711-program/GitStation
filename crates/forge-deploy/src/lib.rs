@@ -30,9 +30,14 @@ use forge_errors::{ErrorCode, ForgeError};
 
 pub use forge_db::deploy::{StoredDeployment, StoredEnvironment, StoredTarget};
 
+pub mod approvers;
 pub mod commits;
 pub mod run;
 pub mod transport;
+
+pub use approvers::{ApproversSpec, GateFacts};
+pub use forge_db::deploy::{DeploymentApproval, EnvironmentApprovers};
+pub use forge_db::review::ApproverNames;
 
 pub use commits::{CommitFacts, CommitSource, FactsFuture, GitCommits};
 
@@ -125,13 +130,21 @@ fn reconfirm(proof: &Authorized<ProjectCtx>, facts: &ProjectUpdateFacts) -> Resu
         .map(drop)
 }
 
-/// The loaded deployment of an approval's context.
-pub fn loaded_deployment(d: &StoredDeployment) -> LoadedDeployment {
+/// The loaded deployment of an approval's context: the stored row, the
+/// caller against the environment's approvers (ADR-0038 §3.4) and the
+/// delegator they approve for (§3.5).
+pub fn loaded_deployment(
+    d: &StoredDeployment,
+    approvers: forge_auth::ApproverGate,
+    on_behalf_of: Option<UserId>,
+) -> LoadedDeployment {
     LoadedDeployment {
         id: d.id,
         tier: d.tier,
         requested_by: d.requested_by.map(UserId::new),
         change_authors: d.change_authors.iter().copied().map(UserId::new).collect(),
+        approvers,
+        on_behalf_of,
     }
 }
 
@@ -393,21 +406,55 @@ impl Deploy {
     }
 
     /// `POST …/deployments/{deployment_id}/approve` (`DeployApprove`).
+    ///
+    /// ADR-0038 §3 (step C): `on_behalf_of` approves for that person under
+    /// an active delegation (where the environment allows it). The caller
+    /// against the environment's approvers is read again here and decided
+    /// again under the lock (the approvers' version must not change); the
+    /// organisation of the person the approval counts for is recorded with
+    /// it. The deployment is `queued` once the environment's
+    /// `approvals_required` is reached (answered `pending_approval` with
+    /// `approvals` until then).
     pub async fn approve(
         &self,
         request: &ChangeRequest,
         proof: &Authorized<DeploymentCtx>,
+        on_behalf_of: Option<UserId>,
     ) -> Result<StoredDeployment, ForgeError> {
         require(proof.action(), Action::DeployApprove)?;
         let user = caller(proof.principal(), Action::DeployApprove)?;
         let (project, id) = *proof.id();
-        let ctx = change_context(request, proof.principal(), user);
-        let stored =
-            forge_db::deploy::approve_decided(&self.db, &ctx, project, id, |facts, locked| {
-                let fresh = DeploymentCtx::new(loaded(&facts.project), loaded_deployment(locked));
-                proof.reconfirm(account(facts), fresh).map(drop)
-            })
+        let current = forge_db::deploy::get_deployment(&self.db, project, id)
+            .await?
+            .ok_or_else(|| {
+                ForgeError::new(ErrorCode::NotFound)
+                    .with_context("resource", "deployment")
+                    .with_context("deployment_id", id)
+            })?;
+        let gate = self
+            .approver_gate(project, &current, user, on_behalf_of)
             .await?;
+        let input = forge_db::deploy::DeployApprovalInput {
+            on_behalf_of,
+            org: gate.org.clone(), // clone: the gate stays for the decision
+            version: gate.version.clone(),
+        };
+        let ctx = change_context(request, proof.principal(), user);
+        let stored = forge_db::deploy::approve_decided(
+            &self.db,
+            &ctx,
+            project,
+            id,
+            &input,
+            |facts, locked| {
+                let fresh = DeploymentCtx::new(
+                    loaded(&facts.project),
+                    loaded_deployment(locked, gate.gate, on_behalf_of),
+                );
+                proof.reconfirm(account(facts), fresh).map(drop)
+            },
+        )
+        .await?;
         tracing::info!(
             target: "forge_deploy",
             event = "forge.deploy.approved",
@@ -417,6 +464,9 @@ impl Deploy {
             environment = stored.tier.as_str(),
             sha = %stored.sha,
             user_id = user.get(),
+            on_behalf_of = on_behalf_of.map(UserId::get),
+            approvals = stored.approvals,
+            status = stored.status.as_str(),
             "deployment approved"
         );
         Ok(stored)

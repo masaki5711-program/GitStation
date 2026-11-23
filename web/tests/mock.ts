@@ -24,6 +24,8 @@ export const MR_COUNTS_PATH = '/api/v1/user/merge-requests/counts';
 export const ACTIVITY_PATH = '/api/v1/user/activity';
 /** The caller's org claims snapshot. */
 export const ORG_PROFILE_PATH = '/api/v1/user/org-profile';
+/** The caller's delegation of approvals (ADR-0038 §3.5). */
+export const DELEGATION_PATH = '/api/v1/user/approval-delegation';
 export const MR_COUNTS_ZERO = {
   authored: { count: 0, capped: false, truncated: false },
   approvable: { count: 0, capped: false, truncated: false },
@@ -39,6 +41,23 @@ const defaults: Record<string, Handler> = {
   // The caller's org claims snapshot (the user menu, the account page;
   // ADR-0021 amendment 2026-11-20): none unless a test gives one.
   [`GET ${ORG_PROFILE_PATH}`]: () => json(200, { user_id: 1, org: null }),
+  // ADR-0038 §3 (step C): the account page's delegation, the project
+  // settings' deploy approvers and the MR panel's "who can approve" (none).
+  [`GET ${DELEGATION_PATH}`]: () => json(200, { mine: null, to_me: [] }),
+  'GET /api/v1/projects/7/deploy/approvers': () => json(200, { environments: [] }),
+  'GET /api/v1/projects/7/merge-requests/3/approvals': () =>
+    json(200, {
+      iid: 3,
+      head_sha: 'b'.repeat(40),
+      target_branch: 'main',
+      approvals: [],
+      rules: [],
+      codeowners: [],
+      config_change_approved: null,
+      blocked_by: [],
+      conflict: false,
+      eligible: [],
+    }),
 };
 
 export function mockServer(routes: Record<string, Handler>) {

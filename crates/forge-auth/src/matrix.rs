@@ -488,6 +488,10 @@ pub(crate) enum Fixture {
         requested_by_me: bool,
         mr_author_me: bool,
         project: crate::matrix_review::MrProject,
+        /// ADR-0038 §3.4: the caller against the environment's approvers.
+        approvers: crate::model::ApproverGate,
+        /// ADR-0038 §3.5: approving for the person who requested it.
+        for_requester: bool,
     },
     /// A binding as an act-as request reaches it (M3 X3):
     /// `matrix_rows_bindings.rs`.
@@ -1302,6 +1306,8 @@ impl Fixture {
                 requested_by_me,
                 mr_author_me,
                 project,
+                approvers,
+                for_requester,
             } => Resource::Deployment(crate::model::DeploymentView {
                 project: match project {
                     crate::matrix_review::MrProject::Private => private,
@@ -1319,6 +1325,8 @@ impl Fixture {
                 } else {
                     vec![OTHER]
                 },
+                approvers,
+                on_behalf_of: for_requester.then_some(OTHER),
             }),
             Fixture::Mr(mr) => mr.resource(role),
             Fixture::ActAs(scene) => scene.resource(role),

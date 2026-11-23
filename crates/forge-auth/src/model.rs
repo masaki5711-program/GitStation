@@ -1087,6 +1087,28 @@ pub struct DeploymentView {
     pub tier: forge_core::deploy::DeployTier,
     pub requested_by: Option<UserId>,
     pub change_authors: Vec<UserId>,
+    /// ADR-0038 §3.4: whether the caller (or `on_behalf_of`) is one of the
+    /// environment's approvers, as loaded.
+    pub approvers: ApproverGate,
+    /// ADR-0038 §3.5: the delegator the caller approves for (an active
+    /// delegation, checked by the loader and again under the lock).
+    pub on_behalf_of: Option<UserId>,
+}
+
+/// Whether a person matches a deploy environment's approvers (ADR-0038
+/// §3.4), decided by the loader on the environment's list, the people's
+/// groups and the organisation snapshots — a fact `authorize()` reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApproverGate {
+    /// The environment names no approvers: Maintainer and above, as before.
+    Unrestricted,
+    /// Named as a user (directly, or the delegator is).
+    Named,
+    /// Matched through a group or an organisation selector.
+    Matched,
+    /// Not one of them (`not_listed`, `selector_unresolved`,
+    /// `delegation_off`).
+    NotListed(&'static str),
 }
 
 /// See [`Resource::JobSelf`]. Private fields, a crate-only constructor.

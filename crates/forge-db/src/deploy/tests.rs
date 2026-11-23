@@ -161,11 +161,69 @@ impl World {
     }
 
     async fn approve(&self, who: UserId, id: i64) -> Result<StoredDeployment, ForgeError> {
+        self.approve_as(who, id, None).await
+    }
+
+    /// One more person.
+    async fn person(&self, name: &str) -> UserId {
+        users::create(
+            &self.t.db,
+            &ctx(Actor::System, &format!("req-user-{name}")),
+            &NewUser::human(name, name, &format!("{name}@example.test")),
+        )
+        .await
+        .expect("person")
+        .user_id
+    }
+
+    /// A delegation period around now: from a day ago for ten days.
+    async fn period(&self) -> (String, String) {
+        let mut su = self.t.superuser().await;
+        sqlx::query_as(
+            "SELECT to_char((now() - interval '1 day') AT TIME ZONE 'UTC',                'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),              to_char((now() + interval '9 days') AT TIME ZONE 'UTC',                'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')",
+        )
+        .fetch_one(&mut su)
+        .await
+        .expect("period")
+    }
+
+    /// End `delegator`'s delegation now (as if its period had passed).
+    async fn end_delegation(&self, delegator: UserId) {
+        let mut su = self.t.superuser().await;
+        sqlx::query(
+            "UPDATE forge.approval_delegations SET starts_at = now() - interval '3 days',              ends_at = now() - interval '1 day' WHERE delegator_id = $1",
+        )
+        .bind(delegator.get())
+        .execute(&mut su)
+        .await
+        .expect("end delegation");
+    }
+
+    /// ADR-0038 §3: an approval recording whom it counts for, decided on
+    /// the environment's approvers version read now.
+    async fn approve_as(
+        &self,
+        who: UserId,
+        id: i64,
+        on_behalf_of: Option<UserId>,
+    ) -> Result<StoredDeployment, ForgeError> {
+        let d = get_deployment(&self.t.db, self.project(), id)
+            .await?
+            .expect("deployment");
+        let env = super::environment_approvers(&self.t.db, self.project(), d.tier)
+            .await?
+            .expect("environment");
+        let input = super::DeployApprovalInput {
+            on_behalf_of,
+            org: forge_core::approver::PersonOrg::Unknown("no_snapshot".to_owned()),
+            version: env.version,
+        };
         approve_decided(
             &self.t.db,
             &ctx(Actor::User(who), "req-approve"),
             self.project(),
             id,
+            &input,
             |_, _| Ok(()),
         )
         .await
@@ -174,7 +232,8 @@ impl World {
     async fn audit_actions(&self) -> Vec<String> {
         let mut su = self.t.superuser().await;
         sqlx::query_scalar(
-            "SELECT action FROM forge.audit_log WHERE action LIKE 'deploy%' ORDER BY id",
+            "SELECT action FROM forge.audit_log WHERE action LIKE 'deploy%' \
+             OR action LIKE 'approval_delegation.%' ORDER BY id",
         )
         .fetch_all(&mut su)
         .await
@@ -618,3 +677,6 @@ async fn a_target_changed_after_the_approval_blocks_the_deployment() {
         .any(|a| a == "deployment.blocked"));
     w.t.drop_now().await;
 }
+
+#[path = "approvers_tests.rs"]
+mod approvers;

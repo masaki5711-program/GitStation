@@ -356,9 +356,19 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
             crate::mr_conditions::status(cli, (*project, *iid), env, io)
         }
         // M3 R5: approvals (`mr_approvals.rs`).
-        MrCommand::Approve { project, iid, sha } => {
-            crate::mr_approvals::approve(cli, (*project, *iid), sha, env, io)
-        }
+        MrCommand::Approve {
+            project,
+            iid,
+            sha,
+            on_behalf_of,
+        } => crate::mr_approvals::approve(
+            cli,
+            (*project, *iid),
+            sha,
+            on_behalf_of.as_deref(),
+            env,
+            io,
+        ),
         MrCommand::Unapprove { project, iid } => {
             crate::mr_approvals::unapprove(cli, (*project, *iid), env, io)
         }

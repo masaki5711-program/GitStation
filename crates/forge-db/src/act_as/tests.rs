@@ -932,6 +932,7 @@ impl World {
             (self.project, self.mr.iid),
             self.bob,
             Some(&using),
+            &crate::review::ApproveAs::own_unknown(),
             |facts| {
                 let via = facts.via.expect("act-as facts under the lock");
                 assert!(via.bound);
@@ -980,6 +981,7 @@ async fn act_as_approval_is_never_carried_to_a_new_head() {
         (w.project, w.mr.iid),
         alice,
         None,
+        &crate::review::ApproveAs::own_unknown(),
         |_| Ok(()),
         |_, _, _| (true, None),
     )
@@ -1141,6 +1143,7 @@ impl World {
                 integration: self.integration,
                 via: self.sa,
             }),
+            &crate::review::ApproveAs::own_unknown(),
             |_| Ok(()),
             |_, _, _| (true, None),
         )

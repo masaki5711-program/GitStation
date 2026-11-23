@@ -18,6 +18,8 @@ forge-db.workspace = true
 forge-errors.workspace = true
 # M4 C11 review: what may be deployed is read with git (browse API).
 forge-git.workspace = true
+# ADR-0038 §3 (step C): approver selectors arrive as JSON objects.
+serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 tracing.workspace = true

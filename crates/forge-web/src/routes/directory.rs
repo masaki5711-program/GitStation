@@ -36,6 +36,8 @@ use crate::routes::write::{bounded, hosting, json, no_store, write_request};
 
 /// `GET /api/v1/users?search=`.
 pub const SEARCH: &str = "/api/v1/users";
+/// `GET /api/v1/org/units?search=` (ADR-0038 §3.1: the unit picker).
+pub const ORG_UNITS: &str = "/api/v1/org/units";
 /// `GET /api/v1/admin/users`.
 pub const ADMIN_USERS: &str = "/api/v1/admin/users";
 /// `POST /api/v1/admin/users/{id}/disable`.
@@ -80,6 +82,35 @@ pub const ADMIN_QUERY: &[QueryParam] = &[
         integer_range: None,
     },
 ];
+
+/// The query of [`ORG_UNITS`].
+pub const ORG_UNITS_QUERY: &[QueryParam] = &[QueryParam {
+    name: "search",
+    description: "1..=64 characters: a unit code prefix or part of a unit name (ja / en / id)",
+    integer_range: None,
+}];
+
+/// One org unit of the master's copy.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OrgUnitBody {
+    pub plant_code: String,
+    pub code: String,
+    /// `division`, `department`, `section` or `team`.
+    pub level: String,
+    pub name_ja: String,
+    #[schema(required = true)]
+    pub name_en: Option<String>,
+    #[schema(required = true)]
+    pub name_id: Option<String>,
+}
+
+/// The units a search found (at most 50).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OrgUnits {
+    pub items: Vec<OrgUnitBody>,
+}
 
 /// One search match: names, and the primary department code.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -218,6 +249,50 @@ pub async fn search(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
                     primary_org: paths.path(m.id),
                     username: m.username,
                     display_name: m.display_name,
+                })
+                .collect(),
+        })
+    }
+    .await;
+    respond(ctx, StatusCode::OK, built)
+}
+
+/// `GET /api/v1/org/units?search=` → `200` the units (ADR-0038 §3.1).
+pub async fn org_units(state: AppState, request: Dispatched<InstanceCtx>) -> Response {
+    let query = request.raw_query().map(str::to_owned);
+    let viewer = request.principal().user();
+    let w = request.into_write();
+    let ctx = &w.ctx;
+    let built = async {
+        let viewer = viewer.ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "search_viewer_missing")
+        })?;
+        if let Err(retry) = state
+            .search_limiter
+            .check(viewer, std::time::Instant::now())
+        {
+            return Err(state.search_limiter.refused(retry));
+        }
+        let params = params(query.as_deref(), &["search"])?;
+        let raw = value(&params, "search").ok_or_else(|| param_invalid("search", "missing"))?;
+        let term = percent_decode(&raw.replace('+', " "))
+            .ok_or_else(|| param_invalid("search", "malformed"))?;
+        let found = bounded(
+            &state,
+            "org_unit_search",
+            hosting(&state)?.search_org_units(&w.proof, &term),
+        )
+        .await?;
+        json(OrgUnits {
+            items: found
+                .into_iter()
+                .map(|u| OrgUnitBody {
+                    plant_code: u.plant_code,
+                    code: u.code,
+                    level: u.level.as_str().to_owned(),
+                    name_ja: u.name.ja,
+                    name_en: u.name.en,
+                    name_id: u.name.id,
                 })
                 .collect(),
         })

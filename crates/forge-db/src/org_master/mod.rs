@@ -17,6 +17,8 @@
 //!   behind the same gates as [`derive`]; past a gate they are still shown,
 //!   marked stale (the last known names).
 //! - [`health`]: doctor's `org.master`.
+//! - [`person_orgs`] / [`plant_people`] / [`unit_chain`] (`people.rs`):
+//!   the whole chain of people's primary units for approvals (ADR-0038 §3).
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -25,9 +27,16 @@ use forge_errors::ForgeError;
 
 use crate::{read_query_error, Db};
 
+mod people;
 mod read;
 mod replace;
+mod selectors;
 
+pub use people::{
+    person_orgs, plant_people, search_units, unit_chain, FoundUnit, MAX_PLANT_PEOPLE,
+    MAX_UNIT_RESULTS,
+};
+pub use selectors::{resolve_selectors, Resolution, ResolvedSelector};
 pub use read::{derive, health, primary_paths, unit_paths, ShownPath, MAX_UNIT_CODES};
 pub use replace::{replace, ReplacePolicy, Replaced, SYNCED_ACTION};
 /// The longest parent chain walked (division → department → section → team
