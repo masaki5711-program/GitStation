@@ -147,6 +147,11 @@ diagnosis / fix に書いた。
    飛ばして署名することはできない。誤りは新しいコード **FG-AGENT-0014** SigningKeyFileInvalid（`insecure_permissions`・
    `keys_unreadable`・`keys_invalid`・`signing_key_invalid`、doctor の `key_not_registered`・`key_mismatch`・`key_revoked`・
    `signing_key_retired`）。利用者への文は「管理者に連絡」: FG-AGENT-0003（手元の鍵の一覧の更新を利用者に頼む）とは直す人が違う。
+   `forge_agent::sign_digest` は pub だが、clippy.toml の `disallowed-methods` で呼び出しを断る（-D warnings で CI が赤）。許すのは
+   A5 の `forge-marketplace` の公開の 1 か所と、合成の種で署名する試験（`#![allow(clippy::disallowed_methods)]`）だけ。
+   **受け入れた残る危険**: ring の `Ed25519KeyPair` は drop で秘密を消さない（zeroize しない）。種の写しは `Zeroizing` で消すが、
+   鍵の組の内部の展開した秘密はプロセスのメモリに残りうる。ed25519-dalek への切り替えは §4 で断った（新しいクレート）ので
+   入れない。緩和: 署名は公開の短い区間だけで鍵の組を作り、すぐ捨てる（A5）。サーバーのメモリを読める者はすでに鍵ファイルも読める。
 5. **doctor `agent.signing_keys`**: ファイルの鍵がすべて登録され、公開鍵が合い、失効していないこと、署名する鍵が退役していないこと。
    設定していないホストは `skip`。権限を確かめられない OS（Windows）では合っていても `warn`。`agent.revoked_in_use` とファイルの
    要約の抜き取りは、使う側の記録ができる A7・A9 で足す。

@@ -4,3 +4,12 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-dbg-in-tests = true
+
+# Plan 16 A3 review (ADR-0032 A3 amendment): signing a part digest is the
+# marketplace's publish step only (forge-marketplace, A5, after the
+# authorized publish decision). Every other caller is refused; tests that
+# sign with a synthetic seed carry `#![allow(clippy::disallowed_methods)]`,
+# and forge-marketplace will allow it at its one call site.
+disallowed-methods = [
+    { path = "forge_agent::sign_digest", reason = "only forge-marketplace's publish step signs agent parts (ADR-0032, plan 16 A3/A5)" },
+]

@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // tests may fail loudly
+// Plan 16 A3 review: tests sign with a synthetic seed (clippy.toml).
+#![allow(clippy::disallowed_methods)]
 
 use std::collections::BTreeMap;
 

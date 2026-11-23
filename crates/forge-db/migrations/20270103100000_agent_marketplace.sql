@@ -400,7 +400,7 @@ BEGIN
         RETURNING id INTO key_row_id;
     ELSIF p_action = 'retire' THEN
         UPDATE forge.agent_signing_keys AS k SET retired_at = pg_catalog.now()
-         WHERE k.kid = p_kid AND k.retired_at IS NULL
+         WHERE k.kid = p_kid AND k.retired_at IS NULL AND k.revoked_at IS NULL
         RETURNING k.id INTO key_row_id;
     ELSE
         UPDATE forge.agent_signing_keys AS k
