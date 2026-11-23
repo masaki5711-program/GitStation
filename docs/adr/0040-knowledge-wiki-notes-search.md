@@ -1,0 +1,58 @@
+# ADR-0040: ナレッジ — Wiki は結び付けた普通のプロジェクト、ノートは自分の非公開プロジェクト、検索はアプリ側の 2-gram と `tsvector`
+
+**Date**: 2026-11-23
+**Status**: proposed（accepted は K1〜K3 の `/review` で CRITICAL / HIGH なしのとき）
+**Deciders**: Masaki Fujikawa（ユーザー、2026-11-23「計画 19・20・21 の未決の問いはすべて推奨の既定で」）、Claude
+
+## Context
+
+M6（計画 20）は Wiki・個人ノート・横断検索（と最小の Issue）を足す。条件は CLAUDE.md §3: 外部の検索サービスを使わない（オンプレ）、PostgreSQL 16 だけ（拡張を足さない — TimescaleDB の像と PFS のサーバーで同じ構成を保つ）、読めない物は 1 件も出さない（判定は `authorize()` の 1 か所）。コードの事実: 全文検索は無い（`tsvector`・`pg_trgm` は未使用）、一覧は行ごとに `authorize()` で決め SQL では決めない（`routes/lists.rs`、案 L1）、1 プロジェクト = 1 リポジトリ（`repositories UNIQUE (project_id)`）、ADR-0015 は `/-/wiki` と `{path}.wiki.git` を M6 用に予約だけしている。
+
+## Decision
+
+1. **検索の方式（S-b）**: 分かち書きは純粋な Rust（`forge-core::search_text`）。NFKC → 小文字 → 和文（漢字・かな・カナ・ハングル）の連続は 2-gram（索引の側は連続の最後の 1 文字も）、それ以外の文字・数字の連続は 1 語（64 文字で切る）。索引は位置と重み（題名 A、パス・ID・見出し B、本文 C）つきの `tsvector` の **文字列表現を Rust で組み**、DB は `$1::tsvector` で受けるだけ。問い合わせも同じ関数で `tsquery` の文字列（全語の `&`、最後の語と 1 文字の和文は前方一致 `:*`）を組み、`@@` + `ts_rank_cd` + 新しさで並べる。DB のロケール・テキスト検索の設定・拡張に依存しない。最短の語は 2 文字（Q7）、最長 200 文字。
+2. **索引は派生のデータ**: `forge.search_entries`（`source_kind` = project / merge_request（K4 で document、I-1 で issue）、`UNIQUE (source_kind, project_id, source_key)`、`tokens` に GIN）と `forge.search_index_state`。`tables.toml` で `derived`、監査の行は要らない、いつでも `forge search reindex` で作り直せる。`project_id` に外部キーを張らない（プロジェクトの完全削除の手順を増やさない）: 消えたプロジェクトの行は検索の結果の判定で落ち、購読者と作り直しが消す。1 件の本文は 256 KB、語は 5 万まで。超えたら `truncated` を立て、ログに残す（黙って切らない）。
+3. **更新**: outbox の購読者 `search-index`（ordered: 失敗は同じイベントでやり直し、飛ばさない）。プロジェクトのイベント（作成・移動・削除・復元・完全削除）と MR のイベント（作成・更新・閉じる・再開・マージ）で、元の表から読み直して 1 行を書き換える。イベントの無い変更（プロジェクトの説明の編集など）は、そのプロジェクトの次のイベントか作り直しで追い付く。
+4. **読める物だけを返す**: `GET /api/v1/search` は新しい Action **`SearchQuery`**（インスタンス、サインインした有効な利用者、トークンは `read_api`、エージェント可、代理・Runner・Job・ポータルは不可）を registry で判定する。候補は順位の順に読み、**1 件ずつ `authorize()`**: プロジェクトは `ProjectRead`、MR は `MergeRequestList`（その MR のプロジェクト、MR の読みと同じ Reporter の条件）。判定の材料はプロジェクトごとに 1 回（`lists::project_records`、1 文）。SQL の条件（種類・プロジェクト）は絞るためだけ。件数は返さない。走査の上限・利用者と問い合わせに封印したカーソル・同時実行の上限は一覧と同じ形。AI の利用者（`is_agent_audience`）には `confidential` の行を返さず数えない。抜粋は保存した本文から作り、強調は文字（コードポイント）の範囲で返す（HTML を返さない）。問い合わせの文字列はログに出さない（長さだけ）。
+5. **Wiki（W-C）**: 「Wiki を作る」で同じ名前空間に普通のプロジェクトを作り `project_wikis` で結ぶ。主プロジェクトの役割を同じ強さで継ぐ（片方向・1 段、`forge-auth` の役割の解決の 1 か所、Q2）。保存は直接のコミット（Q3）、ID は `WIKI-0001` からの連番（Q6）。`/-/wiki` は結び付けた Wiki の画面への入口に使い、ADR-0015 の予約を解く。`{path}.wiki.git` は予約のまま。
+6. **ノート（N-B）**: 自分の名前空間の非公開プロジェクト `<user>/notes`、`user_notes` で指す。既定の区分は `internal`（Q4）。
+7. **Issue（I-1、Q1）**: 最小の Issue を M6 の最後に作る。既定は無効、Kanflow に結んだプロジェクトでは有効にできない。この ADR への Amendment で詳細を決める。
+8. **クレートの置き場所**: 分かち書きは `forge-core`、索引の表・購読者・問い合わせは `forge-db`、判定と組み立ては `forge-web` のルート（一覧と同じ形: `forge-core` のポートを `forge-db` が実装し `forge serve` が注入する）。計画 20 §3.5 の機能クレート `forge-search` は、K4 の文書の索引で forge-web と forge-cli が同じ手順を共有する必要が出たときに作る（今は依存の向きの表を変えない）。
+9. **エラーの領域 `KNOW`**: 検索の文の時間切れ・DB の失敗は `FG-KNOW-0001`（利用者には「いま検索できません」+ `request_id`）、1 件・1 プロジェクトの索引の失敗は `FG-KNOW-0002`（状態の表に残し、次のイベント・作り直しでやり直す）。問い合わせの形の誤りは既存の `FG-WEB-0006 reason=param_invalid param=q`、同時実行の上限は `FG-WEB-0008`。
+
+## Alternatives Considered
+
+### S-a `pg_trgm`
+- **Pros**: PG に同梱、`ILIKE` がそのまま速くなる。
+- **Cons**: 日本語の扱いが DB の `LC_CTYPE` に依存し、開発のコンテナと PFS の本番で同じと言い切れない。2 文字の語が 3-gram に足りない。順位付けが弱い。
+- **Why not**: 2 文字の語（「設備」「承認」）が主な用途で、ロケールの差は再現しにくい障害の元。
+
+### S-c PGroonga / pg_bigm、S-d Elasticsearch / Meilisearch
+- **Pros**: 日本語の精度・機能が多い。
+- **Cons**: PG の配布物の外の拡張、または別のサービスの運用。
+- **Why not**: 条件（拡張を足さない、外部の検索サービスなし）に反する。
+
+### `to_tsvector('simple', …)` に分かち書きした文字列を渡す
+- **Pros**: SQL が短い。
+- **Cons**: DB のパーサーが語をもう一度切る（記号・数字の扱いが PG の版と設定に依存）。
+- **Why not**: 規則を Rust の単体テストだけで決めたい。文字列表現のキャストなら DB は語を解釈しない。
+
+### Wiki = 2 つめのリポジトリ（W-A）、同じリポジトリの `wiki/`（W-B）
+- **Why not**: W-A は `UNIQUE (project_id)` と保存先・バックアップ・ミラー・権限を全部直す。W-B は Wiki の直しにコードの保護ブランチが掛かり、非エンジニアだけに書かせられない（計画 20 §3.2）。
+
+## Consequences
+
+### Positive
+- 分かち書きの規則が DB に依存せず、テストで固定できる。開発と本番で同じ結果。
+- 結果の判定は既存の `ProjectRead` / MR の読みの規則そのまま。新しい読みの規則を作らない。
+- Wiki・ノートは普通のプロジェクトなので、保存・clone・バックアップ・検索（K4）がそのまま効く。
+
+### Negative
+- 2-gram は偽陽性がある（「京都」で「東京都」が出る）。題名の重みと新しさで並べて和らげる。
+- 索引は購読者の遅れの分だけ古い。イベントの無い変更は次のイベントか作り直しまで古い。
+- 候補を順位の順に読み 1 件ずつ判定するので、読めない候補が多いと短いページになる（`has_more: true`）。
+
+### Risks
+- **件数・順位・抜粋から読めない物が漏れる** → 件数を返さない、判定の前に何も組み立てない、カーソルを利用者と問い合わせに封印、権限の表の行と K0 の eval。
+- **分かち書きの規則を変えると古い索引と合わない** → 変えたら `forge search reindex` で全体を作り直す（runbook `search-index`）。
+- **大きな表で遅い** → 文の時間切れ 2 s（`FG-KNOW-0001`）、走査の上限、10 万件で p95 ≤ 300 ms を K5 の前に測って記録する。
