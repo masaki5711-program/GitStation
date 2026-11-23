@@ -808,6 +808,22 @@ async fn finish_steps(
         "projects.purge.finish.merge_request_work_items",
     )
     .await?;
+    // Plan 13 stage 4 part A: the documents each merge request revises
+    // (they reference the merge requests) and the edit claims.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_documents WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_documents",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.document_edit_claims WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.document_edit_claims",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.merge_request_versions WHERE project_id = $1",

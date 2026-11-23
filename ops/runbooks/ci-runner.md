@@ -260,6 +260,7 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
 `find /srv/forge-models -type l -o ! -type f ! -type d`、`find /srv/forge-models -perm /022 -o -user <Runner の利用者>`。
 **説明の付かない変更はセキュリティの事象として扱う**（`/incident`）。説明が付けば（モデルの更新の手順の漏れ）承認したモデルから
 置き場を戻すかマニフェストを作り直し、`manifest_sha256` を直して Runner を再起動する（人の承認のあと）。
+モデルを入れ替える正しい手順は runbook `ai-model-update`。
 
 **本物の GPU の試験**は無い（argv の試験だけ: `model_store_mounted_read_only`、`job_container_has_no_gpu`、`pod_still_network_none`、
 `gpu_denied_on_untagged_runner`、`untagged_job_never_assigned_to_gpu_runner`）。GPU のホストを用意したら、`gpu: true` のサービス

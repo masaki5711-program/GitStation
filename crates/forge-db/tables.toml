@@ -975,3 +975,16 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── Plan 13 stage 4 part A (20270105100000, ADR-0027): the documents each
+# merge request revises (derived from git) and the time-limited edit claims;
+# a Maintainer's revocation writes its own audit row ──
+[tables.merge_request_documents]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.document_edit_claims]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]

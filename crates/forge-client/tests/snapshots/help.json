@@ -6493,6 +6493,267 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        },
+        {
+          "description": "The document id (ASCII letters, digits, '.', '_', '-'; e.g. QP-07-001).",
+          "kind": "positional",
+          "name": "doc_id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn doc status --project 7 QP-07-001",
+        "gstn doc status --project 7 QP-07-001 --json"
+      ],
+      "name": "doc status",
+      "output": {
+        "properties": {
+          "edit_claim": {
+            "required": [
+              "doc_id",
+              "user_id",
+              "merge_request_iid",
+              "claimed_at",
+              "expires_at"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revisions": {
+            "items": {
+              "properties": {
+                "holds": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "lang",
+                "merge_request_iid",
+                "title",
+                "author_id",
+                "since",
+                "head_sha",
+                "holds"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "viewer": {
+            "required": [
+              "can_claim",
+              "can_revoke"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "doc_id",
+          "revisions",
+          "edit_claim",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/documents/{doc_id}/status"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A document's open revisions and edit claim through the server: the open merge requests revising it (every language; the earliest per language holds the revision, a later one is a second revision — opening one is refused with FG-DOC-0006) and who is editing it now (an edit claim lapses 30 minutes after it was taken or last extended)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The document id (e.g. QP-07-001).",
+          "kind": "positional",
+          "name": "doc_id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn doc versions --project 7 QP-07-001",
+        "gstn doc versions --project 7 QP-07-001 --json"
+      ],
+      "name": "doc versions",
+      "output": {
+        "properties": {
+          "current_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "versions": {
+            "items": {
+              "required": [
+                "revision",
+                "merge_request_iid",
+                "title",
+                "merged_at",
+                "commit",
+                "blob"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "doc_id",
+          "ref",
+          "path",
+          "current_revision",
+          "versions",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/documents/{doc_id}/versions"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A document's versions on the default branch through the server: each applied merge that changed its file is the next version (derived from git and the merges; nothing is written into the file). The path is the document's path at the tip. `incomplete` FG-DOC-0002 reason doc_versions: more merges than were read (5000)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The document id (e.g. QP-07-001).",
+          "kind": "positional",
+          "name": "doc_id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The open merge request (iid) the editing is for.",
+          "kind": "option",
+          "name": "--merge-request",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn doc claim --project 7 QP-07-001",
+        "gstn doc claim --project 7 QP-07-001 --merge-request 12"
+      ],
+      "name": "doc claim",
+      "output": {
+        "properties": {
+          "claim": {
+            "required": [
+              "doc_id",
+              "user_id",
+              "merge_request_iid",
+              "claimed_at",
+              "expires_at"
+            ],
+            "type": "object"
+          },
+          "extended": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "claim",
+          "extended"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/documents/{doc_id}/edit-claim"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Say you are editing a document (a person, Developer): take the edit claim for 30 minutes, or extend your own. Others see it in doc status; refused with 409 FG-DOC-0007 while another person's claim is live. Opening a merge request that revises the document releases it."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The document id (e.g. QP-07-001).",
+          "kind": "positional",
+          "name": "doc_id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Revoke the claim whoever holds it (Maintainer).",
+          "kind": "flag",
+          "name": "--revoke",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Confirm --revoke.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn doc release --project 7 QP-07-001",
+        "gstn doc release --project 7 QP-07-001 --revoke --yes"
+      ],
+      "name": "doc release",
+      "output": {
+        "type": "null"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/documents/{doc_id}/edit-claim",
+        "POST /api/v1/projects/{id}/documents/{doc_id}/edit-claim/revoke"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Release your edit claim on a document (409 FG-DOC-0007 when the live claim is another person's; 404 FG-REPO-0005 without one). With --revoke --yes: remove the live claim whoever holds it (a Maintainer, a person; audited document.edit_claim.revoked)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         }
       ],
       "examples": [
