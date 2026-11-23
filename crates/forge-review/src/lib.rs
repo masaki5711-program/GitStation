@@ -110,7 +110,7 @@ pub use merges::{
 pub use revert::{revert_branch, revert_ctx, DraftReport, RevertOpened, RevertTimeouts, Reverter};
 pub use user_lists::{
     AttentionReason, UserListCount, UserListCounts, UserListItem, UserListPage, UserListQuery,
-    UserListScope, WidgetList, WidgetPage,
+    UserListScope, WidgetExtra, WidgetItem, WidgetList, WidgetOrder, WidgetPage,
 };
 pub use versions::{refresh, refresh_prepared, RefreshReport, SyncReport, VersionRefs};
 

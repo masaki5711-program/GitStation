@@ -52,9 +52,9 @@
   { "action": "SshKeyDelete", "allow": 2, "deny": 13, "public": false, "git_operation": false },
   { "action": "NotificationPreferencesRead", "allow": 3, "deny": 15, "public": false, "git_operation": false },
   { "action": "NotificationPreferencesWrite", "allow": 3, "deny": 16, "public": false, "git_operation": false },
-  { "action": "NotificationInboxRead", "allow": 4, "deny": 15, "public": false, "git_operation": false },
+  { "action": "NotificationInboxRead", "allow": 4, "deny": 16, "public": false, "git_operation": false },
   { "action": "NotificationInboxUpdate", "allow": 3, "deny": 17, "public": false, "git_operation": false },
-  { "action": "UserMergeRequestList", "allow": 6, "deny": 16, "public": false, "git_operation": false },
+  { "action": "UserMergeRequestList", "allow": 6, "deny": 17, "public": false, "git_operation": false },
   { "action": "ActivityRead", "allow": 17, "deny": 38, "public": false, "git_operation": false },
   { "action": "UserCreate", "allow": 2, "deny": 12, "public": false, "git_operation": false },
   { "action": "UserDisable", "allow": 2, "deny": 17, "public": false, "git_operation": false },
@@ -139,5 +139,5 @@
   { "action": "WebShell", "allow": 3, "deny": 9, "public": true, "git_operation": false },
   { "action": "Health", "allow": 1, "deny": 9, "public": true, "git_operation": false },
   { "action": "Metrics", "allow": 1, "deny": 10, "public": false, "git_operation": false },
-  { "action": "PortalWidgetRead", "allow": 4, "deny": 26, "public": false, "git_operation": false }
+  { "action": "PortalWidgetRead", "allow": 4, "deny": 28, "public": false, "git_operation": false }
 ]

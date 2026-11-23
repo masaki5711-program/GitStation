@@ -211,7 +211,7 @@ function StatusRows({ status }: { status: MergeStatus }) {
             {given.map((g) => (
               <li key={g.approver_id}>
                 {g.counted ? g.username : t('mr.side.notCounted', { name: g.username })}
-                <OrgCode code={g.primary_org_code} />
+                <OrgCode code={g.primary_org_code} path={g.primary_org} />
               </li>
             ))}
           </ul>

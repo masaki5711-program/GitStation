@@ -58,6 +58,8 @@ mod mirror;
 // M3 N1: FG-INT-0015 (the mail queue and the relay).
 mod notify;
 mod oidc;
+// ADR-0038 §1: the PFS org master's copy.
+mod org;
 // ADR-0036: the PFS portal's news.
 mod portal;
 mod render;
@@ -99,7 +101,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 44] = [
+const DB_CHECKS: [&str; 45] = [
     "db.bootstrap",
     "db.connections",
     // Plan 18 S2: FG-DB-0023 (the server's NOTIFY queue).
@@ -174,6 +176,8 @@ const DB_CHECKS: [&str; 44] = [
     deploy::NAME,
     // ADR-0036: FG-INT-0023 / 0022 (the portal's news: given up, waiting).
     portal::NEWS,
+    // ADR-0038 §1: FG-INT-0028 (the org master's copy is stale).
+    org::NAME,
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -332,6 +336,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let known_hosts = deploy::known_hosts_check(db, cfg).await;
     let portal_news = portal::news_check(db, cfg).await;
     let org_claims = oidc::org_claims_check(db, cfg).await;
+    let org_master = org::master_check(db, cfg).await;
     vec![
         bootstrap,
         connections,
@@ -379,6 +384,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         known_hosts,
         portal_news,
         org_claims,
+        org_master,
     ]
 }
 

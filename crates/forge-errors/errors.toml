@@ -3660,3 +3660,60 @@ diagnosis = "The log event `forge.portal.service_token_failed` with `reason`, `s
 fix = "Runbook portal-widgets: enable the service account of the gitstation client in realm iotpf (the PFS MR), check the client secret file, then wait for the retry."
 runbook = "portal-widgets"
 test = "a_failed_service_token_is_portal_token_unavailable"
+
+# ── PFS organisation master copy (ADR-0038 §1, step A) ───────────────────────
+[[error]]
+code = "FG-INT-0025"
+name = "OrgMasterUnreachable"
+http_status = 503
+severity = "warn"
+user_message_ja = "組織の台帳を読み込めませんでした。自動で再試行します。"
+user_message_en = "The organisation master could not be read. It will be retried automatically."
+user_message_id = "Data induk organisasi tidak dapat dibaca. Akan dicoba ulang secara otomatis."
+cause = "One run of the worker task `org_master_sync` (ADR-0038 §1, `org.master_sync_enabled`) got no answer from the PFS registry-api (`GET {portal.registry_url}/api/v1/org/units` or `/org/positions`): the connection failed or timed out (`reason=connect`, `connect_timeout`, `timeout`, `tls`, `redirect`, `request`, `body_too_large`), the registry answered a server error (`reason=status`, with `status` 5xx or another status that is neither 200 nor a refusal), or the client-credentials token of the gitstation client could not be obtained (`reason=service_token`, after FG-INT-0024). The previous copy in forge.org_units_master / forge.org_positions_master stays unchanged; the next run waits 1 min, doubling up to `org.master_sync_interval_secs`."
+diagnosis = "The log event `forge.org.master_sync_failed` (target forge_cli) with `reason`, `list` (units or positions), `status` and `failures`, never the token or a name. The `forge doctor` row `org.master` shows the age of the copy. A recovery is logged as `forge.org.master_sync_recovered`."
+fix = "Usually nothing: a registry that is briefly down catches up. If it persists, follow runbook oidc-login, section 「組織の台帳の写し」 (portal.registry_url, the CA in portal.ca_file, the gitstation client's service account)."
+runbook = "oidc-login"
+test = "an_unreachable_registry_keeps_the_previous_copy"
+
+[[error]]
+code = "FG-INT-0026"
+name = "OrgMasterRefused"
+http_status = 502
+severity = "alert"
+user_message_ja = "組織の台帳の読み取りが拒否されました。管理者に連絡してください。"
+user_message_en = "Reading the organisation master was refused. Contact the administrator."
+user_message_id = "Pembacaan data induk organisasi ditolak. Hubungi administrator."
+cause = "The PFS registry-api refused the gitstation client's client-credentials token on `GET /api/v1/org/units` or `/api/v1/org/positions` (`status` 401, 403 or 404; ADR-0038 §8): PFS does not list `gitstation` in `ORG_READER_CLIENTS`, the token is for another realm or client, or the registry does not have the org routes yet (404). 401 / 403 also drop the cached token. The previous copy stays unchanged; the task retries with its backoff. Waiting does not fix it."
+diagnosis = "The log event `forge.org.master_sync_failed` with `reason=refused`, `status` and `list`. The token itself is never logged. `forge doctor` row `org.master` turns stale after `org.master_max_age_hours`."
+fix = "Runbook oidc-login, 「組織の台帳の写し」: ask the PFS operators to set `ORG_READER_CLIENTS=gitstation` on registry-api (their MR !28) and check that `auth.oidc.client_id` is the gitstation client of realm iotpf. No GitStation change is needed; the next run picks it up."
+runbook = "oidc-login"
+test = "a_refused_registry_keeps_the_previous_copy"
+
+[[error]]
+code = "FG-INT-0027"
+name = "OrgMasterInvalid"
+http_status = 502
+severity = "alert"
+user_message_ja = "組織の台帳の内容が正しくないため、前回の写しを使っています。管理者に連絡してください。"
+user_message_en = "The organisation master is invalid; the previous copy is used. Contact the administrator."
+user_message_id = "Data induk organisasi tidak valid; salinan sebelumnya digunakan. Hubungi administrator."
+cause = "The PFS registry-api answered 200 but the body breaks the contract GitStation checks before anything is written (ADR-0038 §1): not JSON or not the envelope `{success: true, data: {items: [...]}}` (`reason=envelope`), more than 10 000 items or 8 MiB (`too_many`), an item with a missing or malformed field (`reason=field`, with `field`: plantCode `^[A-Z0-9]{1,4}$`, code `^[A-Z0-9][A-Z0-9_-]{0,19}$` for units and `^[a-z][a-z0-9_]{0,63}$` for positions, level division|department|section|team, parentCode, name, costCenter, headStaffId, validFrom, version, rank 0..=999, sortOrder, active), a unit that is its own parent (`self_parent`), the same plant and code twice (`duplicate`), or no unit at all (`empty`: refused so an outage of the registry never wipes the copy). Checked on the whole lists before writing: a `parentCode` that names no unit of the same plant (`missing_parent`, with `index` and `plant`) or a parent at the same or a lower level (`level_order`); and, unless `org.allow_large_shrink = true`, a sharp shrink of the copy (`shrink`: more than half of the stored units removed, with `before`, `after`, `removed`; `plant_emptied`: a plant that has units or positions today would have none, with `list` and `plant`; `positions_empty`: no positions at all). Nothing is written: the previous copy stays."
+diagnosis = "The log event `forge.org.master_sync_failed` with `reason`, `field`, `list` and the item's `index` (never its values or a name). The `forge doctor` row `org.master` turns stale after `org.master_max_age_hours`."
+fix = "Runbook oidc-login, 「組織の台帳の写し」: the PFS org master holds a value GitStation does not accept (or the contract changed). Correct it in PFS, or update GitStation's parser (forge-integ `org_master`) if the contract changed by agreement. For `shrink` / `plant_emptied` / `positions_empty`: confirm with the PFS operators that the reorganisation is real, then set `org.allow_large_shrink = true` for one sync (an approved runbook step) and turn it off again."
+runbook = "oidc-login"
+test = "an_invalid_payload_keeps_the_previous_copy"
+
+[[error]]
+code = "FG-INT-0028"
+name = "OrgMasterStale"
+http_status = 503
+severity = "alert"
+user_message_ja = "組織の台帳の写しが古いため、組織による判定を止めています。管理者に連絡してください。"
+user_message_en = "The copy of the organisation master is out of date; decisions based on it are stopped. Contact the administrator."
+user_message_id = "Salinan data induk organisasi sudah usang; keputusan berdasarkan data itu dihentikan. Hubungi administrator."
+cause = "The copy of the PFS org master (forge.org_units_master; the sync's time is forge.org_master_state.synced_at) was last synced more than `org.master_max_age_hours` (default 24 h) ago, or was never synced although `org.master_sync_enabled` is on (ADR-0038 §4). Everything derived from it fails closed: the derived section / department of a person is `unknown` (org bindings and approver selectors stop matching once they exist); names fall back to codes only where the copy is missing. Raised by `forge doctor` (row `org.master`) and logged once by the worker when its copy crosses the age."
+diagnosis = "`forge doctor` row `org.master` (last sync, age, unit and position counts); the worker's `forge.org.master_sync_failed` events (FG-INT-0025 / 0026 / 0027) say why the syncs fail. On the database (read-only): `SELECT synced_at, units, positions FROM forge.org_master_state`."
+fix = "Fix the cause of the failing syncs (runbook oidc-login, 「組織の台帳の写し」); the next successful run refreshes the copy and the derived organisation works again. If the sync is meant to be off, turn `org.master_sync_enabled` off."
+runbook = "oidc-login"
+test = "a_stale_master_is_org_master_stale"

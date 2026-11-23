@@ -939,3 +939,24 @@ audit_id_column = "user_id"
 # An equal snapshot moves confirmed_at only; invalid claims set invalid_since.
 unaudited_columns = ["confirmed_at", "invalid_since"]
 txn_audited_columns = []
+
+# ── ADR-0038 §1 (20261231100000): the copy of the PFS organisation master,
+# replaced by the worker task `org_master_sync` (one `org.master_synced`
+# audit row per sync that changed anything). The read pool sees names, levels
+# and the hierarchy; never the head's staff id (personal data) or the cost
+# center ──
+[tables.org_units_master]
+guarded = false
+kind = "derived"
+ro_columns = ["plant_code", "code", "level", "parent_code", "name_ja", "name_en", "name_id", "valid_from", "version", "changed_at"]
+
+[tables.org_positions_master]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# The last successful sync of the copy (one row).
+[tables.org_master_state]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]

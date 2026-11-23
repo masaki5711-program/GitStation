@@ -250,6 +250,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/portal-widgets/v1/attention-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0; scope=deploy is 422 until P2) */
+        get: operations["get_api_portal_widgets_v1_attention_count"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/attention-count/options/project": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget attention-count: the project options (projects the person holds a role on and may read, at most 200) */
+        get: operations["get_api_portal_widgets_v1_attention_count_options_project"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget inbox (kpi): the person's unread notifications they may see now */
+        get: operations["get_api_portal_widgets_v1_inbox"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/menu": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget menu (links): the links of a purpose (developer, reviewer, spec, operations, manager), a chosen project's screens when the person may read it */
+        get: operations["get_api_portal_widgets_v1_menu"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/menu/options/project": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget menu: the project options (projects the person holds a role on and may read, at most 200) */
+        get: operations["get_api_portal_widgets_v1_menu_options_project"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/portal-widgets/v1/my-reviews": {
         parameters: {
             query?: never;
@@ -6044,6 +6129,33 @@ export interface components {
             /** Format: int64 */
             id: number;
         };
+        /**
+         * @description One unit of the PFS org master (ADR-0038 §1): its code, level and
+         *     names.
+         */
+        OrgNameBody: {
+            code: string;
+            /** @description `division`, `department`, `section` or `team`. */
+            level: string;
+            name_en: string | null;
+            name_id: string | null;
+            name_ja: string;
+        };
+        /**
+         * @description A unit and the section and department above it, from the copy of the
+         *     PFS org master (found by the parents' levels, never by the code).
+         */
+        OrgPathBody: {
+            department: null | components["schemas"]["OrgNameBody"];
+            section: null | components["schemas"]["OrgNameBody"];
+            /**
+             * @description The names are the last known ones (「最終確認時点」): the person's
+             *     org snapshot is invalid or older than `org.max_profile_age_hours`,
+             *     or the copy is older than `org.master_max_age_hours` (ADR-0038 §4).
+             */
+            stale: boolean;
+            unit: components["schemas"]["OrgNameBody"];
+        };
         /** @description The snapshot of the identity provider's org claims. */
         OrgProfileBody: {
             /** @description UTC, RFC 3339: the values last changed. */
@@ -6070,6 +6182,7 @@ export interface components {
         OrgUnitBody: {
             /** @description The PFS org code (`^[A-Z0-9][A-Z0-9_-]{0,19}$`). */
             code: string;
+            path: null | components["schemas"]["OrgPathBody"];
             /** @description The person's main department (at most one; listed first). */
             primary: boolean;
         };
@@ -7446,6 +7559,7 @@ export interface components {
             /** Format: int64 */
             approver_id: number;
             counted: boolean;
+            primary_org: null | components["schemas"]["OrgPathBody"];
             /**
              * @description The approver's primary department code (ADR-0021 amendment
              *     2026-11-20, added within `schema_version` 1); `null` without one.
@@ -7897,6 +8011,7 @@ export interface components {
             display_name: string;
             /** Format: int64 */
             id: number;
+            primary_org: null | components["schemas"]["OrgPathBody"];
             /**
              * @description The primary department's code from the identity provider's org
              *     claims (ADR-0021 amendment 2026-11-20); `null` without one.
@@ -8614,11 +8729,136 @@ export interface operations {
             };
         };
     };
+    get_api_portal_widgets_v1_attention_count: {
+        parameters: {
+            query?: {
+                /** @description reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval) or failed (projects whose main build or test failed); deploy is not available yet (422) */
+                scope?: string;
+                /** @description Project ids, repeated (at most 24); none: every project the person may see (failed: the projects they hold a role on) */
+                project?: number;
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_attention_count_options_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_inbox: {
+        parameters: {
+            query?: {
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_menu: {
+        parameters: {
+            query?: {
+                /** @description developer (default), reviewer, spec, operations or manager: whose links */
+                purpose?: string;
+                /** @description One project id (an option of options/project): the project the project links open; none: they ask to choose a project */
+                project?: number;
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_menu_options_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_portal_widgets_v1_my_reviews: {
         parameters: {
             query?: {
-                /** @description review (waiting for my review, default), mine (my open changes), stopped (stopped auto-merges I wrote or approved) or spec (specs awaiting my approval) */
+                /** @description review (waiting for my review, default), mine (my open changes), stopped (stopped auto-merges I wrote or approved), spec (specs awaiting my approval), threads (my unresolved comments that got a reply), conflicts (my changes with a conflict, a likely one, or one not ruled out) or queue (my changes in the merge queue, and those it removed) */
                 kind?: string;
+                /** @description oldest (what has waited longest first, default) or newest */
+                sort?: string;
                 /** @description One project id (an option of options/project); none: every project the person may see */
                 project?: number;
                 /** @description Items, 3..=10 (default 5) */
@@ -8672,6 +8912,8 @@ export interface operations {
                 project?: number;
                 /** @description pipeline (the newest pipeline of main, default) or deploy (the newest deployment) */
                 show?: string;
+                /** @description true: only the projects whose lamp is stop or warn (default false) */
+                only_problems?: string;
                 /** @description ja, en or id (default en): the language of every text */
                 locale?: string;
                 /** @description An IANA zone name (checked; times are answered in UTC) */

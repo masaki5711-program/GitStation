@@ -88,19 +88,43 @@ impl Pipelines {
             .collect())
     }
 
+    /// One project a widget's setting names (the `menu`'s `project`), when
+    /// the person may read it through the portal; `None` for one they may
+    /// not read or that is not there (alike: never a hint).
+    pub async fn portal_project(
+        &self,
+        proof: &Authorized<PortalWidgetCtx>,
+        project: ProjectId,
+    ) -> Result<Option<ProjectOption>, ForgeError> {
+        require(proof.action(), Action::PortalWidgetRead)?;
+        let records = forge_db::lists::project_records(&self.db, &[project], *proof.id()).await?;
+        Ok(Self::visible(proof, records)
+            .into_iter()
+            .find(|r| r.id == project)
+            .map(|r| ProjectOption {
+                project: r.id,
+                path: r.path.full_path(),
+            }))
+    }
+
     /// The widget's lamps: `projects` (the setting; `None`: the projects the
-    /// person holds a role on), each decided, at most 24, in the order
-    /// asked (newest first without a setting). A project asked for that the
-    /// person may not read is left out, as an absent one (never a hint).
+    /// person holds a role on), each decided, those whose lamp `keep`
+    /// accepts, at most 24, in the order asked (newest first without a
+    /// setting). A project asked for that the person may not read is left
+    /// out, as an absent one (never a hint).
     ///
     /// The candidates are ids only (one statement, at most 200); their
-    /// records are loaded 24 at a time and only until 24 are shown (review
-    /// D2) — one load in the usual case, where a member may read.
+    /// records and lamps are loaded 24 at a time and only until 24 are kept
+    /// (review D2) — one load in the usual case. `keep` is applied before
+    /// the cap (widget P1 review): a filtered widget (`only_problems`,
+    /// `attention-count?scope=failed`) never loses a matching project to the
+    /// projects ahead of it that do not match.
     pub async fn portal_lamps(
         &self,
         proof: &Authorized<PortalWidgetCtx>,
         projects: Option<&[ProjectId]>,
         show: Show,
+        keep: fn(Lamp) -> bool,
     ) -> Result<Vec<ProjectLamp>, ForgeError> {
         require(proof.action(), Action::PortalWidgetRead)?;
         let user = *proof.id();
@@ -108,7 +132,7 @@ impl Pipelines {
             Some(asked) => asked.iter().copied().take(MAX_STATUS_ITEMS).collect(),
             None => db_portal::member_projects(&self.db, user, MAX_OPTIONS).await?,
         };
-        let mut shown: Vec<ProjectRecord> = Vec::with_capacity(MAX_STATUS_ITEMS.min(ids.len()));
+        let mut shown: Vec<ProjectLamp> = Vec::with_capacity(MAX_STATUS_ITEMS.min(ids.len()));
         for chunk in ids.chunks(MAX_STATUS_ITEMS) {
             let mut records = forge_db::lists::project_records(&self.db, chunk, user).await?;
             records.sort_by_key(|r| {
@@ -117,20 +141,45 @@ impl Pipelines {
                     .position(|id| *id == r.id)
                     .unwrap_or(usize::MAX)
             });
-            shown.extend(Self::visible(proof, records));
+            let visible = Self::visible(proof, records);
+            let visible_ids: Vec<ProjectId> = visible.iter().map(|r| r.id).collect();
+            let lamps = self.lamps_of(&visible_ids, show).await?;
+            shown.extend(
+                visible
+                    .into_iter()
+                    .zip(lamps)
+                    .filter(|(_, (lamp, _))| keep(*lamp))
+                    .map(|(r, (lamp, tier))| ProjectLamp {
+                        project: r.id,
+                        path: r.path.full_path(),
+                        lamp,
+                        tier,
+                    }),
+            );
             if shown.len() >= MAX_STATUS_ITEMS {
                 shown.truncate(MAX_STATUS_ITEMS);
                 break;
             }
         }
-        let shown_ids: Vec<ProjectId> = shown.iter().map(|r| r.id).collect();
-        let lamps: Vec<(Lamp, Option<String>)> = match show {
-            Show::Pipeline => db_portal::latest_pipelines(&self.db, &shown_ids, MAIN_REF)
+        Ok(shown)
+    }
+
+    /// The lamps of `ids`, in their order (one statement).
+    async fn lamps_of(
+        &self,
+        ids: &[ProjectId],
+        show: Show,
+    ) -> Result<Vec<(Lamp, Option<String>)>, ForgeError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(match show {
+            Show::Pipeline => db_portal::latest_pipelines(&self.db, ids, MAIN_REF)
                 .await?
                 .into_iter()
                 .map(|(_, status)| (pipeline_lamp(status.as_deref()), None))
                 .collect(),
-            Show::Deploy => db_portal::latest_deployments(&self.db, &shown_ids)
+            Show::Deploy => db_portal::latest_deployments(&self.db, ids)
                 .await?
                 .into_iter()
                 .map(|(_, last)| match last {
@@ -138,16 +187,6 @@ impl Pipelines {
                     None => (deploy_lamp(None), None),
                 })
                 .collect(),
-        };
-        Ok(shown
-            .into_iter()
-            .zip(lamps)
-            .map(|(r, (lamp, tier))| ProjectLamp {
-                project: r.id,
-                path: r.path.full_path(),
-                lamp,
-                tier,
-            })
-            .collect())
+        })
     }
 }
