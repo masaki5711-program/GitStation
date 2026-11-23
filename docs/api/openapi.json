@@ -14258,6 +14258,75 @@
         "x-forge-action": "PortalWidgetRead"
       }
     },
+    "/api/portal-widgets/v1/merge-queue": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_merge_queue",
+        "parameters": [
+          {
+            "description": "Project ids, repeated (at most 24); none: the projects the person holds a role on",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget merge-queue (status): the merge queues of the chosen projects the person may read - removed changes, paused, waiting or running, at most 24",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/merge-queue/options/project": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_merge_queue_options_project",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget merge-queue: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
     "/api/portal-widgets/v1/my-reviews": {
       "get": {
         "operationId": "get_api_portal_widgets_v1_my_reviews",
@@ -14440,6 +14509,84 @@
           }
         },
         "summary": "Portal widget pipelines: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/spec-status": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_spec_status",
+        "parameters": [
+          {
+            "description": "Project ids, repeated (at most 24); none: the projects the person holds a role on that released a specification",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "approval (changes awaiting approval, default), undecided (required decisions still open) or lint (changes whose spec or document check found a problem)",
+            "in": "query",
+            "name": "show",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget spec-status (status): per specification project the person may read - changes awaiting approval, undecided items or check findings, at most 24",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/spec-status/options/project": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_spec_status_options_project",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget spec-status: the project options (projects the person holds a role on and may read, at most 200)",
         "x-forge-action": "PortalWidgetRead"
       }
     },

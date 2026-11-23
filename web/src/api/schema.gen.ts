@@ -335,6 +335,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/portal-widgets/v1/merge-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget merge-queue (status): the merge queues of the chosen projects the person may read - removed changes, paused, waiting or running, at most 24 */
+        get: operations["get_api_portal_widgets_v1_merge_queue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/merge-queue/options/project": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget merge-queue: the project options (projects the person holds a role on and may read, at most 200) */
+        get: operations["get_api_portal_widgets_v1_merge_queue_options_project"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/portal-widgets/v1/my-reviews": {
         parameters: {
             query?: never;
@@ -395,6 +429,40 @@ export interface paths {
         };
         /** Portal widget pipelines: the project options (projects the person holds a role on and may read, at most 200) */
         get: operations["get_api_portal_widgets_v1_pipelines_options_project"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/spec-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget spec-status (status): per specification project the person may read - changes awaiting approval, undecided items or check findings, at most 24 */
+        get: operations["get_api_portal_widgets_v1_spec_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/spec-status/options/project": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget spec-status: the project options (projects the person holds a role on and may read, at most 200) */
+        get: operations["get_api_portal_widgets_v1_spec_status_options_project"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9047,6 +9115,53 @@ export interface operations {
             };
         };
     };
+    get_api_portal_widgets_v1_merge_queue: {
+        parameters: {
+            query?: {
+                /** @description Project ids, repeated (at most 24); none: the projects the person holds a role on */
+                project?: number;
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_merge_queue_options_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_portal_widgets_v1_my_reviews: {
         parameters: {
             query?: {
@@ -9132,6 +9247,55 @@ export interface operations {
         };
     };
     get_api_portal_widgets_v1_pipelines_options_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_spec_status: {
+        parameters: {
+            query?: {
+                /** @description Project ids, repeated (at most 24); none: the projects the person holds a role on that released a specification */
+                project?: number;
+                /** @description approval (changes awaiting approval, default), undecided (required decisions still open) or lint (changes whose spec or document check found a problem) */
+                show?: string;
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_spec_status_options_project: {
         parameters: {
             query?: never;
             header?: never;

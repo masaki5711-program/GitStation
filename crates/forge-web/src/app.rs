@@ -928,6 +928,40 @@ fn portal_widget_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::PortalWidgets,
             p::project_options,
         )
+        .route_with(
+            Verb::Get,
+            p::MERGE_QUEUE,
+            Action::PortalWidgetRead,
+            "Portal widget merge-queue (status): the merge queues of the chosen projects the person may read - removed changes, paused, waiting or running, at most 24",
+            p::PortalWidgets,
+            p::merge_queue,
+        )
+        .queries(Verb::Get, p::MERGE_QUEUE, p::MERGE_QUEUE_QUERY)
+        .route_with(
+            Verb::Get,
+            p::MERGE_QUEUE_OPTIONS,
+            Action::PortalWidgetRead,
+            "Portal widget merge-queue: the project options (projects the person holds a role on and may read, at most 200)",
+            p::PortalWidgets,
+            p::project_options,
+        )
+        .route_with(
+            Verb::Get,
+            p::SPEC_STATUS,
+            Action::PortalWidgetRead,
+            "Portal widget spec-status (status): per specification project the person may read - changes awaiting approval, undecided items or check findings, at most 24",
+            p::PortalWidgets,
+            p::spec_status,
+        )
+        .queries(Verb::Get, p::SPEC_STATUS, p::SPEC_STATUS_QUERY)
+        .route_with(
+            Verb::Get,
+            p::SPEC_STATUS_OPTIONS,
+            Action::PortalWidgetRead,
+            "Portal widget spec-status: the project options (projects the person holds a role on and may read, at most 200)",
+            p::PortalWidgets,
+            p::project_options,
+        )
 }
 
 /// The merge requests of the caller's own work across projects (plan 15

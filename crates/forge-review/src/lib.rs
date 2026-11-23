@@ -61,6 +61,7 @@ mod merge_conditions;
 pub mod mergeability;
 pub mod merges;
 pub mod outdated;
+pub mod portal;
 pub mod position;
 mod purge;
 pub mod revert;

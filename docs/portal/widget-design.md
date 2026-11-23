@@ -166,5 +166,10 @@ S は 4 つで 1 行（12 列）、M は 2 つで 1 行。
 1. **P1（GitStation だけで完結）**: `menu`、`inbox`、`attention-count`（`stopped` / `reviews` / `spec` / `failed`）、`my-reviews` の `threads` / `conflicts` / `queue`、`pipelines` の `only_problems`。
    実装済み（契約は [widgets.md](widgets.md)。§4 の「新しい仕様を書く `/{p}/-/new`」は SPA に画面が無いので入れず、代わりに「自分の承認待ち」。`attention-count?scope=deploy` は P2 まで 422）。
 2. **P2**: 不足 2（配備の承認待ち）→ `deploy-approvals`、`attention-count?scope=deploy`、`merge-queue`、`spec-status`。
+   - **P2a** 実装済み: `merge-queue`、`spec-status`（契約は [widgets.md](widgets.md)）。§3.7 との違い: リポジトリに種類は無い
+     （ADR-0023）ので、既定は「仕様の版を公開したことのあるプロジェクト」、`project` の選択肢は他と同じすべてのプロジェクト
+     （まだ公開していない仕様も選べる）。href は `undecided` だけ仕様書 `/<path>/-/documents`、`approval` / `lint` は
+     承認待ちの変更 `/<path>/-/pulls?state=open`（指摘は変更の画面で見るため）。§3.6 の href はブランチごと（`?target=<ブランチ>`）。
+   - **P2b** 残り: `deploy-approvals`、`attention-count?scope=deploy`（ADR-0038 の段 C の後。それまで `scope=deploy` は 422）。
 3. **P3**: 新着の穴（不足 4）、`agent-sessions` と `setup-health` の検討。
 4. 各段の終わりに PFS セッションへ台帳とボードの更新を依頼する（PFS のリポジトリはこちらでは変えない）。

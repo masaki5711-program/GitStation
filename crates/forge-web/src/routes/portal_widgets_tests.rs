@@ -473,3 +473,217 @@ fn the_widget_gate_bounds_the_running_requests_and_the_rate() {
             .expect("a new window"),
     );
 }
+
+// ------------------------------------------------------------ widget design P2a
+
+#[test]
+fn the_p2a_settings_are_read_and_checked() {
+    let q = queue_query(None).expect("defaults");
+    assert_eq!(q.projects, None);
+    assert_eq!(q.lang, Lang::En);
+    let q = queue_query(Some("project=3&project=4&project=3&locale=ja&size=M")).expect("q");
+    assert_eq!(q.projects, Some(vec![ProjectId::new(3), ProjectId::new(4)]));
+    assert_eq!(q.lang, Lang::Ja);
+    let s = spec_query(None).expect("defaults");
+    assert_eq!(s.show, SpecShow::Approval);
+    assert_eq!(s.projects, None);
+    for (raw, show) in [
+        ("show=approval", SpecShow::Approval),
+        ("show=undecided", SpecShow::Undecided),
+        ("show=lint", SpecShow::Lint),
+    ] {
+        assert_eq!(spec_query(Some(raw)).expect(raw).show, show);
+    }
+    let many = (1..=25)
+        .map(|n| format!("project={n}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    for (raw, param, why) in [
+        ("show=everything", "show", "unknown_value"),
+        ("show=lint&show=approval", "show", "repeated"),
+        ("project=0", "project", "not_positive_decimal"),
+        (many.as_str(), "project", "too_many"),
+        ("locale=fr", "locale", "unknown_value"),
+    ] {
+        let e = spec_query(Some(raw)).expect_err(raw);
+        assert_eq!(e.code(), ErrorCode::PortalWidgetSettingInvalid, "{raw}");
+        assert_eq!(rule(&e), (param.to_owned(), why.to_owned()), "{raw}");
+    }
+    for raw in ["project=x", many.as_str(), "tz=../etc"] {
+        let e = queue_query(Some(raw)).expect_err(raw);
+        assert_eq!(e.code(), ErrorCode::PortalWidgetSettingInvalid, "{raw}");
+    }
+}
+
+fn queue(queued: i64, testing: i64, ejected: i64, paused: bool) -> QueueStatus {
+    QueueStatus {
+        project: ProjectId::new(7),
+        target_branch: "refs/heads/main".to_owned(),
+        paused,
+        queued,
+        testing,
+        ejected,
+    }
+}
+
+#[test]
+fn a_queues_lamp_says_what_waits_on_a_person_first() {
+    let lamp = |q: QueueStatus| queue_lamp(&q, Lang::En);
+    assert_eq!(
+        lamp(queue(0, 0, 0, false)),
+        (Lamp::Ok, "Nothing waiting".into())
+    );
+    assert_eq!(lamp(queue(0, 2, 0, false)), (Lamp::Ok, "Running".into()));
+    assert_eq!(
+        lamp(queue(3, 1, 0, false)),
+        (Lamp::Info, "3 waiting".into())
+    );
+    assert_eq!(lamp(queue(0, 0, 0, true)), (Lamp::Warn, "Paused".into()));
+    assert_eq!(
+        lamp(queue(2, 0, 0, true)),
+        (Lamp::Warn, "Paused (2 waiting)".into())
+    );
+    // A removed change wins over everything: someone must act on it.
+    assert_eq!(
+        lamp(queue(2, 1, 1, true)),
+        (Lamp::Stop, "1 removed from the queue".into())
+    );
+    // The reads stop at their cap: said, never silently low.
+    assert_eq!(
+        lamp(queue(MAX_STATUS_COUNT, 0, 0, false)),
+        (Lamp::Info, "100+ waiting".into())
+    );
+    assert_eq!(queue_lamp(&queue(3, 0, 0, false), Lang::Ja).1, "3 件待ち");
+}
+
+#[test]
+fn the_queue_body_links_each_queue_of_its_branch() {
+    let main = PortalQueue {
+        path: "acme/web".to_owned(),
+        status: queue(1, 0, 0, false),
+    };
+    let release = PortalQueue {
+        path: "acme/web".to_owned(),
+        status: QueueStatus {
+            target_branch: "refs/heads/rel/1.0".to_owned(),
+            ..queue(0, 0, 0, false)
+        },
+    };
+    let body = queue_body(&[main, release], Lang::En);
+    let items = body["items"].as_array().expect("items");
+    assert_eq!(items[0]["key"], "7:main");
+    assert_eq!(items[0]["label"], "acme/web");
+    assert_eq!(items[0]["state"], "info");
+    assert_eq!(items[0]["href"], "/acme/web/-/merge-queue?target=main");
+    assert_eq!(items[1]["key"], "7:rel/1.0");
+    assert_eq!(items[1]["label"], "acme/web (rel/1.0)");
+    assert_eq!(items[1]["href"], "/acme/web/-/merge-queue?target=rel/1.0");
+    // Empty: the portal shows its own empty state.
+    assert_eq!(queue_body(&[], Lang::En), json!({ "items": [] }));
+}
+
+fn spec(awaiting: i64, undecided: i64, partial: bool, failing: i64, unchecked: i64) -> SpecStatus {
+    SpecStatus {
+        project: ProjectId::new(9),
+        awaiting,
+        undecided,
+        undecided_partial: partial,
+        failing,
+        unchecked,
+    }
+}
+
+#[test]
+fn a_specs_lamp_never_says_nothing_found_before_the_checks_answered() {
+    use SpecShow::{Approval, Lint, Undecided};
+    let lamp = |s: SpecStatus, show| spec_lamp(&s, show, Lang::En);
+    assert_eq!(
+        lamp(spec(0, 0, false, 0, 0), Approval),
+        (Lamp::Ok, "Nothing awaiting approval".into())
+    );
+    assert_eq!(
+        lamp(spec(2, 0, false, 0, 2), Approval),
+        (Lamp::Warn, "2 awaiting approval".into())
+    );
+    assert_eq!(
+        lamp(spec(1, 3, false, 1, 0), Undecided),
+        (Lamp::Warn, "3 undecided".into())
+    );
+    assert_eq!(
+        lamp(spec(1, 50, true, 1, 0), Undecided),
+        (Lamp::Warn, "50+ undecided".into())
+    );
+    assert_eq!(
+        lamp(spec(1, 0, false, 0, 1), Undecided),
+        (Lamp::Unknown, "Being checked".into())
+    );
+    assert_eq!(
+        lamp(spec(1, 0, false, 0, 0), Undecided),
+        (Lamp::Ok, "Nothing undecided".into())
+    );
+    assert_eq!(
+        lamp(spec(3, 0, false, 2, 1), Lint),
+        (Lamp::Stop, "2 with check findings".into())
+    );
+    assert_eq!(
+        lamp(spec(3, 0, false, 0, 1), Lint),
+        (Lamp::Unknown, "Being checked".into())
+    );
+    assert_eq!(
+        lamp(spec(3, 0, false, 0, 0), Lint),
+        (Lamp::Ok, "No findings".into())
+    );
+    assert_eq!(
+        lamp(spec(MAX_STATUS_COUNT, 0, false, 0, 0), Approval).1,
+        "100+ awaiting approval"
+    );
+    assert_eq!(
+        spec_lamp(&spec(2, 0, false, 0, 0), Approval, Lang::Ja).1,
+        "承認待ち 2 件"
+    );
+}
+
+#[test]
+fn the_spec_body_opens_the_documents_or_the_open_changes() {
+    let p = PortalSpec {
+        path: "acme/spec".to_owned(),
+        status: spec(1, 1, false, 0, 0),
+    };
+    let undecided = spec_body(std::slice::from_ref(&p), SpecShow::Undecided, Lang::En);
+    assert_eq!(undecided["items"][0]["key"], "9");
+    assert_eq!(undecided["items"][0]["label"], "acme/spec");
+    assert_eq!(undecided["items"][0]["href"], "/acme/spec/-/documents");
+    for show in [SpecShow::Approval, SpecShow::Lint] {
+        let body = spec_body(std::slice::from_ref(&p), show, Lang::En);
+        assert_eq!(body["items"][0]["href"], "/acme/spec/-/pulls?state=open");
+    }
+}
+
+/// The reads of one widget stop at 2.5 s whatever `server.lookup_timeout`
+/// says, as `FG-WEB-0002` naming the widget (the portal's limit is 3 s).
+#[tokio::test(start_paused = true)]
+async fn a_slow_widget_read_stops_inside_the_portals_limit() {
+    assert_eq!(widget_limit(Duration::from_secs(10)), WIDGET_READ_BUDGET);
+    assert_eq!(
+        widget_limit(Duration::from_millis(800)),
+        Duration::from_millis(800)
+    );
+    let started = tokio::time::Instant::now();
+    let e = bounded_by(
+        widget_limit(Duration::from_secs(10)),
+        "portal_widget_merge_queue",
+        std::future::pending::<Result<(), ForgeError>>(),
+    )
+    .await
+    .expect_err("timed out");
+    assert_eq!(e.code(), ErrorCode::RequestTimeout);
+    assert_eq!(
+        context_of(&e, "operation").as_deref(),
+        Some("portal_widget_merge_queue")
+    );
+    assert_eq!(context_of(&e, "timeout_ms").as_deref(), Some("2500"));
+    assert_eq!(started.elapsed(), WIDGET_READ_BUDGET);
+    // A read inside the limit answers as it is.
+    let ok = bounded_by(WIDGET_READ_BUDGET, "x", async { Ok::<_, ForgeError>(5) }).await;
+    assert_eq!(ok.expect("in time"), 5);
+}
