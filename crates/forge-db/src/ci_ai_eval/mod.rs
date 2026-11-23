@@ -347,12 +347,34 @@ pub async fn record_then(
     tx.settle("check_run.reported", outcome).await
 }
 
+/// Whether a newer scheduled pipeline of `pipeline`'s project and branch
+/// declares the report (plan 17 P17-6: only the latest nightly run
+/// proposes; an older one's delayed retry never overwrites a newer
+/// candidate). `false` when `pipeline` is gone. Errors: `FG-DB-*`.
+pub async fn newer_scheduled(db: &Db, pipeline: i64) -> Result<bool, ForgeError> {
+    const QUERY: &str = "ci_ai_eval.newer_scheduled";
+    db.within(QUERY, async {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM forge.ci_pipelines p JOIN forge.ci_pipelines q \
+               ON q.project_id = p.project_id AND q.ref = p.ref AND q.id > p.id \
+             WHERE p.id = $1 AND q.source = 'schedule' AND q.ai_eval_job IS NOT NULL)",
+        )
+        .bind(pipeline)
+        .fetch_one(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))
+    })
+    .await
+}
+
 /// The job that proposes a baseline from a nightly run (plan 17 P17-6):
 /// run by `forge serve` (it writes a branch, next to the browse cache).
 pub const BASELINE_CANDIDATE_JOB: &str = "ai_eval.baseline_candidate";
-/// The bound of one proposal (git: two file reads, a blob, a tree, a
-/// commit, one ref; the database: a few short transactions).
-pub const BASELINE_CANDIDATE_TIMEOUT: Duration = Duration::from_secs(120);
+/// The bound of one proposal: above the sum of its steps' own bounds (the
+/// report read, the browse reads, at most 14 git steps of forge-review's
+/// `BASELINE_GIT_TIMEOUT`, a few short transactions), so a job is not
+/// cancelled between the branch's move and its merge request.
+pub const BASELINE_CANDIDATE_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn job_internal(reason: &'static str) -> ForgeError {
     unreadable(reason).with_context("kind", BASELINE_CANDIDATE_JOB)

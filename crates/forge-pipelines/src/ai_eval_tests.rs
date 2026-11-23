@@ -524,12 +524,10 @@ async fn a_passing_nightly_queues_one_baseline_candidate() {
     let w = world().await;
     let old = report_json(&[("a/1", "regular", 3, 3)], 0.8);
     let base = baselines(old.clone()); // clone: the unchanged run reuses it
-    let night = w.nightly('a').await;
     let better = report_json(
         &[("a/1", "regular", 3, 3), ("b/fix-1", "reproduction", 3, 3)],
         0.85,
     );
-    w.upload(night, &better).await;
     let push = w.pipeline('b', true, "succeeded").await;
     w.upload(push, &better).await;
     let worse = w.nightly('c').await;
@@ -537,7 +535,19 @@ async fn a_passing_nightly_queues_one_baseline_candidate() {
         .await;
     let same = w.nightly('d').await;
     w.upload(same, &old).await;
-    assert_eq!(w.sweep(&base).await.written, 4);
+    // A schedule on another branch never proposes (review MEDIUM).
+    let develop = w
+        .pipeline_from(
+            'f',
+            true,
+            "succeeded",
+            (Source::Schedule, "refs/heads/develop"),
+        )
+        .await;
+    w.upload(develop, &better).await;
+    let night = w.nightly('a').await;
+    w.upload(night, &better).await;
+    assert_eq!(w.sweep(&base).await.written, 5);
     assert_eq!(w.check('a').await.expect("run").0, "success");
     assert_eq!(w.check('c').await.expect("run").0, "failure");
     let jobs =
@@ -580,6 +590,15 @@ async fn a_passing_nightly_queues_one_baseline_candidate() {
             .await
             .expect("elsewhere"),
         Candidate::Skip("not_default_branch")
+    );
+    // A newer nightly run exists: the older one's (retried) job proposes
+    // nothing (review MEDIUM).
+    let _newer = w.nightly('e').await;
+    assert_eq!(
+        baseline_candidate(&w.t.db, &w.store, &base, night)
+            .await
+            .expect("superseded"),
+        Candidate::Skip("superseded")
     );
     w.t.drop_now().await;
 }

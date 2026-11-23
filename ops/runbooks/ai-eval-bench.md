@@ -9,7 +9,8 @@
 候補が出ない・MR が増えないとき: `forge serve` のログ `forge.ai_eval.baseline_proposed`（`outcome`・`reason`: `unchanged` /
 `baseline_moved`（夜のコミットの後に基準が変わった）/ `branch_exists`（閉じた候補のブランチが残っている: 消せば再開）/
 `owner_not_allowed`（定期の持ち主が MR を開けない・push できない: `forge.ai_eval.baseline_refused` の `error_code`。持ち主を Maintainer に）/
-`target_missing`）と `forge.ai_eval.baseline_skipped`（`not_scheduled` / `not_default_branch` / `no_report` / `not_passing` / `unchanged` など）。
+`target_missing` / `ai_assets_disabled`（プロジェクトの `ai_assets.enabled` が off）/ `too_many_candidates`（開いた候補が 10 本）/
+`branch_missing`（開いた候補の枝が消えた））と `forge.ai_eval.baseline_skipped`（`not_scheduled` / `superseded`（新しい定期の実行がある）/ `not_default_branch` / `no_report` / `not_passing` / `unchanged` など）。
 ジョブ: `SELECT state, attempts, last_error_code FROM forge.jobs WHERE kind = 'ai_eval.baseline_candidate' ORDER BY id DESC LIMIT 5;`
 （`dead` なら `last_error_code` の runbook）。
 

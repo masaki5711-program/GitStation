@@ -107,3 +107,29 @@ impl JobHandler for BaselineCandidateHandler {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review HIGH: the job's bound is above the sum of the proposal's git
+    /// steps, so it is not cancelled between the branch's move and the
+    /// merge request (an interrupted one is resumed anyway).
+    #[test]
+    fn the_job_outlives_every_git_step_of_a_proposal() {
+        let steps = forge_review::ai_baseline::BASELINE_GIT_TIMEOUT * 14;
+        assert!(
+            forge_db::ci_ai_eval::BASELINE_CANDIDATE_TIMEOUT
+                > steps + std::time::Duration::from_secs(60)
+        );
+    }
+
+    /// A database or git failure that may pass is retried; a refusal of
+    /// the payload is not.
+    #[test]
+    fn failures_that_may_pass_are_retried() {
+        assert!(retryable(&ForgeError::new(ErrorCode::DbUnavailable)));
+        assert!(!retryable(&ForgeError::new(ErrorCode::Internal)));
+        assert!(baseline_candidate_payload(&serde_json::json!({ "pipeline_id": 1 })).is_err());
+    }
+}

@@ -187,10 +187,25 @@ pub struct Built {
     pub propose: bool,
 }
 
-/// A scheduled run against the default branch whose report is not the
-/// baseline already (module docs).
-fn proposes(t: &AiEvalTarget, report: &EvalReport, baseline: Option<&EvalReport>) -> bool {
-    t.scheduled_by.is_some() && t.base_branch.is_none() && candidate_of(report, baseline).is_some()
+/// A scheduled run on the default branch (`on_default`, [`on_default`])
+/// whose report is not the baseline already (module docs).
+fn proposes(on_default: bool, report: &EvalReport, baseline: Option<&EvalReport>) -> bool {
+    on_default && candidate_of(report, baseline).is_some()
+}
+
+/// `t` is a scheduled run on the repository's default branch (a schedule
+/// on another branch compares with the default branch too, but never
+/// proposes its baseline). Reads the default branch only for a scheduled
+/// run.
+async fn on_default(
+    t: &AiEvalTarget,
+    baselines: &dyn BaselineSource,
+    repo: RepoId,
+) -> Result<bool, ForgeError> {
+    if t.scheduled_by.is_none() || t.base_branch.is_some() {
+        return Ok(false);
+    }
+    Ok(baselines.default_branch(repo).await?.as_ref() == Some(&t.git_ref))
 }
 
 fn name() -> Result<CheckName, ForgeError> {
@@ -374,6 +389,7 @@ pub async fn build(
             .with_context("project_id", t.project.get())
             .with_context("operation", "ai_eval_baseline")
     })?;
+    let on_default = on_default(t, baselines, repo).await?;
     let path = baseline_path(&report.models);
     let branch = t
         .base_branch
@@ -399,7 +415,7 @@ pub async fn build(
     let baseline = match baselines.baseline(repo, &base, &path).await? {
         SmallFile::Absent => {
             let mut built = missing("baseline_absent", None)?;
-            built.propose = proposes(t, &report, None);
+            built.propose = proposes(on_default, &report, None);
             return Ok(built);
         }
         SmallFile::NotAFile => return missing("baseline_not_a_file", None),
@@ -418,7 +434,7 @@ pub async fn build(
         return missing("baseline_models_mismatch", None);
     }
     let evaluation = evaluate(&report, &baseline);
-    let propose = evaluation.passed() && proposes(t, &report, Some(&baseline));
+    let propose = evaluation.passed() && proposes(on_default, &report, Some(&baseline));
     let conclusion = if evaluation.passed() {
         CheckConclusion::Success
     } else {
@@ -653,7 +669,7 @@ pub struct Proposal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Candidate {
     Propose(Box<Proposal>),
-    /// Nothing to propose, and why: `pipeline_gone`, `not_scheduled`,
+    /// Nothing to propose, and why: `pipeline_gone`, `not_scheduled`, `superseded`,
     /// `not_default_branch`, `no_report`, `report_unusable`,
     /// `base_unresolved`, `baseline_unusable`, `not_passing`, `unchanged`.
     Skip(&'static str),
@@ -676,6 +692,11 @@ pub async fn baseline_candidate(
     let Some(owner) = t.scheduled_by else {
         return Ok(Candidate::Skip("not_scheduled"));
     };
+    // Only the latest nightly run of the branch proposes (a delayed retry
+    // of an older one never overwrites a newer candidate).
+    if db::newer_scheduled(db_handle, pipeline).await? {
+        return Ok(Candidate::Skip("superseded"));
+    }
     if t.base_branch.is_some() {
         return Ok(Candidate::Skip("not_default_branch"));
     }

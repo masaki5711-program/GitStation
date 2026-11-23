@@ -376,6 +376,57 @@ pub async fn open_iid_between(
     .await
 }
 
+/// The newest merge request of `project` from `source` into `target`, in
+/// any state (`None`: there never was one). Plan 17 P17-6: the baseline
+/// candidate tells an open one, a closed one a person decided on and a
+/// branch left without any merge request (an interrupted proposal) apart.
+pub async fn latest_between(
+    db: &Db,
+    project: ProjectId,
+    (source, target): (&RefName, &RefName),
+) -> Result<Option<StoredMergeRequest>, ForgeError> {
+    const QUERY: &str = "review.latest_between";
+    let row: Option<Row> = db
+        .within(QUERY, async {
+            sqlx::query_as(&format!(
+                "SELECT {COLUMNS} FROM forge.merge_requests WHERE project_id = $1 \
+                 AND source_branch = $2 AND target_branch = $3 ORDER BY iid DESC LIMIT 1"
+            ))
+            .bind(project.get())
+            .bind(source.as_str())
+            .bind(target.as_str())
+            .fetch_optional(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    row.map(Row::parse).transpose()
+}
+
+/// How many open merge requests of `project` come from a branch under
+/// `refs/heads/<prefix>` (plan 17 P17-6: the cap on baseline candidates).
+/// `prefix` is a fixed name without LIKE wildcards.
+pub async fn open_count_from_prefix(
+    db: &Db,
+    project: ProjectId,
+    prefix: &str,
+) -> Result<i64, ForgeError> {
+    const QUERY: &str = "review.open_count_from_prefix";
+    let pattern = format!("refs/heads/{prefix}%");
+    db.within(QUERY, async {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM forge.merge_requests WHERE project_id = $1 \
+             AND state = 'open' AND source_branch LIKE $2",
+        )
+        .bind(project.get())
+        .bind(&pattern)
+        .fetch_one(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))
+    })
+    .await
+}
+
 /// One page of `project`'s merge requests, newest first: `state` (`None` =
 /// every state), `iid < before` when given, at most `limit` (capped at
 /// [`MAX_PAGE`]). One bounded statement on the read pool.

@@ -107,5 +107,6 @@
    承認できない。
 
 止めたいとき: MR を閉じる（ブランチは残す）。閉じた・マージされていないブランチがある間は新しい候補を出さない（`branch_exists`）。
-再開はブランチを消す。マージ済みのブランチは次の夜に前へ進めて新しい MR を開く。ログは `forge.ai_eval.baseline_proposed`
+再開はブランチを消す。マージ済みのブランチは次の夜に前へ進めて新しい MR を開く。MR が一度も無いサーバーのコミットの枝（提案が途中で止まった）は、
+次の夜に続きから MR を開く。`ai_assets.enabled` が off のプロジェクト、開いた候補が 10 本あるとき、同じブランチの新しい定期の実行があるときは出さない。ログは `forge.ai_eval.baseline_proposed`
 （`outcome` = `opened` / `updated` / `skipped`、`reason`）と `forge.ai_eval.baseline_skipped`（`reason`）。
