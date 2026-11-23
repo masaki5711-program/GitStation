@@ -65,6 +65,10 @@ pub enum MergeRequestPipeline {
     /// (`pipeline.run_merge_request`): enqueued even when the row already
     /// exists (the pipeline's job is deduplicated on its identity).
     Requested,
+    /// Plan 18 S6 (ADR-0037 (f)): the merged tree has no `.forge-ci.yml`
+    /// (forge-review looked) — the pipeline job would write nothing, so
+    /// none is enqueued. Never used for a person's ask.
+    NoDefinition,
 }
 
 impl MergeRequestPipeline {
@@ -74,6 +78,7 @@ impl MergeRequestPipeline {
             Self::OnNewHead => "on_new_head",
             Self::OnTargetMove => "on_target_move",
             Self::Requested => "requested",
+            Self::NoDefinition => "no_definition",
         }
     }
 }
@@ -229,6 +234,7 @@ pub async fn record_merge_result(
             Some(_) => {
                 let wanted = match pipeline {
                     MergeRequestPipeline::OnTargetMove | MergeRequestPipeline::Requested => true,
+                    MergeRequestPipeline::NoDefinition => false,
                     MergeRequestPipeline::OnNewHead => {
                         !head_has_pipeline(&mut tx, (ProjectId::new(project), mr), &git_ref, head)
                             .await?

@@ -75,10 +75,18 @@ async fn open(t: &FreshDb, who: UserId, p: ProjectId, source: &str) -> StoredMer
     .expect("open")
 }
 
-/// (dedup_key, payload) of the version jobs, oldest first.
+/// (dedup_key, payload) of the version jobs, oldest first — plan 18 S6:
+/// the prepare jobs (`merge_request.prepare`); no `merge_request.refresh`
+/// job is enqueued any more.
 async fn refresh_jobs(t: &FreshDb) -> Vec<(String, serde_json::Value)> {
+    let legacy: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM forge.jobs WHERE kind = 'merge_request.refresh'")
+            .fetch_one(&mut t.superuser().await)
+            .await
+            .expect("legacy jobs");
+    assert_eq!(legacy, 0, "versions are prepared, not refreshed");
     sqlx::query_as(
-        "SELECT dedup_key, payload FROM forge.jobs WHERE kind = 'merge_request.refresh' \
+        "SELECT dedup_key, payload FROM forge.jobs WHERE kind = 'merge_request.prepare' \
          ORDER BY id",
     )
     .fetch_all(&mut t.superuser().await)
@@ -442,8 +450,9 @@ async fn drain(t: &FreshDb) {
 /// source branch enqueues one per open merge request from it (once, even
 /// when the step runs again); a deleted branch or another branch nothing;
 /// a cut ref list (`refs_truncated`) re-checks every open merge request.
+/// Plan 18 S6: that job is one `merge_request.prepare` per version.
 #[tokio::test]
-async fn pushes_open_and_reopen_enqueue_the_version_job() {
+async fn a_version_enqueues_one_prepare_job() {
     let t = FreshDb::migrated().await;
     let (alice, web) = web(&t).await;
     let p = web.project_id;
@@ -458,8 +467,8 @@ async fn pushes_open_and_reopen_enqueue_the_version_job() {
     assert_eq!(
         keys,
         [
-            format!("mr_refresh:{f}:opened"),
-            format!("mr_refresh:{o}:opened")
+            format!("mr_prepare:{f}:opened"),
+            format!("mr_prepare:{o}:opened")
         ]
     );
     assert_eq!(jobs[0].1["pushed_by"], serde_json::Value::Null);
@@ -483,7 +492,7 @@ async fn pushes_open_and_reopen_enqueue_the_version_job() {
     let jobs = refresh_jobs(&t).await;
     assert_eq!(jobs.len(), 3, "{jobs:?}");
     let (key, payload) = &jobs[2];
-    assert!(key.starts_with(&format!("mr_refresh:{f}:push:")), "{key}");
+    assert!(key.starts_with(&format!("mr_prepare:{f}:push:")), "{key}");
     assert_eq!(payload["merge_request_id"], f);
     assert_eq!(payload["pushed_by"], alice.get());
 
@@ -550,7 +559,7 @@ async fn pushes_open_and_reopen_enqueue_the_version_job() {
     let jobs = refresh_jobs(&t).await;
     assert!(
         jobs.last()
-            .is_some_and(|j| j.0.starts_with(&format!("mr_refresh:{o}:reopened:"))),
+            .is_some_and(|j| j.0.starts_with(&format!("mr_prepare:{o}:reopened:"))),
         "{jobs:?}"
     );
     t.drop_now().await;
@@ -582,6 +591,51 @@ fn a_job_payload_round_trips_and_garbage_is_refused() {
         serde_json::json!({"merge_request_id": 1, "pushed_by": "x"}),
     ] {
         assert!(refresh_payload(&bad).is_err(), "{bad}");
+    }
+}
+
+/// Plan 18 S6: the prepare job's payload is the version job's (read back
+/// by the same parser, with the S5 ask), under its own kind and key.
+#[test]
+fn a_prepare_job_round_trips_like_the_version_job() {
+    let job = crate::review::prepare_job(
+        RefreshRequest {
+            merge_request: MergeRequestId::new(5),
+            pushed_by: Some(UserId::new(2)),
+        },
+        RefreshTrigger::Pushed { seq: 9 },
+        RequestId::parse("req-x").expect("id"),
+        Some(9),
+    )
+    .expect("job");
+    assert_eq!(job.kind.as_str(), crate::review::PREPARE_JOB);
+    assert_eq!(
+        job.dedup_key.as_ref().map(|k| k.as_str()),
+        Some("mr_prepare:5:push:9")
+    );
+    assert_eq!(job.timeout.get(), crate::review::PREPARE_TIMEOUT);
+    let back = refresh_payload(&job.payload).expect("payload");
+    assert_eq!(back.merge_request, MergeRequestId::new(5));
+    assert_eq!(back.pushed_by, Some(UserId::new(2)));
+    assert!(!crate::review::pipeline_asked(&job.payload).expect("ask"));
+    for (trigger, key) in [
+        (RefreshTrigger::Opened, "mr_prepare:5:opened"),
+        (
+            RefreshTrigger::Reopened { revision: 3 },
+            "mr_prepare:5:reopened:3",
+        ),
+    ] {
+        let job = crate::review::prepare_job(
+            RefreshRequest {
+                merge_request: MergeRequestId::new(5),
+                pushed_by: None,
+            },
+            trigger,
+            RequestId::parse("req-x").expect("id"),
+            None,
+        )
+        .expect("job");
+        assert_eq!(job.dedup_key.as_ref().map(|k| k.as_str()), Some(key));
     }
 }
 
@@ -635,7 +689,7 @@ async fn a_service_accounts_push_keeps_pushed_by_on_the_version() {
     let jobs = refresh_jobs(&t).await;
     let (key, payload) = jobs.last().expect("the push's job");
     assert!(
-        key.starts_with(&format!("mr_refresh:{}:push:", mr.id.get())),
+        key.starts_with(&format!("mr_prepare:{}:push:", mr.id.get())),
         "{key}"
     );
     assert_eq!(payload["pushed_by"], bot.get(), "{payload}");

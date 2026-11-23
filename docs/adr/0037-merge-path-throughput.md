@@ -949,3 +949,100 @@ p50 1.2 s かかった。調べ直して 1 点直した: 枝の先端は毎回�
   （`a_running_required_check_refuses_enqueue_without_git`）。
 - `checks_failed` は、人のエントリでも同じ head について止まったままになる（新しい push か、人が自分で入れ直すまで）。
   自動マージ自身のエントリの今までの決まりと同じ。
+
+## 追記（2026-11-20、計画 18 S6 の実装）— (f) のうち作ったもの、文との違い、既知の限界
+
+### 作ったもの
+
+1. **1 つのジョブ `merge_request.prepare`**（`forge_db::review::prepare`、ハンドラーは `forge-cli/src/worker/prepare.rs`）。
+   版のジョブを積んでいた 3 か所（`merge-request-refresh` の購読側の push、open、reopen）が、代わりにこれを積む。ペイロードは
+   版のジョブと同じ（`merge_request_id`、`pushed_by`。S5 の `"pipeline": true` も読む）。優先度は版のジョブと同じ段 1、
+   同時に 3 件まで（`KIND_CAPS`）。ハンドラーは 4 つのジョブが呼んでいた関数を順に呼ぶ: (1) `forge_review::refresh_prepared`
+   （版・隠し ref・土台・判定の依頼・衝突の予測の依頼）、(2) `forge_review::check_asked`（判定）、(3) `Risk::run`（`forge/risk`）、
+   (4) `SpecChecks::run`（`forge/spec-lint`、`forge/spec-trace`、`forge/doc-lint`、`forge/ci-lint`）。同じ関数なので、同じ行・
+   同じチェック名・同じ結論・同じログを書く（不変条件。試験 `prepare_writes_the_same_check_runs_as_the_four_jobs` が、S6 の前の
+   4 つのジョブの経路と結果を比べる）。1 回の実行に info を 1 行（`forge.review.prepared`: 各小段の `done` / `skipped` /
+   `handed_over` と時間）。
+2. **版のイベントの印**。prepare が記録した版の `merge_request.pushed` のペイロードに `"prepared": true` を足した
+   （`record_mr_version_prepared`。イベントのペイロードは足すだけ、という Webhook の契約の内側）。`risk` と `spec-index` の購読側は
+   印のある版にはジョブを積まない。印のない版（S6 の前に積まれた版のジョブ、他の呼び出し）には今までどおり積む。だから
+   古い `merge_request.refresh` のジョブは配備の後も古い経路のまま正しく動き、ハンドラーも残した。
+3. **判定の小段は待たせたジョブを後ろに置く**。判定の依頼は今までどおり `check_seq` を進め、判定のジョブを積むが、
+   `BACKSTOP_DELAY`（120 s、判定の予算 90 s より長い）の後にしか動けない（`request_check_backstop`、
+   `jobs::enqueue_superseding_after_on`）。prepare はその seq を自分で判定し、成功したらそのジョブを消し（`Backstop::Drop`）、
+   失敗したら今すぐ動けるようにする（`Backstop::Wake`）。判定の間、そのジョブが依頼の「生きたジョブ」（`LIVE_JOB`）なので、
+   見回り（`sweep_unchecked`）と回収（`reap_stale_checks`）は今までどおりに見る。prepare が途中で死んだら、120 s 後にそのジョブが
+   自分で判定する。S5 の依頼の印は、prepare の印か、置き換えたジョブの印を受け継ぐ（`request_check_asking_on` と同じ）。
+4. **失敗した小段は自分のジョブに渡す**。prepare を失敗させるのは版の小段（`step=refresh`）だけ（版のジョブと同じ再試行の規則）。
+   判定・リスク・spec の小段が失敗したら、warn `forge.review.prepare_step_failed`（その小段のコード、`step`、
+   `job_kind=merge_request.prepare`）を 1 回出して、その小段を自分のジョブに渡す: 判定は上の `Wake`、リスクと spec は購読側が
+   積んだはずのジョブ（同じ重複排除のキー、`checks::risk::hand_over`、`checks::spec_index::hand_over`）。prepare は次の小段に進む。
+   だから「失敗した小段だけをやり直す」は、その小段のジョブの再試行と最後の試行の `error` の答えで実現した。
+5. **MR パイプラインの判断**。`Mergeability::with_ci_definition_probe`（worker は判定のジョブにも prepare にも付ける）: きれいな
+   マージ結果の MR パイプラインを積む前に、マージした木に `.forge-ci.yml` があるかを `ls-tree` 1 回で見る。なければ方針を
+   `MergeRequestPipeline::NoDefinition` にして積まない（パイプラインのジョブは同じ木を読んで `no_definition` で何も書かない
+   だけだった）。人の依頼（`Requested`）は見ない（そのジョブが自分で答える）。見られなかったら方針はそのまま（ジョブが決める）、
+   warn `forge.review.ci_definition_unread`。
+6. **衝突の予測の相手を絞った**。`scan_peers(…, filter)`: `review.path_filter` が真なら、相手はパスが影響しうる開いた MR だけ
+   （S4 の述語を 2 つの head のパスの集合に掛けた `mergeability::peer_interacts_sql`。どちらかの集合が分からなければ相手に
+   入れる）。外した数は `Peers::passed_over`（debug `forge.review.conflict_peers_filtered`）。相手が上限を超えたときは今までどおり
+   `incomplete` / `peers_capped`。予測は今までどおり低優先度の別のジョブ。
+
+### 文との違い
+
+- **重複排除のキー**: 計画は `prepare:<mr>:<head>` と書いたが、`mr_prepare:<id>:<trigger>`（`opened`、`reopened:<rev>`、
+  `push:<seq>`）にした。head はジョブが読むもので積むときには分からない。また head のキーは成功したジョブが持ち続けるので、
+  ソース枝を前の head に戻す push（A → B → A）が版を記録しなくなる。
+- **head の一覧 1 回と `cat-file --batch` 1 回の共有**は作っていない。各小段は今までどおり自分で読む（リスク・spec の木の読み）。
+  減ったのは claim の往復 3 回と、ジョブの行 3 本（判定の行は作って消す）。共有は S7 の文書の索引（内容アドレスの LRU）と
+  一緒に行うのがよい。
+- 計画の「ファイル」の `crates/forge-db/src/review/conflicts/` は `conflicts/run.rs`（`scan_peers`）、絞り込みの SQL は
+  `mergeability/paths.rs` に置いた（S4 の述語の隣）。
+- 新しいコード・キー・マイグレーションはない（計画どおり）。小段のコードは今までのもの。`PREPARE_TIMEOUT` は 360 s
+  （60 + 90 + 90 + 120）。
+
+### 既知の限界
+
+- prepare が最後まで失敗した（`dead`）とき、版がもう記録されていれば、その head の `forge/risk` と spec の検査は出ない
+  （印のある版なので購読側も積まない）。見回りは `check.risk` / `check.spec_index` の死んだジョブしか見ない。新しい push か
+  開き直しで直る（Runbook `job-dead-lettered` に書いた）。prepare が版の後で失敗するのは、小段の後始末の DB の失敗だけ。
+- prepare の後の試行（`attempt > 1`）は、版が `already_head` でも検査の小段を走らせる。結果がもうある小段（`forge/risk`、
+  `forge/spec-lint` が forge の行である）は飛ばす。引き継いだジョブと後の試行の両方が走ることはありうる（同じ答えを 2 回書く）。
+- 判定が 120 s を超えると、待たせたジョブも動き出して同じ seq を 2 回判定することがある（結果は同じ、seq が守る）。
+- 衝突の予測の絞り込みは、相手の集合が自分の今の head のものであるときだけ効く（`checked_head_sha = head_sha`）。prepare の後に
+  積まれた予測は、判定が先に集合を書くので効きやすい。
+
+### レビュー対応（2026-11-21、rust・database のレビュー）
+
+1. **（HIGH）死んだ prepare の検査に答える**。版を記録した後で prepare が `dead` になると、印のある版なので購読側は積まず、
+   見回りは `check.risk` / `check.spec_index` の死んだジョブしか見ないので、`forge/risk` と spec の 4 つの検査（doc-lint、
+   ci-lint を含む）が永遠に出なかった。worker の新しい作業 `prepare_sweep`（60 s ごと、`risk_sweep` と同じカーソル）が、
+   7 日以内に死んだ prepare のうち、開いた MR の今の head にその検査がないもの（`unanswered_dead_prepares`、その MR に生きた
+   prepare があれば除く）に、死んだジョブのコードと要求 id で `error` を書く。答えた head は二度と並ばない。試験
+   `a_dead_prepare_job_after_its_version_gets_its_checks_answered`。上の「既知の限界」の 1 つ目はこれで閉じた。
+2. **引き継ぎがジョブを積めないとき**（MEDIUM 1、2）。`hand_over` は `HandOver::{Queued, Pending, Held}` を返す。`Held`
+   （キーを終わったジョブが持つ。A → B → A などで前にそのキーで評価した head）か、DB の失敗なら、その小段をその場で
+   `error` で答える（`Risk::fail`、`SpecChecks::fail`）。error `forge.review.prepare_hand_over_failed`（小段のコード、`reason`
+   = `key_held` か DB のコード）。もう prepare を失敗させない（判定をやり直させない）。warn
+   `forge.review.prepare_step_failed` は、本当に自分のジョブが再試行するときだけ出す。
+3. **待たせたジョブの後始末の失敗は prepare の失敗ではない**（MEDIUM 2）。warn `forge.review.prepare_backstop_unsettled`
+   を出して次の小段に進む（そのジョブは遅れの後に動く: 同じ seq の 2 回目の判定か、少し遅い再試行）。
+4. **時間**（MEDIUM 3）。`PREPARE_TIMEOUT` は 420 s（小段の予算の和 360 s に余裕）。`BACKSTOP_DELAY` は
+   `MERGEABILITY_TIMEOUT + 30 s` から作る。依頼から数えるので、判定がそれより長いと待たせたジョブと並ぶことがある。
+   「決して並ばない」という文は直した（並んでも同じ seq の 2 回目の判定で、結果は seq ごと 1 回）。
+5. **置き換えで列の場所を失わない**（MEDIUM 4）。遅れつきの置き換えは `LEAST(置き換えたジョブの最小の run_after,
+   now + delay)`。すでに動けるジョブを置き換えたら、新しいジョブもすぐ動ける（prepare の判定と並ぶことがある。上と同じ）。
+6. **記録済みの head**（LOW）。`already_head` と `restored` でも検査の小段を走らせ、その head に結果がある小段は飛ばす
+   （1 回目の試行でも。開き直しや前の head への push で、結果がなければ埋まる）。
+7. **衝突の予測の絞り込みと古い予測**（LOW）。`record_scan` は試した組だけを書き、試さなかった組を消さない。それでも
+   絞り込みで外れた組に古い「衝突」は残らない: 2 つの MR が衝突するのは同じパスを変えるときだけで、それは S4 の述語では
+   必ず「影響しうる」（外れない）。読み手は両方の head が今のものの予測しか信じない（`a_prediction_about_an_old_head_is_not_read`）。
+8. 試験を足した: 判定の小段の失敗で待たせたジョブが起きる、spec の小段の失敗の引き継ぎ、キーが持たれた引き継ぎは
+   `error` で答える、版の小段の DB の失敗は再試行・壊れたペイロードは即 `dead`。
+
+### 証明について
+
+計画の証明（`a-burst` で作成から enqueue まで p95 ≤ 5 s、MR あたりのジョブ ≤ 2）は、負荷試験（`ops/loadtest/`）で測る。
+このコミットでは測っていない。数え方: `SELECT kind, count(*) FROM forge.jobs WHERE created_at > <開始> GROUP BY kind`
+（S6 の後、doc の MR あたり `merge_request.prepare` 1、`check.spec_drift` 1、`merge_request.conflict_scan` 1。判定・リスク・
+spec のジョブは小段が失敗したときだけ）。

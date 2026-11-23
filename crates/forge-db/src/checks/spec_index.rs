@@ -6,7 +6,9 @@
 //!
 //! When a job is asked for:
 //! - `merge_request.pushed` (every version, the first of an open included):
-//!   the version's head;
+//!   the version's head — except a version the prepare job recorded
+//!   (`"prepared": true`, plan 18 S6): that job runs the checks itself and
+//!   hands a failure over to this job ([`hand_over`], the same key);
 //! - `work_item.linked` / `work_item.unlinked` (spec-trace covers the linked
 //!   work items) and a retarget (`merge_request.updated` with
 //!   `target_branch`: the merge base moves): the merge request's **current**
@@ -169,6 +171,32 @@ pub struct UnansweredJob {
 /// How far back the sweep looks for dead jobs.
 pub const UNANSWERED_WINDOW_DAYS: i32 = 7;
 
+/// Plan 18 S6: hand a failed spec step of the prepare job over to this
+/// job — the one the `spec-index` subscriber would have asked for the
+/// version (the same key: the merge request's current state), so it
+/// retries, and answers `error` on its last attempt, as for any version.
+pub async fn hand_over(
+    db: &Db,
+    request: &SpecIndexRequest,
+    origin: RequestId,
+) -> Result<super::HandOver, ForgeError> {
+    const QUERY: &str = "checks.spec_index_hand_over";
+    let state: Option<String> = db
+        .within(QUERY, async {
+            sqlx::query_scalar(
+                "SELECT pg_catalog.md5(m.target_branch || '|' || coalesce((                 SELECT pg_catalog.string_agg(l.work_item_id::text, ',' ORDER BY l.work_item_id)                  FROM forge.merge_request_work_items l                  WHERE l.merge_request_id = m.id AND l.unlinked_at IS NULL), ''))                  FROM forge.merge_requests m WHERE m.project_id = $1 AND m.iid = $2",
+            )
+            .bind(request.project.get())
+            .bind(request.iid)
+            .fetch_optional(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    let job = spec_index_job(request, state.as_deref(), origin, None)?;
+    super::hand_over_job(db, &job).await
+}
+
 /// At most `limit` [`UnansweredJob`]s, the oldest first: dead within
 /// [`UNANSWERED_WINDOW_DAYS`], of a project that still exists, whose head
 /// lacks one of `forge/spec-lint`, `forge/spec-trace`, `forge/doc-lint`
@@ -319,6 +347,11 @@ impl SpecIndexRequests {
     }
 
     async fn on_version(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
+        if crate::review::prepared_version(&event.payload) {
+            // Plan 18 S6: the prepare job that recorded the version runs the
+            // spec checks itself (and hands a failure over to this job).
+            return Ok(());
+        }
         let project = event
             .project_id
             .ok_or_else(|| bad_payload(event, "project_id"))?;

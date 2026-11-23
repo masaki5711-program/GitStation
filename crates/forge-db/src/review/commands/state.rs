@@ -10,8 +10,9 @@ use super::{
 };
 use crate::change::{ChangeContext, ChangeTx, Settle};
 use crate::review::conflicts::request_scan_on;
+use crate::review::prepare::prepare_job;
 use crate::review::version_refs::precondition;
-use crate::review::versions::{refresh_job, versions_on, RefreshRequest, RefreshTrigger};
+use crate::review::versions::{versions_on, RefreshRequest, RefreshTrigger};
 use crate::review::{Row, StoredMergeRequest, COLUMNS};
 use crate::Db;
 
@@ -148,7 +149,7 @@ pub async fn reopen_mr_decided<P>(
         };
         let record = record(project, vec![change], stored.revision)?;
         // M3 R1b: the source may have moved while it was closed.
-        let job = refresh_job(
+        let job = prepare_job(
             RefreshRequest {
                 merge_request: id,
                 pushed_by: None,

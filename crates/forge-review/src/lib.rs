@@ -112,7 +112,7 @@ pub use user_lists::{
     AttentionReason, UserListCount, UserListCounts, UserListItem, UserListPage, UserListQuery,
     UserListScope, WidgetExtra, WidgetItem, WidgetList, WidgetOrder, WidgetPage,
 };
-pub use versions::{refresh, RefreshReport, SyncReport, VersionRefs};
+pub use versions::{refresh, refresh_prepared, RefreshReport, SyncReport, VersionRefs};
 
 pub use discussions::DiffProbe;
 pub use fields::{

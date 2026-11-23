@@ -1,7 +1,9 @@
 //! The `merge-request-refresh` subscriber (M3 R1b, plan 11 §11.3): on
-//! `repository.pushed` it ENQUEUES the version job (`merge_request.refresh`)
-//! for every open merge request whose source branch the push moved; the
-//! job reads the branch with git and writes the version (a subscriber
+//! `repository.pushed` it ENQUEUES the version's job for every open merge
+//! request whose source branch the push moved — since plan 18 S6 the
+//! prepare job (`merge_request.prepare`, `super::prepare`: the version and
+//! its checks in one job; the version job `merge_request.refresh` before);
+//! the job reads the branch with git and writes the version (a subscriber
 //! never calls git: external calls belong in jobs, ADR-0016 §7).
 //!
 //! - When the event lists every ref (`refs_truncated = false`), the merge
@@ -14,7 +16,7 @@
 //!   [`MAX_REFRESH_FANOUT`] jobs (most recently updated first); more is
 //!   logged at warn (`forge.review.refresh_fanout_capped`).
 //!
-//! Each job's dedup key is `mr_refresh:<merge_request_id>:push:<seq>`: a
+//! Each job's dedup key is `mr_prepare:<merge_request_id>:push:<seq>`: a
 //! retried step never doubles a job, and each push gets its own. The pusher
 //! (`actor_user_id` of a `user` or `service_account` event) becomes the
 //! version's `pushed_by`.
@@ -59,7 +61,8 @@ use forge_errors::{ErrorCode, ForgeError};
 use super::mergeability::{
     carry_forward_on, defer_checks_on, not_checked, request_check_on, settled_on,
 };
-use super::versions::{refresh_job, RefreshRequest, RefreshTrigger};
+use super::prepare::prepare_job;
+use super::versions::{RefreshRequest, RefreshTrigger};
 use crate::jobs::enqueue_on;
 use crate::query_error;
 use crate::subscribers::{DerivedTx, HandleFuture, Ordering, SourceEvent, Subscriber};
@@ -385,7 +388,7 @@ impl MergeRequestRefresh {
             .map(UserId::new);
         let origin = event.request_id().unwrap_or_else(RequestId::generate);
         for id in ids {
-            let job = refresh_job(
+            let job = prepare_job(
                 RefreshRequest {
                     merge_request: MergeRequestId::new(id),
                     pushed_by,

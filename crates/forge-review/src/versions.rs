@@ -75,6 +75,22 @@ pub struct RefreshReport {
     pub check_requested: Option<i64>,
     /// The conflict scan this run requested (its `scan_seq`; M3 X6).
     pub scan_requested: Option<i64>,
+    /// Plan 18 S6: the requested check's merge result gets the merge
+    /// request pipeline as asked for ([`refresh_prepared`]; `false` for
+    /// the version job, whose check runs in its own job).
+    pub check_asked: bool,
+}
+
+/// How the version is recorded and its check requested (plan 18 S6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// The version job (`merge_request.refresh`): the check is its own job.
+    Job,
+    /// The prepare job (`merge_request.prepare`): the version event says
+    /// `prepared`, and the check's job waits behind the prepare job's own
+    /// check (`forge_db::review::request_check_backstop`); `ask`: the
+    /// prepare job carries a person's ask for the pipeline.
+    Prepare { ask: bool },
 }
 
 fn outcome_name(outcome: &VersionOutcome) -> (&'static str, Option<i64>) {
@@ -101,8 +117,35 @@ pub async fn refresh(
     request: RefreshRequest,
     request_id: &RequestId,
 ) -> Result<RefreshReport, ForgeError> {
+    refresh_with(db, refs, request, request_id, Mode::Job).await
+}
+
+/// [`refresh`] as the first step of the prepare job (plan 18 S6,
+/// `forge_db::review::prepare`): the version's `merge_request.pushed` says
+/// `"prepared": true` (the `risk` and `spec-index` subscribers leave its
+/// checks to the prepare job), and the requested check
+/// ([`RefreshReport::check_requested`]) is the prepare job's to run — its
+/// mergeability job waits [`forge_db::review::BACKSTOP_DELAY`] behind it.
+/// `ask`: the prepare job carries a person's ask for the pipeline.
+pub async fn refresh_prepared(
+    db: &Db,
+    refs: &VersionRefs,
+    request: RefreshRequest,
+    ask: bool,
+    request_id: &RequestId,
+) -> Result<RefreshReport, ForgeError> {
+    refresh_with(db, refs, request, request_id, Mode::Prepare { ask }).await
+}
+
+async fn refresh_with(
+    db: &Db,
+    refs: &VersionRefs,
+    request: RefreshRequest,
+    request_id: &RequestId,
+    mode: Mode,
+) -> Result<RefreshReport, ForgeError> {
     let mut lock = review::lock_version_refs(db, request.merge_request).await?;
-    let report = refresh_locked(db, refs, &mut lock, request, request_id).await;
+    let report = refresh_locked(db, refs, &mut lock, (request, mode), request_id).await;
     lock.release().await;
     report
 }
@@ -111,7 +154,7 @@ async fn refresh_locked(
     db: &Db,
     refs: &VersionRefs,
     lock: &mut RefsLock,
-    request: RefreshRequest,
+    (request, mode): (RefreshRequest, Mode),
     request_id: &RequestId,
 ) -> Result<RefreshReport, ForgeError> {
     let started = Instant::now();
@@ -123,6 +166,7 @@ async fn refresh_locked(
             refs: None,
             check_requested: None,
             scan_requested: None,
+            check_asked: false,
         });
     };
     if !target.repository_ready {
@@ -152,15 +196,30 @@ async fn refresh_locked(
                     request_id,
                 )
                 .await?;
-                let done = review::record_mr_version_carrying(
-                    db,
-                    &ctx,
-                    mr,
-                    &tip,
-                    request.pushed_by,
-                    carry.as_ref(),
-                )
-                .await?;
+                let done = match mode {
+                    Mode::Job => {
+                        review::record_mr_version_carrying(
+                            db,
+                            &ctx,
+                            mr,
+                            &tip,
+                            request.pushed_by,
+                            carry.as_ref(),
+                        )
+                        .await?
+                    }
+                    Mode::Prepare { .. } => {
+                        review::record_mr_version_prepared(
+                            db,
+                            &ctx,
+                            mr,
+                            &tip,
+                            request.pushed_by,
+                            carry.as_ref(),
+                        )
+                        .await?
+                    }
+                };
                 if let VersionOutcome::PurgedHead { version } = done {
                     tracing::warn!(
                         target: "forge_review",
@@ -182,11 +241,17 @@ async fn refresh_locked(
     // Also for a closed one: refs of versions recorded by an earlier
     // attempt that stopped before its sync are written now.
     let synced = refs.sync_locked(lock, repo, request_id).await?;
-    let check_requested = if stored.state == forge_core::MergeRequestState::Open {
-        crate::mergeability::after_version(db, refs, lock, mr, repo, request_id).await?
+    let backstop = match mode {
+        Mode::Job => None,
+        Mode::Prepare { ask } => Some(ask),
+    };
+    let requested = if stored.state == forge_core::MergeRequestState::Open {
+        crate::mergeability::after_version(db, refs, lock, (mr, repo), backstop, request_id).await?
     } else {
         None
     };
+    let check_requested = requested.map(|(seq, _)| seq);
+    let check_asked = requested.is_some_and(|(_, asked)| asked);
     // M3 X6: the conflict scan of the (new) head, drafts included; never
     // fails the version job (review HIGH: the sweep covers a failed request).
     let scan = if stored.state == forge_core::MergeRequestState::Open {
@@ -220,6 +285,7 @@ async fn refresh_locked(
         refs: synced,
         check_requested,
         scan_requested,
+        check_asked,
     })
 }
 

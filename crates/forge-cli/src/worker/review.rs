@@ -131,17 +131,24 @@ impl MergeabilityHandler {
             kind,
             inner: Arc::new(CheckInner {
                 db: db.clone(), // clone: pool handles
-                // clone: the handler owns its git and storage handles
-                // Plan 18 S4: the head's changed paths are stored with the
-                // result (`review.path_filter` / `review.paths_max`).
-                // Plan 18 S5: a target move's merge result gets the merge
-                // request pipeline only with `ci.mr_pipeline_on_target_move`.
-                checker: Mergeability::new(storage.git.clone(), storage.root.clone())
-                    .with_paths(storage.merge_paths_max)
-                    .with_pipeline_on_target_move(storage.mr_pipeline_on_target_move),
+                checker: checker(storage),
             }),
         })
     }
+}
+
+/// The worker's mergeability check (the mergeability job and the prepare
+/// job, plan 18 S6). Plan 18 S4: the head's changed paths are stored with
+/// the result (`review.path_filter` / `review.paths_max`). Plan 18 S5: a
+/// target move's merge result gets the merge request pipeline only with
+/// `ci.mr_pipeline_on_target_move`. Plan 18 S6: and only when the merged
+/// tree has a `.forge-ci.yml`.
+pub(crate) fn checker(storage: &Storage) -> Mergeability {
+    // clone: the check owns its git and storage handles
+    Mergeability::new(storage.git.clone(), storage.root.clone())
+        .with_paths(storage.merge_paths_max)
+        .with_pipeline_on_target_move(storage.mr_pipeline_on_target_move)
+        .with_ci_definition_probe(true)
 }
 
 impl JobHandler for MergeabilityHandler {
@@ -216,7 +223,10 @@ impl ConflictScanHandler {
             inner: Arc::new(ScanInner {
                 db: db.clone(), // clone: pool handles
                 // clone: the handler owns its git and storage handles
-                predictor: ConflictPredictor::new(storage.git.clone(), storage.root.clone()),
+                // Plan 18 S6: only the peers whose paths may interact
+                // (`review.path_filter`, which the stored path sets need).
+                predictor: ConflictPredictor::new(storage.git.clone(), storage.root.clone())
+                    .with_path_filter(storage.merge_paths_max.is_some()),
             }),
         })
     }
@@ -259,4 +269,4 @@ mod tests;
 
 #[cfg(test)]
 #[path = "mergeability_tests.rs"]
-mod mergeability_tests;
+pub(crate) mod mergeability_tests;

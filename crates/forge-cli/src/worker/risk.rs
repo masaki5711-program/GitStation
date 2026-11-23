@@ -37,22 +37,28 @@ impl RiskHandler {
                 .with_context("reason", "invalid_job_kind")
                 .with_context("kind", RISK_JOB)
         })?;
-        let browse = Browser::new(
-            storage.git.clone(),  // clone: the browser owns its handles
-            storage.root.clone(), // clone: as git
-            BrowseLimits::default(),
-        );
         Ok(Self {
             kind,
-            risk: Arc::new(Risk::new(
-                db.clone(),           // clone: pool handles
-                storage.git.clone(),  // clone: the evaluation owns its handles
-                storage.root.clone(), // clone: as git
-                browse,
-                Arc::new(db.clone()), // clone: the same Db loads projects
-            )),
+            risk: Arc::new(risk(db, storage)),
         })
     }
+}
+
+/// The worker's `forge/risk` evaluation (the `check.risk` job and the
+/// prepare job's risk step, plan 18 S6).
+pub(crate) fn risk(db: &Db, storage: &Storage) -> Risk {
+    let browse = Browser::new(
+        storage.git.clone(),  // clone: the browser owns its handles
+        storage.root.clone(), // clone: as git
+        BrowseLimits::default(),
+    );
+    Risk::new(
+        db.clone(),           // clone: pool handles
+        storage.git.clone(),  // clone: the evaluation owns its handles
+        storage.root.clone(), // clone: as git
+        browse,
+        Arc::new(db.clone()), // clone: the same Db loads projects
+    )
 }
 
 /// Whether a failed run may succeed later.
