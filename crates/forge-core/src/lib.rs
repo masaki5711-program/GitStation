@@ -30,6 +30,8 @@ pub mod history_import;
 pub mod ids;
 pub mod integration;
 pub mod list_page;
+// Plan 19 L5-1 (ADR-0039): the local LLM's contract (pure).
+pub mod llm;
 pub mod merge;
 pub mod merge_conditions;
 /// Plan 18 S4 (ADR-0037 (c)): changed-path sets and `may_interact`.

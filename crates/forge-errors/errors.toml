@@ -3758,3 +3758,44 @@ diagnosis = "`forge doctor` row `org.master` (last sync, age, unit and position 
 fix = "Fix the cause of the failing syncs (runbook oidc-login, 「組織の台帳の写し」); the next successful run refreshes the copy and the derived organisation works again. If the sync is meant to be off, turn `org.master_sync_enabled` off."
 runbook = "oidc-login"
 test = "a_stale_master_is_org_master_stale"
+
+# ── Plan 19 L5-1 (ADR-0039): the local LLM gateway's contract ──
+
+[[error]]
+code = "FG-LLM-0002"
+name = "LlmOutputInvalid"
+http_status = 502
+severity = "warn"
+user_message_ja = "AI の助言を作れませんでした（AI の答えが決まった形になっていません）。助言なしで続けられます。"
+user_message_en = "The AI advice could not be made (the AI's answer was not in the required shape). You can continue without it."
+user_message_id = "Saran AI tidak dapat dibuat (jawaban AI tidak dalam bentuk yang diwajibkan). Anda dapat melanjutkan tanpanya."
+cause = "Plan 19 §2 (ADR-0039): the local model answered a request twice with something that is not the advice's JSON shape (`forge_core::llm::check_output`): not JSON, not an object, `summary` missing or not text, `findings` not a list or a finding with a bad `severity` / `path` / `line` / `quote` / `message` / `confidence`, a bad `deep_review`, or more than 100 findings. The first invalid answer is retried once with a note; the second is this code. The advice is not written: a check built on it is `error`, never success (ADR-0003), and the screens fall back to the view without AI."
+diagnosis = "The gateway logs `forge.llm.request_finished` with `error_code=FG-LLM-0002`, `purpose`, `llm_request_id`, `model`, `prompt_version`, `reason` (the second answer's) and `first_reason`, `attempts=2`; the metric `forge_llm_output_invalid_total{purpose}` counts them. Read the request row: SELECT purpose, model, prompt_id, prompt_version, input_tokens, output_tokens, state, error_code FROM forge.llm_requests WHERE id = <llm_request_id>. A run of them after a model or prompt change is the change's fault."
+fix = "Single failures need nothing (the next request runs normally). A run of them: roll the prompt version or the model back (runbook llm-advice-quality / llm-model-update), and add the failing shape to the purpose's eval set before changing the prompt again."
+test = "invalid_output_retried_once_then_error"
+
+[[error]]
+code = "FG-LLM-0005"
+name = "LlmInputRefused"
+http_status = 422
+severity = "info"
+user_message_ja = "この内容は AI に渡せないため、AI の助言はありません（秘密の情報を含むか、大きすぎます）。"
+user_message_en = "This content cannot be given to the AI, so there is no AI advice (it holds secrets or is too large)."
+user_message_id = "Konten ini tidak dapat diberikan ke AI, sehingga tidak ada saran AI (berisi rahasia atau terlalu besar)."
+cause = "Plan 19 §5 (06 D-5): the input of a request was refused before any model saw it (`forge_core::llm::prepare`). `reason`: `secret_unredactable` (a private key block whose end is missing: what follows its header cannot be told apart from the key), `too_many_secrets` (more secrets than the input may hold redacted, 64 by default), `too_large` (more characters than the purpose's bound after redaction), `empty` (no part: a bug of the input builder). Secrets that can be redacted are replaced by `[REDACTED:<kind>]` and the request goes on; this code is only for inputs that cannot be sent at all."
+diagnosis = "The caller logs it with `purpose`, `reason`, `label` (the part: `diff`, `log`, …) and, for `too_many_secrets`, `redactions`, `max_chars` for `too_large`. The input itself is never logged or stored; reproduce it from the request's keys (the merge request's head and base SHAs, the log's request_id)."
+fix = "`secret_unredactable` / `too_many_secrets`: the source holds credentials — rotate them (a committed secret is a leak) and remove them; `too_large`: the input builder must split or trim the input (a defect of the purpose's builder). `empty`: a builder bug, fix it."
+test = "secret_in_input_refused"
+
+[[error]]
+code = "FG-LLM-0006"
+name = "LlmEvidenceInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "AI の指摘の一部は、根拠が入力に見つからなかったため表示しません。"
+user_message_en = "Some AI findings are not shown because their evidence was not found in the input."
+user_message_id = "Beberapa temuan AI tidak ditampilkan karena buktinya tidak ditemukan dalam input."
+cause = "Plan 19 §3.1, §5 (ADR-0039): findings of a valid answer quoted text that is not in the input (in the parts of the finding's path when it names one, or anywhere otherwise), quoted fewer than 8 characters, named a path the input does not have, or had nothing left after mentions and links were stripped. Those findings alone were dropped; the advice keeps the rest and says how many were dropped. Typical of a model that invents code, or of injected text that tries to plant a finding."
+diagnosis = "The gateway logs it once per advice with `llm_request_id`, `purpose`, `dropped` and `kept`; `forge_llm_requests_total{purpose,outcome}` is unaffected (the advice is written). Many per advice for one model or prompt version: compare `SELECT prompt_version, count(*) FROM forge.llm_requests WHERE purpose = '<purpose>' GROUP BY 1`."
+fix = "Nothing for single advices. A rising share after a prompt or model change: roll it back (runbook llm-advice-quality) and add the cases to the eval set."
+test = "evidence_outside_input_dropped"

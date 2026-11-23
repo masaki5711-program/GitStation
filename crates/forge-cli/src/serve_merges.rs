@@ -220,6 +220,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::EvalReportInvalid
         // Plan 17 P17-3: the AI asset lint's (gstn, never a merge's).
         | ErrorCode::AiAssetInvalid
+        // Plan 19 L5-1: the local LLM's (advice only, never a merge's).
+        | ErrorCode::LlmOutputInvalid
+        | ErrorCode::LlmInputRefused
+        | ErrorCode::LlmEvidenceInvalid
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

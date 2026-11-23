@@ -38,9 +38,10 @@ struct Entry {
 // M3 I1a (plan 11 §11.4, 02 §9): INT for the kanflow integration.
 // Plan 16 A1 (ADR-0032): AGENT for agent parts, the marketplace and the builder.
 // Plan 17 P17-2 (ADR-0034): AIASSET for the PFS AI assets.
-const AREAS: [&str; 14] = [
+// Plan 19 L5-1 (ADR-0017 decision 8, ADR-0039): LLM for the local LLM gateway.
+const AREAS: [&str; 15] = [
     "AUTH", "GIT", "REPO", "DB", "CI", "DEPLOY", "DOC", "WEB", "SYS", "CLI", "REVIEW", "INT",
-    "AGENT", "AIASSET",
+    "AGENT", "AIASSET", "LLM",
 ];
 
 fn main() {
