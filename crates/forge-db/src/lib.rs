@@ -114,6 +114,8 @@ pub mod identities;
 pub mod org_profiles;
 // ── ADR-0038 §1: the copy of the PFS organisation master ──
 pub mod org_master;
+// ── ADR-0038 §2: org bindings (access by organisation) ──
+pub mod org_bindings;
 // ── D4: projects, repositories, project members, protected refs ──
 pub mod projects;
 #[cfg(test)]

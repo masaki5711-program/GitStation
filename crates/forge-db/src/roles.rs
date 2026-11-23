@@ -24,8 +24,9 @@ pub struct MemberRoles {
     /// personal namespace, Owner for that namespace's owner; `None` = no
     /// role there.
     pub native: Option<Role>,
-    /// The direct role in this group or project only; `None` = not a direct
-    /// member.
+    /// The role held on this group or project itself: the direct
+    /// membership, raised by the org bindings of this group or project
+    /// (ADR-0038 §2; never above Developer); `None` = neither.
     pub direct: Option<Role>,
 }
 
@@ -72,18 +73,32 @@ pub(crate) use chain_cte;
 /// place deeper below it. Only active users hold a role, and a bot never
 /// gets the personal-namespace Owner (bots are never members, ADR-0017;
 /// `projects::create` also refuses a bot's namespace as a parent).
+///
+/// ADR-0038 §2 (step B): on a group or project step the membership's role
+/// is raised to the role the org bindings of that group or project give the
+/// user now (`forge.org_binding_role`: Reporter or Developer, never above;
+/// nothing when the user's snapshot or the master's copy cannot be trusted,
+/// §4) through `forge.org_role_max`. The function runs only for a group or
+/// project that has a binding at all (an index probe first). The user is
+/// written `= $2` here too, so `project_roles_on`'s rewrite reaches it.
 macro_rules! chain_role_columns {
     () => {
         "c.step, c.parent_id IS NOT NULL AND c.step >= $3 AS truncated, \
            CASE c.kind \
-             WHEN 'group' THEN (SELECT m.role FROM forge.group_members m \
+             WHEN 'group' THEN forge.org_role_max((SELECT m.role FROM forge.group_members m \
                JOIN forge.users u ON u.id = m.user_id \
                WHERE m.group_id = c.owner_id AND m.user_id = $2 \
-                 AND u.state = 'active') \
-             WHEN 'project' THEN (SELECT m.role FROM forge.project_members m \
+                 AND u.state = 'active'), \
+               (SELECT forge.org_binding_role(u.id, 'group', c.owner_id) FROM forge.users u \
+                WHERE u.id = $2 AND EXISTS (SELECT 1 FROM forge.org_bindings b \
+                  WHERE b.target_kind = 'group' AND b.target_id = c.owner_id))) \
+             WHEN 'project' THEN forge.org_role_max((SELECT m.role FROM forge.project_members m \
                JOIN forge.users u ON u.id = m.user_id \
                WHERE m.project_id = c.owner_id AND m.user_id = $2 \
-                 AND u.state = 'active') \
+                 AND u.state = 'active'), \
+               (SELECT forge.org_binding_role(u.id, 'project', c.owner_id) FROM forge.users u \
+                WHERE u.id = $2 AND EXISTS (SELECT 1 FROM forge.org_bindings b \
+                  WHERE b.target_kind = 'project' AND b.target_id = c.owner_id))) \
              WHEN 'user' THEN (SELECT 'owner' FROM forge.users u \
                WHERE c.step = 2 AND c.anchor_kind = 'project' \
                  AND c.owner_id = $2 AND u.id = $2 \

@@ -32,6 +32,15 @@ export const MR_COUNTS_ZERO = {
 
 /** Answered when a test's table has no route of its own for them: the
  * requests a page makes as a side effect of its frame, not of its content. */
+/** An empty `GET …/org-bindings` answer (nothing bound; the caller may not change it). */
+export const NO_ORG_BINDINGS = {
+  bindings: [],
+  members: [],
+  members_truncated: false,
+  members_limited: true,
+  viewer: { can_manage: false },
+};
+
 const defaults: Record<string, Handler> = {
   [`GET ${MR_COUNTS_PATH}`]: () => json(200, MR_COUNTS_ZERO),
   // Home's "recent updates" (plan 15 MR 9).
@@ -39,6 +48,10 @@ const defaults: Record<string, Handler> = {
   // The caller's org claims snapshot (the user menu, the account page;
   // ADR-0021 amendment 2026-11-20): none unless a test gives one.
   [`GET ${ORG_PROFILE_PATH}`]: () => json(200, { user_id: 1, org: null }),
+  // ADR-0038 §2: the members screen's org bindings (none unless a test
+  // gives some) of the usual project and group.
+  'GET /api/v1/projects/7/org-bindings': () => json(200, NO_ORG_BINDINGS),
+  'GET /api/v1/groups/3/org-bindings': () => json(200, NO_ORG_BINDINGS),
 };
 
 export function mockServer(routes: Record<string, Handler>) {

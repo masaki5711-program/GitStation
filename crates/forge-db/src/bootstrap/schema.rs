@@ -1011,6 +1011,23 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── ADR-0038 §2: org bindings (20270101100000) ──
+        (
+            "forge.org_bindings",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("org_bindings")?,
+            ]
+            .concat(),
+        ),
+        (
+            "forge.org_access_policy",
+            [
+                plain(&["forge_app:SELECT", "forge_app:UPDATE"]),
+                ro("org_access_policy")?,
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -1225,6 +1242,9 @@ const LATER_TABLES: &[&str] = &[
     "org_units_master",
     "org_positions_master",
     "org_master_state",
+    // ── ADR-0038 §2: org bindings (20270101100000) ──
+    "org_bindings",
+    "org_access_policy",
 ];
 
 /// Every table the first migration creates.

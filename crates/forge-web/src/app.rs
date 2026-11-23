@@ -644,7 +644,9 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
                     notification_routes(check_routes(dev_status_routes(feed_routes(
                         integration_routes(service_account_routes(account_routes(history_routes(
                             browse_routes(git_routes(shell_routes(merge_request_routes(
-                                member_routes(move_routes(hosting_routes(fixed))),
+                                org_binding_routes(member_routes(move_routes(hosting_routes(
+                                    fixed,
+                                )))),
                             )))),
                         )))),
                     )))),
@@ -2387,6 +2389,80 @@ fn content_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
             );
     }
     registry
+}
+
+/// Org bindings (ADR-0038 §2, §5): read like the members (`MemberList`),
+/// added and removed by the Owner in a web session (`OrgBindingManage`,
+/// decided again in forge-hosting on the locked target), and the org
+/// master's units to pick them from (`UserSearch`).
+fn org_binding_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::org_bindings as o;
+    registry
+        .route_with(
+            Verb::Get,
+            o::PROJECT_COLLECTION,
+            Action::MemberList,
+            "A project's org bindings and the people they give a role to now (as the member list)",
+            o::ProjectBindings,
+            o::list_project,
+        )
+        .responds::<o::OrgBindingsBody>(Verb::Get, o::PROJECT_COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            o::PROJECT_COLLECTION,
+            Action::OrgBindingManage,
+            "Bind an org unit to a project as Reporter or Developer (never above; the Owner, people only, a web session); audited",
+            o::MAX_BODY,
+            o::ProjectBindings,
+            o::create_project,
+        )
+        .responds_created::<o::OrgBindingBody>(Verb::Post, o::PROJECT_COLLECTION)
+        .route_with(
+            Verb::Delete,
+            o::PROJECT_ONE,
+            Action::OrgBindingManage,
+            "Remove a project's org binding (the Owner, people only, a web session); audited",
+            o::ProjectBinding,
+            o::delete_project,
+        )
+        .responds_no_content(Verb::Delete, o::PROJECT_ONE)
+        .route_with(
+            Verb::Get,
+            o::GROUP_COLLECTION,
+            Action::MemberList,
+            "A group's org bindings and the people they give a role to now (as the member list)",
+            o::GroupBindings,
+            o::list_group,
+        )
+        .responds::<o::OrgBindingsBody>(Verb::Get, o::GROUP_COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            o::GROUP_COLLECTION,
+            Action::OrgBindingManage,
+            "Bind an org unit to a group as Reporter or Developer (never above; inherited by everything below; the Owner, people only, a web session); audited",
+            o::MAX_BODY,
+            o::GroupBindings,
+            o::create_group,
+        )
+        .responds_created::<o::OrgBindingBody>(Verb::Post, o::GROUP_COLLECTION)
+        .route_with(
+            Verb::Delete,
+            o::GROUP_ONE,
+            Action::OrgBindingManage,
+            "Remove a group's org binding (the Owner, people only, a web session); audited",
+            o::GroupBinding,
+            o::delete_group,
+        )
+        .responds_no_content(Verb::Delete, o::GROUP_ONE)
+        .route(
+            Verb::Get,
+            o::UNITS,
+            Action::UserSearch,
+            "The org master's units for the binding picker (names, level, parent; at most 50)",
+            o::units,
+        )
+        .responds::<o::OrgUnitsBody>(Verb::Get, o::UNITS)
+        .queries(Verb::Get, o::UNITS, o::UNITS_QUERY)
 }
 
 /// Members and protected refs (M1 phase 8b MR8): the lists decided on the

@@ -886,6 +886,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "member add",
             "member set-role",
             "member remove",
+            "member org-bindings",
+            "member org-units",
             "protected-ref list",
             "protected-ref add",
             "protected-ref edit",

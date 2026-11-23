@@ -236,6 +236,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PortalTokenInvalid
         | ErrorCode::PortalUserNotLinked
         | ErrorCode::OrgClaimsInvalid
+        | ErrorCode::OrgBindingInvalid
+        | ErrorCode::OrgUnitNotInMaster
+        | ErrorCode::OrgBindingRoleAboveCap
         | ErrorCode::PortalWidgetSettingInvalid
         | ErrorCode::LoginNotPermitted
         | ErrorCode::IdentityLinkConflict

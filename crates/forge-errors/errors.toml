@@ -3578,6 +3578,47 @@ fix = "Follow runbook oidc-login, section 「PFS の組織の claim」: the attr
 runbook = "oidc-login"
 test = "invalid_org_claims_keep_the_snapshot_and_are_logged_once"
 
+# ── ADR-0038 §2 (step B): org bindings ───────────────────────────────────────
+[[error]]
+code = "FG-AUTH-0029"
+name = "OrgBindingInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "組織の結び付けの指定が正しくありません。工場・組織のコード、職位ランク（0〜999）、理由（500 文字まで）を確かめてください。"
+user_message_en = "The organisation binding is not valid. Check the plant and unit codes, the position rank (0 to 999) and the reason (at most 500 characters)."
+user_message_id = "Pengikatan organisasi tidak valid. Periksa kode pabrik dan unit, peringkat jabatan (0 sampai 999) dan alasan (paling banyak 500 karakter)."
+cause = "`POST /api/v1/projects/{id}/org-bindings` or `POST /api/v1/groups/{id}/org-bindings` (ADR-0038 §2.1) asked for a binding whose fields break the table's rules, or one that exists already. Nothing was written."
+diagnosis = "The log event carries `reason`: `plant_code_invalid` (not `^[A-Z0-9]{1,4}$`), `org_code_invalid` (not `^[A-Z0-9][A-Z0-9_-]{0,19}$`), `min_rank_out_of_range` (outside 0..=999), `reason_invalid` (empty or longer than 500 characters), `role_not_allowed` (guest: a binding gives Reporter or Developer), `duplicate` (the same unit, descendants, membership and minimum rank are bound to this group or project already; with `binding_id`), `too_many` (the group or project has 100 bindings). The values themselves are not logged, except the codes."
+fix = "Correct the request (pick the unit from the organisation list in the settings screen). For `duplicate`, change the existing binding by removing it and adding the new one. For `too_many`, bind a department with its descendants instead of each section."
+test = "org_binding_invalid_input_is_refused"
+
+[[error]]
+code = "FG-AUTH-0030"
+name = "OrgUnitNotInMaster"
+http_status = 422
+severity = "info"
+user_message_ja = "指定した組織が組織の台帳にありません。一覧から組織を選んでください。"
+user_message_en = "The organisation unit is not in the organisation master. Pick the unit from the list."
+user_message_id = "Unit organisasi tidak ada di master organisasi. Pilih unit dari daftar."
+cause = "A binding was asked for a (plant, unit) that the copy of the PFS organisation master (`forge.org_units_master`, ADR-0038 §1) does not hold: a typo, a unit that was closed in PFS, a version that starts later (`valid_from` in the future), or the copy was never synced. Bindings are kept to units the master knows, so that the hierarchy (descendants) can be read. Nothing was written."
+diagnosis = "The log event carries `reason`: `not_in_master` (with `plant_code`, `org_code`), `not_yet_valid`, or `master_missing` (no sync ever succeeded: `forge doctor` row `org.master`, FG-INT-0028 / FG-INT-0025..0027). Read-only: `SELECT code, level, valid_from FROM forge.org_units_master WHERE plant_code = '<plant>' AND code = '<code>'`."
+fix = "Pick a unit from the list (`GET /api/v1/org-units`, the settings screen's picker). If the unit should exist, check the org master sync (runbook oidc-login, 「組織の台帳の写し」) and the unit in PFS."
+runbook = "oidc-login"
+test = "org_binding_unit_not_in_master_is_refused"
+
+[[error]]
+code = "FG-AUTH-0031"
+name = "OrgBindingRoleAboveCap"
+http_status = 422
+severity = "info"
+user_message_ja = "組織の結び付けで付けられるのは Reporter か Developer までです。Maintainer・Owner はメンバーとして手で付けてください。"
+user_message_en = "An organisation binding gives Reporter or Developer only. Give Maintainer or Owner by adding the person as a member."
+user_message_id = "Pengikatan organisasi hanya memberi Reporter atau Developer. Berikan Maintainer atau Owner dengan menambahkan orang itu sebagai anggota."
+cause = "A binding was asked with the role `maintainer` or `owner`. ADR-0038 §2.1 caps bindings at Developer: protected branches, settings and deployment approval are never given by a change in the organisation alone, only by a person adding a member by hand. The table's CHECK `org_bindings_role_cap` is the backstop. Nothing was written."
+diagnosis = "The log event carries `reason=role_above_cap`, `role` (the asked role) and `cap=developer`."
+fix = "Bind with `reporter` or `developer`; add the few people who need Maintainer or Owner as members (members screen)."
+test = "org_binding_role_above_developer_is_refused"
+
 # ── PFS portal home widgets and news (ADR-0036) ──────────────────────────────
 [[error]]
 code = "FG-AUTH-0026"

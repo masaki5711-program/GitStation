@@ -477,6 +477,13 @@ pub async fn sweep_orphaned(db: &Db, limit: i64) -> Result<Vec<SweptNews>, Forge
 /// again with `authorize()` when it is sent). More than that is logged once
 /// (`forge.portal.news_audience_truncated`): the people beyond the limit
 /// are not told.
+///
+/// ADR-0038 §2.5: the hand-made memberships only — the people an org
+/// binding brings in are not addressed (a bound department would flood the
+/// audience cap; they still find the release on the portal, where every
+/// read is decided by `authorize()` with the org-derived role). Errs on
+/// the side of telling fewer people, never of telling someone without a
+/// role.
 pub(crate) async fn project_people(
     conn: &mut PgConnection,
     project: ProjectId,

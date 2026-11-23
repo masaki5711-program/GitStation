@@ -377,6 +377,11 @@ async fn approvers_on(
     .map_err(|e| query_error("review.approvers", e))?;
     let users: Vec<UserId> = live.iter().map(|a| a.approver).collect();
     let mut roles = crate::roles::project_roles_on(&mut *conn, project, &users).await?;
+    // ADR-0038 §2.5: the roles above include the org-derived ones (the
+    // shared role SQL); the direct groups below are the hand-made group
+    // memberships only — an org binding never makes a person a member of a
+    // group for a group approval rule. Approval through the org is step C
+    // (ADR-0038 §3), which decides that separately.
     let memberships: Vec<(i64, i64)> =
         sqlx::query_as("SELECT user_id, group_id FROM forge.group_members WHERE user_id = ANY($1)")
             .bind(&ids)
