@@ -671,6 +671,20 @@ impl SpecChecks {
             Compared::Nothing => SpecIndex::default(),
         };
         let trace = trace_merge_request(&base, &head.index, &linked, &head.external);
+        // Plan 13 stage 4 part A: the documents this version revises,
+        // recorded for the rule "one open revision per document" (only
+        // for the merge request's current head: a job of an older version
+        // never replaces a newer one's documents).
+        if mr.state == forge_core::MergeRequestState::Open
+            && mr.head_sha.as_deref() == Some(request.head.as_str())
+        {
+            let merge_base = match &compared {
+                Compared::MergeBase(b) => Some(b),
+                Compared::Nothing => None,
+            };
+            self.record_revised(request, request_id, mr.id, repo.id, merge_base)
+                .await?;
+        }
         Ok(Some(Evaluated {
             head,
             docs,
@@ -680,6 +694,85 @@ impl SpecChecks {
             compared,
             links_truncated: links.truncated,
         }))
+    }
+
+    /// Record the documents `request`'s head revises against `merge_base`
+    /// (plan 13 stage 4 part A, [`crate::doc_revision`]) and log a second
+    /// revision of a document an earlier open merge request holds (the
+    /// mark: `forge.doc_revision.second_revision`, `FG-DOC-0006`; a push is
+    /// never refused). Inside the evaluation's budget: a failure fails the
+    /// job, which is retried.
+    async fn record_revised(
+        &self,
+        request: &SpecIndexRequest,
+        request_id: &RequestId,
+        mr: forge_core::MergeRequestId,
+        repo: forge_core::RepoId,
+        merge_base: Option<&ObjectId>,
+    ) -> Result<(), ForgeError> {
+        let revised = crate::doc_revision::revised_documents(
+            &self.browse,
+            repo,
+            merge_base,
+            &request.head,
+            &self.doc_limits,
+        )
+        .await?;
+        if let Some(bound) = revised.incomplete {
+            tracing::info!(
+                target: "forge_checks",
+                event = "forge.doc_revision.incomplete",
+                error_code = ErrorCode::DocIndexBounded.id(),
+                request_id = %request_id,
+                project_id = request.project.get(),
+                iid = request.iid,
+                head_sha = request.head.as_str(),
+                bound,
+                documents = revised.keys.len(),
+                "the documents a version revises were read within a bound: some may be missing"
+            );
+        }
+        within(
+            "doc_revision_record",
+            LOOKUP_TIMEOUT,
+            forge_db::checks::doc_revisions::record_merge_request_documents(
+                &self.db,
+                request.project,
+                mr,
+                request.head.as_str(),
+                &revised.keys,
+            ),
+        )
+        .await?;
+        let open = within(
+            "doc_revision_open",
+            LOOKUP_TIMEOUT,
+            forge_db::checks::doc_revisions::open_revisions(
+                &self.db,
+                request.project,
+                &revised.keys,
+            ),
+        )
+        .await?;
+        for key in &revised.keys {
+            let holder = open.iter().find(|r| &r.key == key);
+            if let Some(h) = holder.filter(|h| h.merge_request != mr) {
+                tracing::warn!(
+                    target: "forge_checks",
+                    event = "forge.doc_revision.second_revision",
+                    error_code = ErrorCode::DocRevisionOpen.id(),
+                    request_id = %request_id,
+                    project_id = request.project.get(),
+                    iid = request.iid,
+                    head_sha = request.head.as_str(),
+                    doc_id = %key.doc_id,
+                    lang = key.lang.as_deref(),
+                    holder_iid = h.iid,
+                    "a merge request revises a document an earlier open merge request holds"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// The job failed for good (its last attempt, or a failure that can
