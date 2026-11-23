@@ -1272,3 +1272,7 @@ pub async fn queues_with_live_batch(db: &Db, queues: &[i64]) -> Result<Vec<i64>,
     })
     .await
 }
+
+#[cfg(test)]
+#[path = "limit_tests.rs"]
+mod limit_tests;

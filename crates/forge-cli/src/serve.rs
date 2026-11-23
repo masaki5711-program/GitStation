@@ -187,17 +187,23 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // linted before it lands. `merge_queue.train_lint_budget_ms = 0`
         // injects nothing — the gate is off, logged by the spawn below.
         if let Some(train_lint_budget) = cfg.merge_queue.train_lint_budget() {
+            let mut lint = forge_checks::train_lint::TrainLint::new(
+                db.clone(),                 // clone: the pool handle is shared
+                smart_http.git.clone(),     // clone: Arc handles
+                smart_http.storage.clone(), // clone: the root path
+                smart_http.browse.clone(),  // clone: shares the ref cache
+            );
+            // Plan 18 S7: the content-addressed document index
+            // (`merge_queue.doc_index_bytes = 0`: every tree read whole).
+            if let Some(bytes) = cfg.merge_queue.doc_index_bytes() {
+                lint = lint.with_doc_index(bytes);
+            }
             queue = queue
                 .with_limits(forge_review::QueueLimits {
                     train_lint_budget,
                     ..forge_review::QueueLimits::default()
                 })
-                .with_train_lint(Arc::new(forge_checks::train_lint::TrainLint::new(
-                    db.clone(),                 // clone: the pool handle is shared
-                    smart_http.git.clone(),     // clone: Arc handles
-                    smart_http.storage.clone(), // clone: the root path
-                    smart_http.browse.clone(),  // clone: shares the ref cache
-                )));
+                .with_train_lint(Arc::new(lint));
         }
         // Plan 18 S3: `merge_queue.workers` turns, woken instead of polling.
         let queue_tasks = crate::serve_merge_queue::spawn(queue, &cfg.merge_queue);

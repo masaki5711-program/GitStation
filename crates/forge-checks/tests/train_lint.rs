@@ -335,5 +335,52 @@ async fn the_train_lint_answers_like_gstn_doc_lint() {
         .await
         .expect("runs")
         .is_empty());
+
+    // Plan 18 S7: through the document index — cold, then warm (nothing
+    // read again), and on a bound so small it drops everything after each
+    // tree — the verdicts are the whole reading's.
+    for max_bytes in [64 * 1024 * 1024, 1] {
+        let indexed = TrainLint::new(
+            w.t.db.clone(),
+            w.git.clone(),
+            w.storage.clone(),
+            w.browser.clone(),
+        )
+        .with_doc_index(max_bytes);
+        let two = [tip.clone(), repaired.clone()]; // clone: the input borrows the list
+        for _ in 0..2 {
+            let red = indexed.lint_train(input).await.expect("verdict");
+            assert_eq!(
+                red,
+                TrainLintVerdict::NewProblems {
+                    first_bad_step: 0,
+                    problems: keys(&expected),
+                }
+            );
+            let fixed = indexed
+                .lint_train(TrainLintInput {
+                    base: &tip,
+                    steps: &steps_of(&two[1..]),
+                    ..input
+                })
+                .await
+                .expect("verdict");
+            assert_eq!(fixed, TrainLintVerdict::Clean);
+            // The first step breaks the base, the second repairs it back to
+            // the base's very tree: nothing changed, nothing to lint.
+            let both = indexed
+                .lint_train(TrainLintInput {
+                    steps: &two,
+                    ..input
+                })
+                .await
+                .expect("verdict");
+            assert_eq!(both, TrainLintVerdict::NotApplicable);
+        }
+    }
     w.t.drop_now().await;
+}
+
+fn steps_of(steps: &[ObjectId]) -> Vec<ObjectId> {
+    steps.to_vec()
 }

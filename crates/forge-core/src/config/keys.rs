@@ -267,6 +267,17 @@ pub const KEYS: &[Key] = &[
         "merge_queue.train_lint_budget_ms",
         "FORGE_MERGE_QUEUE_TRAIN_LINT_BUDGET_MS",
     ),
+    // Plan 18 S7 (ADR-0037 (b)): the document fast path's batch bounds
+    // and the train lint's document index (0: off).
+    number(
+        "merge_queue.doc_batch_max",
+        "FORGE_MERGE_QUEUE_DOC_BATCH_MAX",
+    ),
+    number("merge_queue.ci_batch_max", "FORGE_MERGE_QUEUE_CI_BATCH_MAX"),
+    number(
+        "merge_queue.doc_index_bytes",
+        "FORGE_MERGE_QUEUE_DOC_INDEX_BYTES",
+    ),
     // M3 I1c: the feed's seal-sink comparison (ADR-0018 §5; false only in M3).
     boolean(
         "feed.require_sink_compare",

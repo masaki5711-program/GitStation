@@ -29,6 +29,20 @@
 //!   driven by one turn at a time (its lease). `1` is the single loop
 //!   before plan 18.
 //!
+//! Plan 18 S7 — the document fast path:
+//!
+//! * `merge_queue.doc_batch_max` (default 32; 1 ..= 64): the most entries
+//!   of one batch of a queue whose verdict is in process — neither the
+//!   base nor the train has a `.forge-ci.yml` (no pipeline to wait for).
+//! * `merge_queue.ci_batch_max` (default 4; 1 ..= 64): the most entries of
+//!   one batch of a queue with a CI definition (the bound before S7).
+//!   `doc_batch_max = 4` is the way back to one bound for both.
+//! * `merge_queue.doc_index_bytes` (default 67108864 = 64 MiB; `0`, or
+//!   1048576 ..= 1073741824): the bound of the train lint's in-memory
+//!   document index (content-addressed, least recently used dropped).
+//!   `0` turns the index off: every train's trees are read and parsed
+//!   whole, as before S7.
+//!
 //! The other key of the gate, `merge_queue.doc_lint_strict`, is per
 //! repository and therefore not here: it is read from the base's
 //! `.forge/repo.yml` (`forge_core::repo_config`).
@@ -45,6 +59,9 @@ const BUDGET_KEY: &str = "merge_queue.train_lint_budget_ms";
 const SAFETY_POLL_KEY: &str = "merge_queue.safety_poll_ms";
 const WAITING_SAFETY_POLL_KEY: &str = "merge_queue.waiting_safety_poll_ms";
 const WORKERS_KEY: &str = "merge_queue.workers";
+const DOC_BATCH_KEY: &str = "merge_queue.doc_batch_max";
+const CI_BATCH_KEY: &str = "merge_queue.ci_batch_max";
+const DOC_INDEX_KEY: &str = "merge_queue.doc_index_bytes";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MergeQueueConfig {
@@ -56,6 +73,12 @@ pub struct MergeQueueConfig {
     pub waiting_safety_poll_ms: u32,
     /// `merge_queue.workers`.
     pub workers: u32,
+    /// `merge_queue.doc_batch_max` (plan 18 S7).
+    pub doc_batch_max: u32,
+    /// `merge_queue.ci_batch_max` (plan 18 S7).
+    pub ci_batch_max: u32,
+    /// `merge_queue.doc_index_bytes` (plan 18 S7; `0`: no index).
+    pub doc_index_bytes: u32,
 }
 
 impl Default for MergeQueueConfig {
@@ -65,6 +88,9 @@ impl Default for MergeQueueConfig {
             safety_poll_ms: Self::DEFAULT_SAFETY_POLL_MS,
             waiting_safety_poll_ms: Self::DEFAULT_WAITING_SAFETY_POLL_MS,
             workers: Self::DEFAULT_WORKERS,
+            doc_batch_max: Self::DEFAULT_DOC_BATCH_MAX,
+            ci_batch_max: Self::DEFAULT_CI_BATCH_MAX,
+            doc_index_bytes: Self::DEFAULT_DOC_INDEX_BYTES,
         }
     }
 }
@@ -82,11 +108,25 @@ impl MergeQueueConfig {
     pub const DEFAULT_WORKERS: u32 = 2;
     pub const MIN_WORKERS: u32 = 1;
     pub const MAX_WORKERS: u32 = 8;
+    pub const DEFAULT_DOC_BATCH_MAX: u32 = 32;
+    pub const DEFAULT_CI_BATCH_MAX: u32 = 4;
+    /// Both batch bounds: the schema's (`merge_queue_batch_limit_64`).
+    pub const MIN_BATCH_MAX: u32 = 1;
+    pub const MAX_BATCH_MAX: u32 = 64;
+    pub const DEFAULT_DOC_INDEX_BYTES: u32 = 64 * 1024 * 1024;
+    pub const MIN_DOC_INDEX_BYTES: u32 = 1024 * 1024;
+    pub const MAX_DOC_INDEX_BYTES: u32 = 1024 * 1024 * 1024;
 
     /// The train lint's budget; `None`: the gate is off.
     pub fn train_lint_budget(&self) -> Option<Duration> {
         (self.train_lint_budget_ms > 0)
             .then(|| Duration::from_millis(u64::from(self.train_lint_budget_ms)))
+    }
+
+    /// The train lint's document index bound in bytes; `None`: no index.
+    pub fn doc_index_bytes(&self) -> Option<usize> {
+        (self.doc_index_bytes > 0)
+            .then(|| usize::try_from(self.doc_index_bytes).unwrap_or(usize::MAX))
     }
 
     /// The safety-net period of an idle turn (and of a queue with nothing
@@ -107,6 +147,13 @@ impl MergeQueueConfig {
         }
         if budget > Self::MAX_TRAIN_LINT_BUDGET_MS {
             return Err(invalid(BUDGET_KEY, "above_max"));
+        }
+        let index = unsigned(&get, DOC_INDEX_KEY, Self::DEFAULT_DOC_INDEX_BYTES)?;
+        if index != 0 && index < Self::MIN_DOC_INDEX_BYTES {
+            return Err(invalid(DOC_INDEX_KEY, "below_min"));
+        }
+        if index > Self::MAX_DOC_INDEX_BYTES {
+            return Err(invalid(DOC_INDEX_KEY, "above_max"));
         }
         let ranged = |key: &'static str, default: u32, min: u32, max: u32| {
             let value = unsigned(&get, key, default)?;
@@ -138,6 +185,19 @@ impl MergeQueueConfig {
                 Self::MIN_WORKERS,
                 Self::MAX_WORKERS,
             )?,
+            doc_batch_max: ranged(
+                DOC_BATCH_KEY,
+                Self::DEFAULT_DOC_BATCH_MAX,
+                Self::MIN_BATCH_MAX,
+                Self::MAX_BATCH_MAX,
+            )?,
+            ci_batch_max: ranged(
+                CI_BATCH_KEY,
+                Self::DEFAULT_CI_BATCH_MAX,
+                Self::MIN_BATCH_MAX,
+                Self::MAX_BATCH_MAX,
+            )?,
+            doc_index_bytes: index,
         })
     }
 }

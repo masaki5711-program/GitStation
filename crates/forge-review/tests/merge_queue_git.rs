@@ -17,6 +17,8 @@ mod queue_paths;
 mod queue_train_lint;
 // Plan 18 S3 (ADR-0037 (a)): the queue's and auto-merge's wakes.
 mod queue_wake;
+// Plan 18 S7 (ADR-0037 (b)): the document fast path.
+mod queue_doc_fast;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -431,11 +433,15 @@ impl World {
     async fn drive(&self, worker: &MergeQueue, bad: &BTreeSet<i64>) -> Vec<usize> {
         let queue = self.queue_id().await;
         let mut sizes = Vec::new();
+        let mut seen = BTreeSet::new();
         for _ in 0..80 {
             let report = worker.tick().await.expect("tick");
             if let Some(r) = &report {
-                if r.outcome == "built" {
-                    let b = qdb::batch(&self.t.db, r.batch_id.expect("id"))
+                // A batch is counted the first time a tick names it: the
+                // tick that built it (plan 18 S7: a document batch may
+                // also land in that tick, so its outcome is not `built`).
+                if let Some(id) = r.batch_id.filter(|id| seen.insert(*id)) {
+                    let b = qdb::batch(&self.t.db, id)
                         .await
                         .expect("read")
                         .expect("batch");
@@ -571,17 +577,16 @@ async fn train_jobs(w: &World) -> i64 {
 /// Merge load test 2026-11-17 (doc fast path, ADR-0030 §5): a train whose
 /// commit has no `.forge-ci.yml` gets no pipeline job — the job would find
 /// no definition and write nothing — so the verdict is "no pipeline" at
-/// once and the batch lands on the next tick, with no pipeline row at all.
+/// once and (plan 18 S7) the batch lands in the tick that built it, with
+/// no pipeline row at all.
 #[tokio::test]
 async fn a_train_without_a_ci_definition_lands_without_a_pipeline_job() {
     let mut w = world_with(DOC_BASE).await;
     let mrs = four(&mut w).await;
     let worker = w.worker("w1");
-    let built = worker.tick().await.expect("tick").expect("due");
-    assert_eq!(built.outcome, "built");
-    assert_eq!(train_jobs(&w).await, 0, "no pipeline job for the train");
     let landed = worker.tick().await.expect("tick").expect("due");
     assert_eq!(landed.outcome, "landed");
+    assert_eq!(train_jobs(&w).await, 0, "no pipeline job for the train");
     assert_outcome(&w, &mrs, &BTreeSet::new()).await;
     let pipelines = count(&w.t, "SELECT count(*) AS n FROM forge.ci_pipelines").await;
     assert_eq!(pipelines, 0);
@@ -663,8 +668,10 @@ async fn a_required_pipeline_without_a_ci_definition_is_missing_at_the_landing()
         .await
         .expect("ci/pipeline is the queue's to test");
     let worker = w.worker("w1");
+    // Plan 18 S7: no pipeline to wait for — the landing decides in the
+    // tick that built the batch.
     let built = worker.tick().await.expect("tick").expect("due");
-    assert_eq!(built.outcome, "built");
+    assert_eq!(built.outcome, "abandoned");
     assert_eq!(train_jobs(&w).await, 0);
     for _ in 0..5 {
         if worker.tick().await.expect("tick").is_none() {

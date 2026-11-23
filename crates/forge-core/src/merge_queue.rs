@@ -6,8 +6,31 @@
 
 use crate::{MergeRequestId, ProjectId};
 
-/// The most entries one batch holds (plan 14 §9 decision 5).
-pub const MAX_BATCH: usize = 4;
+/// The most entries one batch can hold: the schema's bound (`CHECK 1..64`
+/// on `merge_queues.batch_limit` and `merge_queue_batches.size`, migration
+/// `merge_queue_batch_limit_64`, plan 18 S7). A queue's stored
+/// `batch_limit` is this until a red batch bisects it; the bound a batch
+/// is built with is the smaller of it and the queue's kind
+/// ([`batch_bound`]).
+pub const MAX_BATCH: usize = 64;
+
+/// `merge_queue.doc_batch_max`'s default: a queue whose verdict is in
+/// process — no `.forge-ci.yml` at its base or its train (plan 18 S7,
+/// ADR-0037 (b) 5).
+pub const DEFAULT_DOC_BATCH: usize = 32;
+
+/// `merge_queue.ci_batch_max`'s default: a queue whose train has a
+/// pipeline (plan 14 §9 decision 5, ADR-0030).
+pub const DEFAULT_CI_BATCH: usize = 4;
+
+/// The bound of the next batch: the queue's stored `batch_limit` (lowered
+/// by a bisection or a cut) and its kind's bound — `doc_max` when the
+/// verdict is in process (`in_process`: no CI definition), `ci_max`
+/// otherwise — each kept within `1..=`[`MAX_BATCH`].
+pub fn batch_bound(stored: usize, in_process: bool, doc_max: usize, ci_max: usize) -> usize {
+    let kind = if in_process { doc_max } else { ci_max };
+    stored.min(kind).clamp(1, MAX_BATCH)
+}
 
 /// An entry reaped this many times (its batch passed the deadline) is
 /// removed (`FG-CI-0024`, ADR-0030 §14). The table's CHECK
@@ -245,6 +268,28 @@ mod tests {
         assert_eq!(bisected_limit(2), 1);
         assert_eq!(bisected_limit(1), 1);
         assert_eq!(bisected_limit(0), 1);
+    }
+
+    #[test]
+    fn a_batch_is_bound_by_its_kind_and_by_the_bisection() {
+        // A fresh queue (the stored bound is the schema's).
+        assert_eq!(
+            batch_bound(MAX_BATCH, true, DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH),
+            32
+        );
+        assert_eq!(
+            batch_bound(MAX_BATCH, false, DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH),
+            4
+        );
+        // A bisected CI queue, a cut document queue.
+        assert_eq!(
+            batch_bound(2, false, DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH),
+            2
+        );
+        assert_eq!(batch_bound(5, true, DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH), 5);
+        // Never 0, never past the schema.
+        assert_eq!(batch_bound(0, true, 0, 0), 1);
+        assert_eq!(batch_bound(500, true, 500, 4), MAX_BATCH);
     }
 
     #[test]

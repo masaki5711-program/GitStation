@@ -1046,3 +1046,64 @@ p50 1.2 s かかった。調べ直して 1 点直した: 枝の先端は毎回�
 このコミットでは測っていない。数え方: `SELECT kind, count(*) FROM forge.jobs WHERE created_at > <開始> GROUP BY kind`
 （S6 の後、doc の MR あたり `merge_request.prepare` 1、`check.spec_drift` 1、`merge_request.conflict_scan` 1。判定・リスク・
 spec のジョブは小段が失敗したときだけ）。
+
+## 追記（2026-11-23、計画 18 S7 の実装）— (b) の 3・5・6・7: 作ったもの、文との違い、既知の限界
+
+上の Decision (b) の文は変えない。S7 が作ったのは (b) の 3（増分・内容アドレスの索引）・5（バッチ 32 / 4）・6（同じ手番での着地）・
+7（`assess_train`）。新しいエラーコードは無い。
+
+### 作ったもの
+
+1. **スキーマ**（マイグレーション `20270104100000_merge_queue_batch_limit_64`）: `merge_queues.batch_limit` と `merge_queue_batches.size`
+   の CHECK を 1..64 に（ADR-0030 のレビューの型: 新しい CHECK を `NOT VALID` で足し、`VALIDATE` してから古いものを消して名前を戻す）。
+   `batch_limit` の既定を 64 にし、4（S7 の前の「満杯」）の行を 64 にした（二分で下がった 1〜3 はそのまま、次の着地で戻る）。
+   `forge_core::merge_queue::MAX_BATCH` は 64（スキーマの上限）。試験 `batch_limit_accepts_64_rejects_65`。
+2. **バッチの上限**: `batch_bound(保存した上限, 判定がプロセス内か, doc_batch_max, ci_batch_max)` = 小さいほう、1..64。
+   「プロセス内」は土台に `.forge-ci.yml` が無いこと（`root_entry` を 1 回。読めなければ CI ありとみなす = 小さいほう）で決め、列車の
+   先端でもう一度見る。列車の途中で `.forge-ci.yml` が入ったら CI の上限まで切り詰める。切り詰めた後ろで `conflict` などで断られた
+   MR は外さない（その接頭辞は試されないので）— 断りは「何段目の列車に対してか」を持って後回しにし、残った列車の中のものだけを外す。
+   設定 `merge_queue.doc_batch_max`（32、1〜64）、`merge_queue.ci_batch_max`（4、1〜64）。試験
+   `a_doc_queue_builds_batches_of_32_and_a_ci_queue_of_4`、`a_train_that_brings_a_ci_definition_in_takes_the_ci_bound`。
+3. **同じ手番での着地**: パイプラインのジョブを積まなかったバッチ（列車に `.forge-ci.yml` が無い）は、`batch_built` の後、同じ手番で
+   試しの段（`poll`: エントリーと target の読み直し、列車の doc-lint、マージ結果の判定、着地）に進む。状態は `testing → landing → landed`
+   のまま。試しの段のコードは S7 の前と同じ関数で、手番が 1 つ減っただけ。CAS の後で止まったバッチは、次の手番の回復
+   （`recover`）が git を見て記録する。試験 `a_doc_batch_lands_in_the_tick_that_built_it`、
+   `a_restart_mid_landing_recovers_a_same_tick_batch`（`with_crash_after_cas`）。
+4. **増分の lint**（`forge_doc::lint::incremental::LintCache`、`forge_checks::train_lint::DocIndex`）: 文書を blob の id で引く解析の
+   キャッシュと、(パス, blob) ごとの検査の結果。検査の結果は、その検査が**索引で引いた id と、そのときの entry**（無いことも含む）と、
+   型の定義の世代と一緒に保存し、次の木でそれが全部同じときだけ使う。これが「逆引きの参照」: ある id を足す・消す・改名する・変える
+   文書は、その id を引いた文書だけを検査し直させる。索引そのものと重複 id の判定は、保存した解析から毎回作り直す（解析しないので安い）。
+   保存した検査は「足した問題の列」で、同じ report に流し直すので、重複の除き方・順番・ファイルごとの上限まで全件の `lint()` と同じに
+   なる。試験は性質 `incremental_lint_equals_full_lint`（追加・削除・改名・書き換え・参照・ブロック・型の定義の変更をランダムに、
+   十分な大きさのキャッシュと、毎回ほぼ全部を捨てる大きさ 1 のキャッシュの両方で）と、forge-checks の実 git の試験（索引あり／なし、
+   冷たい・温かい、大きさ 1 で同じ判定）。`forge serve` の中で、リポジトリごとの `LintCache` を全体で `merge_queue.doc_index_bytes`
+   （既定 64 MiB、`0` で索引なし = S1 の読み方）に収め、超えたら最も古く使ったリポジトリから丸ごと捨てる。列車の木は `ls-tree -r`
+   1 回で blob の id が分かるので、持っていない文書だけを `cat-file --batch` で読む（型の定義は毎回読む。64 件まで、小さい）。
+5. **`assess_train`**（`MergeResultAssessor` の既定のメソッド。既定の実装は段ごとに `assess` を呼ぶ = 定義から等しい）: forge-checks の
+   `Risk` は、AI 資産の設定を 1 回だけ読み、マージベースを 1 回だけ計算する（列車の土台が最後の段の祖先なら、どの段のマージベースも
+   土台。キューは段を前の段の上に作るので常にそう。違えば段ごとに計算する）。段ごとの評価の予算は変えず、全体は今までどおり
+   `MERGE_RESULT_BUDGET`（90 s）。試験 `assess_train_equals_per_step_assess`、`a_32_member_judgement_stays_within_the_budget`
+   （32 段で 30 s 未満）。
+
+### 文との違い
+
+- (b) 7 の「各段の diff を前の段から 1 回だけ読んで積み上げ、O(変更パスの合計)」は作っていない。`forge/risk` の規則は土台からの
+  累積の diff（改名の検出、大量削除の行数、ファイルの数え方）で決まるので、段ごとの diff を足し合わせても等しくならない。等しさを
+  先に守り、段ごとの `risk_diff` は残した（段ごとに git 1 回。マージベースの 1 回を減らした）。32 段の時間は試験で上限を見ている。
+- (b) 3 の逆引きの索引は「id → それを参照する文書」の表ではなく、文書ごとに「引いた id とその entry」を持ち、次の木で比べる形にした。
+  参照の書き方（`[[ID]]`、`related`、`supersedes`、`docref` / `blockref`、`replaced_by`）を全部列挙しなくても、索引への問い合わせを
+  1 か所（`Index::get` / `contains_key`）で記録するので漏れが無い。比べる費用は引いた id の数。
+- S1 の既知の限界「予算は待つのをやめるだけ」は残る（1 本の木の lint は途中で止まらない）。ただし温かい索引では読むのも解析するのも
+  変わった文書だけになり、1 本の重さが小さくなった。
+- 計画の「ファイル」の `crates/forge-db/src/review/merge_queue/` は、`MAX_BATCH` を使う既存の箇所がそのまま新しい上限になったので、
+  試験（`limit_tests.rs`）だけを足した。キーは `config/keys.rs` と `config/merge_queue.rs`。
+
+### 既知の限界
+
+- `gstn queue list` の「次のバッチの上限」は保存した上限（ふだん 64）で、キューの種類の上限（32 / 4）は含まない。表示を変えるのは
+  クライアントと API の変更なので、ここではしていない（Runbook `merge-queue` に読み方を書いた）。
+- 同じ手番での着地には切り替えのキーが無い。パイプラインが無いときの答えは次の手番でも同じなので、戻す必要が無いと判断した。
+  バッチの大きさは `merge_queue.doc_batch_max = 4` で S7 の前に戻せる。
+- 索引は `forge serve` のプロセスのメモリにあり、再起動で空になる（最初の列車は木を全部読む）。2 つのキューが同じリポジトリの木を
+  同時に lint すると、それぞれが別のキャッシュで動き、後に戻したほうが残る（答えは変わらない。遅くなるだけ）。
+- 証明（計画の `a-burst` ≥ 200/分、`a` の p50 ≤ 15 s など）は負荷試験（`ops/loadtest/`）で測る。このコミットでは測っていない。
