@@ -274,6 +274,10 @@ pub async fn revised_by_branches(
 /// a version job (every git and database step has its own timeout too).
 pub const REVISION_BUDGET: Duration = Duration::from_secs(5);
 
+/// The longest a create waits for its project's revision lock
+/// ([`DocRevisions::serialize`]) before it goes on without it.
+pub const LOCK_WAIT: Duration = Duration::from_secs(2);
+
 /// [`revised_by_branches`] for the create route, **failing open**: the
 /// rule is a safeguard, not the merge request. A failure or the
 /// [`REVISION_BUDGET`] is logged (`forge.doc_revision.unavailable`, warn,
@@ -440,17 +444,42 @@ impl DocRevisions {
 
     /// Hold `project`'s revision lock (the refusal, the create and the
     /// record of a merge request revising documents) until the guard drops.
-    pub async fn serialize(&self, project: ProjectId) -> tokio::sync::OwnedMutexGuard<()> {
+    /// The wait is bounded by [`LOCK_WAIT`] and **fails open** (review
+    /// MEDIUM): past it `None` is answered and logged
+    /// (`forge.doc_revision.lock_busy`, warn, `FG-WEB-0002`) — the create
+    /// goes on unserialized and the version job marks a second revision.
+    /// Locks nobody holds or waits for are dropped from the map on each
+    /// call, so it holds only the projects being created in now.
+    pub async fn serialize(
+        &self,
+        project: ProjectId,
+        request_id: &RequestId,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
         let lock = {
             // A panic while holding the map cannot leave it inconsistent
-            // (one insert): a poisoned map is used as it is.
+            // (one insert or a prune): a poisoned map is used as it is.
             let mut map = self
                 .locks
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            map.retain(|p, l| *p == project || std::sync::Arc::strong_count(l) > 1);
             std::sync::Arc::clone(map.entry(project).or_default())
         };
-        lock.lock_owned().await
+        match tokio::time::timeout(LOCK_WAIT, lock.lock_owned()).await {
+            Ok(guard) => Some(guard),
+            Err(_) => {
+                tracing::warn!(
+                    target: "forge_checks",
+                    event = "forge.doc_revision.lock_busy",
+                    error_code = ErrorCode::RequestTimeout.id(),
+                    request_id = %request_id,
+                    project_id = project.get(),
+                    timeout_ms = LOCK_WAIT.as_millis(),
+                    "the project's revision lock was busy; the merge request is created without it"
+                );
+                None
+            }
+        }
     }
 
     /// `GET …/documents/{doc_id}/status` (`RepoBrowse`): the open

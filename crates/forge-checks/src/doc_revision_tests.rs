@@ -97,3 +97,33 @@ fn a_second_revision_of_a_document_is_refused_at_open() {
     assert!(refusal(ProjectId::new(7), &open, &[other]).is_none());
     assert!(refusal(ProjectId::new(7), &[], &[DocKey::original("QP-07-001")]).is_none());
 }
+
+/// Review MEDIUM: the wait for a project's revision lock is bounded and
+/// fails open; locks nobody holds are dropped from the map.
+#[tokio::test]
+async fn a_busy_revision_lock_fails_open_and_idle_locks_are_dropped() {
+    let t = forge_db::test_support::FreshDb::migrated().await;
+    let revisions = DocRevisions::new(t.db.clone());
+    let request = RequestId::parse("req-lock").expect("id");
+    let held = revisions
+        .serialize(ProjectId::new(1), &request)
+        .await
+        .expect("free");
+    let started = std::time::Instant::now();
+    assert!(revisions
+        .serialize(ProjectId::new(1), &request)
+        .await
+        .is_none());
+    assert!(started.elapsed() >= LOCK_WAIT);
+    drop(held);
+    let other = revisions.serialize(ProjectId::new(2), &request).await;
+    assert!(other.is_some());
+    let projects: Vec<ProjectId> = revisions
+        .locks
+        .lock()
+        .expect("map")
+        .keys()
+        .copied()
+        .collect();
+    assert_eq!(projects, vec![ProjectId::new(2)]);
+}

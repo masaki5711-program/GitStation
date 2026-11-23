@@ -578,7 +578,7 @@ pub async fn create(
         let _serialized = match (&planned, state.doc_revisions.as_deref()) {
             (Some((_, revised)), Some(revisions)) if !revised.keys.is_empty() => {
                 let (project, _) = *w.proof.id();
-                let guard = revisions.serialize(project).await;
+                let guard = revisions.serialize(project, &w.ctx.request_id).await;
                 refuse_second(revisions, &w, &revised.keys).await?;
                 Some(guard)
             }
