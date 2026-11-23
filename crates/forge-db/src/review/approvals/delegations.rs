@@ -51,7 +51,17 @@ pub enum DelegationOutcome {
     Absent,
 }
 
-type Row = (i64, String, String, i64, String, String, String, String, bool);
+type Row = (
+    i64,
+    String,
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    bool,
+);
 
 fn columns() -> String {
     format!(
@@ -227,7 +237,7 @@ pub async fn set_delegation_decided(
         let (valid, nonempty, future, short): (bool, bool, bool, bool) = tx
             .step(|c| async move {
                 sqlx::query_as(
-                    "SELECT v, v AND s < e, v AND e > now(), v AND e <= s + interval '30 days' \
+                    "SELECT v, v AND s < e, v AND e > now(), v AND e <= s + interval '720 hours' \
                      FROM (SELECT pg_input_is_valid($1, 'timestamptz') \
                              AND pg_input_is_valid($2, 'timestamptz') AS v) ok \
                      CROSS JOIN LATERAL (SELECT CASE WHEN ok.v THEN $1::timestamptz END AS s, \
@@ -262,8 +272,8 @@ pub async fn set_delegation_decided(
             })
             .await?;
         let same: bool = match &current {
-            Some(r) if r.3 == delegate.get() => tx
-                .step(|c| async move {
+            Some(r) if r.3 == delegate.get() => {
+                tx.step(|c| async move {
                     sqlx::query_scalar(
                         "SELECT starts_at = $2::timestamptz AND ends_at = $3::timestamptz \
                          FROM forge.approval_delegations WHERE delegator_id = $1",
@@ -275,7 +285,8 @@ pub async fn set_delegation_decided(
                     .await
                     .map_err(|e| query_error(QUERY, e))
                 })
-                .await?,
+                .await?
+            }
             Some(_) | None => false,
         };
         if same {
@@ -307,13 +318,19 @@ pub async fn set_delegation_decided(
             })
             .await?;
         let stored = of(row);
+        // A new delegate replaces the old one: what the old one approved for
+        // the person ends (review of ADR-0038 step C).
+        let (affected, events) =
+            super::commands::end_delegated_on(&mut tx, delegator, Some(delegate)).await?;
         let details = AuditDetails::ApprovalDelegationSet {
             delegator,
             delegate,
             starts_at: stored.starts_at.clone(), // clone: the answer keeps it
             ends_at: stored.ends_at.clone(),
         };
-        let record = ChangeRecord::audit_only(&details, RESOURCE, delegator.get());
+        let mut record = ChangeRecord::audit_only(&details, RESOURCE, delegator.get());
+        record.affected = affected;
+        record.events = events;
         Ok(Settle::Commit(record, (DelegationOutcome::Set, stored)))
     }
     .await;
@@ -344,11 +361,17 @@ pub async fn remove_delegation_decided(
         let Some(delegate) = removed else {
             return Ok(Settle::Discard(DelegationOutcome::Absent));
         };
+        // Review of ADR-0038 step C: what the delegate approved for the
+        // person ends with the delegation.
+        let (affected, events) =
+            super::commands::end_delegated_on(&mut tx, delegator, None).await?;
         let details = AuditDetails::ApprovalDelegationRemoved {
             delegator,
             delegate: UserId::new(delegate),
         };
-        let record = ChangeRecord::audit_only(&details, RESOURCE, delegator.get());
+        let mut record = ChangeRecord::audit_only(&details, RESOURCE, delegator.get());
+        record.affected = affected;
+        record.events = events;
         Ok(Settle::Commit(record, DelegationOutcome::Removed))
     }
     .await;

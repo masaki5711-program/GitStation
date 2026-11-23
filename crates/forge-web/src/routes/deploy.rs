@@ -36,8 +36,8 @@ use forge_auth::{DeploymentCtx, ProjectCtx};
 use forge_core::deploy::DeployTier;
 use forge_core::{parse_positive_id, ProjectId, UserId};
 use forge_deploy::{
-    ApproverNames, ApproversSpec, ChangeRequest, Deploy, EnvironmentSpec, StoredDeployment, StoredEnvironment,
-    StoredTarget, TargetSpec,
+    ApproverNames, ApproversSpec, ChangeRequest, Deploy, EnvironmentSpec, StoredDeployment,
+    StoredEnvironment, StoredTarget, TargetSpec,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use serde::{Deserialize, Serialize};
@@ -61,7 +61,8 @@ pub const APPROVE: &str = "/api/v1/projects/{id}/deployments/{deployment_id}/app
 /// `GET` every environment's approvers.
 pub const APPROVERS: &str = "/api/v1/projects/{id}/deploy/approvers";
 /// `PUT` one environment's approvers.
-pub const ENVIRONMENT_APPROVERS: &str = "/api/v1/projects/{id}/deploy/environments/{tier}/approvers";
+pub const ENVIRONMENT_APPROVERS: &str =
+    "/api/v1/projects/{id}/deploy/environments/{tier}/approvers";
 /// The query of [`APPROVE`].
 pub const APPROVE_QUERY: &[crate::registry::QueryParam] = &[crate::registry::QueryParam {
     name: "on_behalf_of",
@@ -476,24 +477,30 @@ impl ApprovalOf {
         // ADR-0038 §3.4, §3.5: the caller (or the delegator they approve
         // for) against the environment's approvers.
         let params = crate::routes::browse::query(parts.uri.query(), &["on_behalf_of"])?;
-        // Without a caller `authorize()` refuses before any fact counts.
-        let (gate, on_behalf_of) = match viewer {
-            None => (forge_auth::ApproverGate::Unrestricted, None),
-            Some(caller) => {
-                let on_behalf_of = match crate::routes::browse::take(&params, "on_behalf_of") {
-                    Some(name) => Some(service.delegator(name, caller).await?),
-                    None => None,
-                };
-                let facts = service
-                    .approver_gate(id, &stored, caller, on_behalf_of)
-                    .await?;
-                (facts.gate, on_behalf_of)
-            }
+        // Without a caller `authorize()` refuses before any fact counts. A
+        // delegator that does not resolve or holds no delegation to the
+        // caller is a fact too: `authorize()` refuses first (review of
+        // ADR-0038 step C: no username or delegation oracle for someone who
+        // may not approve).
+        let fact = match viewer {
+            None => forge_deploy::ApproverFact::own(forge_auth::ApproverGate::Unrestricted),
+            Some(caller) => match crate::routes::browse::take(&params, "on_behalf_of") {
+                Some(name) => match service.delegator(name, caller).await? {
+                    Some(d) => {
+                        service
+                            .approver_gate(id, &stored, caller, Some(d))
+                            .await?
+                            .fact
+                    }
+                    None => forge_deploy::ApproverFact::unknown_delegator(),
+                },
+                None => service.approver_gate(id, &stored, caller, None).await?.fact,
+            },
         };
         Ok(Lookup::Found {
             ctx: DeploymentCtx::new(
                 projects::loaded(&record),
-                forge_deploy::loaded_deployment(&stored, gate, on_behalf_of),
+                forge_deploy::loaded_deployment(&stored, fact),
             ),
             canonical: None,
             tombstone: None,

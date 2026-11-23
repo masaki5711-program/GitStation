@@ -163,7 +163,7 @@ function ApproversDialog({
     const body: PutApprovers = {
       users,
       groups,
-      selectors: selectors as unknown as PutApprovers['selectors'],
+      selectors: selectors as unknown as NonNullable<PutApprovers['selectors']>,
       approvals_required: required,
       allow_delegation: delegation,
     };

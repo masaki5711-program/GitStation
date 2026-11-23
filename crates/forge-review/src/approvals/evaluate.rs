@@ -240,7 +240,19 @@ fn classify(inputs: &ApprovalInputs, a: &ApproverFacts) -> (Option<UncountedReas
         .is_some_and(|d| d.kind != UserKind::Human)
     {
         Some(UncountedReason::NotHuman)
-    } else if a.delegator.as_ref().is_some_and(|d| d.user == inputs.author) {
+    } else if a
+        .delegator
+        .as_ref()
+        .is_some_and(|d| !d.role.is_some_and(|r| r >= Role::Developer))
+    {
+        // Review of ADR-0038 step C: an approval counts for the delegator
+        // only while they could approve themself.
+        Some(UncountedReason::RoleInsufficient)
+    } else if a
+        .delegator
+        .as_ref()
+        .is_some_and(|d| d.user == inputs.author)
+    {
         Some(UncountedReason::Author)
     } else if !inputs.committer_approvals_excluded {
         // M3 R6: the project counts committers' approvals.
@@ -267,9 +279,7 @@ fn classify(inputs: &ApprovalInputs, a: &ApproverFacts) -> (Option<UncountedReas
 /// The person an approval counts for (ADR-0038 §3.5): the delegator of an
 /// approval given on their behalf, else the approver.
 pub fn counts_for(a: &ApproverFacts) -> UserId {
-    a.delegator
-        .as_ref()
-        .map_or(a.approval.approver, |d| d.user)
+    a.delegator.as_ref().map_or(a.approval.approver, |d| d.user)
 }
 
 fn groups_of(a: &ApproverFacts) -> &BTreeSet<GroupId> {
@@ -278,7 +288,11 @@ fn groups_of(a: &ApproverFacts) -> &BTreeSet<GroupId> {
 
 /// Whether the snapshot recorded with `a` matches `selector` for this
 /// merge request (fail closed: no target, no known snapshot — no match).
-fn selector_matches(targets: &SelectorTargets, selector: &ApproverSelector, a: &ApproverFacts) -> bool {
+fn selector_matches(
+    targets: &SelectorTargets,
+    selector: &ApproverSelector,
+    a: &ApproverFacts,
+) -> bool {
     let Some(Ok(target)) = targets.get(selector) else {
         return false;
     };
@@ -450,9 +464,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
                         .rules
                         .iter()
                         .zip(&rules)
-                        .any(|(rule, status)| {
-                            status.applies && in_rule(rule, &inputs.targets, a)
-                        })
+                        .any(|(rule, status)| status.applies && in_rule(rule, &inputs.targets, a))
                     || match &inputs.codeowners {
                         CodeownersFact::Valid { .. } if !inputs.codeowners_enforced => false,
                         CodeownersFact::Valid { file, owners, .. } => codeowners.iter().any(|c| {
@@ -473,10 +485,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
                 counted: reason.is_none(),
                 uncounted_reason: reason,
                 committer_push: push,
-                on_behalf_of: a
-                    .delegator
-                    .as_ref()
-                    .map(|d| (d.user, d.username.clone())), // clone: the status owns it
+                on_behalf_of: a.delegator.as_ref().map(|d| (d.user, d.username.clone())), // clone: the status owns it
             }
         })
         .collect();

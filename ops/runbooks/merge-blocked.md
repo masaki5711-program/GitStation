@@ -157,7 +157,10 @@ R5 の 4 回目から、コミッターは push を受けた時点で記録す�
 | `people` が空で `unresolved` も空 | 組織は決まったが、条件（ランク・職位、Developer 以上）に当てはまる人がいない | `escalate: parent` を付ける、名指しの人を足す、職位の条件を見直す |
 | `incomplete: true` | 工場の写しの人数が多く、候補を数えられなかった | 一覧は短いことがある。承認自体はそれぞれの写しで判定される |
 
-代理の承認の拒否は FG-REVIEW-0033（代理が無い・期間外・別の人）。読む（読み取りのみ）:
+代理の承認の拒否は FG-REVIEW-0033（代理が無い・期間外・別の人）。本人の承認（本人または別の代理の分）がもうあるときは
+FG-REVIEW-0034（1 人 1 件。本人が自分で承認すると代理の承認は `unapproved` で終わる）。代理の承認は、本人のロールが Developer 未満なら
+数えない（`role_insufficient`）。本人が代理を外す・別の人に替えると、その代理の承認は `delegation_ended` で終わる。期間が切れた代理の承認は
+新しい版に引き継がない（`new_commits`）。読む（読み取りのみ）:
 `SELECT delegator_id, delegate_id, starts_at, ends_at FROM forge.approval_delegations WHERE delegator_id = <user id>;`、
 承認の行: `SELECT approver_id, on_behalf_of, approver_org FROM forge.merge_request_approvals WHERE merge_request_id = <id> AND revoked_at IS NULL;`
 
@@ -170,7 +173,7 @@ R5 の 4 回目から、コミッターは push を受けた時点で記録す�
    `git --git-dir <repo> rev-list <head> ^<target の先端>` と
    `SELECT id, actor_user_id, details -> 'refs' FROM forge.audit_log WHERE project_id = <id> AND action = 'repository.pushed' ORDER BY id DESC LIMIT 50;`
 4. 承認が消えた: `SELECT id, approver_id, head_sha, target_branch, revoked_at, revoked_reason FROM forge.merge_request_approvals WHERE merge_request_id = <mr_id> ORDER BY id;`
-   （`new_commits` = 新しい版、`target_changed` = target の変更、`unapproved` = 本人の取り消し。イベント `merge_request.unapproved` も同じ）。
+   （`new_commits` = 新しい版、`target_changed` = target の変更、`unapproved` = 本人の取り消し、`delegation_ended` = 代理を外した・替えた。イベント `merge_request.unapproved` も同じ）。
 
 ## Mitigate
 

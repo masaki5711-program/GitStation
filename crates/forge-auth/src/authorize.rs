@@ -1561,17 +1561,36 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
                     return Err(own("delegator_change_author"));
                 }
             }
-            match d.approvers {
-                crate::model::ApproverGate::Unrestricted => need(Role::Maintainer, d.project.role),
-                crate::model::ApproverGate::Named => need(Role::Reporter, d.project.role),
-                crate::model::ApproverGate::Matched => need(Role::Maintainer, d.project.role),
+            // Review of ADR-0038 step C: a named delegation that does not
+            // hold is told only to someone who may approve at all.
+            if let Some(reason) = d.delegation_refused {
+                need(Role::Reporter, d.project.role)?;
+                return Err(deny(ErrorCode::ApprovalDelegationInactive)
+                    .with_context("reason", reason)
+                    .with_context("environment", d.tier.as_str()));
+            }
+            let required = match d.approvers {
+                crate::model::ApproverGate::Unrestricted => Role::Maintainer,
+                crate::model::ApproverGate::Named => Role::Reporter,
+                crate::model::ApproverGate::Matched => Role::Maintainer,
                 crate::model::ApproverGate::NotListed(reason) => {
                     need(Role::Reporter, d.project.role)?;
-                    Err(deny(ErrorCode::DeployApproverNotListed)
+                    return Err(deny(ErrorCode::DeployApproverNotListed)
                         .with_context("reason", reason)
-                        .with_context("environment", d.tier.as_str()))
+                        .with_context("environment", d.tier.as_str()));
                 }
+            };
+            need(required, d.project.role)?;
+            // Review of ADR-0038 step C: the person the approval counts for
+            // holds the same role on the project now (the caller's
+            // administrator bypass does not lend it to them).
+            if d.on_behalf_of.is_some() && !d.delegator_role.is_some_and(|r| r >= required) {
+                return Err(deny(ErrorCode::Forbidden)
+                    .with_context("reason", "delegator_role")
+                    .with_context("required_role", required.as_str())
+                    .with_context("actual_role", d.delegator_role.map_or("none", Role::as_str)));
             }
+            Ok(())
         }
 
         // --- merge queue (M4 C8, plan 14 §4.2, ADR-0030) ---

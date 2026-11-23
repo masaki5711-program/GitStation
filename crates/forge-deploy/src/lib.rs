@@ -35,7 +35,7 @@ pub mod commits;
 pub mod run;
 pub mod transport;
 
-pub use approvers::{ApproversSpec, GateFacts};
+pub use approvers::{ApproverFact, ApproversSpec, GateFacts};
 pub use forge_db::deploy::{DeploymentApproval, EnvironmentApprovers};
 pub use forge_db::review::ApproverNames;
 
@@ -133,18 +133,16 @@ fn reconfirm(proof: &Authorized<ProjectCtx>, facts: &ProjectUpdateFacts) -> Resu
 /// The loaded deployment of an approval's context: the stored row, the
 /// caller against the environment's approvers (ADR-0038 §3.4) and the
 /// delegator they approve for (§3.5).
-pub fn loaded_deployment(
-    d: &StoredDeployment,
-    approvers: forge_auth::ApproverGate,
-    on_behalf_of: Option<UserId>,
-) -> LoadedDeployment {
+pub fn loaded_deployment(d: &StoredDeployment, fact: ApproverFact) -> LoadedDeployment {
     LoadedDeployment {
         id: d.id,
         tier: d.tier,
         requested_by: d.requested_by.map(UserId::new),
         change_authors: d.change_authors.iter().copied().map(UserId::new).collect(),
-        approvers,
-        on_behalf_of,
+        approvers: fact.gate,
+        on_behalf_of: fact.on_behalf_of,
+        delegator_role: fact.delegator_role,
+        delegation_refused: fact.delegation_refused,
     }
 }
 
@@ -449,7 +447,7 @@ impl Deploy {
             |facts, locked| {
                 let fresh = DeploymentCtx::new(
                     loaded(&facts.project),
-                    loaded_deployment(locked, gate.gate, on_behalf_of),
+                    loaded_deployment(locked, gate.fact),
                 );
                 proof.reconfirm(account(facts), fresh).map(drop)
             },

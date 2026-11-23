@@ -35,13 +35,12 @@ pub(crate) use delegations::active_on as delegation_active_on;
 mod rules;
 
 pub use commands::{approve_mr_decided, unapprove_mr_decided, ApproveAs, ApproveOutcome, Classify};
-pub use eligible::{group_members, people_facts, PersonFacts, MAX_PEOPLE};
+pub(crate) use commands::{carry_some_on, revoke_on};
 pub use delegations::{
     active_delegation, delegation_of, delegations_to, inactive as delegation_inactive,
-    remove_delegation_decided,
-    set_delegation_decided, DelegationOutcome, StoredDelegation,
+    remove_delegation_decided, set_delegation_decided, DelegationOutcome, StoredDelegation,
 };
-pub(crate) use commands::{carry_some_on, revoke_on};
+pub use eligible::{group_members, people_facts, PersonFacts, MAX_PEOPLE};
 pub use rules::{
     put_approval_rule_mr_decided, remove_approval_rule_mr_decided, NewApprovalRule, RuleOutcome,
     MAX_RULES, MAX_RULE_APPROVERS,
@@ -78,6 +77,10 @@ pub struct DelegatorFacts {
     pub username: String,
     pub active: bool,
     pub kind: UserKind,
+    /// The delegator's native role on the project now (`None`: none). An
+    /// approval counts for them only while they could approve themself
+    /// (review of ADR-0038 step C: Developer or above).
+    pub role: Option<Role>,
     /// The groups the delegator is a direct member of now.
     pub groups: BTreeSet<GroupId>,
 }
@@ -429,8 +432,11 @@ async fn approvers_on(
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| query_error("review.approvers", e))?;
-    let users: Vec<UserId> = live.iter().map(|a| a.approver).collect();
-    let mut roles = crate::roles::project_roles_on(&mut *conn, project, &users).await?;
+    // The approvers and the people they approved for: a delegator's role is
+    // checked like an approver's (review of ADR-0038 step C).
+    let users: Vec<UserId> = ids.iter().copied().map(UserId::new).collect();
+    let roles = crate::roles::project_roles_on(&mut *conn, project, &users).await?;
+    let role_of = |u: UserId| roles.get(&u).copied().flatten();
     let memberships: Vec<(i64, i64)> =
         sqlx::query_as("SELECT user_id, group_id FROM forge.group_members WHERE user_id = ANY($1)")
             .bind(&ids)
@@ -476,6 +482,7 @@ async fn approvers_on(
                             .with_context("reason", "unknown_user_kind")
                             .with_context("user_id", d.get())
                     })?,
+                    role: role_of(d),
                     groups: groups_of(d),
                 })
             }
@@ -485,7 +492,7 @@ async fn approvers_on(
             username: username.clone(), // clone: each approver owns its name
             active: *active,
             kind,
-            role: roles.remove(&user).flatten(),
+            role: role_of(user),
             groups: groups_of(user),
             delegator,
         });

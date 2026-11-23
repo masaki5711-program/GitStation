@@ -299,32 +299,6 @@ pub fn deploy(cli: &Cli, cmd: &DeployCommand, env: EnvFn<'_>, io: &mut Io<'_>) -
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn freeze_windows_are_sent_as_start_and_end() {
-        let body = environment_body(
-            true,
-            false,
-            Some(30),
-            None,
-            &["2026-12-28T00:00:00+09:00/2027-01-04T00:00:00+09:00".to_owned()],
-        );
-        assert_eq!(
-            body["freeze_windows"][0]["starts_at"],
-            "2026-12-28T00:00:00+09:00"
-        );
-        assert_eq!(
-            body["freeze_windows"][0]["ends_at"],
-            "2027-01-04T00:00:00+09:00"
-        );
-        assert_eq!(body["approval_ttl_minutes"], 30);
-        assert!(body["auto_deploy_ref"].is_null());
-    }
-}
-
 /// `gstn delegation show` (ADR-0038 §3.5): your delegation and the people
 /// who delegate to you. Setting one is a browser session's (a token is
 /// refused, FG-AUTH-0002).
@@ -337,7 +311,13 @@ pub fn delegation(
     match cmd {
         DelegationCommand::Show => {
             let c = client(cli, env, io)?;
-            let out = call(&c, Method::Get, "/api/v1/user/approval-delegation", &[], None)?;
+            let out = call(
+                &c,
+                Method::Get,
+                "/api/v1/user/approval-delegation",
+                &[],
+                None,
+            )?;
             let line = |d: &Value, who: &str| {
                 format!(
                     "{} from {} until {}{}",
@@ -366,5 +346,31 @@ pub fn delegation(
             let human = lines.join("\n");
             emit(io, cli, out, &human)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn freeze_windows_are_sent_as_start_and_end() {
+        let body = environment_body(
+            true,
+            false,
+            Some(30),
+            None,
+            &["2026-12-28T00:00:00+09:00/2027-01-04T00:00:00+09:00".to_owned()],
+        );
+        assert_eq!(
+            body["freeze_windows"][0]["starts_at"],
+            "2026-12-28T00:00:00+09:00"
+        );
+        assert_eq!(
+            body["freeze_windows"][0]["ends_at"],
+            "2027-01-04T00:00:00+09:00"
+        );
+        assert_eq!(body["approval_ttl_minutes"], 30);
+        assert!(body["auto_deploy_ref"].is_null());
     }
 }

@@ -205,7 +205,10 @@ impl World {
             Action::DeployApprove,
             DeploymentCtx::new(
                 loaded_project,
-                loaded_deployment(&stored, forge_auth::ApproverGate::Unrestricted, None),
+                loaded_deployment(
+                    &stored,
+                    crate::ApproverFact::own(forge_auth::ApproverGate::Unrestricted),
+                ),
             ),
         )
     }

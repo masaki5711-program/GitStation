@@ -283,6 +283,7 @@ describe('approval rules', () => {
       target_pattern: 'refs/heads/release/*',
       users: ['jiro'],
       groups: ['acme'],
+      selectors: [],
       expected_updated_at: null,
     });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
@@ -330,6 +331,7 @@ describe('approval rules', () => {
       target_pattern: 'refs/heads/main',
       users: ['jiro', 'hana'],
       groups: ['acme'],
+      selectors: [],
       expected_updated_at: RULE_STAMP,
     });
   });

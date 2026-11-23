@@ -22,14 +22,19 @@ pub enum UnapproveReason {
     /// head (a new row with `carried_from`). The row's `revoked_reason`
     /// only — the carry's event is the new row's `merge_request.approved`.
     Carried,
+    /// ADR-0038 §3.5 (review of step C): an approval given on a person's
+    /// behalf ended because that person removed (or replaced) the
+    /// delegation.
+    DelegationEnded,
 }
 
 impl UnapproveReason {
-    pub const ALL: [UnapproveReason; 4] = [
+    pub const ALL: [UnapproveReason; 5] = [
         Self::Unapproved,
         Self::NewCommits,
         Self::TargetChanged,
         Self::Carried,
+        Self::DelegationEnded,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -38,6 +43,7 @@ impl UnapproveReason {
             Self::NewCommits => "new_commits",
             Self::TargetChanged => "target_changed",
             Self::Carried => "carried",
+            Self::DelegationEnded => "delegation_ended",
         }
     }
 

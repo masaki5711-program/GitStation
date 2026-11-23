@@ -539,6 +539,8 @@ fn mismatched_resource_is_an_internal_error_not_an_allow() {
                 | Action::SshKeyList
                 | Action::SshKeyAdd
                 | Action::SshKeyDelete
+                | Action::ApprovalDelegationRead
+                | Action::ApprovalDelegationManage
         ) {
             continue;
         }

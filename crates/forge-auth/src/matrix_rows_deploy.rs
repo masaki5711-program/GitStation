@@ -10,9 +10,10 @@
 use forge_errors::ErrorCode as E;
 
 use crate::action::Action as A;
-use crate::matrix::{Actor as W, Expect, Fixture as F, Row};
+use crate::matrix::{Actor as W, DeployBehalf as B, Expect, Fixture as F, Row};
 use crate::matrix_review::MrProject as P;
 use crate::model::ApproverGate as G;
+use crate::model::Role as R;
 
 const fn row(action: A, actor: W, fixture: F, expect: Expect) -> Row {
     Row {
@@ -38,7 +39,7 @@ const fn dep(prod: bool, mine: bool, mr_mine: bool, project: P) -> F {
         mr_author_me: mr_mine,
         project,
         approvers: G::Unrestricted,
-        for_requester: false,
+        behalf: B::Own,
     }
 }
 
@@ -51,7 +52,32 @@ const fn listed(gate: G) -> F {
         mr_author_me: false,
         project: P::Private,
         approvers: gate,
-        for_requester: false,
+        behalf: B::Own,
+    }
+}
+
+/// ADR-0038 §3.5 (review of step C): a deployment approved for a
+/// delegator who holds `role` on the project now, the caller matching the
+/// environment's approvers as `gate`.
+const fn for_delegator(prod: bool, gate: G, role: Option<R>) -> F {
+    F::Deployment {
+        prod,
+        requested_by_me: false,
+        mr_author_me: false,
+        project: P::Private,
+        approvers: gate,
+        behalf: B::Delegator(role),
+    }
+}
+/// A delegation named that does not hold (review of ADR-0038 step C).
+const fn refused(behalf: B) -> F {
+    F::Deployment {
+        prod: true,
+        requested_by_me: false,
+        mr_author_me: false,
+        project: P::Private,
+        approvers: G::Named,
+        behalf,
     }
 }
 /// ADR-0038 §3.5: approving as the delegate of the requester.
@@ -61,7 +87,7 @@ const PROD_FOR_REQUESTER: F = F::Deployment {
     mr_author_me: false,
     project: P::Private,
     approvers: G::Named,
-    for_requester: true,
+    behalf: B::Requester,
 };
 const NAMED: F = listed(G::Named);
 const MATCHED: F = listed(G::Matched);
@@ -171,6 +197,24 @@ pub(crate) const DEPLOY_ROWS: &[Row] = &[
     row(A::DeployApprove, W::BotAdminSession, NAMED, deny(E::Forbidden)),
     // ADR-0038 §3.5: a delegate never approves the delegator's own request.
     row(A::DeployApprove, W::Maintainer, PROD_FOR_REQUESTER, deny(E::DeploySelfApprovalRefused)),
+    // The delegator needs the role the gate asks of the caller (review of
+    // ADR-0038 step C), prod and stg alike; the caller's administrator
+    // bypass is not lent to them.
+    row(A::DeployApprove, W::Reporter, for_delegator(true, G::Named, Some(R::Reporter)), Allow),
+    row(A::DeployApprove, W::Reporter, for_delegator(true, G::Named, None), deny(E::Forbidden)),
+    row(A::DeployApprove, W::Reporter, for_delegator(true, G::Named, Some(R::Guest)), deny(E::Forbidden)),
+    row(A::DeployApprove, W::Maintainer, for_delegator(true, G::Matched, Some(R::Maintainer)), Allow),
+    row(A::DeployApprove, W::Maintainer, for_delegator(true, G::Matched, Some(R::Developer)), deny(E::Forbidden)),
+    row(A::DeployApprove, W::Maintainer, for_delegator(false, G::Matched, None), deny(E::Forbidden)),
+    row(A::DeployApprove, W::Admin, for_delegator(true, G::Matched, None), deny(E::Forbidden)),
+    row(A::DeployApprove, W::Maintainer, for_delegator(false, G::Unrestricted, Some(R::Developer)), deny(E::Forbidden)),
+    // A named delegation that does not hold (or a name that does not
+    // resolve) is a loaded fact: told only to someone who may approve.
+    row(A::DeployApprove, W::Maintainer, refused(B::NoDelegation), deny(E::ApprovalDelegationInactive)),
+    row(A::DeployApprove, W::Reporter, refused(B::UnknownDelegator), deny(E::ApprovalDelegationInactive)),
+    row(A::DeployApprove, W::Guest, refused(B::NoDelegation), deny(E::Forbidden)),
+    row(A::DeployApprove, W::Guest, refused(B::UnknownDelegator), deny(E::Forbidden)),
+    row(A::DeployApprove, W::MaintainerTokenApi, refused(B::NoDelegation), deny(E::InsufficientScope)),
     // --- DeployApproversManage: Owner, people only ---
     row(A::DeployApproversManage, W::Owner, F::PrivateProject, Allow),
     row(A::DeployApproversManage, W::OwnerTokenApi, F::PrivateProject, Allow),

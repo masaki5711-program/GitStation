@@ -364,12 +364,7 @@ impl Review {
         let report = evaluate(&git.inputs(&current, &head, facts));
         let applying: Vec<&StoredApprovalRule> = rules
             .iter()
-            .filter(|r| {
-                report
-                    .rules
-                    .iter()
-                    .any(|s| s.name == r.name && s.applies)
-            })
+            .filter(|r| report.rules.iter().any(|s| s.name == r.name && s.applies))
             .collect();
         let eligible = self.eligible(&current, &applying).await?;
         Ok(ApprovalState {
@@ -426,8 +421,10 @@ impl Review {
             &[mr.author],
         )
         .await?;
-        let groups: Vec<forge_core::GroupId> =
-            rules.iter().flat_map(|r| r.groups.iter().copied()).collect();
+        let groups: Vec<forge_core::GroupId> = rules
+            .iter()
+            .flat_map(|r| r.groups.iter().copied())
+            .collect();
         let members = review::group_members(&self.db, &groups, MAX_GROUP_MEMBERS).await?;
         let mut ids: Vec<UserId> = rules.iter().flat_map(|r| r.users.iter().copied()).collect();
         ids.extend(members.iter().map(|(_, u)| *u));
@@ -439,7 +436,9 @@ impl Review {
         let ok = |u: &UserId| {
             *u != mr.author
                 && people.get(u).is_some_and(|p| {
-                    p.active && p.kind == UserKind::Human && p.role.is_some_and(|r| r >= Role::Developer)
+                    p.active
+                        && p.kind == UserKind::Human
+                        && p.role.is_some_and(|r| r >= Role::Developer)
                 })
         };
         let mut out = Vec::new();
@@ -449,7 +448,7 @@ impl Review {
             }
             let mut found: std::collections::BTreeMap<UserId, &'static str> =
                 std::collections::BTreeMap::new();
-            for u in rule.users.iter().filter(|u| ok(*u)) {
+            for u in rule.users.iter().filter(|u| ok(u)) {
                 found.entry(*u).or_insert("user");
             }
             for (_, u) in members
@@ -468,7 +467,7 @@ impl Review {
                     (Err(e), _) => unresolved.push(unresolved_of(e)),
                     (Ok(_), None) => incomplete = true,
                     (Ok(_), Some(c)) => {
-                        for u in c.iter().filter(|u| ok(*u)) {
+                        for u in c.iter().filter(|u| ok(u)) {
                             found.entry(*u).or_insert("selector");
                         }
                     }
@@ -550,9 +549,7 @@ impl Review {
         let selectors = ask
             .selectors
             .iter()
-            .map(|v| {
-                ApproverSelector::from_value(v).map_err(|why| param_invalid("selectors", why))
-            })
+            .map(|v| ApproverSelector::from_value(v).map_err(|why| param_invalid("selectors", why)))
             .collect::<Result<Vec<_>, _>>()?;
         let found = review::owners(&self.db, &ask.users, &ask.groups).await?;
         let mut users = Vec::with_capacity(ask.users.len());

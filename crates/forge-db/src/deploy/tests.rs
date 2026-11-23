@@ -190,10 +190,12 @@ impl World {
     /// End `delegator`'s delegation now (as if its period had passed).
     async fn end_delegation(&self, delegator: UserId) {
         let mut su = self.t.superuser().await;
-        sqlx::query(
-            "UPDATE forge.approval_delegations SET starts_at = now() - interval '3 days',              ends_at = now() - interval '1 day' WHERE delegator_id = $1",
-        )
-        .bind(delegator.get())
+        // The audit trigger wants an audit row of the delegator in the
+        // same transaction.
+        sqlx::raw_sql(&format!(
+            "BEGIN; INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type,                resource_id, request_id, details) VALUES ('system', 'approval_delegation.set',                'succeeded', 'user', {d}, 'req-test-expire', '{{}}');              UPDATE forge.approval_delegations SET starts_at = now() - interval '3 days',                ends_at = now() - interval '1 day' WHERE delegator_id = {d}; COMMIT;",
+            d = delegator.get()
+        ))
         .execute(&mut su)
         .await
         .expect("end delegation");

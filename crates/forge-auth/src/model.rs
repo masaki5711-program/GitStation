@@ -1093,6 +1093,14 @@ pub struct DeploymentView {
     /// ADR-0038 §3.5: the delegator the caller approves for (an active
     /// delegation, checked by the loader and again under the lock).
     pub on_behalf_of: Option<UserId>,
+    /// The native role of `on_behalf_of` on the project now (`None`: none,
+    /// or no delegator). The delegator needs the role the gate asks of the
+    /// caller (review of ADR-0038 step C).
+    pub delegator_role: Option<Role>,
+    /// Why the named delegation does not hold now (`unknown_delegator`,
+    /// `no_delegation`), as loaded: `FG-REVIEW-0033` once the caller may
+    /// approve at all (review of ADR-0038 step C).
+    pub delegation_refused: Option<&'static str>,
 }
 
 /// Whether a person matches a deploy environment's approvers (ADR-0038

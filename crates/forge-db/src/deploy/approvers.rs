@@ -54,7 +54,8 @@ pub struct ApproversInput {
 type EnvSql = (i64, String, i32, bool, String);
 type ApproverSql = (Option<i64>, Option<i64>, Option<String>);
 
-const VERSION: &str = "to_char(e.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')";
+const VERSION: &str =
+    "to_char(e.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')";
 
 async fn approvers_on(
     conn: &mut PgConnection,
@@ -267,11 +268,13 @@ pub async fn put_approvers_decided(
         let groups: Vec<i64> = input.groups.iter().map(|g| g.get()).collect();
         let stored = tx
             .step(|c| async move {
-                sqlx::query("DELETE FROM forge.deploy_environment_approvers WHERE environment_id = $1")
-                    .bind(env)
-                    .execute(&mut *c)
-                    .await
-                    .map_err(|e| query_error(QUERY, e))?;
+                sqlx::query(
+                    "DELETE FROM forge.deploy_environment_approvers WHERE environment_id = $1",
+                )
+                .bind(env)
+                .execute(&mut *c)
+                .await
+                .map_err(|e| query_error(QUERY, e))?;
                 sqlx::query(
                     "INSERT INTO forge.deploy_environment_approvers (environment_id, project_id, \
                      user_id) SELECT $1, $2, u FROM unnest($3::bigint[]) AS u",
@@ -315,13 +318,25 @@ pub async fn put_approvers_decided(
                 .fetch_one(&mut *c)
                 .await
                 .map_err(write_error)?;
+                // Review of ADR-0038 step C: approvals given to deployments
+                // still waiting were decided on the approvers just replaced;
+                // they end with them (the people approve again).
+                sqlx::query(
+                    "DELETE FROM forge.deployment_approvals a USING forge.deployments d \
+                     WHERE d.id = a.deployment_id AND d.environment_id = $1 \
+                       AND d.status = 'pending_approval'",
+                )
+                .bind(env)
+                .execute(&mut *c)
+                .await
+                .map_err(|e| query_error(QUERY, e))?;
                 approvers_on(c, row).await
             })
             .await?;
         let change = DeployChange::ApproversSet {
             project,
             tier,
-            users: stored.users.clone(),   // clone: the audit row owns them
+            users: stored.users.clone(), // clone: the audit row owns them
             groups: stored.groups.clone(), // clone: as above
             selectors: stored
                 .selectors

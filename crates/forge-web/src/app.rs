@@ -1154,7 +1154,7 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Post,
             d::APPROVE,
             Action::DeployApprove,
-            "Approve a deployment waiting for one: 200 queued until approval_expires_at once the environment's approvals_required is reached (pending_approval with approvals until then); 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); 403 FG-DEPLOY-0014 when the environment names approvers and the caller is not one; ?on_behalf_of= for a delegator (403 FG-REVIEW-0033 without an active delegation); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer, or a named approver)",
+            "Approve a deployment waiting for one: 200 queued until approval_expires_at once the environment's approvals_required is reached (pending_approval with approvals until then); 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); 403 FG-DEPLOY-0014 when the environment names approvers and the caller is not one; ?on_behalf_of= for a delegator who holds the role the approval needs (403 FG-AUTH-0003 otherwise; 403 FG-REVIEW-0033 without an active delegation, told only to a Reporter or above); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer, or a named approver)",
             d::OF_APPROVAL,
             d::approve,
         )
@@ -1471,10 +1471,10 @@ pub fn registry_without_content_routes() -> Registry<AppState> {
 /// Tokens, sessions, the user search and the user administration (M2 MR6,
 /// plan 10 §5, ADR-0021 §17).
 fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::approval_delegation as ad;
     use routes::{
         directory as d, org_profiles as o, ssh_keys as k, tokens as t, user_sessions as s,
     };
-    use routes::approval_delegation as ad;
     registry
         // ADR-0038 §3.5 (step C): the caller's delegation of approvals.
         .route_with(

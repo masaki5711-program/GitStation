@@ -431,7 +431,7 @@ impl Unresolved {
     pub fn detail(&self) -> Option<&str> {
         match self {
             Self::RequesterUnknown(r) => Some(r),
-            _ => None,
+            Self::RequesterNoSection | Self::RequesterNoDepartment | Self::UnitNotInMaster => None,
         }
     }
 }
@@ -455,7 +455,11 @@ pub fn base_target(
             let s = r
                 .at_level(OrgLevel::Section)
                 .ok_or(Unresolved::RequesterNoSection)?;
-            (s.code.clone(), false, r.parent_of(&s.code).map(|p| p.code.clone())) // clone: owned target
+            (
+                s.code.clone(),
+                false,
+                r.parent_of(&s.code).map(|p| p.code.clone()),
+            ) // clone: owned target
         }
         Relation::RequesterDepartment => {
             let d = r
@@ -471,7 +475,10 @@ pub fn base_target(
             let chain = unit_chain
                 .filter(|c| !c.is_empty())
                 .ok_or(Unresolved::UnitNotInMaster)?;
-            let code = selector.unit.as_deref().ok_or(Unresolved::UnitNotInMaster)?;
+            let code = selector
+                .unit
+                .as_deref()
+                .ok_or(Unresolved::UnitNotInMaster)?;
             if chain[0].code != code {
                 return Err(Unresolved::UnitNotInMaster);
             }

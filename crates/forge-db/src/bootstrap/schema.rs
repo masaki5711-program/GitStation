@@ -1013,7 +1013,15 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ),
         // ── ADR-0038 §3 (step C): approvers and delegations (20270102100000) ──
         ("forge.deploy_environment_approvers", operational()),
-        ("forge.deployment_approvals", operational()),
+        // Written once, never changed (review of step C): no UPDATE.
+        (
+            "forge.deployment_approvals",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("deployment_approvals")?,
+            ]
+            .concat(),
+        ),
         ("forge.approval_delegations", operational()),
     ])
 }

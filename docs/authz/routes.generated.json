@@ -756,6 +756,15 @@
     "word": "fixed"
   },
   {
+    "action": "UserSearch",
+    "method": "GET",
+    "path": "/api/v1/org/units",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectList",
     "method": "GET",
     "path": "/api/v1/projects",
@@ -965,6 +974,15 @@
   {
     "action": "DeployRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/deploy/approvers",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/deploy/environments",
     "people_only": false,
     "public": false,
@@ -975,6 +993,15 @@
     "action": "DeployEnvironmentManage",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/deploy/environments/{tier}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployApproversManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/deploy/environments/{tier}/approvers",
     "people_only": true,
     "public": false,
     "scope": "fixed",
@@ -2082,6 +2109,33 @@
     "action": "ActivityRead",
     "method": "GET",
     "path": "/api/v1/user/activity",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ApprovalDelegationRead",
+    "method": "GET",
+    "path": "/api/v1/user/approval-delegation",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ApprovalDelegationManage",
+    "method": "PUT",
+    "path": "/api/v1/user/approval-delegation",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ApprovalDelegationManage",
+    "method": "DELETE",
+    "path": "/api/v1/user/approval-delegation",
     "people_only": true,
     "public": false,
     "scope": "fixed",

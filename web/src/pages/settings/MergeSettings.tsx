@@ -437,7 +437,9 @@ function approverNames(r: ApprovalRule): { users: string[]; groups: string[] } {
  * read is left out (and the rule cannot be saved here, like an unnamed
  * approver). */
 function selectorsOf(r: ApprovalRule): { selectors: ApproverSelector[]; unreadable: boolean } {
-  const raw = r.selectors as unknown[];
+  // A rule written before step C (or a server without them) has none.
+  const given: unknown = r.selectors;
+  const raw: unknown[] = Array.isArray(given) ? given : [];
   const selectors = raw.map(asSelector).filter((x): x is ApproverSelector => x !== null);
   return { selectors, unreadable: selectors.length !== raw.length };
 }
@@ -713,7 +715,7 @@ function RuleForm({
           target_pattern: target.trim() === '' ? null : target.trim(),
           users,
           groups,
-          selectors: selectors as unknown as PutApprovalRuleBody['selectors'],
+          selectors: selectors as unknown as NonNullable<PutApprovalRuleBody['selectors']>,
           // Verbatim; null: a new rule (refused when the name exists by then).
           expected_updated_at: rule?.updated_at ?? null,
         },

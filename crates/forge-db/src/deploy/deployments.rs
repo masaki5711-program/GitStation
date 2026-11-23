@@ -114,13 +114,28 @@ pub(crate) fn deployment_columns(a: &str, authors: bool) -> String {
          {a}.merge_request_author, {a}.approved_by, {}, {}, {a}.previous_sha, {a}.error_code, \
          {a}.failed_target, {}, {}, {}, {a}.commit_subject, {a}.commit_author_name, \
          {a}.commit_author_email, {change} AS change_authors, \
-         (SELECT count(*) FROM forge.deployment_approvals x WHERE x.deployment_id = {a}.id) \
-         AS approvals",
+         {} AS approvals",
         ts("approved_at"),
         ts("approval_expires_at"),
         ts("created_at"),
         ts("started_at"),
         ts("finished_at"),
+        live_approvals_count(&format!("{a}.id")),
+    )
+}
+
+/// How many approvals of deployment `deployment` (an SQL expression) count
+/// now: the approver, and the person approved for, still active (review of
+/// ADR-0038 step C: a disabled approver's earlier approval no longer
+/// counts). Rows of another approvers version are deleted when the
+/// approvers change (`put_approvers_decided`).
+pub(crate) fn live_approvals_count(deployment: &str) -> String {
+    format!(
+        "(SELECT count(*) FROM forge.deployment_approvals x \
+          JOIN forge.users xu ON xu.id = x.approver_id AND xu.state = 'active' \
+          LEFT JOIN forge.users xb ON xb.id = x.on_behalf_of \
+          WHERE x.deployment_id = {deployment} \
+            AND (x.on_behalf_of IS NULL OR xb.state = 'active'))"
     )
 }
 
@@ -583,18 +598,26 @@ pub async fn approve_decided(
                     .map_err(|e| query_error(QUERY, e))
             })
             .await?;
-        let (version, required, _) = tx
+        let (version, required, allow_delegation) = tx
             .step(|c| async move { super::approvers::version_on(c, env_id).await })
             .await?;
         if version != input.version {
             return Err(conflict("approvers_changed"));
         }
+        // Review of ADR-0038 step C: delegation is the environment's choice,
+        // checked here too (fail closed, whatever the caller decided on).
+        if input.on_behalf_of.is_some() && !allow_delegation {
+            return Err(ForgeError::new(ErrorCode::DeployApproverNotListed)
+                .with_context("reason", "delegation_off")
+                .with_context("deployment_id", id)
+                .with_context("environment", current.tier.as_str()));
+        }
         let me = UserId::new(user);
         if let Some(delegator) = input.on_behalf_of {
             let active = tx
-                .step(|c| async move {
-                    crate::review::delegation_active_on(c, delegator, me).await
-                })
+                .step(
+                    |c| async move { crate::review::delegation_active_on(c, delegator, me).await },
+                )
                 .await?;
             if !active {
                 return Err(crate::review::delegation_inactive(
@@ -629,15 +652,14 @@ pub async fn approve_decided(
             // already approved this deployment.
             return Err(conflict("already_approved"));
         }
+        let count_sql = format!("SELECT {}", live_approvals_count("$1"));
         let approvals: i64 = tx
             .step(|c| async move {
-                sqlx::query_scalar(
-                    "SELECT count(*) FROM forge.deployment_approvals WHERE deployment_id = $1",
-                )
-                .bind(id)
-                .fetch_one(c)
-                .await
-                .map_err(|e| query_error(QUERY, e))
+                sqlx::query_scalar(&count_sql)
+                    .bind(id)
+                    .fetch_one(c)
+                    .await
+                    .map_err(|e| query_error(QUERY, e))
             })
             .await?;
         if approvals < i64::from(required) {

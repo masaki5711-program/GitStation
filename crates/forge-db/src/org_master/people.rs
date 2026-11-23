@@ -27,6 +27,10 @@ use super::read::{older, stored_units, MASTER_AGE};
 use super::{chains, path_of, ChainRow, UnknownReason, MAX_USERS};
 use crate::{query_error, Db};
 
+/// A person whose snapshot passed the gates, waiting for the chain read:
+/// (user, units, plant, positions, rank, digest).
+type Pending = (UserId, String, String, Vec<String>, Option<i32>, String);
+
 /// The most people of one plant read for a selector's candidates.
 pub const MAX_PLANT_PEOPLE: usize = 2000;
 
@@ -84,7 +88,7 @@ async fn orgs_of(
     let ages = db.org_ages();
     let unknown = |r: UnknownReason| PersonOrg::Unknown(r.as_str().to_owned());
     let mut out = HashMap::with_capacity(rows.len());
-    let mut pending: Vec<(UserId, String, String, Vec<String>, Option<i32>, String)> = Vec::new();
+    let mut pending: Vec<Pending> = Vec::new();
     for (user, units, plant, positions, rank, digest, invalid, profile_age) in rows {
         let user = UserId::new(user);
         let gate = if invalid {
@@ -277,7 +281,14 @@ pub async fn search_units(db: &Db, term: &str) -> Result<Vec<FoundUnit>, ForgeEr
         }
         pattern.push(c);
     }
-    type Row = (String, String, String, String, Option<String>, Option<String>);
+    type Row = (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    );
     let rows: Vec<Row> = db
         .within(QUERY, async {
             sqlx::query_as(

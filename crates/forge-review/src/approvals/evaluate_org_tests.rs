@@ -43,7 +43,10 @@ fn sel(v: serde_json::Value) -> ApproverSelector {
 }
 
 /// The author works in team T1 (section S1, department D1).
-fn targets_for(selectors: &[ApproverSelector], base_has_candidates: Option<bool>) -> SelectorTargets {
+fn targets_for(
+    selectors: &[ApproverSelector],
+    base_has_candidates: Option<bool>,
+) -> SelectorTargets {
     let author = org("T1", 15);
     SelectorTargets(
         selectors
@@ -66,12 +69,17 @@ fn for_delegator(mut a: ApproverFacts, delegator: UserId, o: PersonOrg) -> Appro
         username: format!("user{}", delegator.get()),
         active: true,
         kind: UserKind::Human,
+        role: Some(Role::Developer),
         groups: BTreeSet::new(),
     });
     a
 }
 
-fn selector_rule(name: &str, required: i32, selectors: Vec<ApproverSelector>) -> StoredApprovalRule {
+fn selector_rule(
+    name: &str,
+    required: i32,
+    selectors: Vec<ApproverSelector>,
+) -> StoredApprovalRule {
     StoredApprovalRule {
         selectors,
         ..rule(name, required, Vec::new())
@@ -130,11 +138,15 @@ fn users_groups_and_selectors_mix_in_one_rule_with_a_required_count() {
     qa.groups.insert(QA);
     let approvals = vec![
         with_org(approver(BOB, Role::Developer), org("S1", 60)), // selector
-        approver(CAROL, Role::Developer),                         // named
-        qa,                                                       // group
-        approver(ERIN, Role::Developer),                          // none of them
+        approver(CAROL, Role::Developer),                        // named
+        qa,                                                      // group
+        approver(ERIN, Role::Developer),                         // none of them
     ];
-    let r = evaluate(&org_inputs(approvals.clone(), vec![mixed.clone()], targets.clone()));
+    let r = evaluate(&org_inputs(
+        approvals.clone(),
+        vec![mixed.clone()],
+        targets.clone(),
+    ));
     assert!(r.blocks.is_empty(), "{:?}", r.blocks);
     assert_eq!(r.rules[0].counted, 3);
     assert_eq!(reason_of(&r, ERIN), Some(UncountedReason::NotInRule));
@@ -225,7 +237,10 @@ fn exclusions_come_before_any_selector() {
     let manager = org("S1", 99);
     // The author, however high.
     let own = evaluate(&org_inputs(
-        vec![with_org(approver(AUTHOR, Role::Maintainer), manager.clone())],
+        vec![with_org(
+            approver(AUTHOR, Role::Maintainer),
+            manager.clone(),
+        )],
         rules.clone(),
         targets.clone(),
     ));
@@ -288,9 +303,34 @@ fn a_delegators_exclusions_apply_too() {
     }
     let r = evaluate(&inputs(vec![gone], rules.clone()));
     assert_eq!(reason_of(&r, DAVE), Some(UncountedReason::Inactive));
+    // The delegator holds no role on the project (or lost it), or only
+    // Reporter: the delegate does not count for them, even when the rule
+    // names the delegator (review of ADR-0038 step C).
+    for role in [None, Some(Role::Reporter), Some(Role::Guest)] {
+        let mut weak = for_delegator(approver(DAVE, Role::Maintainer), CAROL, org("S1", 15));
+        if let Some(d) = weak.delegator.as_mut() {
+            d.role = role;
+        }
+        let r = evaluate(&inputs(vec![weak.clone()], rules.clone()));
+        assert_eq!(
+            reason_of(&r, DAVE),
+            Some(UncountedReason::RoleInsufficient),
+            "{role:?}"
+        );
+        assert_eq!(r.blocks.len(), 1);
+        let named = evaluate(&inputs(vec![weak], vec![rule("carol", 1, vec![CAROL])]));
+        assert_eq!(
+            reason_of(&named, DAVE),
+            Some(UncountedReason::RoleInsufficient)
+        );
+    }
     // The delegator pushed a commit of the range.
     let mut i = inputs(
-        vec![for_delegator(approver(DAVE, Role::Developer), CAROL, org("S1", 15))],
+        vec![for_delegator(
+            approver(DAVE, Role::Developer),
+            CAROL,
+            org("S1", 15),
+        )],
         rules,
     );
     i.committers = Committers::Known(BTreeMap::from([(CAROL, 11)]));
@@ -306,7 +346,11 @@ fn a_delegate_matches_a_selector_on_the_delegators_snapshot() {
     // Dave (staff) approves for Carol, the section manager: the recorded
     // snapshot is Carol's.
     let r = evaluate(&org_inputs(
-        vec![for_delegator(approver(DAVE, Role::Developer), CAROL, org("S1", 55))],
+        vec![for_delegator(
+            approver(DAVE, Role::Developer),
+            CAROL,
+            org("S1", 55),
+        )],
         rules,
         targets,
     ));

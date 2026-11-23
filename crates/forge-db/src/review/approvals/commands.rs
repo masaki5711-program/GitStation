@@ -202,6 +202,13 @@ async fn carry_on(
         .step(|c| async move { end_act_as_on(c, mr).await })
         .await?;
     let (mut rows, mut events) = ended_records(mr, act_as, UnapproveReason::NewCommits)?;
+    let lapsed = tx
+        .step(|c| async move { end_lapsed_delegated_on(c, mr).await })
+        .await?;
+    let (mut lapsed_rows, mut lapsed_events) =
+        ended_records(mr, lapsed, UnapproveReason::NewCommits)?;
+    rows.append(&mut lapsed_rows);
+    events.append(&mut lapsed_events);
     let reason = UnapproveReason::Carried;
     let ended = tx
         .step(|c| async move { end_on(c, mr, reason, None, &[]).await })
@@ -301,6 +308,112 @@ async fn end_act_as_on(
         .collect::<Result<_, _>>()?;
     ended.sort_by_key(|a| a.id.get());
     Ok(ended)
+}
+
+/// End the live approvals of `mr` given on someone's behalf whose
+/// delegation to the approver no longer holds now (ended, removed,
+/// replaced, or the delegator left) with `new_commits`, on `conn` (review
+/// of ADR-0038 step C: a carry is a new approval of the new head, so the
+/// delegation must hold for it).
+async fn end_lapsed_delegated_on(
+    conn: &mut PgConnection,
+    mr: &StoredMergeRequest,
+) -> Result<Vec<StoredApproval>, ForgeError> {
+    let rows: Vec<ApprovalRow> = sqlx::query_as(&format!(
+        "UPDATE forge.merge_request_approvals SET revoked_at = now(), revoked_reason = $2 \
+         WHERE merge_request_id = $1 AND revoked_at IS NULL AND on_behalf_of IS NOT NULL \
+         AND NOT EXISTS (SELECT 1 FROM forge.approval_delegations d \
+           JOIN forge.users u ON u.id = d.delegator_id \
+           WHERE d.delegator_id = merge_request_approvals.on_behalf_of \
+             AND d.delegate_id = merge_request_approvals.approver_id \
+             AND d.starts_at <= now() AND now() < d.ends_at \
+             AND u.state = 'active' AND u.kind = 'human') \
+         RETURNING {}",
+        approval_columns()
+    ))
+    .bind(mr.id.get())
+    .bind(UnapproveReason::NewCommits.as_str())
+    .fetch_all(conn)
+    .await
+    .map_err(|e| query_error("review.approvals_end_lapsed_delegated", e))?;
+    let mut ended: Vec<StoredApproval> = rows
+        .into_iter()
+        .map(ApprovalRow::parse)
+        .collect::<Result<_, _>>()?;
+    ended.sort_by_key(|a| a.id.get());
+    Ok(ended)
+}
+
+/// An approval ended with a delegation: (approval, merge request, iid,
+/// project, approver, head).
+type EndedRow = (i64, i64, i64, i64, i64, String);
+
+/// At most this many live approvals end with one removed delegation (one
+/// event each, within a change's events).
+const MAX_DELEGATED_ENDED: usize = crate::change::MAX_EVENTS - 1;
+
+/// End the live approvals given on `delegator`'s behalf (all of them, or
+/// those of another delegate than `keep`) with `delegation_ended`, inside
+/// `tx` (review of ADR-0038 step C: removing or replacing a delegation
+/// withdraws what the delegate approved for the person). The audit rows
+/// (one per approval, on its project: `affected`) and events. More than
+/// [`MAX_DELEGATED_ENDED`] is `FG-SYS-0001 reason=delegated_approvals_over_cap`
+/// (nothing written).
+pub(crate) async fn end_delegated_on(
+    tx: &mut ChangeTx,
+    delegator: UserId,
+    keep: Option<UserId>,
+) -> Result<(Vec<AuditEntry>, Vec<DomainEvent>), ForgeError> {
+    let rows: Vec<EndedRow> = tx
+        .step(|c| async move {
+            sqlx::query_as(
+                "UPDATE forge.merge_request_approvals a SET revoked_at = now(), \
+                   revoked_reason = $3 \
+                 FROM forge.merge_requests m \
+                 WHERE m.id = a.merge_request_id AND a.on_behalf_of = $1 \
+                   AND a.revoked_at IS NULL AND ($2::bigint IS NULL OR a.approver_id <> $2) \
+                 RETURNING a.id, a.merge_request_id, m.iid, a.project_id, a.approver_id, \
+                   a.head_sha",
+            )
+            .bind(delegator.get())
+            .bind(keep.map(UserId::get))
+            .bind(UnapproveReason::DelegationEnded.as_str())
+            .fetch_all(c)
+            .await
+            .map_err(|e| query_error("review.approvals_end_delegated", e))
+        })
+        .await?;
+    if rows.len() > MAX_DELEGATED_ENDED {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "delegated_approvals_over_cap")
+            .with_context("user_id", delegator.get())
+            .with_context("approvals", rows.len()));
+    }
+    let mut audits = Vec::with_capacity(rows.len());
+    let mut events = Vec::with_capacity(rows.len());
+    let mut rows = rows;
+    rows.sort_by_key(|r| r.0);
+    for (id, mr, iid, project, approver, head) in rows {
+        let head_sha = ObjectId::parse(&head).map_err(|_| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "stored_approval_head_invalid")
+        })?;
+        let (audit, event) = entry(
+            ProjectId::new(project),
+            ApprovalId::new(id),
+            MergeRequestChange::Unapproved {
+                merge_request: forge_core::ids::MergeRequestId::new(mr),
+                iid,
+                approval: ApprovalId::new(id),
+                approver: UserId::new(approver),
+                head_sha,
+                reason: UnapproveReason::DelegationEnded,
+            },
+        )?;
+        audits.push(audit);
+        events.push(event);
+    }
+    Ok((audits, events))
 }
 
 /// Where an approval written by `ctx` came from (ADR-0017 §4.2): acting
@@ -450,6 +563,31 @@ pub async fn approve_mr_decided<P>(
             events.extend(evs);
         } else if live.len() as i64 >= MAX_APPROVALS {
             return Err(full(&mr));
+        }
+        // Review of ADR-0038 step C: one live approval per person it counts
+        // for (the partial unique index is the backstop). The person
+        // approving themself replaces their delegate's approval for them
+        // (`unapproved`); a delegate approving for someone who already
+        // holds one is `FG-REVIEW-0034`.
+        let person = as_.on_behalf_of.unwrap_or(viewer);
+        if let Some(other) = live
+            .iter()
+            .find(|a| a.approver != viewer && a.on_behalf_of.unwrap_or(a.approver) == person)
+        {
+            if as_.on_behalf_of.is_some() {
+                return Err(ForgeError::new(ErrorCode::ApprovalPersonAlreadyApproved)
+                    .with_context("on_behalf_of", person.get())
+                    .with_context("user_id", viewer.get())
+                    .with_context("merge_request_id", mr.id.get()));
+            }
+            let (mr_ref, delegate) = (&mr, other.approver);
+            let reason = UnapproveReason::Unapproved;
+            let ended = tx
+                .step(|c| async move { end_on(c, mr_ref, reason, Some(delegate), &[]).await })
+                .await?;
+            let (rows, evs) = ended_records(&mr, ended, reason)?;
+            affected.extend(rows);
+            events.extend(evs);
         }
         let (head_ref, target) = (&head, &mr.target_branch);
         let org = as_.org.to_value().to_string();

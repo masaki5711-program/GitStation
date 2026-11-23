@@ -72,7 +72,8 @@ pub struct ApproveMergeRequest {
     /// refused (FG-REVIEW-0008 stale_view).
     pub sha: String,
     /// ADR-0038 §3.5: approve for this person (a username) who delegated
-    /// to the caller for now (FG-REVIEW-0033 otherwise).
+    /// to the caller for now (FG-REVIEW-0033 otherwise; FG-REVIEW-0034 when
+    /// the person already holds a live approval).
     #[serde(default)]
     pub on_behalf_of: Option<String>,
 }
@@ -447,9 +448,28 @@ fn answer_body(iid: i64, a: &ApprovalAnswer) -> ApprovalAnswerBody {
     }
 }
 
+/// Why a selector names no unit, as `viewer_sees_org` allows: the author's
+/// organisation status (`requester_*`, and its `detail`: `no_snapshot`,
+/// `stale_snapshot`, `invalid_since`, …) is the author's or an
+/// administrator's to see; every other reader gets `requester_org_unknown`
+/// without a detail (review of ADR-0038 step C).
+fn unresolved_body(reason: &str, detail: Option<&String>, viewer_sees_org: bool) -> UnresolvedBody {
+    if viewer_sees_org || !reason.starts_with("requester_") {
+        return UnresolvedBody {
+            reason: reason.to_owned(),
+            detail: detail.cloned(), // clone: the state is borrowed
+        };
+    }
+    UnresolvedBody {
+        reason: "requester_org_unknown".to_owned(),
+        detail: None,
+    }
+}
+
 fn eligible_body(
     e: &forge_review::approvals::RuleEligibility,
     paths: &crate::routes::org_profiles::OrgPaths,
+    viewer_sees_org: bool,
 ) -> RuleEligibilityBody {
     RuleEligibilityBody {
         rule: e.rule.clone(), // clone: the state is borrowed
@@ -468,10 +488,7 @@ fn eligible_body(
         unresolved: e
             .unresolved
             .iter()
-            .map(|(reason, detail)| UnresolvedBody {
-                reason: reason.clone(), // clone: as above
-                detail: detail.clone(),
-            })
+            .map(|(reason, detail)| unresolved_body(reason, detail.as_ref(), viewer_sees_org))
             .collect(),
         incomplete: e.incomplete,
     }
@@ -481,6 +498,7 @@ fn state_body(
     iid: i64,
     s: &ApprovalState,
     paths: &crate::routes::org_profiles::OrgPaths,
+    viewer_sees_org: bool,
 ) -> ApprovalStateBody {
     let target = s
         .target_branch
@@ -552,7 +570,7 @@ fn state_body(
         eligible: s
             .eligible
             .iter()
-            .map(|e| eligible_body(e, paths))
+            .map(|e| eligible_body(e, paths, viewer_sees_org))
             .collect(),
     }
 }
@@ -697,7 +715,10 @@ pub async fn approvals(state: AppState, request: Dispatched<MergeRequestCtx>) ->
             crate::routes::write::hosting(&state)?.primary_org_paths(&ids),
         )
         .await?;
-        json(state_body(iid, &answer, &paths))
+        let principal = w.proof.principal();
+        let viewer_sees_org = principal.admin_rights()
+            || principal.user() == Some(w.proof.ctx().merge_request().author);
+        json(state_body(iid, &answer, &paths, viewer_sees_org))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
@@ -805,8 +826,8 @@ pub async fn put_rule(
             name,
             target_pattern: w.input.target_pattern.clone(), // clone: the ask owns its values
             required_approvals: w.input.required_approvals,
-            users: w.input.users.clone(),   // clone: as above
-            groups: w.input.groups.clone(), // clone: as above
+            users: w.input.users.clone(),         // clone: as above
+            groups: w.input.groups.clone(),       // clone: as above
             selectors: w.input.selectors.clone(), // clone: as above
         };
         let (outcome, rule) = review(&state)?
@@ -845,5 +866,37 @@ pub async fn delete_rule(state: AppState, request: Dispatched<ProjectCtx>) -> Re
     match done {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod org_reason_tests {
+    use super::unresolved_body;
+
+    /// Review of ADR-0038 step C: the author's organisation status is the
+    /// author's (or an administrator's) to see.
+    #[test]
+    fn the_authors_org_status_is_shown_to_the_author_and_administrators_only() {
+        let detail = "stale_snapshot".to_owned();
+        let own = unresolved_body("requester_org_unknown", Some(&detail), true);
+        assert_eq!(
+            (own.reason.as_str(), own.detail.as_deref()),
+            ("requester_org_unknown", Some("stale_snapshot"))
+        );
+        for reason in [
+            "requester_org_unknown",
+            "requester_no_section",
+            "requester_no_department",
+        ] {
+            let other = unresolved_body(reason, Some(&detail), false);
+            assert_eq!(
+                (other.reason.as_str(), other.detail),
+                ("requester_org_unknown", None),
+                "{reason}"
+            );
+        }
+        // Not about the author: the same for everyone.
+        let unit = unresolved_body("unit_not_in_master", None, false);
+        assert_eq!(unit.reason, "unit_not_in_master");
     }
 }

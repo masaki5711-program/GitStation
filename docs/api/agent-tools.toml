@@ -510,6 +510,18 @@ params = [
 gstn = "mr approve"
 reason = "Approval is a person's judgement (C-9); the server refuses an agent token (people_only)."
 
+[[deferred]]
+gstn = "deploy approvers"
+reason = "ADR-0038 step C: reading who approves a deploy environment is a settings read; an agent tool waits for a use."
+
+[[excluded]]
+gstn = "deploy approvers-set"
+reason = "Choosing who approves deployments is an Owner's decision (DeployApproversManage, people only)."
+
+[[excluded]]
+gstn = "delegation show"
+reason = "A person's own delegation of approvals (ADR-0038 §3.5); approvals are people's (C-9), so an agent never needs it."
+
 [[excluded]]
 gstn = "mr unapprove"
 reason = "Approval is a person's; an agent never adds or withdraws one."

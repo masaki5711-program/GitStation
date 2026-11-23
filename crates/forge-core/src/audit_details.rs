@@ -187,10 +187,7 @@ pub enum AuditDetails {
         ends_at: String,
     },
     /// `approval_delegation.removed` (ADR-0038 §3.5, audit-only).
-    ApprovalDelegationRemoved {
-        delegator: UserId,
-        delegate: UserId,
-    },
+    ApprovalDelegationRemoved { delegator: UserId, delegate: UserId },
     // ── D4 MR3b: repository provisioning ──
     /// `repository.created` (D4 MR3b): the provisioning job created (or
     /// adopted) the bare repository and marked it ready. Also the payload of

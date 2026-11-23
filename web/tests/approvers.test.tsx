@@ -54,7 +54,7 @@ describe('delegation period', () => {
     });
     await renderApp({ fetch: server.fetch, path: '/taro/-/settings?tab=ssh-keys', lang: 'en' });
     const section = await screen.findByRole('region', { name: 'Delegated approval' });
-    expect(within(section).getByText('You have no delegate.')).toBeTruthy();
+    expect(await within(section).findByText('You have no delegate.')).toBeTruthy();
     fireEvent.change(within(section).getByLabelText('Find a user'), { target: { value: 'jiro' } });
     fireEvent.click(within(section).getByRole('button', { name: 'Search' }));
     fireEvent.click(await within(section).findByRole('button', { name: 'Add Jiro' }));

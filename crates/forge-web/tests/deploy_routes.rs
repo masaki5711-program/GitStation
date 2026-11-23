@@ -167,7 +167,10 @@ impl World {
             Arc::new(OnMain),
             forge_core::deploy::TargetPolicy::default(),
         ))
-        .with_review(forge_review::Review::new(self.t.db.clone(), Arc::new(NoBranches)));
+        .with_review(forge_review::Review::new(
+            self.t.db.clone(),
+            Arc::new(NoBranches),
+        ));
         let res = forge_web::app(state, AppConfig::default())
             .expect("router")
             .oneshot(req)
@@ -453,9 +456,17 @@ async fn a_person_outside_the_environment_approvers_cannot_approve() {
             Some(json!({"selectors": [{"relation": "boss"}], "approvals_required": 1})),
         )
         .await;
-    assert_eq!((bad.status, bad.code()), (StatusCode::BAD_REQUEST, "FG-WEB-0006"));
+    assert_eq!(
+        (bad.status, bad.code()),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006")
+    );
     let list = w
-        .call("GET", &w.uri("deploy/approvers"), session(w.developer, false), None)
+        .call(
+            "GET",
+            &w.uri("deploy/approvers"),
+            session(w.developer, false),
+            None,
+        )
         .await;
     assert_eq!(list.status, StatusCode::OK, "{}", list.json);
     let prod = list.json["environments"]
@@ -468,10 +479,14 @@ async fn a_person_outside_the_environment_approvers_cannot_approve() {
     assert_eq!(prod["unrestricted"], false);
     // The owner (a Maintainer and more) is not named: refused.
     // Dee, a Developer, requests it (never one of the approvers).
-    let dee = users::create(&w.t.db, &ctx("req-user-dee"), &NewUser::human("dee", "dee", "dee@example.test"))
-        .await
-        .expect("dee")
-        .user_id;
+    let dee = users::create(
+        &w.t.db,
+        &ctx("req-user-dee"),
+        &NewUser::human("dee", "dee", "dee@example.test"),
+    )
+    .await
+    .expect("dee")
+    .user_id;
     projects::add_member(&w.t.db, &ctx("req-member-dee"), w.web, dee, Role::Developer)
         .await
         .expect("member");
@@ -499,7 +514,9 @@ async fn a_person_outside_the_environment_approvers_cannot_approve() {
 async fn a_delegation_is_the_persons_own_and_set_in_a_session() {
     let w = World::new().await;
     let path = "/api/v1/user/approval-delegation";
-    let empty = w.call("GET", path, session(w.maintainer, false), None).await;
+    let empty = w
+        .call("GET", path, session(w.maintainer, false), None)
+        .await;
     assert_eq!(empty.status, StatusCode::OK, "{}", empty.json);
     assert!(empty.json["mine"].is_null());
     let body = json!({
@@ -509,7 +526,12 @@ async fn a_delegation_is_the_persons_own_and_set_in_a_session() {
     });
     // A token never sets one.
     let token_set = w
-        .call("PUT", path, token(w.maintainer, &[Scope::Api]), Some(body.clone()))
+        .call(
+            "PUT",
+            path,
+            token(w.maintainer, &[Scope::Api]),
+            Some(body.clone()),
+        )
         .await;
     assert_eq!(
         (token_set.status, token_set.code()),
@@ -519,6 +541,9 @@ async fn a_delegation_is_the_persons_own_and_set_in_a_session() {
     let long = w
         .call("PUT", path, session(w.maintainer, false), Some(body))
         .await;
-    assert_eq!((long.status, long.code()), (StatusCode::BAD_REQUEST, "FG-WEB-0006"));
+    assert_eq!(
+        (long.status, long.code()),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006")
+    );
     w.t.drop_now().await;
 }

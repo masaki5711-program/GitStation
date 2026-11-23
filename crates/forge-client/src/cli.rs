@@ -372,7 +372,9 @@ pub fn parse_text(raw: &str) -> Result<String, String> {
 pub fn parse_selector(raw: &str) -> Result<String, String> {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(serde_json::Value::Object(_)) => Ok(raw.to_owned()),
-        _ => Err("a selector is a JSON object, e.g. {\"relation\":\"requester_section\"}".to_owned()),
+        _ => {
+            Err("a selector is a JSON object, e.g. {\"relation\":\"requester_section\"}".to_owned())
+        }
     }
 }
 

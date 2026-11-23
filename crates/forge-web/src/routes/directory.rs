@@ -93,7 +93,7 @@ pub const ORG_UNITS_QUERY: &[QueryParam] = &[QueryParam {
 /// One org unit of the master's copy.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct OrgUnitBody {
+pub struct OrgUnitFoundBody {
     pub plant_code: String,
     pub code: String,
     /// `division`, `department`, `section` or `team`.
@@ -109,7 +109,7 @@ pub struct OrgUnitBody {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OrgUnits {
-    pub items: Vec<OrgUnitBody>,
+    pub items: Vec<OrgUnitFoundBody>,
 }
 
 /// One search match: names, and the primary department code.
@@ -286,7 +286,7 @@ pub async fn org_units(state: AppState, request: Dispatched<InstanceCtx>) -> Res
         json(OrgUnits {
             items: found
                 .into_iter()
-                .map(|u| OrgUnitBody {
+                .map(|u| OrgUnitFoundBody {
                     plant_code: u.plant_code,
                     code: u.code,
                     level: u.level.as_str().to_owned(),

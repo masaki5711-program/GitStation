@@ -1132,7 +1132,7 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "GET",
         "/api/v1/org/units",
-        Coverage::Planned("ADR-0038 step D: the unit picker of the web's selector form; gstn api for now"),
+        Coverage::NotForCli("the unit picker of the web's selector form (ADR-0038 step C): `gstn approval-rule set --selector` and `gstn deploy approvers-set --selector` take the unit code itself"),
     ),
     (
         "GET",

@@ -99,8 +99,8 @@ CREATE TABLE forge.deploy_environment_approvers (
 );
 CREATE INDEX deploy_environment_approvers_project
     ON forge.deploy_environment_approvers (project_id);
-CREATE INDEX deploy_environment_approvers_user ON forge.deploy_environment_approvers (user_id);
-CREATE INDEX deploy_environment_approvers_group ON forge.deploy_environment_approvers (group_id);
+CREATE INDEX deploy_environment_approvers_by_user ON forge.deploy_environment_approvers (user_id);
+CREATE INDEX deploy_environment_approvers_by_group ON forge.deploy_environment_approvers (group_id);
 
 CREATE CONSTRAINT TRIGGER audited_change_present
     AFTER INSERT OR DELETE OR UPDATE OF id, environment_id, project_id, user_id, group_id,
@@ -139,8 +139,11 @@ CREATE TABLE forge.approval_delegations (
     ends_at       timestamptz NOT NULL,
     created_at    timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT approval_delegations_not_self CHECK (delegate_id <> delegator_id),
+    -- 720 hours, not '30 days': a day interval depends on the session's
+    -- TimeZone across a DST change; hours do not (UTC-pinned, the same
+    -- bound the application checks).
     CONSTRAINT approval_delegations_period CHECK (
-        ends_at > starts_at AND ends_at <= starts_at + interval '30 days')
+        ends_at > starts_at AND ends_at <= starts_at + interval '720 hours')
 );
 CREATE INDEX approval_delegations_delegate ON forge.approval_delegations (delegate_id);
 
@@ -156,8 +159,22 @@ ALTER TABLE forge.merge_request_approvals
     ADD COLUMN on_behalf_of bigint REFERENCES forge.users (id),
     ADD COLUMN approver_org jsonb CONSTRAINT merge_request_approvals_approver_org
         CHECK (jsonb_typeof(approver_org) = 'object' AND octet_length(approver_org::text) <= 4096);
+-- NOT VALID, then VALIDATE: the table is large on a long-running instance;
+-- VALIDATE takes only SHARE UPDATE EXCLUSIVE (writes go on meanwhile).
 ALTER TABLE forge.merge_request_approvals ADD CONSTRAINT merge_request_approvals_not_self
-    CHECK (on_behalf_of IS DISTINCT FROM approver_id);
+    CHECK (on_behalf_of IS DISTINCT FROM approver_id) NOT VALID;
+ALTER TABLE forge.merge_request_approvals VALIDATE CONSTRAINT merge_request_approvals_not_self;
+-- One live approval per person it counts for (review of step C): a person
+-- and their delegate never both hold one on a merge request.
+CREATE UNIQUE INDEX merge_request_approvals_one_live_per_person
+    ON forge.merge_request_approvals (merge_request_id, coalesce(on_behalf_of, approver_id))
+    WHERE revoked_at IS NULL;
+-- An approval given on someone's behalf ends when they remove or replace
+-- the delegation (`delegation_ended`).
+ALTER TABLE forge.merge_request_approvals DROP CONSTRAINT merge_request_approvals_revoked_reason;
+ALTER TABLE forge.merge_request_approvals ADD CONSTRAINT merge_request_approvals_revoked_reason
+    CHECK (revoked_reason IN ('unapproved', 'new_commits', 'target_changed', 'carried',
+        'delegation_ended'));
 CREATE INDEX merge_request_approvals_on_behalf_of
     ON forge.merge_request_approvals (on_behalf_of) WHERE on_behalf_of IS NOT NULL;
 
@@ -192,8 +209,8 @@ REVOKE ALL ON FUNCTION forge.merge_request_approvals_guard() FROM PUBLIC;
 DROP TRIGGER audited_change_present ON forge.merge_request_approvals;
 CREATE CONSTRAINT TRIGGER audited_change_present
     AFTER INSERT OR DELETE OR UPDATE OF id, merge_request_id, project_id, approver_id, head_sha,
-        target_branch, created_at, revoked_at, revoked_reason, carried_from, on_behalf_of,
-        approver_org
+        target_branch, created_at, revoked_at, revoked_reason, carried_from, credential_origin,
+        on_behalf_of, approver_org
     ON forge.merge_request_approvals
     DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
     EXECUTE FUNCTION forge.audited_change_present('project', 'project_id', '', '');
@@ -202,7 +219,9 @@ ALTER TABLE forge.merge_request_approvals ENABLE ALWAYS TRIGGER audited_change_p
 -- Grants ------------------------------------------------------------------
 GRANT SELECT, INSERT, UPDATE, DELETE ON forge.deploy_environment_approvers TO forge_app;
 GRANT SELECT ON forge.deploy_environment_approvers TO forge_ro;
-GRANT SELECT, INSERT, UPDATE, DELETE ON forge.deployment_approvals TO forge_app;
+-- Rows are written once and never changed; DELETE for the approvers'
+-- replacement (pending approvals end) and the project purge.
+GRANT SELECT, INSERT, DELETE ON forge.deployment_approvals TO forge_app;
 GRANT SELECT ON forge.deployment_approvals TO forge_ro;
 GRANT SELECT, INSERT, UPDATE, DELETE ON forge.approval_delegations TO forge_app;
 GRANT SELECT ON forge.approval_delegations TO forge_ro;

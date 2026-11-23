@@ -16,7 +16,11 @@ fn input(users: Vec<UserId>, required: i32, allow_delegation: bool) -> Approvers
     }
 }
 
-async fn put(w: &World, tier: DeployTier, i: &ApproversInput) -> Result<EnvironmentApprovers, ForgeError> {
+async fn put(
+    w: &World,
+    tier: DeployTier,
+    i: &ApproversInput,
+) -> Result<EnvironmentApprovers, ForgeError> {
     put_approvers_decided(
         &w.t.db,
         &ctx(Actor::User(w.alice), "req-approvers"),
@@ -37,7 +41,7 @@ async fn prod_request(w: &World, c: char) -> StoredDeployment {
 #[tokio::test]
 async fn two_named_approvers_are_needed_when_the_environment_requires_two() {
     let w = world().await;
-    let carol = w.person("carol").await;
+    let carol = w.person("cy").await;
     w.env(DeployTier::Prod, Vec::new()).await;
     w.target(DeployTier::Prod, "web-1").await.expect("target");
     let set = put(&w, DeployTier::Prod, &input(vec![w.bob, carol], 2, false))
@@ -124,7 +128,7 @@ async fn a_changed_approver_list_is_a_conflict() {
 #[tokio::test]
 async fn an_approval_for_someone_without_a_delegation_is_refused() {
     let w = world().await;
-    let carol = w.person("carol").await;
+    let carol = w.person("cy").await;
     w.env(DeployTier::Prod, Vec::new()).await;
     w.target(DeployTier::Prod, "web-1").await.expect("target");
     put(&w, DeployTier::Prod, &input(vec![w.bob], 1, true))
@@ -142,7 +146,7 @@ async fn an_approval_for_someone_without_a_delegation_is_refused() {
         &w.t.db,
         &ctx(Actor::User(w.bob), "req-delegate"),
         w.bob,
-        "carol",
+        "cy",
         &w.period().await.0,
         &w.period().await.1,
     )
@@ -172,7 +176,7 @@ async fn an_approval_for_someone_without_a_delegation_is_refused() {
 #[tokio::test]
 async fn a_delegate_and_the_delegator_count_once() {
     let w = world().await;
-    let carol = w.person("carol").await;
+    let carol = w.person("cy").await;
     let dave = w.person("dave").await;
     w.env(DeployTier::Prod, Vec::new()).await;
     w.target(DeployTier::Prod, "web-1").await.expect("target");
@@ -183,7 +187,7 @@ async fn a_delegate_and_the_delegator_count_once() {
         &w.t.db,
         &ctx(Actor::User(w.bob), "req-delegate"),
         w.bob,
-        "carol",
+        "cy",
         &w.period().await.0,
         &w.period().await.1,
     )
@@ -204,7 +208,7 @@ async fn a_delegate_and_the_delegator_count_once() {
 #[tokio::test]
 async fn a_delegation_is_checked_set_listed_and_removed() {
     let w = world().await;
-    let carol = w.person("carol").await;
+    let carol = w.person("cy").await;
     let (start, end) = w.period().await;
     let set = |delegate: &'static str, s: String, e: String| {
         let db = w.t.db.clone();
@@ -224,21 +228,28 @@ async fn a_delegation_is_checked_set_listed_and_removed() {
     for (delegate, s, e, param) in [
         ("bob", start.clone(), end.clone(), "delegate"),
         ("nobody", start.clone(), end.clone(), "delegate"),
-        ("carol", "yesterday".to_owned(), end.clone(), "starts_at"),
-        ("carol", end.clone(), start.clone(), "ends_at"),
-        ("carol", "2026-01-01T00:00:00Z".to_owned(), "2026-03-01T00:00:00Z".to_owned(), "ends_at"),
+        ("cy", "not-a-time".to_owned(), end.clone(), "starts_at"),
+        ("cy", end.clone(), start.clone(), "ends_at"),
+        (
+            "cy",
+            "2026-01-01T00:00:00Z".to_owned(),
+            "2026-03-01T00:00:00Z".to_owned(),
+            "ends_at",
+        ),
     ] {
         let refused = set(delegate, s, e).await.expect_err("refused");
         assert_eq!(refused.code(), ErrorCode::RequestInvalid, "{delegate}");
         assert!(format!("{refused:?}").contains(param), "{refused:?}");
     }
-    let (outcome, stored) = set("carol", start.clone(), end.clone()).await.expect("set");
+    let (outcome, stored) = set("cy", start.clone(), end.clone()).await.expect("set");
     assert_eq!(outcome, DelegationOutcome::Set);
     assert!(stored.active);
     assert_eq!(stored.delegate, carol);
-    let (again, _) = set("carol", start, end).await.expect("same");
+    let (again, _) = set("cy", start, end).await.expect("same");
     assert_eq!(again, DelegationOutcome::Unchanged);
-    let to_carol = crate::review::delegations_to(&w.t.db, carol).await.expect("to");
+    let to_carol = crate::review::delegations_to(&w.t.db, carol)
+        .await
+        .expect("to");
     assert_eq!(to_carol.len(), 1);
     assert_eq!(to_carol[0].delegator, w.bob);
     let removed = crate::review::remove_delegation_decided(
@@ -256,5 +267,75 @@ async fn a_delegation_is_checked_set_listed_and_removed() {
     let actions = w.audit_actions().await;
     assert!(actions.iter().any(|a| a == "approval_delegation.set"));
     assert!(actions.iter().any(|a| a == "approval_delegation.removed"));
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn approvals_end_with_the_approver_list_and_a_disabled_approver_stops_counting() {
+    let w = world().await;
+    let carol = w.person("cy").await;
+    let dave = w.person("dave").await;
+    w.env(DeployTier::Prod, Vec::new()).await;
+    w.target(DeployTier::Prod, "web-1").await.expect("target");
+    let three = input(vec![w.bob, carol, dave], 2, false);
+    put(&w, DeployTier::Prod, &three).await.expect("approvers");
+    let d = prod_request(&w, 'a').await;
+    let first = w.approve(w.bob, d.id).await.expect("bob");
+    assert_eq!(first.approvals, 1);
+    // The list is set again: Bob's approval was decided on the old one.
+    put(&w, DeployTier::Prod, &three)
+        .await
+        .expect("approvers again");
+    let read = get_deployment(&w.t.db, w.project(), d.id)
+        .await
+        .expect("read")
+        .expect("deployment");
+    assert_eq!(read.approvals, 0);
+    assert!(deployment_approvals(&w.t.db, w.project(), d.id)
+        .await
+        .expect("rows")
+        .is_empty());
+    // Bob approves again, then leaves: his approval no longer counts.
+    w.approve(w.bob, d.id).await.expect("bob again");
+    let _ = users::disable(&w.t.db, &ctx(Actor::System, "req-disable"), w.bob)
+        .await
+        .expect("disable");
+    let second = w.approve(carol, d.id).await.expect("carol");
+    assert_eq!(second.status, DeploymentStatus::PendingApproval);
+    assert_eq!(second.approvals, 1);
+    let third = w.approve(dave, d.id).await.expect("dave");
+    assert_eq!(third.status, DeploymentStatus::Queued);
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn an_approval_for_someone_is_refused_where_the_environment_does_not_allow_it() {
+    let w = world().await;
+    let carol = w.person("cy").await;
+    w.env(DeployTier::Prod, Vec::new()).await;
+    w.target(DeployTier::Prod, "web-1").await.expect("target");
+    put(&w, DeployTier::Prod, &input(vec![w.bob], 1, false))
+        .await
+        .expect("approvers");
+    let _ = set_delegation_decided(
+        &w.t.db,
+        &ctx(Actor::User(w.bob), "req-delegate"),
+        w.bob,
+        "cy",
+        &w.period().await.0,
+        &w.period().await.1,
+    )
+    .await
+    .expect("delegation");
+    let d = prod_request(&w, 'a').await;
+    let e = w
+        .approve_as(carol, d.id, Some(w.bob))
+        .await
+        .expect_err("delegation off");
+    assert_eq!(e.code(), ErrorCode::DeployApproverNotListed);
+    assert!(deployment_approvals(&w.t.db, w.project(), d.id)
+        .await
+        .expect("rows")
+        .is_empty());
     w.t.drop_now().await;
 }

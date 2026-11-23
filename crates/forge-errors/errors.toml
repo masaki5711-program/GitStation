@@ -3558,10 +3558,23 @@ severity = "info"
 user_message_ja = "この人の代理として承認できません。代理の期間が過ぎたか、代理に登録されていません。"
 user_message_en = "You cannot approve on this person's behalf: the delegation has ended or does not name you."
 user_message_id = "Anda tidak dapat menyetujui atas nama orang ini: delegasi sudah berakhir atau tidak menyebut Anda."
-cause = "ADR-0038 §3.5 (step C): an approval (`POST …/merge-requests/{iid}/approve` with `on_behalf_of`, or `POST …/deployments/{deployment_id}/approve?on_behalf_of=`) named a person who has no delegation to the caller active now (`reason=no_delegation`: none, another delegate, not started yet or ended — `forge.approval_delegations` is read under the transaction's lock), or named an unknown or disabled person (`reason=unknown_delegator`). A delegate never approves for a delegate's delegator (one level only). Nothing was written."
+cause = "ADR-0038 §3.5 (step C): an approval (`POST …/merge-requests/{iid}/approve` with `on_behalf_of`, or `POST …/deployments/{deployment_id}/approve?on_behalf_of=`) named a person who has no delegation to the caller active now (`reason=no_delegation`: none, another delegate, not started yet or ended — `forge.approval_delegations` is read under the transaction's lock), or named an unknown or disabled person (`reason=unknown_delegator`). For a deployment the loader records this as a fact and authorize() refuses with this code only once the caller may approve at all (Reporter and above; others get FG-AUTH-0003 first, no username or delegation oracle). A delegate never approves for a delegate's delegator (one level only). Nothing was written."
 diagnosis = "The log event carries `request_id`, `error_code`, `reason`, the caller and `on_behalf_of`. Read (read-only): SELECT delegator_id, delegate_id, starts_at, ends_at FROM forge.approval_delegations WHERE delegator_id = <user id>; the change history is the audit rows `approval_delegation.set` / `.removed` on the delegator."
 fix = "Approve for yourself, or ask the person to register you as their delegate (個人設定 → 代理の承認) for the period."
 test = "an_approval_for_someone_without_a_delegation_is_refused"
+
+[[error]]
+code = "FG-REVIEW-0034"
+name = "ApprovalPersonAlreadyApproved"
+http_status = 409
+severity = "info"
+user_message_ja = "この人の承認はすでにあります（本人か代理の人が承認済みです）。"
+user_message_en = "This person's approval is already there (they or their delegate approved)."
+user_message_id = "Persetujuan orang ini sudah ada (orang itu atau delegasinya sudah menyetujui)."
+cause = "ADR-0038 §3.5 (review of step C): `POST …/merge-requests/{iid}/approve` with `on_behalf_of` named a person who already holds a live approval on the merge request (their own, or another delegate's for them). One person counts once: a merge request holds at most one live approval per person it counts for (the partial unique index `merge_request_approvals_one_live_per_person` is the backstop). The person approving themself instead replaces their delegate's approval (`merge_request.unapproved`, `reason=unapproved`). Nothing was written."
+diagnosis = "The log event carries `request_id`, `error_code`, `on_behalf_of`, `user_id` and `merge_request_id`. Read (read-only): SELECT id, approver_id, on_behalf_of, head_sha FROM forge.merge_request_approvals WHERE merge_request_id = <id> AND revoked_at IS NULL."
+fix = "Nothing to do: the person's approval already counts. To approve for them on a new head, wait for the new commits to clear it, or ask them to withdraw theirs."
+test = "one_person_holds_one_live_approval_and_a_removed_delegation_ends_its_approvals"
 
 [[error]]
 code = "FG-AUTH-0024"

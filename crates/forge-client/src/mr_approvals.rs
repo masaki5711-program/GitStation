@@ -142,7 +142,11 @@ conflict: the head does not merge cleanly into the target (resolve it first)",
             out.push_str(&format!(
                 "\nrule {rule} can be approved by {}{}",
                 people.join(", "),
-                if e["more"] == Value::Bool(true) { ", ..." } else { "" }
+                if e["more"] == Value::Bool(true) {
+                    ", ..."
+                } else {
+                    ""
+                }
             ));
         }
     }
