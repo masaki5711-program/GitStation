@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="GitStation">
+  <!-- Portal card / app tile icon: two tracks (teal, orange) merge at a station and leave as one. Readable from 16 px. -->
+  <rect width="48" height="48" rx="11" fill="#1B2A44"/>
+  <g fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 15 H15 C20 15 22 19 25 24" stroke="#22B8A0"/>
+    <path d="M7 33 H15 C20 33 22 29 25 24" stroke="#FF7A45"/>
+    <path d="M25 24 H35" stroke="#22B8A0"/>
+  </g>
+  <path d="M34 17.5 L43 24 L34 30.5 Z" fill="#22B8A0"/>
+  <circle cx="25" cy="24" r="5.5" fill="#F4FBFC" stroke="#1B2A44" stroke-width="2"/>
+</svg>

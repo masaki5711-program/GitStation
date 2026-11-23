@@ -7,18 +7,39 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 
 `required_role` はすべて `access`（Keycloak のクライアント `gitstation` のロール）。`news: true`。
 
-| id | type | 大きさ | 更新 | エンドポイント |
+| id | type | 大きさ（`sizes`、太字が `default_size`） | 更新 | エンドポイント |
 |---|---|---|---|---|
-| `my-reviews` | list | M, L（既定 M） | 60 秒 | `/api/portal-widgets/v1/my-reviews` |
-| `pipelines` | status | S, M, L（既定 M） | 60 秒 | `/api/portal-widgets/v1/pipelines` |
-| `stopped-count` | kpi | S | 120 秒 | `/api/portal-widgets/v1/stopped-count` |
-| `attention-count` | kpi | S | 120 秒 | `/api/portal-widgets/v1/attention-count`（P1） |
-| `inbox` | kpi | S | 60 秒 | `/api/portal-widgets/v1/inbox`（P1） |
-| `menu` | links | S, M（既定 S） | 3600 秒 | `/api/portal-widgets/v1/menu`（P1） |
-| `merge-queue` | status | M, L（既定 M） | 60 秒 | `/api/portal-widgets/v1/merge-queue`（P2a） |
-| `spec-status` | status | M, L（既定 M） | 300 秒 | `/api/portal-widgets/v1/spec-status`（P2a） |
+| `my-reviews` | list | 1x2、**2x2**、4x2 | 60 秒 | `/api/portal-widgets/v1/my-reviews` |
+| `pipelines` | status | 2x1、**2x2**、4x2 | 60 秒 | `/api/portal-widgets/v1/pipelines` |
+| `stopped-count` | kpi | **1x1**、2x1 | 120 秒 | `/api/portal-widgets/v1/stopped-count` |
+| `attention-count` | kpi | **1x1**、2x1 | 120 秒 | `/api/portal-widgets/v1/attention-count`（P1） |
+| `inbox` | kpi | **1x1** | 60 秒 | `/api/portal-widgets/v1/inbox`（P1） |
+| `menu` | links | **1x2**、2x2 | 3600 秒 | `/api/portal-widgets/v1/menu`（P1） |
+| `merge-queue` | status | 1x2、**2x2**、4x2 | 60 秒 | `/api/portal-widgets/v1/merge-queue`（P2a） |
+| `spec-status` | status | 1x2、**2x2**、4x2 | 300 秒 | `/api/portal-widgets/v1/spec-status`（P2a） |
 
 P1 と P2a は設計（[widget-design.md](widget-design.md) §8）の段。PFS の台帳に載せる形は末尾の「台帳の写し」。
+
+### 大きさ（2026-11-23、PFS のセル方式）
+
+PFS のポータルは大きさを「横 × 縦のセル数」で決める（Android のホーム画面のウィジェットと同じ考え方。iotpf-portal MR !33、
+pfs-prototype MR !82）。セル 1 つはボードの横幅の 1/4（1440px の画面で約 330px）× 約 150px。利用者が大きさを変えるときは、
+宣言した大きさにだけ吸着する。旧 S / M / L は当面 1x1 / 2x2 / 4x2 として読まれる。
+
+| 大きさ | PFS の用途 | GitStation で選んだもの |
+|---|---|---|
+| 1x1 | 数字だけ | kpi 3 つ（件数と標準 0 のランプ） |
+| 2x1 | 数字と小さな推移 | `stopped-count` / `attention-count`（件数と標準との差）、`pipelines`（ランプ 4 つまでの帯） |
+| 1x2 | 短い一覧 | list・status・links（3 件ほど） |
+| 2x2 | 一覧・グラフ | list・status の既定 |
+| 4x2 | 横長の表 | list・status の広い表示（24 件まで見える） |
+| 4x4 | 詳細 | 使わない（詳細は GitStation の画面へ `href` で渡す） |
+
+- ポータルは描く大きさをヘッダー `x-portal-widget-size: <大きさ>` で渡す。**GitStation は今は大きさで中身を変えない**
+  （ヘッダーは読まない。件数は `limit` の設定、項目はポータルが入る分だけ描く）。大きさごとに件数を変えるのは P3 で検討する。
+- カードの見出しとアプリのタイルに出すアイコンは [brand/gitstation-portal-icon.svg](brand/gitstation-portal-icon.svg)
+  （48×48 の正方形、16px でも判別できる簡略版。配色は `web/src/assets/brand/gitstation-v1-icon.svg` と同じ）。
+  PFS 側の置き場所は `portal/public/brand/apps/gitstation/icon.svg`（PFS の MR で入れる）。
 
 ## 設定（「何を表示するか」）
 
@@ -188,9 +209,14 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
 PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 側の MR で入れる。このリポジトリから PFS は変えない）。
 既存の `my-reviews` / `pipelines` は設定を足すだけ。台帳の文字列は 1 行で、`$(`・`${`・`\` を含めない（台帳の検査）。
 
+大きさ（2026-11-23）: すべてのウィジェットの `sizes` / `default_size` を上の表のセル方式に替える。既存の 3 つ
+（`my-reviews` / `pipelines` / `stopped-count`）も大きさだけ替える。
+
 ```yaml
-  # my-reviews: kind に 3 つ、sort を足す（既存の kind / project / limit はそのまま）
+  # my-reviews: kind に 3 つ、sort を足す（既存の kind / project / limit はそのまま）。大きさを替える
   - id: my-reviews
+    sizes: [1x2, 2x2, 4x2]
+    default_size: 2x2
     settings:
       - key: kind
         type: select
@@ -212,20 +238,27 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
           - { value: newest, label: { ja: 新しい順, en: Newest first, id: Terbaru dulu } }
         default: oldest
 
-  # pipelines: only_problems を足す
+  # pipelines: only_problems を足す。大きさを替える
   - id: pipelines
+    sizes: [2x1, 2x2, 4x2]
+    default_size: 2x2
     settings:
       - key: only_problems
         type: toggle
         label: { ja: 問題のあるものだけ, en: Problems only, id: Hanya yang bermasalah }
         default: false
 
+  # stopped-count: 大きさだけ替える
+  - id: stopped-count
+    sizes: [1x1, 2x1]
+    default_size: 1x1
+
   - id: attention-count
     type: kpi
     name:        { ja: 対応が必要な件数, en: Needs my attention, id: Perlu perhatian saya }
     description: { ja: "レビュー待ち・止まった変更・承認待ちの仕様書・失敗しているプロジェクトのどれかを数えます。0 が標準です。", en: "Counts reviews waiting for you, stopped changes, specs awaiting approval or failing projects. The standard is 0.", id: "Menghitung tinjauan yang menunggu Anda, perubahan yang berhenti, spesifikasi yang menunggu persetujuan atau proyek yang gagal. Standarnya 0." }
-    sizes: [S]
-    default_size: S
+    sizes: [1x1, 2x1]
+    default_size: 1x1
     endpoint: /api/portal-widgets/v1/attention-count
     refresh_sec: 120
     required_role: access
@@ -249,8 +282,8 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
     type: kpi
     name:        { ja: GitStation の未読の通知, en: GitStation unread notifications, id: Notifikasi GitStation belum dibaca }
     description: { ja: "GitStation の通知のうち、まだ読んでいないものの数です。", en: "Number of GitStation notifications you have not read yet.", id: "Jumlah notifikasi GitStation yang belum Anda baca." }
-    sizes: [S]
-    default_size: S
+    sizes: [1x1]
+    default_size: 1x1
     endpoint: /api/portal-widgets/v1/inbox
     refresh_sec: 60
     required_role: access
@@ -259,8 +292,8 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
     type: status
     name:        { ja: マージ待ちの列, en: Merge queues, id: Antrean merge }
     description: { ja: "プロジェクトごとのマージ待ちの列です。列から外された変更・一時停止・待ちの数を色で示します。", en: "The merge queue of each project: changes the queue removed, a paused queue, and how many wait.", id: "Antrean merge tiap proyek: perubahan yang dikeluarkan antrean, antrean yang dijeda, dan jumlah yang menunggu." }
-    sizes: [M, L]
-    default_size: M
+    sizes: [1x2, 2x2, 4x2]
+    default_size: 2x2
     endpoint: /api/portal-widgets/v1/merge-queue
     refresh_sec: 60
     required_role: access
@@ -275,8 +308,8 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
     type: status
     name:        { ja: 仕様の状況, en: Specification status, id: Status spesifikasi }
     description: { ja: "仕様のプロジェクトごとに、承認待ちの変更・未決定の項目・検査の指摘のどれかを示します。", en: "For each specification project: changes awaiting approval, undecided items or check findings.", id: "Untuk tiap proyek spesifikasi: perubahan yang menunggu persetujuan, butir yang belum diputuskan, atau temuan pemeriksaan." }
-    sizes: [M, L]
-    default_size: M
+    sizes: [1x2, 2x2, 4x2]
+    default_size: 2x2
     endpoint: /api/portal-widgets/v1/spec-status
     refresh_sec: 300
     required_role: access
@@ -299,8 +332,8 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
     type: links
     name:        { ja: GitStation のメニュー, en: GitStation menu, id: Menu GitStation }
     description: { ja: "開発・レビュー・仕様・運用・管理の用途ごとに、よく使う GitStation の画面へのリンクを並べます。", en: "Links to the GitStation screens each role uses most: development, review, specifications, operations or management.", id: "Tautan ke layar GitStation yang paling sering dipakai per peran: pengembangan, tinjauan, spesifikasi, operasional, atau manajemen." }
-    sizes: [S, M]
-    default_size: S
+    sizes: [1x2, 2x2]
+    default_size: 1x2
     endpoint: /api/portal-widgets/v1/menu
     refresh_sec: 3600
     required_role: access
