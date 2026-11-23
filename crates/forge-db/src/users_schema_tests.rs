@@ -52,6 +52,28 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // Plan 16 A3: the agent marketplace (20270103100000).
+            AuditedTable {
+                name: "agent_part_versions".into(),
+                audit_resource: AuditResource::Literal("agent_part".into()),
+                audit_id_column: "part_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "agent_parts".into(),
+                audit_resource: AuditResource::Literal("agent_part".into()),
+                audit_id_column: "id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "agent_signing_keys".into(),
+                audit_resource: AuditResource::Literal("agent_signing_key".into()),
+                audit_id_column: "id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "approval_rule_approvers".into(),
                 audit_resource: AuditResource::Literal("project".into()),

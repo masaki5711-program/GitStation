@@ -120,3 +120,23 @@ MEDIUM: MCP の行き先は、どのスキームの `scheme://`・`//host`・素
 
 LOW: `core.autocrlf=true` の checkout は LF を CRLF にするので、全部のファイルが `file_changed` になる（安全側に失敗する）。FG-AGENT-0007 の
 diagnosis / fix に書いた。
+
+## Amendment（2026-11-23、A3: 表・追記だけの守り・サーバーの鍵ファイル）
+
+1. **表**（マイグレーション `20270103100000`、計画 16 §3）: `agent_signing_keys`・`agent_parts`・`agent_part_versions`・
+   `agent_part_files`・`agent_builds`・`agent_lesson_injections`。前の 4 つは公開したものを固める表で、DB 自身が断る（`XF001` →
+   FG-DB-0009）: 部品の名前・種類・元のプロジェクトは変わらない、取り下げ（`deprecated_*`）は 1 回だけ。版は `beta`・`published` で
+   入り、退役も失効もしていない鍵の署名で、取り下げていない部品にだけ足せる。後で変えてよいのは beta → stable（公開中だけ）と
+   published → revoked（理由・人・時刻つき）だけで、失効した版は最終。ファイルは追記だけで、**版を入れたトランザクションの中でしか
+   足せない**（版の `txid` を守りが入れる）。`sha256` は中身の SHA-256、1 版 200 ファイル・1 MiB まで。鍵は kid と公開鍵が
+   変わらず、退役と失効は 1 回だけ。どれも消せない。forge_app には DELETE が無く、UPDATE は変えてよい列だけ。部品・版・鍵の変更は
+   監査の行が同じトランザクションに要る（`agent_part`・`agent_signing_key`）。ファイルは版の監査の行で覆う。
+2. **元のプロジェクトに外部キーを張らない**（`source_project_id`、`ci_pipeline_id`）: 公開した部品は元のプロジェクトの消去より長く残る。
+   `agent_builds`・`agent_lesson_injections` はプロジェクトの記録なので、消去で消す。
+3. **鍵ファイル `agent.signing_keys_file`**（ADR-0013 の形）: 1 行に `<kid> <64 桁の 16 進数>`（kid は 1〜65535 の 10 進、鍵は
+   Ed25519 の 32 バイトの種）。いちばん大きい kid が署名する。DB には公開鍵だけ。読み方は他の秘密のファイルと同じ（絶対パス、
+   普通のファイル、64 KiB まで、Unix では所有者だけ）。誤りは FG-SYS-0002 ではなく **FG-AGENT-0003**（`insecure_permissions`・
+   `keys_unreadable`・`keys_invalid`）: 署名の鍵の問題は、確かめる側（gstn）と同じコードと Runbook `agent-signing-key` で追える。
+   種は `forge_core::agent_signing` から出ない（署名する関数だけを出す）。forge-core は forge-agent に依存する（契約 9 の向き）。
+4. **doctor `agent.signing_keys`**: ファイルの鍵がすべて登録され、公開鍵が合い、失効していないこと、署名する鍵が退役していないこと。
+   設定していないホストは `skip`。`agent.revoked_in_use` とファイルの要約の抜き取りは、使う側の記録ができる A7・A9 で足す。
