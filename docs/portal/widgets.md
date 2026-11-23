@@ -15,8 +15,10 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 | `attention-count` | kpi | S | 120 秒 | `/api/portal-widgets/v1/attention-count`（P1） |
 | `inbox` | kpi | S | 60 秒 | `/api/portal-widgets/v1/inbox`（P1） |
 | `menu` | links | S, M（既定 S） | 3600 秒 | `/api/portal-widgets/v1/menu`（P1） |
+| `merge-queue` | status | M, L（既定 M） | 60 秒 | `/api/portal-widgets/v1/merge-queue`（P2a） |
+| `spec-status` | status | M, L（既定 M） | 300 秒 | `/api/portal-widgets/v1/spec-status`（P2a） |
 
-P1 は設計（[widget-design.md](widget-design.md) §8）の第 1 段。PFS の台帳に載せる形は末尾の「台帳の写し」。
+P1 と P2a は設計（[widget-design.md](widget-design.md) §8）の段。PFS の台帳に載せる形は末尾の「台帳の写し」。
 
 ## 設定（「何を表示するか」）
 
@@ -105,10 +107,46 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
   （forge-web `every_menu_href_is_a_screen_of_the_spa`）で確かめる。
 - カードの題は「GitStation（開発）」の形、カードの `href` は `/`。
 
+### merge-queue（status、P2a）
+
+| キー | 型 | 値 | 既定 | 意味 |
+|---|---|---|---|---|
+| `project` | multi（`options_from: options/project`） | プロジェクトの id（繰り返す、最大 24） | なし = 自分がロールを持つプロジェクト | マージ待ちの列を出すプロジェクト |
+
+- 項目はマージ待ちの列ごと（プロジェクトとブランチの組。`main` を先に）。列の無いプロジェクトは出さない（列の無いプロジェクトが
+  多くても、列のあるプロジェクトが 24 件の上限から押し出されないように、24 件そろうまで先を読む）。列が 1 つも無ければ空。
+- ランプ（上ほど優先）: 列が自分で外した変更がある → `stop`（「外された変更 n 件」。外されたあと、もう一度列に入れるか閉じる・
+  マージするまで数える。人が外したものは数えない。`my-reviews?kind=queue` と同じ）、一時停止中 → `warn`（待ちがあれば
+  「一時停止中（n 件待ち）」）、待ちがある → `info`（「n 件待ち」）、それ以外 → `ok`（検査中の束があれば「動作中」、無ければ「待ちなし」）。
+- 件数は 100 で読むのをやめる（`100+`）。
+- `label` はプロジェクトのパス（`main` 以外の列は `<path> (<ブランチ>)`）、`key` は `<プロジェクトの id>:<ブランチ>`、
+  `href` は `/<path>/-/merge-queue?target=<ブランチ>`。見られないプロジェクトを指定しても出ない（無いのと同じ）。
+
+### spec-status（status、P2a）
+
+| キー | 型 | 値 | 既定 | 意味 |
+|---|---|---|---|---|
+| `project` | multi（`options_from: options/project`） | プロジェクトの id（繰り返す、最大 24） | なし = 自分がロールを持ち、仕様の版を公開したことのあるプロジェクト | 出す仕様のプロジェクト |
+| `show` | select | `approval` | ✓ | 承認待ちの変更: 開いていて下書きでない変更の数（新しい順に 100 件まで見る） |
+| | | `undecided` | | 未決定の項目: その変更の現在の版の `forge/doc-lint` が指摘した「必須の決定がまだ open」（規則 `decisions_resolved`）の場所（ファイルと行）の数。同じ場所は 1 度だけ数える |
+| | | `lint` | | 検査の指摘: その変更のうち、現在の版の `forge/spec-lint` か `forge/doc-lint` が失敗（`failure`）したものの数 |
+
+- 仕様のプロジェクト: ADR-0023 によりリポジトリに種類は無いので、`project` を指定しないときは「仕様の版を公開したことがある」
+  （`spec.released`、`my-reviews?kind=spec` と同じ）プロジェクトを出す。まだ公開していない仕様のリポジトリは `project` で選べば出る
+  （選択肢は他のウィジェットと同じ、ロールを持ち読めるすべてのプロジェクト）。
+- ランプ: `approval` 待ちあり → `warn`（「承認待ち n 件」）、無し → `ok`。`undecided` 未決定あり → `warn`（「未決定 n 件」）。
+  `lint` 失敗あり → `stop`（「検査の指摘 n 件」）。
+- 検査の結果がまだ無い（その版の `forge/spec-lint` と `forge/doc-lint` のどちらかがまだ終わっていない、または `error` で答えた）変更が
+  あるときは、`undecided` / `lint` を「なし」とは出さず `unknown`（「確認中」）にする。`forge/doc-lint` の 1 回の指摘は 50 件までしか
+  残らないので、50 件に達した版があれば件数を `n+` とする（0 件なら「確認中」）。
+- 件数は 100 で読むのをやめる（`100+`）。
+- `href`: `approval` / `lint` → 承認待ちの変更 `/<path>/-/pulls?state=open`、`undecided` → 仕様書 `/<path>/-/documents`。
+  言葉は「MR」と言わず「変更」（plan 08）。見られないプロジェクトは指定しても出ない。
+
 ### 選択肢
 
 `GET /api/portal-widgets/v1/my-reviews/options/project`、`…/pipelines/options/project`、`…/attention-count/options/project`、
-`…/menu/options/project`: 本人がロールを持ち読めるプロジェクト
+`…/menu/options/project`、`…/merge-queue/options/project`、`…/spec-status/options/project`: 本人がロールを持ち読めるプロジェクト
 （新しい順、最大 200）。`{success: true, data: {options: [{value: "<id>", label: "<path>"}]}}`。
 
 ## 認証と認可
@@ -126,6 +164,8 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
 - このトークンはウィジェットの経路でだけ受ける。ほかの API は 401 のまま。
 - 1 つのウィジェットの読み取りは 2.5 秒で打ち切る（`server.lookup_timeout` がそれより長くても。ポータルの上限は 3 秒）。
   件数だけのウィジェット（`stopped-count`、`attention-count`）は表示しない事実（衝突・検査）を読まない。
+- `merge-queue` / `spec-status` はプロジェクトごとに、本人が読めるか（`PortalWidgetRead`、管理者の権限なしのセッションと同じ）を
+  先に決めてから、そのプロジェクトの列・変更・検査を読む（どれもプロジェクトを読める人が画面で見られるもの）。
 
 ## 新着（ポータルへ送る）
 
@@ -215,6 +255,46 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
     refresh_sec: 60
     required_role: access
 
+  - id: merge-queue
+    type: status
+    name:        { ja: マージ待ちの列, en: Merge queues, id: Antrean merge }
+    description: { ja: "プロジェクトごとのマージ待ちの列です。列から外された変更・一時停止・待ちの数を色で示します。", en: "The merge queue of each project: changes the queue removed, a paused queue, and how many wait.", id: "Antrean merge tiap proyek: perubahan yang dikeluarkan antrean, antrean yang dijeda, dan jumlah yang menunggu." }
+    sizes: [M, L]
+    default_size: M
+    endpoint: /api/portal-widgets/v1/merge-queue
+    refresh_sec: 60
+    required_role: access
+    settings:
+      - key: project
+        type: multi
+        label: { ja: プロジェクト, en: Projects, id: Proyek }
+        options_from: options/project
+        default: null
+
+  - id: spec-status
+    type: status
+    name:        { ja: 仕様の状況, en: Specification status, id: Status spesifikasi }
+    description: { ja: "仕様のプロジェクトごとに、承認待ちの変更・未決定の項目・検査の指摘のどれかを示します。", en: "For each specification project: changes awaiting approval, undecided items or check findings.", id: "Untuk tiap proyek spesifikasi: perubahan yang menunggu persetujuan, butir yang belum diputuskan, atau temuan pemeriksaan." }
+    sizes: [M, L]
+    default_size: M
+    endpoint: /api/portal-widgets/v1/spec-status
+    refresh_sec: 300
+    required_role: access
+    settings:
+      - key: project
+        type: multi
+        label: { ja: 仕様のプロジェクト, en: Specification projects, id: Proyek spesifikasi }
+        options_from: options/project
+        default: null
+      - key: show
+        type: select
+        label: { ja: 表示するもの, en: Show, id: Tampilkan }
+        options:
+          - { value: approval,  label: { ja: 承認待ちの変更, en: Changes awaiting approval, id: Perubahan menunggu persetujuan } }
+          - { value: undecided, label: { ja: 未決定の項目, en: Undecided items, id: Butir yang belum diputuskan } }
+          - { value: lint,      label: { ja: 検査の指摘, en: Check findings, id: Temuan pemeriksaan } }
+        default: approval
+
   - id: menu
     type: links
     name:        { ja: GitStation のメニュー, en: GitStation menu, id: Menu GitStation }
@@ -242,5 +322,6 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
         default: null
 ```
 
+`merge-queue` と `spec-status` は P2a で足した（PFS 側の MR で上の 2 つを入れる）。
 `widget_status` は P1 の受け入れ後に `pilot`。ボード（`catalog/boards/`）の更新は設計 §5 のとおり（`attention-count?scope=deploy` と
 `deploy-approvals` / `merge-queue` / `spec-status` は P2 で足す）。

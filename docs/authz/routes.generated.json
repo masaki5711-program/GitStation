@@ -281,6 +281,24 @@
   {
     "action": "PortalWidgetRead",
     "method": "GET",
+    "path": "/api/portal-widgets/v1/merge-queue",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/merge-queue/options/project",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
     "path": "/api/portal-widgets/v1/my-reviews",
     "people_only": false,
     "public": false,
@@ -309,6 +327,24 @@
     "action": "PortalWidgetRead",
     "method": "GET",
     "path": "/api/portal-widgets/v1/pipelines/options/project",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/spec-status",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/spec-status/options/project",
     "people_only": false,
     "public": false,
     "scope": "fixed",

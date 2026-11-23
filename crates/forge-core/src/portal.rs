@@ -226,10 +226,27 @@ pub enum Word {
     MenuChangesWaiting,
     MenuGroups,
     MenuActivity,
+    // Widget design P2a: `merge-queue` and `spec-status`.
+    TitleMergeQueue,
+    TitleSpecApproval,
+    TitleSpecUndecided,
+    TitleSpecLint,
+    QueueWaiting,
+    QueueRunning,
+    QueueIdle,
+    QueuePaused,
+    QueueEjected,
+    SpecAwaiting,
+    SpecNoneAwaiting,
+    SpecUndecided,
+    SpecNoneUndecided,
+    SpecFindings,
+    SpecNoFindings,
+    SpecChecking,
 }
 
 impl Word {
-    pub const ALL: [Word; 54] = [
+    pub const ALL: [Word; 70] = [
         Self::TitleReview,
         Self::TitleMine,
         Self::TitleStopped,
@@ -284,6 +301,22 @@ impl Word {
         Self::MenuChangesWaiting,
         Self::MenuGroups,
         Self::MenuActivity,
+        Self::TitleMergeQueue,
+        Self::TitleSpecApproval,
+        Self::TitleSpecUndecided,
+        Self::TitleSpecLint,
+        Self::QueueWaiting,
+        Self::QueueRunning,
+        Self::QueueIdle,
+        Self::QueuePaused,
+        Self::QueueEjected,
+        Self::SpecAwaiting,
+        Self::SpecNoneAwaiting,
+        Self::SpecUndecided,
+        Self::SpecNoneUndecided,
+        Self::SpecFindings,
+        Self::SpecNoFindings,
+        Self::SpecChecking,
     ];
 
     /// `[ja, en, id]`.
@@ -421,6 +454,52 @@ impl Word {
             ],
             Self::MenuGroups => ["グループ", "Groups", "Grup"],
             Self::MenuActivity => ["最近の動き", "Recent activity", "Aktivitas terbaru"],
+            Self::TitleMergeQueue => ["マージ待ちの列", "Merge queues", "Antrean merge"],
+            Self::TitleSpecApproval => [
+                "仕様の承認待ちの変更",
+                "Spec changes awaiting approval",
+                "Perubahan spesifikasi menunggu persetujuan",
+            ],
+            Self::TitleSpecUndecided => [
+                "仕様の未決定の項目",
+                "Undecided items in specs",
+                "Butir spesifikasi yang belum diputuskan",
+            ],
+            Self::TitleSpecLint => [
+                "仕様の検査の指摘",
+                "Spec check findings",
+                "Temuan pemeriksaan spesifikasi",
+            ],
+            Self::QueueWaiting => ["{n} 件待ち", "{n} waiting", "{n} menunggu"],
+            Self::QueueRunning => ["動作中", "Running", "Berjalan"],
+            Self::QueueIdle => ["待ちなし", "Nothing waiting", "Tidak ada antrean"],
+            Self::QueuePaused => ["一時停止中", "Paused", "Dijeda"],
+            Self::QueueEjected => [
+                "外された変更 {n} 件",
+                "{n} removed from the queue",
+                "{n} dikeluarkan dari antrean",
+            ],
+            Self::SpecAwaiting => [
+                "承認待ち {n} 件",
+                "{n} awaiting approval",
+                "{n} menunggu persetujuan",
+            ],
+            Self::SpecNoneAwaiting => [
+                "承認待ちなし",
+                "Nothing awaiting approval",
+                "Tidak ada yang menunggu persetujuan",
+            ],
+            Self::SpecUndecided => ["未決定 {n} 件", "{n} undecided", "{n} belum diputuskan"],
+            Self::SpecNoneUndecided => {
+                ["未決定なし", "Nothing undecided", "Semua sudah diputuskan"]
+            }
+            Self::SpecFindings => [
+                "検査の指摘 {n} 件",
+                "{n} with check findings",
+                "{n} dengan temuan pemeriksaan",
+            ],
+            Self::SpecNoFindings => ["指摘なし", "No findings", "Tidak ada temuan"],
+            Self::SpecChecking => ["確認中", "Being checked", "Sedang diperiksa"],
         }
     }
 
@@ -518,6 +597,22 @@ pub fn project_href(project_path: &str) -> String {
 pub fn tags_href(project_path: &str) -> String {
     format!("/{project_path}/-/tags")
 }
+
+/// A project's specification documents (`/{path}/-/documents`).
+pub fn documents_href(project_path: &str) -> String {
+    format!("/{project_path}/-/documents")
+}
+
+/// A project's open merge requests (`/{path}/-/pulls?state=open`): the
+/// changes awaiting approval.
+pub fn open_changes_href(project_path: &str) -> String {
+    format!("/{project_path}/-/pulls?state=open")
+}
+
+/// The lint rule of a required decision still open (forge-doc
+/// `Rule::DecisionsResolved`): the `spec-status` widget's undecided items
+/// are the `forge/doc-lint` annotations of this rule.
+pub const UNDECIDED_RULE: &str = "decisions_resolved";
 
 /// The caller's own merge requests (`/-/merge-requests`).
 pub const MY_MERGE_REQUESTS_HREF: &str = "/-/merge-requests";
@@ -1012,6 +1107,21 @@ mod tests {
         assert_eq!(
             merge_request_changes_href("acme/web", 4),
             "/acme/web/-/pull/4/changes"
+        );
+        assert_eq!(documents_href("acme/spec"), "/acme/spec/-/documents");
+        assert_eq!(
+            open_changes_href("acme/spec"),
+            "/acme/spec/-/pulls?state=open"
+        );
+    }
+
+    /// `spec-status?show=undecided` counts forge-doc's annotations of this
+    /// rule: the name is forge-doc's own.
+    #[test]
+    fn the_undecided_rule_is_forge_docs() {
+        assert_eq!(
+            UNDECIDED_RULE,
+            forge_doc::doctype::Rule::DecisionsResolved.as_str()
         );
     }
 

@@ -1,8 +1,9 @@
 //! The PFS portal's home widgets (ADR-0036; the PFS portal contract v1,
 //! `docs/portal/widgets.md`, widget design P1): the data of the widgets
 //! GitStation declares (`my-reviews`, `pipelines`, `stopped-count`, and
-//! from P1 `attention-count`, `inbox`, `menu`) and the project options of
-//! those with a `project` setting.
+//! from P1 `attention-count`, `inbox`, `menu`, from P2a `merge-queue`,
+//! `spec-status`) and the project options of those with a `project`
+//! setting.
 //!
 //! - Only the portal's credential reaches them (`crate::auth`: the portal's
 //!   Bearer token, `azp = portal`, decided by `authorize()` as
@@ -43,6 +44,7 @@ use forge_core::portal::{
 use forge_core::{parse_positive_id, ProjectId, UserId};
 use forge_errors::{ErrorCode, ForgeError, Lang};
 use forge_pipelines::portal::Show;
+use forge_review::portal::{PortalQueue, PortalSpec, QueueStatus, SpecStatus, MAX_STATUS_COUNT};
 use forge_review::{AttentionReason, UserListCount, WidgetItem, WidgetList, WidgetOrder};
 use serde_json::{json, Value};
 
@@ -62,6 +64,10 @@ pub const ATTENTION_COUNT_OPTIONS: &str = "/api/portal-widgets/v1/attention-coun
 pub const INBOX: &str = "/api/portal-widgets/v1/inbox";
 pub const MENU: &str = "/api/portal-widgets/v1/menu";
 pub const MENU_OPTIONS: &str = "/api/portal-widgets/v1/menu/options/project";
+pub const MERGE_QUEUE: &str = "/api/portal-widgets/v1/merge-queue";
+pub const MERGE_QUEUE_OPTIONS: &str = "/api/portal-widgets/v1/merge-queue/options/project";
+pub const SPEC_STATUS: &str = "/api/portal-widgets/v1/spec-status";
+pub const SPEC_STATUS_OPTIONS: &str = "/api/portal-widgets/v1/spec-status/options/project";
 
 /// The most projects the `pipelines` setting may name (contract §3).
 const MAX_PROJECTS: usize = 24;
@@ -73,6 +79,8 @@ const STALE_LIST_S: u64 = 300;
 const STALE_KPI_S: u64 = 600;
 /// The `menu` changes only with a release (refresh 3600 s).
 const STALE_MENU_S: u64 = 7200;
+/// `spec-status` refreshes every 300 s.
+const STALE_SPEC_S: u64 = 900;
 
 const LOCALE: QueryParam = QueryParam {
     name: "locale",
@@ -169,6 +177,32 @@ pub const MENU_QUERY: &[QueryParam] = &[
         name: "project",
         description: "One project id (an option of options/project): the project the project links open; none: they ask to choose a project",
         integer_range: Some((1, i64::MAX)),
+    },
+    LOCALE,
+    TZ,
+];
+
+pub const MERGE_QUEUE_QUERY: &[QueryParam] = &[
+    QueryParam {
+        name: "project",
+        description:
+            "Project ids, repeated (at most 24); none: the projects the person holds a role on",
+        integer_range: Some((1, i64::MAX)),
+    },
+    LOCALE,
+    TZ,
+];
+
+pub const SPEC_STATUS_QUERY: &[QueryParam] = &[
+    QueryParam {
+        name: "project",
+        description: "Project ids, repeated (at most 24); none: the projects the person holds a role on that released a specification",
+        integer_range: Some((1, i64::MAX)),
+    },
+    QueryParam {
+        name: "show",
+        description: "approval (changes awaiting approval, default), undecided (required decisions still open) or lint (changes whose spec or document check found a problem)",
+        integer_range: None,
     },
     LOCALE,
     TZ,
@@ -278,7 +312,21 @@ async fn widget_bounded<T>(
     operation: &'static str,
     read: impl std::future::Future<Output = Result<T, ForgeError>>,
 ) -> Result<T, ForgeError> {
-    let limit = state.lookup_timeout.min(WIDGET_READ_BUDGET);
+    bounded_by(widget_limit(state.lookup_timeout), operation, read).await
+}
+
+/// The limit of one widget's reads under `lookup_timeout`.
+pub(crate) fn widget_limit(lookup_timeout: Duration) -> Duration {
+    lookup_timeout.min(WIDGET_READ_BUDGET)
+}
+
+/// `read` within `limit`: `FG-WEB-0002` (`RequestTimeout`) with the operation
+/// and the limit past it.
+pub(crate) async fn bounded_by<T>(
+    limit: Duration,
+    operation: &'static str,
+    read: impl std::future::Future<Output = Result<T, ForgeError>>,
+) -> Result<T, ForgeError> {
     match tokio::time::timeout(limit, read).await {
         Ok(result) => result,
         Err(_) => Err(ForgeError::new(ErrorCode::RequestTimeout)
@@ -510,6 +558,57 @@ pub(crate) fn menu_query(raw: Option<&str>) -> Result<MenuQuery, ForgeError> {
     Ok(MenuQuery {
         purpose,
         project,
+        lang,
+    })
+}
+
+/// `merge-queue`'s settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QueueQuery {
+    pub projects: Option<Vec<ProjectId>>,
+    pub lang: Lang,
+}
+
+pub(crate) fn queue_query(raw: Option<&str>) -> Result<QueueQuery, ForgeError> {
+    let pairs = pairs(raw);
+    let lang = common(&pairs)?;
+    Ok(QueueQuery {
+        projects: multi_projects(&pairs)?,
+        lang,
+    })
+}
+
+/// What `spec-status` shows of each project (widget design §3.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpecShow {
+    /// The changes awaiting approval.
+    Approval,
+    /// The required decisions still open.
+    Undecided,
+    /// The changes whose spec or document check found a problem.
+    Lint,
+}
+
+/// `spec-status`' settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpecQuery {
+    pub projects: Option<Vec<ProjectId>>,
+    pub show: SpecShow,
+    pub lang: Lang,
+}
+
+pub(crate) fn spec_query(raw: Option<&str>) -> Result<SpecQuery, ForgeError> {
+    let pairs = pairs(raw);
+    let lang = common(&pairs)?;
+    let show = match single(&pairs, "show")? {
+        None | Some("approval") => SpecShow::Approval,
+        Some("undecided") => SpecShow::Undecided,
+        Some("lint") => SpecShow::Lint,
+        Some(_) => return Err(invalid("show", "unknown_value")),
+    };
+    Ok(SpecQuery {
+        projects: multi_projects(&pairs)?,
+        show,
         lang,
     })
 }
@@ -1029,6 +1128,206 @@ pub async fn menu(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Resp
             Some(HOME_HREF.to_owned()),
             STALE_MENU_S,
             menu_body(q.purpose, path.as_deref(), q.lang),
+        )
+    }
+    .await;
+    answer(&w.ctx, built)
+}
+
+/// A count shown: `n+` when it reached the cap of the reads, or when
+/// `partial` says more may exist.
+fn shown_count(n: i64, partial: bool) -> String {
+    if partial || n >= MAX_STATUS_COUNT {
+        format!("{n}+")
+    } else {
+        n.to_string()
+    }
+}
+
+/// `word` with `{n}` replaced.
+fn with_n(word: Word, n: &str, lang: Lang) -> String {
+    word.in_lang(lang).replace("{n}", n)
+}
+
+/// The lamp and label of one queue (widget design §3.6): a merge request
+/// the queue removed → `stop`, paused → `warn`, entries waiting → `info`,
+/// otherwise `ok` (running a batch, or nothing waiting).
+pub(crate) fn queue_lamp(q: &QueueStatus, lang: Lang) -> (Lamp, String) {
+    if q.ejected > 0 {
+        return (
+            Lamp::Stop,
+            with_n(Word::QueueEjected, &shown_count(q.ejected, false), lang),
+        );
+    }
+    let waiting = with_n(Word::QueueWaiting, &shown_count(q.queued, false), lang);
+    if q.paused {
+        let paused = Word::QueuePaused.in_lang(lang);
+        return if q.queued > 0 {
+            (Lamp::Warn, format!("{paused} ({waiting})"))
+        } else {
+            (Lamp::Warn, paused.to_owned())
+        };
+    }
+    if q.queued > 0 {
+        return (Lamp::Info, waiting);
+    }
+    if q.testing > 0 {
+        return (Lamp::Ok, Word::QueueRunning.in_lang(lang).to_owned());
+    }
+    (Lamp::Ok, Word::QueueIdle.in_lang(lang).to_owned())
+}
+
+/// The `merge-queue` body: one lamp per queue; a queue of another branch
+/// than `main` is labelled with it.
+pub(crate) fn queue_body(queues: &[PortalQueue], lang: Lang) -> Value {
+    let items: Vec<Value> = queues
+        .iter()
+        .map(|q| {
+            let s = &q.status;
+            let short = s
+                .target_branch
+                .strip_prefix("refs/heads/")
+                .unwrap_or(&s.target_branch);
+            let label = if short == "main" {
+                q.path.clone()
+            } else {
+                format!("{} ({short})", q.path)
+            };
+            let (lamp, state_label) = queue_lamp(s, lang);
+            json!({
+                "key": format!("{}:{short}", s.project.get()),
+                "label": label,
+                "state": lamp.as_str(),
+                "state_label": state_label,
+                "href": forge_core::portal::merge_queue_href(&q.path, &s.target_branch),
+            })
+        })
+        .collect();
+    json!({ "items": items })
+}
+
+/// The lamp and label of one specification project (widget design §3.7):
+/// `approval` with waiting changes → `warn`; `undecided` with open
+/// decisions → `warn`; `lint` with a failed check → `stop`. A change not
+/// checked yet (or whose check answered `error`) is never "nothing found":
+/// `unknown` when nothing else is to be said.
+pub(crate) fn spec_lamp(s: &SpecStatus, show: SpecShow, lang: Lang) -> (Lamp, String) {
+    match show {
+        SpecShow::Approval => {
+            if s.awaiting > 0 {
+                (
+                    Lamp::Warn,
+                    with_n(Word::SpecAwaiting, &shown_count(s.awaiting, false), lang),
+                )
+            } else {
+                (Lamp::Ok, Word::SpecNoneAwaiting.in_lang(lang).to_owned())
+            }
+        }
+        SpecShow::Undecided => {
+            if s.undecided > 0 {
+                let n = shown_count(s.undecided, s.undecided_partial);
+                (Lamp::Warn, with_n(Word::SpecUndecided, &n, lang))
+            } else if s.unchecked > 0 || s.undecided_partial {
+                (Lamp::Unknown, Word::SpecChecking.in_lang(lang).to_owned())
+            } else {
+                (Lamp::Ok, Word::SpecNoneUndecided.in_lang(lang).to_owned())
+            }
+        }
+        SpecShow::Lint => {
+            if s.failing > 0 {
+                (
+                    Lamp::Stop,
+                    with_n(Word::SpecFindings, &shown_count(s.failing, false), lang),
+                )
+            } else if s.unchecked > 0 {
+                (Lamp::Unknown, Word::SpecChecking.in_lang(lang).to_owned())
+            } else {
+                (Lamp::Ok, Word::SpecNoFindings.in_lang(lang).to_owned())
+            }
+        }
+    }
+}
+
+/// The `spec-status` body: one lamp per project; `undecided` opens the
+/// documents, the others the open changes.
+pub(crate) fn spec_body(specs: &[PortalSpec], show: SpecShow, lang: Lang) -> Value {
+    let items: Vec<Value> = specs
+        .iter()
+        .map(|p| {
+            let (lamp, state_label) = spec_lamp(&p.status, show, lang);
+            let href = match show {
+                SpecShow::Undecided => forge_core::portal::documents_href(&p.path),
+                SpecShow::Approval | SpecShow::Lint => {
+                    forge_core::portal::open_changes_href(&p.path)
+                }
+            };
+            json!({
+                "key": p.status.project.get().to_string(),
+                "label": p.path,
+                "state": lamp.as_str(),
+                "state_label": state_label,
+                "href": href,
+            })
+        })
+        .collect();
+    json!({ "items": items })
+}
+
+/// `GET merge-queue` → the `status` widget (widget design §3.6).
+pub async fn merge_queue(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Response {
+    let query = queue_query(request.raw_query());
+    let w = request.into_write();
+    let built = async {
+        let q = query?;
+        let review = state
+            .review
+            .as_deref()
+            .ok_or_else(|| unconfigured("review_unconfigured"))?;
+        let queues = widget_bounded(
+            &state,
+            "portal_widget_merge_queue",
+            review.portal_merge_queues(&w.proof, q.projects.as_deref()),
+        )
+        .await?;
+        envelope(
+            "status",
+            Word::TitleMergeQueue.in_lang(q.lang),
+            None,
+            STALE_LIST_S,
+            queue_body(&queues, q.lang),
+        )
+    }
+    .await;
+    answer(&w.ctx, built)
+}
+
+/// `GET spec-status` → the `status` widget (widget design §3.7).
+pub async fn spec_status(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Response {
+    let query = spec_query(request.raw_query());
+    let w = request.into_write();
+    let built = async {
+        let q = query?;
+        let review = state
+            .review
+            .as_deref()
+            .ok_or_else(|| unconfigured("review_unconfigured"))?;
+        let specs = widget_bounded(
+            &state,
+            "portal_widget_spec_status",
+            review.portal_spec_status(&w.proof, q.projects.as_deref()),
+        )
+        .await?;
+        let title = match q.show {
+            SpecShow::Approval => Word::TitleSpecApproval,
+            SpecShow::Undecided => Word::TitleSpecUndecided,
+            SpecShow::Lint => Word::TitleSpecLint,
+        };
+        envelope(
+            "status",
+            title.in_lang(q.lang),
+            None,
+            STALE_SPEC_S,
+            spec_body(&specs, q.show, q.lang),
         )
     }
     .await;

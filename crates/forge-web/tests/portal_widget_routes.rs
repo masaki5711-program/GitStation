@@ -1181,3 +1181,435 @@ async fn a_failing_project_past_the_first_24_is_never_dropped() {
     assert_eq!(failed["value"], 1, "{failed}");
     assert_eq!(failed["display"], "1 projects");
 }
+
+// ------------------------------------------------------------ widget design P2a
+
+const QUEUES: &str = "/api/portal-widgets/v1/merge-queue";
+const QUEUE_OPTIONS: &str = "/api/portal-widgets/v1/merge-queue/options/project";
+const SPECS: &str = "/api/portal-widgets/v1/spec-status";
+const SPEC_OPTIONS: &str = "/api/portal-widgets/v1/spec-status/options/project";
+
+/// The labels and states of a `status` body's items.
+fn lamps(body: &Value) -> Vec<(String, String, String)> {
+    body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|i| {
+            (
+                i["label"].as_str().unwrap_or("").to_owned(),
+                i["state"].as_str().unwrap_or("").to_owned(),
+                i["state_label"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// A queue of `project` on `branch`: `paused` or not.
+fn queue_row(project: ProjectId, branch: &str, paused: bool) -> String {
+    let (by, at) = if paused {
+        ("(SELECT min(id) FROM forge.users)", "now()")
+    } else {
+        ("NULL", "NULL")
+    };
+    format!(
+        "INSERT INTO forge.merge_queues (project_id, target_branch, paused, paused_by, paused_at) \
+         VALUES ({}, '{branch}', {paused}, {by}, {at})",
+        project.get()
+    )
+}
+
+/// An entry of merge request `mr` (iid `iid`) in the queue of `project` on
+/// `branch`, by `by`: `queued`, or `removed` (by the queue itself without
+/// `removed_by`).
+fn entry_row(
+    project: ProjectId,
+    branch: &str,
+    mr: i64,
+    iid: i64,
+    by: UserId,
+    state: &str,
+    removed_by: Option<UserId>,
+) -> String {
+    let p = project.get();
+    let finished = if state == "queued" { "NULL" } else { "now()" };
+    let reason = if state == "removed" {
+        "'checks_failed'"
+    } else {
+        "NULL"
+    };
+    format!(
+        "INSERT INTO forge.merge_queue_entries (queue_id, project_id, merge_request_id, state, \
+         head_sha, method, message, enqueued_by, credential_kind, credential_id, request_id, \
+         removed_by, reason, finished_at) VALUES ((SELECT id FROM forge.merge_queues WHERE \
+         project_id = {p} AND target_branch = '{branch}'), {p}, {mr}, '{state}', '{}', \
+         'merge_commit', 'm', {}, 'session', 1, 'req-q{mr}-{state}', {}, {reason}, {finished})",
+        head(iid),
+        by.get(),
+        removed_by.map_or_else(|| "NULL".to_owned(), |u| u.get().to_string()),
+    )
+}
+
+#[tokio::test]
+async fn merge_queue_shows_each_readable_queue_and_what_waits_on_a_person() {
+    let w = World::new().await;
+    // Empty state: no project of dave's has a queue yet.
+    let empty = data(&w.as_token(QUEUES, "t-dave").await, "status");
+    assert_eq!(empty["items"], Value::Array(Vec::new()), "{empty}");
+    let first = mr_id(&w.t, w.web, 1).await;
+    let second = mr(&w.t, w.web, 2, w.olga).await;
+    let third = mr(&w.t, w.web, 3, w.dave).await;
+    let hidden = mr_id(&w.t, w.secret, 1).await;
+    let main = "refs/heads/main";
+    w.t.commit_audited(
+        ("project", w.web.get()),
+        &[
+            queue_row(w.web, main, false),
+            queue_row(w.web, "refs/heads/rel/1.0", true),
+            entry_row(w.web, main, first, 1, w.olga, "queued", None),
+            // Dequeued by a person: not "removed by the queue".
+            entry_row(w.web, main, second, 2, w.olga, "removed", Some(w.olga)),
+            // Removed by the queue itself: someone must act.
+            entry_row(w.web, main, third, 3, w.dave, "removed", None),
+            // The hidden project's queue removed mallory's change.
+            queue_row(w.secret, main, false),
+        ],
+    )
+    .await;
+    w.t.commit_audited(
+        ("project", w.secret.get()),
+        &[entry_row(
+            w.secret, main, hidden, 1, w.olga, "removed", None,
+        )],
+    )
+    .await;
+    let a = w.as_token(&format!("{QUEUES}?locale=en"), "t-dave").await;
+    let body = data(&a, "status");
+    assert_eq!(a.1["data"]["title"], "Merge queues");
+    assert_eq!(
+        lamps(&body),
+        [
+            (
+                "acme/web".to_owned(),
+                "stop".to_owned(),
+                "1 removed from the queue".to_owned()
+            ),
+            (
+                "acme/web (rel/1.0)".to_owned(),
+                "warn".to_owned(),
+                "Paused".to_owned()
+            ),
+        ],
+        "{body}"
+    );
+    assert_eq!(
+        hrefs(&body),
+        [
+            "/acme/web/-/merge-queue?target=main",
+            "/acme/web/-/merge-queue?target=rel/1.0"
+        ]
+    );
+    // Queued again: the removal is over, the queue has two waiting.
+    w.t.commit_audited(
+        ("project", w.web.get()),
+        &[entry_row(w.web, main, third, 3, w.dave, "queued", None)],
+    )
+    .await;
+    let body = data(&w.as_token(QUEUES, "t-dave").await, "status");
+    assert_eq!(body["items"][0]["state"], "info", "{body}");
+    assert_eq!(body["items"][0]["state_label"], "2 waiting");
+    let ja = data(
+        &w.as_token(&format!("{QUEUES}?locale=ja"), "t-dave").await,
+        "status",
+    );
+    assert_eq!(ja["items"][0]["state_label"], "2 件待ち");
+    // Naming the hidden project (or one that is not there) shows nothing
+    // of it; eve, who holds no role, sees no queue at all.
+    let asked = format!(
+        "{QUEUES}?project={}&project={}&project=999999",
+        w.secret.get(),
+        w.web.get()
+    );
+    let body = data(&w.as_token(&asked, "t-dave").await, "status");
+    assert!(
+        lamps(&body)
+            .iter()
+            .all(|(label, _, _)| label.starts_with("acme/web")),
+        "{body}"
+    );
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(2));
+    let only_hidden = data(
+        &w.as_token(&format!("{QUEUES}?project={}", w.secret.get()), "t-dave")
+            .await,
+        "status",
+    );
+    assert_eq!(only_hidden["items"], Value::Array(Vec::new()));
+    let eve = data(&w.as_token(QUEUES, "t-eve").await, "status");
+    assert_eq!(eve["items"], Value::Array(Vec::new()));
+    // The options: dave's project only.
+    let options = w.as_token(QUEUE_OPTIONS, "t-dave").await;
+    assert_eq!(options.0, StatusCode::OK, "{}", options.1);
+    assert_eq!(options.1["data"]["options"][0]["label"], "acme/web");
+    assert_eq!(
+        options.1["data"]["options"].as_array().map(Vec::len),
+        Some(1)
+    );
+}
+
+/// At most 24 queues; projects without a queue never push one out.
+#[tokio::test]
+async fn merge_queue_keeps_at_most_24_and_reads_past_projects_without_one() {
+    let w = World::new().await;
+    let mut queues = Vec::new();
+    for n in 0..25 {
+        let p = project(&w.t, &format!("q{n:02}"), w.dave, &[]).await;
+        queues.push(queue_row(p, "refs/heads/main", false));
+    }
+    // 24 newer projects without a queue.
+    for n in 0..24 {
+        project(&w.t, &format!("z{n:02}"), w.dave, &[]).await;
+    }
+    w.t.commit_audited(("project", w.web.get()), &queues).await;
+    let body = data(&w.as_token(QUEUES, "t-dave").await, "status");
+    let shown = lamps(&body);
+    assert_eq!(shown.len(), 24, "{body}");
+    assert!(shown
+        .iter()
+        .all(|(l, s, _)| l.starts_with('q') && s == "ok"));
+    // Newest first: q24 … q01; the oldest (q00) is past the cap.
+    assert_eq!(shown[0].0, "q24/web");
+    assert!(!shown.iter().any(|(l, _, _)| l == "q00/web"));
+}
+
+/// `spec-status` facts on merge request `mr`'s head `head(iid)` of
+/// `project`: one run of `name` concluding `conclusion`.
+fn run_row(project: ProjectId, iid: i64, name: &str, conclusion: &str, by: UserId) -> String {
+    // A `forge/` run has no reporting account (`check_runs_reporter`).
+    let by = if name.starts_with("forge/") {
+        "NULL".to_owned()
+    } else {
+        by.get().to_string()
+    };
+    format!(
+        "INSERT INTO forge.check_runs (project_id, head_sha, name, status, conclusion, \
+         completed_at, reported_by, request_id) VALUES ({}, '{}', '{name}', 'completed', \
+         '{conclusion}', now(), {}, 'req-run-{iid}')",
+        project.get(),
+        head(iid),
+        by
+    )
+}
+
+/// An annotation of `project`'s doc-lint run on `head(iid)`.
+fn annotation_row(
+    project: ProjectId,
+    iid: i64,
+    position: i32,
+    path: &str,
+    line: i32,
+    rule: &str,
+) -> String {
+    let p = project.get();
+    format!(
+        "INSERT INTO forge.check_annotations (check_run_id, project_id, position, path, \
+         start_line, end_line, level, message) VALUES ((SELECT id FROM forge.check_runs \
+         WHERE project_id = {p} AND head_sha = '{}' AND name = 'forge/doc-lint'), {p}, \
+         {position}, '{path}', {line}, {line}, 'failure', '{path}:{line} {rule} — D-0{line} \
+         [FG-DOC-0001]')",
+        head(iid)
+    )
+}
+
+/// `project` released a specification.
+fn released_row(project: ProjectId) -> String {
+    let p = project.get();
+    format!(
+        "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
+         request_id, project_id) VALUES ('system', 'spec.released', 'succeeded', 'project', {p}, \
+         'req-rel-{p}', {p})"
+    )
+}
+
+#[tokio::test]
+async fn spec_status_shows_each_readable_spec_and_never_says_nothing_found_too_early() {
+    let w = World::new().await;
+    // Empty state: no project of dave's released a specification.
+    let empty = data(&w.as_token(SPECS, "t-dave").await, "status");
+    assert_eq!(empty["items"], Value::Array(Vec::new()), "{empty}");
+    // Two specification projects dave reads, and the hidden one.
+    let specs = project(&w.t, "specs", w.olga, &[(w.dave, Role::Developer)]).await;
+    let fresh = project(&w.t, "fresh", w.olga, &[(w.dave, Role::Reporter)]).await;
+    for iid in 1..=3 {
+        mr(&w.t, specs, iid, w.olga).await;
+    }
+    mr(&w.t, fresh, 1, w.olga).await;
+    let o = w.olga;
+    let draft = mr_id(&w.t, specs, 3).await;
+    w.t.commit_audited(
+        ("project", specs.get()),
+        &[
+            released_row(specs),
+            released_row(fresh),
+            released_row(w.secret),
+            format!("UPDATE forge.merge_requests SET draft = true, revision = revision + 1 WHERE id = {draft}"),
+            // Change 1: spec-lint passed, doc-lint found two open decisions
+            // (one of them twice: counted once) and another problem.
+            run_row(specs, 1, "forge/spec-lint", "success", o),
+            run_row(specs, 1, "forge/doc-lint", "failure", o),
+            annotation_row(specs, 1, 0, "spec/a.md", 3, "decisions_resolved"),
+            annotation_row(specs, 1, 1, "spec/a.md", 9, "decisions_resolved"),
+            annotation_row(specs, 1, 2, "spec/b.md", 4, "every_must_req_has_check"),
+            // Change 2 shares change 1's document state: same places.
+            run_row(specs, 2, "forge/spec-lint", "success", o),
+            run_row(specs, 2, "forge/doc-lint", "failure", o),
+            annotation_row(specs, 2, 0, "spec/a.md", 3, "decisions_resolved"),
+            // The draft's findings are not counted.
+            run_row(specs, 3, "forge/spec-lint", "failure", o),
+            // fresh: its one change has spec-lint only — doc-lint has not
+            // answered yet.
+            run_row(fresh, 1, "forge/spec-lint", "success", o),
+        ],
+    )
+    .await;
+    let show = |show: &str| format!("{SPECS}?show={show}&locale=en");
+    // approval (default): newest project first; the hidden one never.
+    let a = w.as_token(SPECS, "t-dave").await;
+    let approval = data(&a, "status");
+    assert_eq!(a.1["data"]["title"], "Spec changes awaiting approval");
+    assert_eq!(
+        lamps(&approval),
+        [
+            (
+                "fresh/web".to_owned(),
+                "warn".to_owned(),
+                "1 awaiting approval".to_owned()
+            ),
+            (
+                "specs/web".to_owned(),
+                "warn".to_owned(),
+                "2 awaiting approval".to_owned()
+            ),
+        ],
+        "{approval}"
+    );
+    assert_eq!(
+        hrefs(&approval),
+        [
+            "/fresh/web/-/pulls?state=open",
+            "/specs/web/-/pulls?state=open"
+        ]
+    );
+    let undecided = data(&w.as_token(&show("undecided"), "t-dave").await, "status");
+    assert_eq!(
+        lamps(&undecided),
+        [
+            (
+                "fresh/web".to_owned(),
+                "unknown".to_owned(),
+                "Being checked".to_owned()
+            ),
+            (
+                "specs/web".to_owned(),
+                "warn".to_owned(),
+                "2 undecided".to_owned()
+            ),
+        ],
+        "{undecided}"
+    );
+    assert_eq!(hrefs(&undecided)[1], "/specs/web/-/documents");
+    let lint = data(&w.as_token(&show("lint"), "t-dave").await, "status");
+    assert_eq!(
+        lamps(&lint),
+        [
+            (
+                "fresh/web".to_owned(),
+                "unknown".to_owned(),
+                "Being checked".to_owned()
+            ),
+            (
+                "specs/web".to_owned(),
+                "stop".to_owned(),
+                "2 with check findings".to_owned()
+            ),
+        ],
+        "{lint}"
+    );
+    // Chosen explicitly: a project that never released is shown as asked;
+    // the hidden one (released) is not, nor one that is not there.
+    let asked = data(
+        &w.as_token(
+            &format!(
+                "{SPECS}?project={}&project={}&project=999999",
+                w.web.get(),
+                w.secret.get()
+            ),
+            "t-dave",
+        )
+        .await,
+        "status",
+    );
+    assert_eq!(
+        lamps(&asked),
+        [(
+            "acme/web".to_owned(),
+            "warn".to_owned(),
+            "1 awaiting approval".to_owned()
+        )],
+        "{asked}"
+    );
+    // eve holds no role anywhere: the empty state, also for the options.
+    let eve = data(&w.as_token(SPECS, "t-eve").await, "status");
+    assert_eq!(eve["items"], Value::Array(Vec::new()));
+    let options = w.as_token(SPEC_OPTIONS, "t-eve").await;
+    assert_eq!(options.0, StatusCode::OK, "{}", options.1);
+    assert_eq!(options.1["data"]["options"], Value::Array(Vec::new()));
+    let ja = data(
+        &w.as_token(&format!("{SPECS}?locale=ja"), "t-dave").await,
+        "status",
+    );
+    assert_eq!(ja["items"][1]["state_label"], "承認待ち 2 件");
+}
+
+#[tokio::test]
+async fn the_p2a_routes_are_decided_by_authorize_and_checked() {
+    let w = World::new().await;
+    for (token, status, code) in [
+        ("t-norole", StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        ("t-otherparty", StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        ("t-disabled", StatusCode::FORBIDDEN, "FG-AUTH-0004"),
+        ("t-unlinked", StatusCode::FORBIDDEN, "FG-AUTH-0027"),
+        ("t-forged", StatusCode::UNAUTHORIZED, "FG-AUTH-0026"),
+    ] {
+        for uri in [QUEUES, QUEUE_OPTIONS, SPECS, SPEC_OPTIONS] {
+            let a = w.as_token(uri, token).await;
+            assert_eq!(a.0, status, "{token} {uri}: {}", a.1);
+            assert_eq!(refused(&a), code, "{token} {uri}");
+        }
+    }
+    let cookie = w.get(SPECS, &[("cookie", "__Host-gstn_session=abc")]).await;
+    assert_eq!(refused(&cookie), "FG-AUTH-0026");
+    for uri in [QUEUES, SPECS] {
+        let a = w.as_token_with_headers(uri, "t-dave").await;
+        assert_eq!(a.answer.0, StatusCode::OK, "{uri}: {}", a.answer.1);
+        assert_eq!(a.cache_control.as_deref(), Some("private, max-age=30"));
+    }
+    for uri in [
+        format!("{SPECS}?show=deploy"),
+        format!("{SPECS}?show=lint&show=approval"),
+        format!("{SPECS}?project=0"),
+        format!("{QUEUES}?project=abc"),
+        format!("{QUEUES}?locale=xx"),
+        // deploy still waits for ADR-0038 step C.
+        format!("{ATTENTION}?scope=deploy"),
+    ] {
+        let a = w.as_token_with_headers(&uri, "t-dave").await;
+        assert_eq!(
+            a.answer.0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{uri}: {}",
+            a.answer.1
+        );
+        assert_eq!(refused(&a.answer), "FG-WEB-0011", "{uri}");
+        assert_eq!(a.cache_control.as_deref(), Some("no-store"));
+    }
+}
