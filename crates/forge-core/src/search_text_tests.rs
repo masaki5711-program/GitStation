@@ -254,3 +254,20 @@ fn snippet_needles_are_deduplicated_and_capped() {
     assert!(s.highlights.is_empty());
     assert!(s.cut_after);
 }
+
+#[test]
+fn a_query_has_at_most_max_query_terms() {
+    // 33 kanji: 32 two-grams, accepted; 34: 33, refused.
+    let kanji: Vec<char> =
+        "設備仕様承認手順管理番号確認作業記録保存期間更新履歴参照文書変更理由説明欄追加"
+            .chars()
+            .collect();
+    let ok: String = kanji.iter().take(MAX_QUERY_TERMS + 1).collect();
+    assert_eq!(
+        SearchQuery::parse(&ok).unwrap().terms().len(),
+        MAX_QUERY_TERMS
+    );
+    let over: String = kanji.iter().take(MAX_QUERY_TERMS + 2).collect();
+    assert_eq!(SearchQuery::parse(&over), Err(QueryRejection::TooManyTerms));
+    assert_eq!(QueryRejection::TooManyTerms.as_str(), "too_many_terms");
+}

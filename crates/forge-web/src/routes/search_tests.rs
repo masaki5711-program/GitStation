@@ -250,7 +250,39 @@ struct Fake {
     hang: bool,
     calls: AtomicUsize,
     pages: AtomicUsize,
+    loads: AtomicUsize,
     filters: Mutex<Vec<(CandidateFilter, u32)>>,
+    /// Extra readable (Reporter) and hidden (no role) projects, ids from 1000.
+    extra_readable: usize,
+    extra_hidden: usize,
+}
+
+impl Fake {
+    fn all_records(&self) -> Vec<ProjectRecord> {
+        let mut all = records();
+        let mut id = 1000i64;
+        for _ in 0..self.extra_hidden {
+            all.push(record(id, None, false));
+            id += 1;
+        }
+        for _ in 0..self.extra_readable {
+            all.push(record(id, Some(Role::Reporter), false));
+            id += 1;
+        }
+        all
+    }
+}
+
+impl forge_core::ProjectAccessLoader for Fake {
+    fn load_project<'a>(
+        &'a self,
+        project: ProjectId,
+        _: Option<UserId>,
+    ) -> LookupFuture<'a, Option<ProjectRecord>> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        let found = records().into_iter().find(|r| r.id == project);
+        Box::pin(async move { Ok(found) })
+    }
 }
 
 impl ProjectPageLoader for Fake {
@@ -263,7 +295,8 @@ impl ProjectPageLoader for Fake {
         max_rows: u32,
     ) -> LookupFuture<'a, Vec<ProjectRecord>> {
         self.pages.fetch_add(1, Ordering::SeqCst);
-        let rows: Vec<ProjectRecord> = records()
+        let rows: Vec<ProjectRecord> = self
+            .all_records()
             .into_iter()
             .filter(|r| after.is_none_or(|a| r.id > a))
             .take(usize::try_from(max_rows).expect("fits"))
@@ -346,7 +379,7 @@ fn app(fake: &Arc<Fake>) -> axum::Router {
     let none = Arc::new(NoLookups);
     let lookups = Lookups {
         namespaces: Arc::clone(&none) as Arc<dyn forge_core::NamespaceResolver>,
-        projects: none as Arc<dyn forge_core::ProjectAccessLoader>,
+        projects: Arc::clone(fake) as Arc<dyn forge_core::ProjectAccessLoader>,
     };
     let keys = CursorKeys::parse(&format!("1 {}\n", "ab".repeat(32))).expect("keys");
     let lists = Lists::new(
@@ -579,4 +612,117 @@ async fn private_project_filter_is_like_a_missing_one() {
     assert_eq!(a.0, StatusCode::OK);
     assert_eq!(a, b);
     assert_eq!(a.1["has_more"], false);
+}
+
+// --- re-review of K3 ---------------------------------------------------------
+
+#[tokio::test]
+async fn a_named_project_is_one_load_not_a_scan() {
+    let fake = fake();
+    let uri = format!("/api/v1/search?q=%E8%A8%AD%E5%82%99&project={READABLE}");
+    let (status, body) = get(&fake, &uri, Some(person())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().expect("items").len(), 2);
+    assert_eq!(fake.loads.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.pages.load(Ordering::SeqCst), 0, "no project scan");
+}
+
+#[tokio::test]
+async fn the_readable_limit_counts_only_readable_projects() {
+    // 25 000 hidden projects never refuse a search.
+    let hidden = Arc::new(Fake {
+        candidates: candidates(),
+        extra_hidden: 25_000,
+        ..Fake::default()
+    });
+    let (status, _) = get(&hidden, URI, Some(person())).await;
+    assert_eq!(status, StatusCode::OK);
+    // Exactly the limit readable: answered (the next page was read).
+    let at_limit = Arc::new(Fake {
+        candidates: candidates(),
+        extra_readable: MAX_READABLE_PROJECTS - 1,
+        ..Fake::default()
+    });
+    let (status, _) = get(&at_limit, URI, Some(person())).await;
+    assert_eq!(status, StatusCode::OK);
+    // One more: refused, before any search row is read.
+    let over = Arc::new(Fake {
+        candidates: candidates(),
+        extra_readable: MAX_READABLE_PROJECTS,
+        ..Fake::default()
+    });
+    let (status, body) = get(&over, URI, Some(person())).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error_code"], "FG-KNOW-0001");
+    assert_eq!(over.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_read_api_token_gets_its_owners_readable_set() {
+    let fake = fake();
+    let token = Principal::authenticated(
+        UserId::new(5),
+        false,
+        true,
+        Credential::Token(vec![Scope::ReadApi]),
+        AccountKind::Human,
+    );
+    let (status, _) = get(&fake, URI, Some(token)).await;
+    assert_eq!(status, StatusCode::OK);
+    let filters = fake.filters.lock().expect("lock");
+    assert_eq!(
+        filters[0].0.readable_projects,
+        vec![ProjectId::new(READABLE)]
+    );
+    assert_eq!(
+        filters[0].0.readable_merge_requests,
+        vec![ProjectId::new(READABLE)]
+    );
+}
+
+#[tokio::test]
+async fn acting_for_a_person_is_refused_before_any_read() {
+    let fake = fake();
+    let acting = Principal::act_as(
+        UserId::new(5),
+        true,
+        AccountKind::Human,
+        forge_auth::ActAsCredential {
+            via: UserId::new(9),
+            via_kind: AccountKind::ServiceAccount,
+            via_token: 77,
+            via_scopes: vec![Scope::ReadApi, Scope::ActAs],
+            via_agent: false,
+            integration: forge_core::IntegrationId::new(5),
+            integration_enabled: true,
+            assertion: None,
+            claimed_mac: "00".repeat(32),
+            claimed_key_id: 1,
+        },
+    );
+    let (status, body) = get(&fake, URI, Some(acting)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error_code"], "FG-AUTH-0003");
+    assert_eq!(fake.pages.load(Ordering::SeqCst), 0);
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn too_many_terms_is_a_request_error() {
+    // 34 kanji: 33 two-grams.
+    let q: String =
+        "設備仕様承認手順管理番号確認作業記録保存期間更新履歴参照文書変更理由説明欄追加"
+            .chars()
+            .take(34)
+            .collect();
+    let encoded: String = q.bytes().map(|b| format!("%{b:02X}")).collect();
+    let err = parse(Some(&format!("q={encoded}"))).expect_err("too many");
+    assert_eq!(
+        rule(&err),
+        (
+            ErrorCode::RequestInvalid,
+            "q".to_owned(),
+            "too_many_terms".to_owned()
+        )
+    );
 }

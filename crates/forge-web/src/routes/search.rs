@@ -12,7 +12,7 @@
 //!   statement then ranks, pages and skips **only** rows of those
 //!   projects, so a short page, `has_more` or a `project=` filter can never
 //!   reveal how many hidden rows match (a private project's id answers
-//!   exactly like a missing one). Past [`MAX_PROJECT_SCAN`] projects the
+//!   exactly like a missing one). Past [`MAX_READABLE_PROJECTS`] projects the
 //!   search is refused (`FG-KNOW-0001 reason=project_scan_limit`).
 //! - **And again per hit**: a hit shows only when `prove(ProjectRead)`
 //!   (and `MergeRequestList`) allow it on the same facts; nothing of a hit
@@ -34,7 +34,7 @@
 //!   percent-encoded, `+` = space), `scope` (comma-separated `project`,
 //!   `merge_request`), `project` (a positive id), `limit` (1 ..= 50,
 //!   default 20), `cursor`. Anything else, or a repeated one, is
-//!   `FG-WEB-0006 reason=param_invalid` (`param=q rule=empty|too_short|
+//!   `FG-WEB-0006 reason=param_invalid` (`param=q rule=empty|too_short|too_many_terms|
 //!   too_long|missing|malformed`, …), decided before any lookup.
 //! - Failures of the reads are `FG-KNOW-0001` (the cause chained; the
 //!   route's own bound with `timeout_ms`). The query's words are never
@@ -421,10 +421,11 @@ pub(crate) fn walk(
 
 /// Projects scanned per page for the readable sets (the list's scan size).
 const PROJECT_PAGE: u32 = 1_000;
-/// The most projects one search scans for its readable sets; past it the
-/// search is refused (`FG-KNOW-0001 reason=project_scan_limit`) rather than
-/// answered from an incomplete set (ADR-0040: an SQL superset then).
-const MAX_PROJECT_SCAN: usize = 20_000;
+/// The most projects one search may read; past it the search is refused
+/// (`FG-KNOW-0001 reason=project_scan_limit`) rather than answered from an
+/// incomplete set (ADR-0040: an SQL superset then). Only readable projects
+/// count.
+pub(crate) const MAX_READABLE_PROJECTS: usize = 20_000;
 
 /// What the caller may read, decided before any search row is read.
 #[derive(Debug, Default)]
@@ -450,8 +451,21 @@ async fn readable(
     only: Option<ProjectId>,
 ) -> Result<Readable, ForgeError> {
     let mut out = Readable::default();
+    if let Some(project) = only {
+        // One project named: one load, no scan (a project the caller cannot
+        // read, or one that does not exist, gives the same empty sets).
+        let record = bounded(
+            state,
+            "search_projects",
+            state.lookups.projects.load_project(project, Some(viewer)),
+        )
+        .await?;
+        if let Some(record) = record.filter(|r| r.id == project) {
+            admit(principal, record, &mut out)?;
+        }
+        return Ok(out);
+    }
     let mut after: Option<ProjectId> = None;
-    let mut scanned = 0usize;
     let page_rows = usize::try_from(PROJECT_PAGE).unwrap_or(usize::MAX);
     loop {
         let rows = bounded(
@@ -462,33 +476,40 @@ async fn readable(
                 .project_page(after, viewer, None, PROJECT_PAGE),
         )
         .await?;
-        scanned += rows.len();
         let full = rows.len() >= page_rows;
         after = rows.last().map(|r| r.id);
         for record in rows {
-            if only.is_some_and(|p| p != record.id) {
-                continue;
-            }
-            let allow = decide(principal, &record)?;
-            if !allow.project {
-                continue;
-            }
-            out.projects.push(record.id);
-            if allow.merge_requests {
-                out.merge_requests.push(record.id);
-            }
-            out.records.push(record);
+            admit(principal, record, &mut out)?;
+        }
+        // The limit counts what the caller may read, never what they cannot.
+        if out.projects.len() > MAX_READABLE_PROJECTS {
+            return Err(ForgeError::new(ErrorCode::SearchUnavailable)
+                .with_context("operation", "search_projects")
+                .with_context("reason", "project_scan_limit")
+                .with_context("limit", MAX_READABLE_PROJECTS));
         }
         if !full {
             return Ok(out);
         }
-        if scanned >= MAX_PROJECT_SCAN {
-            return Err(ForgeError::new(ErrorCode::SearchUnavailable)
-                .with_context("operation", "search_projects")
-                .with_context("reason", "project_scan_limit")
-                .with_context("limit", MAX_PROJECT_SCAN));
-        }
     }
+}
+
+/// Decide one project and keep it in the sets it is allowed into.
+fn admit(
+    principal: &Principal,
+    record: ProjectRecord,
+    out: &mut Readable,
+) -> Result<(), ForgeError> {
+    let allow = decide(principal, &record)?;
+    if !allow.project {
+        return Ok(());
+    }
+    out.projects.push(record.id);
+    if allow.merge_requests {
+        out.merge_requests.push(record.id);
+    }
+    out.records.push(record);
+    Ok(())
 }
 
 async fn page(

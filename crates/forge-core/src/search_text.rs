@@ -35,6 +35,8 @@ use unicode_normalization::UnicodeNormalization;
 pub const MIN_QUERY_CHARS: usize = 2;
 /// The longest query, in characters as sent.
 pub const MAX_QUERY_CHARS: usize = 200;
+/// The most distinct terms a query may have (each one is a GIN lookup).
+pub const MAX_QUERY_TERMS: usize = 32;
 /// A word longer than this is cut (indexed and queried the same way).
 pub const MAX_WORD_CHARS: usize = 64;
 /// The most distinct terms one entry stores; past it the entry is marked
@@ -279,6 +281,9 @@ pub enum QueryRejection {
     TooShort,
     /// More than [`MAX_QUERY_CHARS`] characters.
     TooLong,
+    /// More than [`MAX_QUERY_TERMS`] distinct terms (a long Japanese
+    /// phrase: every 2-gram is a term).
+    TooManyTerms,
 }
 
 impl QueryRejection {
@@ -288,6 +293,7 @@ impl QueryRejection {
             Self::Empty => "empty",
             Self::TooShort => "too_short",
             Self::TooLong => "too_long",
+            Self::TooManyTerms => "too_many_terms",
         }
     }
 }
@@ -342,6 +348,9 @@ impl SearchQuery {
                     terms.push(term);
                 }
             }
+        }
+        if terms.len() > MAX_QUERY_TERMS {
+            return Err(QueryRejection::TooManyTerms);
         }
         let mut needles: Vec<String> = Vec::new();
         for p in &pieces {
