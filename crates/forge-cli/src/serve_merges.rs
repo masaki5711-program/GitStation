@@ -387,6 +387,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PartManifestInvalid
         | ErrorCode::PartSignatureInvalid
         | ErrorCode::SigningKeyUnavailable
+        | ErrorCode::SigningKeyFileInvalid
         | ErrorCode::PartCapabilityUndeclared
         | ErrorCode::AgentLockMismatch
         | ErrorCode::McpEndpointNotAllowed => false,

@@ -20,7 +20,11 @@
 //!
 //! Every violation is SQLSTATE `XF001`, `FG-DB-0009` AppendOnlyViolation
 //! (alert) through [`crate::query_error`]. forge_app holds no DELETE on these
-//! four tables and UPDATE only on the columns that may change.
+//! four tables, INSERT of the caller's columns and UPDATE only of the
+//! columns that may change — and only SELECT on the keys: they are
+//! registered, retired and revoked through `forge.agent_signing_key_manage`
+//! (SECURITY DEFINER, owner forge_seq, EXECUTE forge_maint only: the
+//! operator's `forge admin agent-key`, A5), which writes the audit row.
 //!
 //! Reads here: [`signing_keys`] (doctor `agent.signing_keys`).
 
@@ -28,7 +32,8 @@ use forge_errors::ForgeError;
 
 use crate::{read_query_error, Db};
 
-/// The audit resource of a signing key's change (tables.toml).
+/// The audit resource of a signing key's change (written by
+/// `forge.agent_signing_key_manage`).
 pub const KEY_RESOURCE: &str = "agent_signing_key";
 /// The audit resource of a part's or a version's change (tables.toml).
 pub const PART_RESOURCE: &str = "agent_part";
@@ -54,7 +59,7 @@ pub async fn signing_keys(db: &Db) -> Result<Vec<StoredSigningKey>, ForgeError> 
         sqlx::query_as(
             "SELECT kid, public_key, retired_at IS NOT NULL AS retired, \
              revoked_at IS NOT NULL AS revoked \
-             FROM forge.agent_signing_keys ORDER BY kid::integer",
+             FROM forge.agent_signing_keys ORDER BY kid::integer LIMIT 1000",
         )
         .fetch_all(db.pool().executor())
         .await

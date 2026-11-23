@@ -1056,12 +1056,15 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ),
         // ── Plan 16 A3: the agent marketplace (20270103100000): no DELETE
         // on the published tables, UPDATE of the changing columns only ──
+        // The keys: forge_app reads; forge_seq writes, only through
+        // forge.agent_signing_key_manage (EXECUTE forge_maint).
         (
             "forge.agent_signing_keys",
             [
-                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                plain(&["forge_app:SELECT", "forge_seq:SELECT"]),
+                columns("forge_seq", "INSERT", &["kid", "public_key"]),
                 columns(
-                    "forge_app",
+                    "forge_seq",
                     "UPDATE",
                     &["retired_at", "revoked_at", "revoked_reason"],
                 ),
@@ -1072,7 +1075,12 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         (
             "forge.agent_parts",
             [
-                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                plain(&["forge_app:SELECT"]),
+                columns(
+                    "forge_app",
+                    "INSERT",
+                    &["slug", "kind", "source_project_id", "created_by"],
+                ),
                 columns("forge_app", "UPDATE", &["deprecated_at", "deprecated_by"]),
                 ro("agent_parts")?,
             ]
@@ -1081,7 +1089,8 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         (
             "forge.agent_part_versions",
             [
-                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                plain(&["forge_app:SELECT"]),
+                columns("forge_app", "INSERT", AGENT_VERSION_APP_INSERT),
                 columns(
                     "forge_app",
                     "UPDATE",
@@ -1167,6 +1176,24 @@ const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
     "refresh_checked_at",
     "access_role_seen_at",
     "refresh_without_id_token",
+];
+
+/// The columns forge_app may insert into forge.agent_part_versions (plan
+/// 16 A3: not id, created_at or txid, which the table and its guard set).
+const AGENT_VERSION_APP_INSERT: &[&str] = &[
+    "part_id",
+    "version",
+    "channel",
+    "source_sha",
+    "tag",
+    "manifest",
+    "digest",
+    "signature",
+    "key_id",
+    "capabilities",
+    "published_by",
+    "ci_pipeline_id",
+    "state",
 ];
 
 /// The columns forge_app may update on forge.tokens.

@@ -1,5 +1,6 @@
 //! forge-core: domain primitives and runtime foundations shared by every
-//! server-side crate. Depends only on `forge-errors` (CLAUDE.md §3.9).
+//! server-side crate. Depends on `forge-errors` and the pure crates below it
+//! (`forge-agent`, `forge-doc`; CLAUDE.md §3.9).
 
 pub mod act_as;
 // Plan 16 A3: the server's agent part signing keys (ADR-0032).

@@ -68,13 +68,6 @@ async fn every_audited_table_has_its_audit_trigger() {
                 txn_audited_columns: vec![],
             },
             AuditedTable {
-                name: "agent_signing_keys".into(),
-                audit_resource: AuditResource::Literal("agent_signing_key".into()),
-                audit_id_column: "id".into(),
-                unaudited_columns: vec![],
-                txn_audited_columns: vec![],
-            },
-            AuditedTable {
                 name: "approval_rule_approvers".into(),
                 audit_resource: AuditResource::Literal("project".into()),
                 audit_id_column: "project_id".into(),

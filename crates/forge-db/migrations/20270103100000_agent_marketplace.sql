@@ -5,7 +5,8 @@
 -- audited. Nothing here is ever deleted except a project's builds and
 -- lesson injections by the project purge.
 --
--- forge.agent_signing_keys (audited on ('agent_signing_key', id)): the
+-- forge.agent_signing_keys (derived; every change is audited by the one
+-- function that may write it, see below): the
 -- PUBLIC half of each Ed25519 key the server signs parts with (the seed
 -- stays in agent.signing_keys_file, ADR-0013; never in the database).
 --   kid          the key file's key id, 1..=65535 as decimal text (the
@@ -14,8 +15,12 @@
 --   retired_at   signs nothing new; still verifies what it signed
 --   revoked_at   its signatures are refused (FG-AGENT-0002 key_revoked)
 -- kid, public_key and created_at never change; retired and revoked are
--- set once (guard agent_signing_keys_forward). Registered by the operator
--- CLI `forge admin agent-key` (A5), never over HTTP.
+-- set once (guard agent_signing_keys_forward). Written ONLY through
+-- forge.agent_signing_key_manage (SECURITY DEFINER, owner forge_seq,
+-- EXECUTE forge_maint): the operator CLI `forge admin agent-key` (A5) on
+-- the maintenance connection, never forge_app and never over HTTP. The
+-- function writes the key's audit row itself (`agent_signing_key.
+-- registered` / `.retired` / `.revoked`, actor_label = the session user).
 --
 -- forge.agent_parts (audited on ('agent_part', id)): a part's identity.
 --   slug               unique, forge-agent's slug rule
@@ -44,7 +49,9 @@
 -- row covers them), at most 200 files and 1 MiB of content per version,
 -- sha256 = the content's SHA-256 (checked by the guard); never updated or
 -- deleted (guard agent_part_files_append_only). forge_app holds INSERT
--- and SELECT only.
+-- and SELECT only. path is relative: `.claude/...`, `CLAUDE.md` or
+-- `.mcp.json`, no `.` / `..` / empty segment, no backslash, colon or
+-- control character (forge-agent's rule, checked again here).
 --
 -- forge.agent_builds (derived): a builder run of a project (A7) — the
 -- selection, the lock's digest, dry run or the merge request it opened.
@@ -101,7 +108,8 @@ CREATE TABLE forge.agent_part_versions (
     tag              text NOT NULL CONSTRAINT agent_part_versions_tag
         CHECK (octet_length(tag) BETWEEN 1 AND 255),
     manifest         jsonb NOT NULL CONSTRAINT agent_part_versions_manifest
-        CHECK (jsonb_typeof(manifest) = 'object'),
+        CHECK (jsonb_typeof(manifest) = 'object'
+               AND octet_length(manifest::text) <= 1048576),
     digest           text NOT NULL CONSTRAINT agent_part_versions_digest
         CHECK (digest ~ '^sha256:[0-9a-f]{64}$'),
     signature        text NOT NULL CONSTRAINT agent_part_versions_signature
@@ -133,7 +141,12 @@ CREATE INDEX agent_part_versions_revoked_by ON forge.agent_part_versions (revoke
 CREATE TABLE forge.agent_part_files (
     version_id  bigint NOT NULL REFERENCES forge.agent_part_versions (id),
     path        text NOT NULL CONSTRAINT agent_part_files_path
-        CHECK (octet_length(path) BETWEEN 1 AND 255),
+        CHECK (octet_length(path) BETWEEN 1 AND 255
+               AND path ~ '^(\.claude/[^\\:]+|CLAUDE\.md|\.mcp\.json)$'
+               AND path !~ '(^|/)\.{1,2}(/|$)'
+               AND path !~ '//'
+               AND path !~ '/$'
+               AND path !~ '[[:cntrl:]]'),
     mode        text NOT NULL CONSTRAINT agent_part_files_mode
         CHECK (mode IN ('100644', '100755')),
     sha256      text NOT NULL CONSTRAINT agent_part_files_sha256
@@ -275,14 +288,20 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE = 'XF001',
                 MESSAGE = 'a version of forge.agent_part_versions is published to beta first';
         END IF;
+        -- The key's row is not locked: forge_app may not lock it (no
+        -- UPDATE privilege). A retirement or revocation racing this insert
+        -- fails closed later: a retired key still verifies what it signed,
+        -- a revoked key's signatures are refused (FG-AGENT-0002).
         IF NOT EXISTS (SELECT 1 FROM forge.agent_signing_keys AS k
                        WHERE k.kid = NEW.key_id AND k.retired_at IS NULL
                          AND k.revoked_at IS NULL) THEN
             RAISE EXCEPTION USING ERRCODE = 'XF001',
                 MESSAGE = 'a version of forge.agent_part_versions is signed by a current key';
         END IF;
+        -- Locked: a deprecation waits for this insert's transaction.
         IF NOT EXISTS (SELECT 1 FROM forge.agent_parts AS p
-                       WHERE p.id = NEW.part_id AND p.deprecated_at IS NULL) THEN
+                       WHERE p.id = NEW.part_id AND p.deprecated_at IS NULL
+                       FOR SHARE) THEN
             RAISE EXCEPTION USING ERRCODE = 'XF001',
                 MESSAGE = 'a deprecated part of forge.agent_parts gets no new version';
         END IF;
@@ -358,15 +377,57 @@ CREATE TRIGGER agent_part_files_append_only BEFORE INSERT OR UPDATE OR DELETE
     FOR EACH ROW EXECUTE FUNCTION forge.agent_part_files_guard();
 ALTER TABLE forge.agent_part_files ENABLE ALWAYS TRIGGER agent_part_files_append_only;
 
--- ── Audit triggers (tables.toml kind = "audited") ──
+-- ── Key management: the operator only (forge_maint) ──
 
-CREATE CONSTRAINT TRIGGER audited_change_present
-    AFTER INSERT OR DELETE OR UPDATE OF id, kid, public_key, created_at, retired_at, revoked_at,
-        revoked_reason
-    ON forge.agent_signing_keys
-    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
-    EXECUTE FUNCTION forge.audited_change_present('agent_signing_key', 'id', '', '');
-ALTER TABLE forge.agent_signing_keys ENABLE ALWAYS TRIGGER audited_change_present;
+CREATE FUNCTION forge.agent_signing_key_manage(p_action text, p_kid text, p_public_key text,
+    p_reason text, p_request_id text, OUT key_row_id bigint)
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path = pg_catalog, forge, pg_temp
+AS $$
+BEGIN
+    IF p_action IS NULL OR p_action NOT IN ('register', 'retire', 'revoke')
+       OR p_request_id IS NULL OR length(p_request_id) NOT BETWEEN 1 AND 128
+       OR p_kid IS NULL
+       OR (p_action = 'register' AND p_public_key IS NULL)
+       OR (p_action = 'revoke' AND (p_reason IS NULL OR length(p_reason) NOT BETWEEN 1 AND 500)) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'forge.agent_signing_key_manage: action register / retire / revoke, a kid, a public key to register, a reason to revoke, request_id 1..128 characters';
+    END IF;
+    IF p_action = 'register' THEN
+        INSERT INTO forge.agent_signing_keys (kid, public_key)
+        VALUES (p_kid, p_public_key)
+        RETURNING id INTO key_row_id;
+    ELSIF p_action = 'retire' THEN
+        UPDATE forge.agent_signing_keys AS k SET retired_at = pg_catalog.now()
+         WHERE k.kid = p_kid AND k.retired_at IS NULL
+        RETURNING k.id INTO key_row_id;
+    ELSE
+        UPDATE forge.agent_signing_keys AS k
+           SET revoked_at = pg_catalog.now(), revoked_reason = p_reason
+         WHERE k.kid = p_kid AND k.revoked_at IS NULL
+        RETURNING k.id INTO key_row_id;
+    END IF;
+    IF key_row_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0002',
+            MESSAGE = 'forge.agent_signing_key_manage: no such key, or already retired / revoked';
+    END IF;
+    INSERT INTO forge.audit_log (actor_kind, actor_label, action, outcome, resource_type,
+        resource_id, request_id, details)
+    VALUES ('system', left(session_user::text, 64),
+        CASE p_action WHEN 'register' THEN 'agent_signing_key.registered'
+                      WHEN 'retire' THEN 'agent_signing_key.retired'
+                      ELSE 'agent_signing_key.revoked' END,
+        'succeeded', 'agent_signing_key', key_row_id, p_request_id,
+        pg_catalog.jsonb_build_object('kid', p_kid));
+END
+$$;
+REVOKE ALL ON FUNCTION forge.agent_signing_key_manage(text, text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION forge.agent_signing_key_manage(text, text, text, text, text)
+    TO forge_maint;
+ALTER FUNCTION forge.agent_signing_key_manage(text, text, text, text, text) OWNER TO forge_seq;
+
+-- ── Audit triggers (tables.toml kind = "audited") ──
 
 CREATE CONSTRAINT TRIGGER audited_change_present
     AFTER INSERT OR DELETE OR UPDATE OF id, slug, kind, source_project_id, created_by, created_at,
@@ -385,16 +446,23 @@ CREATE CONSTRAINT TRIGGER audited_change_present
     EXECUTE FUNCTION forge.audited_change_present('agent_part', 'part_id', '', '');
 ALTER TABLE forge.agent_part_versions ENABLE ALWAYS TRIGGER audited_change_present;
 
--- ── Privileges: no DELETE on the published tables; UPDATE of the
--- columns that may change only ──
+-- ── Privileges: no DELETE on the published tables; INSERT of the
+-- caller's columns and UPDATE of the columns that may change only; the
+-- keys are forge_app's to read only (forge_seq writes them, through
+-- agent_signing_key_manage only) ──
 
-GRANT SELECT, INSERT ON forge.agent_signing_keys TO forge_app;
-GRANT UPDATE (retired_at, revoked_at, revoked_reason) ON forge.agent_signing_keys TO forge_app;
+GRANT SELECT ON forge.agent_signing_keys TO forge_app;
+GRANT SELECT ON forge.agent_signing_keys TO forge_seq;
+GRANT INSERT (kid, public_key) ON forge.agent_signing_keys TO forge_seq;
+GRANT UPDATE (retired_at, revoked_at, revoked_reason) ON forge.agent_signing_keys TO forge_seq;
 GRANT SELECT ON forge.agent_signing_keys TO forge_ro;
-GRANT SELECT, INSERT ON forge.agent_parts TO forge_app;
+GRANT SELECT ON forge.agent_parts TO forge_app;
+GRANT INSERT (slug, kind, source_project_id, created_by) ON forge.agent_parts TO forge_app;
 GRANT UPDATE (deprecated_at, deprecated_by) ON forge.agent_parts TO forge_app;
 GRANT SELECT ON forge.agent_parts TO forge_ro;
-GRANT SELECT, INSERT ON forge.agent_part_versions TO forge_app;
+GRANT SELECT ON forge.agent_part_versions TO forge_app;
+GRANT INSERT (part_id, version, channel, source_sha, tag, manifest, digest, signature, key_id,
+    capabilities, published_by, ci_pipeline_id, state) ON forge.agent_part_versions TO forge_app;
 GRANT UPDATE (channel, state, revoked_reason, revoked_by, revoked_at)
     ON forge.agent_part_versions TO forge_app;
 GRANT SELECT ON forge.agent_part_versions TO forge_ro;
@@ -408,7 +476,6 @@ GRANT SELECT ON forge.agent_lesson_injections TO forge_ro;
 INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
     ('function', 'forge.agent_signing_keys_guard()'),
     ('trigger', 'agent_signing_keys_forward on forge.agent_signing_keys'),
-    ('trigger', 'audited_change_present on forge.agent_signing_keys'),
     ('function', 'forge.agent_parts_guard()'),
     ('trigger', 'agent_parts_forward on forge.agent_parts'),
     ('trigger', 'audited_change_present on forge.agent_parts'),
@@ -416,9 +483,10 @@ INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
     ('trigger', 'agent_part_versions_forward on forge.agent_part_versions'),
     ('trigger', 'audited_change_present on forge.agent_part_versions'),
     ('function', 'forge.agent_part_files_guard()'),
-    ('trigger', 'agent_part_files_append_only on forge.agent_part_files')
+    ('trigger', 'agent_part_files_append_only on forge.agent_part_files'),
+    ('function', 'forge.agent_signing_key_manage(text,text,text,text,text)')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20270103100000, "guarded_changes": ["forge.agent_signing_keys_guard", "forge.agent_signing_keys.agent_signing_keys_forward", "forge.agent_signing_keys.audited_change_present", "forge.agent_parts_guard", "forge.agent_parts.agent_parts_forward", "forge.agent_parts.audited_change_present", "forge.agent_part_versions_guard", "forge.agent_part_versions.agent_part_versions_forward", "forge.agent_part_versions.audited_change_present", "forge.agent_part_files_guard", "forge.agent_part_files.agent_part_files_append_only"]}');
+    '{"version": 20270103100000, "guarded_changes": ["forge.agent_signing_keys_guard", "forge.agent_signing_keys.agent_signing_keys_forward", "forge.agent_parts_guard", "forge.agent_parts.agent_parts_forward", "forge.agent_parts.audited_change_present", "forge.agent_part_versions_guard", "forge.agent_part_versions.agent_part_versions_forward", "forge.agent_part_versions.audited_change_present", "forge.agent_part_files_guard", "forge.agent_part_files.agent_part_files_append_only", "forge.agent_signing_key_manage"]}');

@@ -4,17 +4,18 @@
 //! - `agent.signing_keys_file`: the Ed25519 seeds the server signs
 //!   published agent part versions with (`<kid> <64 hex>` per line; a
 //!   secret file, absolute path, owner only on Unix;
-//!   [`crate::agent_signing::AgentSigningKeys`]). Optional: without it
-//!   nothing can be published (A5). The path is checked at load time;
-//!   the file is read by the command that signs and by doctor
-//!   (`agent.signing_keys`), where a failure is `FG-AGENT-0003`.
+//!   [`crate::agent_signing::AgentKeyFile`]). Optional: without it
+//!   nothing can be published (A5). The path is checked at load time.
+//!   Here the file is read for its public keys only (doctor
+//!   `agent.signing_keys`; a failure is `FG-AGENT-0014`); signing with
+//!   the seeds belongs to the marketplace crate (A5).
 
 use std::path::PathBuf;
 
 use forge_errors::ForgeError;
 
 use super::{database, invalid};
-use crate::agent_signing::{AgentSigningKeys, SIGNING_KEYS_KEY};
+use crate::agent_signing::{AgentKeyFile, SIGNING_KEYS_KEY};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentConfig {
@@ -35,11 +36,12 @@ impl AgentConfig {
     }
 
     /// Read `agent.signing_keys_file` now (`None` when not configured);
-    /// every failure is `FG-AGENT-0003`.
-    pub fn signing_keys(&self) -> Result<Option<AgentSigningKeys>, ForgeError> {
+    /// every failure is `FG-AGENT-0014`. Public keys only: forge-core never
+    /// signs (the marketplace crate does, A5).
+    pub fn signing_keys(&self) -> Result<Option<AgentKeyFile>, ForgeError> {
         self.signing_keys_file
             .as_deref()
-            .map(AgentSigningKeys::read)
+            .map(AgentKeyFile::read)
             .transpose()
     }
 }

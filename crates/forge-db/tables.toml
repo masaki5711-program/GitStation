@@ -989,14 +989,12 @@ ro_columns = ["*"]
 # append-only, inserted with their version only. forge_app has no DELETE on
 # them. Builds and lesson injections are the builder's records (derived),
 # deleted with their project by the purge ──
+# Written only by forge.agent_signing_key_manage (SECURITY DEFINER, owner
+# forge_seq, EXECUTE forge_maint), which writes the key's audit row itself.
 [tables.agent_signing_keys]
 guarded = false
-kind = "audited"
+kind = "derived"
 ro_columns = ["*"]
-audit_resource = "agent_signing_key"
-audit_id_column = "id"
-unaudited_columns = []
-txn_audited_columns = []
 
 [tables.agent_parts]
 guarded = false

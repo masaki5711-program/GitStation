@@ -1,4 +1,4 @@
-# Runbook: agent-signing-key（FG-AGENT-0003。関連: FG-AGENT-0002）
+# Runbook: agent-signing-key（FG-AGENT-0003・FG-AGENT-0014。関連: FG-AGENT-0002）
 
 計画 16（ADR-0032）のエージェントの部品の署名を確かめる鍵が無い・読めない・部品の `key_id` を持っていないとき。
 
@@ -13,8 +13,9 @@
   - `keys_invalid`: 形が違う（JSON でない、`kid` が空・重複、`public_key` が base64 の 32 バイトでない、知らない鍵）。
   - `unknown_key`: lock の `key_id` が一覧に無い。手元の一覧が鍵の入れ替えより古いか、**誰も発行していない kid**（改ざんの印）。
 
-- サーバー（A3）: `forge doctor` の `agent.signing_keys` が `FG-AGENT-0003`（`config_key=agent.signing_keys_file`）。`reason`:
-  - `insecure_permissions`（`mode` 付き）: 鍵ファイルを group か others が読める（Unix）。秘密の鍵の種なので断る。
+- サーバー（A3）: `forge doctor` の `agent.signing_keys` が `FG-AGENT-0014` SigningKeyFileInvalid（`config_key=agent.signing_keys_file`）。`reason`:
+  - `insecure_permissions`（`mode` 付き）: 鍵ファイルを group か others が読める（Unix）。`rule=owner`: 別のユーザーの持ち物（Linux）。秘密の鍵の種なので断る。
+  - Windows では権限を確かめられないので、合っていても `warn`（ACL を forge のサービスのアカウントだけにする）。
   - `keys_unreadable`（`config_reason`: `not_absolute`・`unreadable`・`invalid` = 普通のファイルでない・64 KiB 超）。
   - `keys_invalid`（`rule`・`line`）: 行の形 `<kid> <64 桁の 16 進数>`（kid は 1〜65535）でない、kid の重複、鍵が無い。
   - `key_not_registered`・`key_mismatch`・`key_revoked`・`signing_key_retired`（`kid` 付き）: ファイルと DB の公開鍵が合わない。
@@ -43,7 +44,8 @@
 2. `insecure_permissions`: `chmod 600` と `chown`。ファイルが他の人に読まれていた期間があれば、鍵の盗難として扱い、
    新しい kid を足して古い kid を失効する判断を Runbook `agent-supply-chain` で行う。
 3. `keys_invalid`: 行を直す（鍵の中身はログに出ない。`line` で場所が分かる）。
-4. `key_not_registered`: 新しい kid の公開鍵を登録してから署名に使う（A5 の `forge admin agent-key`）。
+4. `key_not_registered`: 新しい kid の公開鍵を登録してから署名に使う（A5 の `forge admin agent-key`。保守の接続 `database.maint_url` の
+   forge_maint だけが `forge.agent_signing_key_manage` を実行できる。forge_app は鍵の表を読むだけ）。
 5. `key_mismatch`: ファイルの種が登録した公開鍵と合わない。取り違えか偽のファイル。説明がつかなければ改ざんの疑い:
    Runbook `agent-supply-chain`。
 6. `key_revoked`: 失効した鍵の行をファイルから消す。`signing_key_retired`: 新しい kid を足す（いちばん大きい kid が署名する）。
@@ -51,7 +53,7 @@
 ## Verify
 
 - `gstn agent verify` が FG-AGENT-0003 を出さない（他の問題があれば、それぞれのコードの Runbook へ）。
-- サーバー: `forge doctor` の `agent.signing_keys` が `ok`（設定していないホストは `skip`）。
+- サーバー: `forge doctor` の `agent.signing_keys` が `ok`（設定していないホストは `skip`、Windows は `warn`）。
 
 ## 関連
 
