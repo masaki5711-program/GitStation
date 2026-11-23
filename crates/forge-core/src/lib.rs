@@ -62,6 +62,8 @@ pub mod request_id;
 pub mod risk;
 pub mod role;
 pub mod scope;
+// Plan 20 K2 (ADR-0040): the search index's kinds, candidates and reader port.
+pub mod search;
 // Plan 20 K1 (ADR-0040): the search tokenizer (NFKC, Japanese 2-grams).
 pub mod search_text;
 pub mod session_token;

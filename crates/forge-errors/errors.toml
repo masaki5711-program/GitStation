@@ -3758,3 +3758,32 @@ diagnosis = "`forge doctor` row `org.master` (last sync, age, unit and position 
 fix = "Fix the cause of the failing syncs (runbook oidc-login, 「組織の台帳の写し」); the next successful run refreshes the copy and the derived organisation works again. If the sync is meant to be off, turn `org.master_sync_enabled` off."
 runbook = "oidc-login"
 test = "a_stale_master_is_org_master_stale"
+
+# ── Plan 20 K2/K3 (ADR-0040): search, the wiki and personal notes ──
+[[error]]
+code = "FG-KNOW-0001"
+name = "SearchUnavailable"
+http_status = 503
+severity = "warn"
+user_message_ja = "いま検索できません。しばらくしてから再度お試しください。"
+user_message_en = "Search is unavailable right now. Try again later."
+user_message_id = "Pencarian tidak tersedia saat ini. Coba lagi nanti."
+cause = "Plan 20 K3 (ADR-0040): `GET /api/v1/search` could not read its candidates: the search statement over forge.search_entries (`tokens @@ query`, ranked) hit its statement timeout, or the database failed (the cause is chained: FG-DB-0001 / FG-DB-0002 / FG-DB-0009), or the read was not answered within the route's lookup timeout. The project facts the hits are decided with are read by the same rule (`operation=search_projects`). Not a refusal: nothing about any hit was shown."
+diagnosis = "The log event carries `operation` (`search_candidates`: the ranked read; `search_projects`: the access facts of the hits' projects), `timeout_ms` when the route's own bound fired, the chained FG-DB code otherwise, `query_chars` and `query_terms` (the query's length and term count — never the words, which may be personal or confidential) and the request_id. Many timeouts with short queries: a very common 2-gram matches most rows (look at the table size: `SELECT count(*) FROM forge.search_entries`); timeouts on every query: the GIN index `search_entries_tokens` is missing or bloated, or the database is slow (runbook db-unavailable)."
+fix = "Check the database first (runbook db-unavailable). For a slow search: `REINDEX INDEX CONCURRENTLY forge.search_entries_tokens` in a quiet window, or rebuild the index (`forge search reindex`, runbook search-index). The client retries later; the request_id finds the event."
+runbook = "search-index"
+test = "search_store_failure_is_search_unavailable"
+
+[[error]]
+code = "FG-KNOW-0002"
+name = "SearchIndexItemFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "検索の索引を更新できませんでした。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The search index could not be updated. Give the request ID to your administrator."
+user_message_id = "Indeks pencarian tidak dapat diperbarui. Berikan ID permintaan kepada administrator Anda."
+cause = "Plan 20 K2 (ADR-0040): one entry, or one project's entries, of the search index could not be written as asked, or not completely: `reason=truncated` (an entry's body is over 256 KB or its vector over 50 000 terms: the rest is not searchable, the row says `truncated`), `reason=subtree_too_large` (a group move or user rename touched more projects than one subscriber step refreshes: the rest keep their old path in the index until the rebuild), `reason=write_failed` (the rebuild could not write one project's entries; the cause is chained). The index is derived: nothing a person wrote is lost."
+diagnosis = "The log event (`forge.search.index_item`) carries `reason`, `source_kind`, `project_id`, `source_key` (a project: empty; a merge request: its iid), `limit` and the source event's `request_id` / `seq` (subscriber) or the rebuild's request_id. forge.search_index_state holds the project's last `state` and `last_error_code` and `attempts`. A failed subscriber step itself is FG-DB-0008 (subscriber `search-index`, runbook subscriber-lag)."
+fix = "`truncated`: nothing to repair (the entry stays searchable by its title and first 256 KB); shorten the source if it matters. `subtree_too_large`: run `forge search reindex` (runbook search-index). `write_failed`: fix the chained cause, then `forge search reindex --project <id>`."
+runbook = "search-index"
+test = "oversized_description_is_truncated_and_logged"

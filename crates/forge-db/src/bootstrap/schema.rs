@@ -1028,6 +1028,15 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── Plan 20 K2: the search index (20270107100000) ──
+        (
+            "forge.search_entries",
+            [dml("forge_app"), ro("search_entries")?].concat(),
+        ),
+        (
+            "forge.search_index_state",
+            [dml("forge_app"), ro("search_index_state")?].concat(),
+        ),
     ])
 }
 
@@ -1245,6 +1254,9 @@ const LATER_TABLES: &[&str] = &[
     // ── ADR-0038 §2: org bindings (20270101100000) ──
     "org_bindings",
     "org_access_policy",
+    // ── Plan 20 K2: the search index (20270107100000) ──
+    "search_entries",
+    "search_index_state",
 ];
 
 /// Every table the first migration creates.
