@@ -28,11 +28,17 @@
 //! ones of [`super::lint`]. The property test
 //! `incremental_lint_equals_full_lint` holds it over random edits.
 //!
-//! **Bounded.** The cache charges an estimate of every kept value and,
-//! after each call, drops the least recently used ones until it is under
-//! its bound (`merge_queue.doc_index_bytes`); what a call uses is the most
-//! recent, so a tree larger than the bound still lints (it is parsed again
-//! next time). Pure: no I/O, no clock — "recent" is a call counter.
+//! **Bounded, approximately.** The cache charges an *estimate* of every
+//! kept value — a parsed document by its bytes and its parsed items
+//! ([`parsed_cost`], calibrated by `the_estimate_covers_a_dense_front_matter`
+//! against the size of the parsed value), a kept check by its lookups and
+//! problems, the type definitions by their bytes — and, after each call,
+//! drops the least recently used ones until the estimate is under its bound
+//! (`merge_queue.doc_index_bytes`). The bound is therefore approximate, not
+//! an exact count of the heap. What a call uses is the most recent, so a
+//! tree larger than the bound still lints (it is parsed again next time);
+//! the type definitions of the last call are always kept. Pure: no I/O, no
+//! clock — "recent" is a call counter.
 
 use std::collections::HashMap;
 
@@ -95,6 +101,26 @@ struct Checked {
 
 /// The estimated bytes of a value with no content (keys, bookkeeping).
 const OVERHEAD: usize = 256;
+
+/// The estimated bytes of one parsed item (a front matter field, a heading,
+/// a block, a reference, a problem): its strings' and vectors' headers and
+/// allocations beyond the text itself.
+const ITEM: usize = 96;
+
+/// The estimated bytes of a document parsed from `len` bytes (approximate:
+/// module docs). The text is counted twice (the parsed strings, their
+/// allocations' slack) and every parsed item by [`ITEM`], so a dense front
+/// matter — many short fields — is not undercharged.
+pub(crate) fn parsed_cost(len: usize, doc: &Document) -> usize {
+    let items = doc.meta.as_ref().map_or(0, Vec::len)
+        + doc.headings.len()
+        + doc.blocks.len()
+        + doc.refs.len()
+        + doc.problems.len();
+    len.saturating_mul(2)
+        .saturating_add(items.saturating_mul(ITEM))
+        .saturating_add(OVERHEAD)
+}
 
 /// The incremental, content-addressed lint (module docs).
 pub struct LintCache {
@@ -190,7 +216,7 @@ impl LintCache {
             };
             let doc = parse_document(bytes);
             let names_type = names_type(&doc, bytes);
-            let cost = bytes.len().saturating_mul(2).saturating_add(OVERHEAD);
+            let cost = parsed_cost(bytes.len(), &doc);
             self.bytes = self.bytes.saturating_add(cost);
             self.parsed.insert(
                 src.key.to_owned(),
@@ -306,12 +332,26 @@ impl LintCache {
                 .zip(doctypes)
                 .all(|((path, bytes), src)| path == src.path && bytes.as_slice() == src.bytes);
         if !same {
+            self.bytes = self.bytes.saturating_sub(self.types_cost());
             self.types = doctypes
                 .iter()
                 .map(|src| (src.path.to_owned(), src.bytes.to_vec()))
                 .collect();
+            self.bytes = self.bytes.saturating_add(self.types_cost());
             self.types_gen = self.types_gen.saturating_add(1);
         }
+    }
+
+    /// The estimated bytes of the kept type definitions.
+    fn types_cost(&self) -> usize {
+        self.types
+            .iter()
+            .map(|(path, bytes)| {
+                path.len()
+                    .saturating_add(bytes.len())
+                    .saturating_add(OVERHEAD)
+            })
+            .fold(0, usize::saturating_add)
     }
 
     /// Drop the least recently used values until under the bound; how many.

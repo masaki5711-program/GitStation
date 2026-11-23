@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use proptest::prelude::*;
 
-use super::{KeyedSource, LintCache, MissingBytes};
+use super::{parsed_cost, KeyedSource, LintCache, MissingBytes};
 use crate::lint::{lint, Source};
 
 const T_QP: &str = include_str!("../../../docs/plan/13-examples/.forge/doctypes/qms.procedure.yml");
@@ -236,7 +236,8 @@ proptest! {
             let want = full(&tree, &types);
             prop_assert_eq!(&incremental(&mut roomy, &tree, &types).unwrap(), &want);
             prop_assert_eq!(&incremental(&mut tiny, &tree, &types).unwrap(), &want);
-            prop_assert!(tiny.bytes() <= 1 || tiny.documents() == 0);
+            // Only the type definitions stay (always kept).
+            prop_assert_eq!(tiny.documents(), 0);
         }
     }
 }
@@ -311,4 +312,37 @@ fn a_document_without_bytes_that_is_not_held_is_refused() {
             path: "qms/QP-07-001.md".to_owned()
         })
     );
+}
+
+/// The size estimate of a parsed document is calibrated against the size
+/// of the parsed value (its `Debug` text: every string once, every item's
+/// structure) — at least that much for a dense front matter of short fields
+/// and for a body of many blocks and references, and not wildly more.
+#[test]
+fn the_estimate_covers_a_dense_front_matter() {
+    let mut dense =
+        String::from("---\ndoctype: qms.procedure\nid: QP-07-001\ntitle: T\nowner: qa\n");
+    for i in 0..150 {
+        dense.push_str(&format!("k{i}: v\n"));
+    }
+    dense.push_str("---\n\n## 目的\n");
+    let mut blocks = String::from(
+        "---\ndoctype: qms.procedure\nid: QP-07-002\ntitle: T\nowner: qa\n---\n\n## 手順\n\n",
+    );
+    for i in 0..60 {
+        blocks.push_str(&format!(
+            "::: step S-{i} role=\"qa\"\nSee [[QP-07-00{}]].\n:::\n\n",
+            i % 9
+        ));
+    }
+    for text in [&dense, &blocks] {
+        let doc = crate::document::parse_document(text.as_bytes());
+        let parsed = format!("{doc:?}").len();
+        let estimate = parsed_cost(text.len(), &doc);
+        assert!(estimate >= parsed, "estimate {estimate} < parsed {parsed}");
+        assert!(
+            estimate <= parsed * 6,
+            "estimate {estimate} >> parsed {parsed}"
+        );
+    }
 }

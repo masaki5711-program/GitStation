@@ -684,13 +684,26 @@ impl MergeQueue {
         // Plan 18 S7 (ADR-0037 (b) 6): no pipeline to wait for — the
         // verdict is in process, so this tick goes on to it (the testing
         // step: entries and target read again, the lint, the merge result,
-        // the landing). A failure here leaves the batch `testing` (or
-        // `landing`, after the swap) for the next tick, as before.
+        // the landing). The build is reported (`batch_built` above) whatever
+        // follows: a failure of this testing step is logged here with its
+        // code and the batch's request id, and the tick answers `retry` —
+        // the batch stays `testing` (or `landing`, after the swap) and the
+        // queue is looked at again within [`RETRY`], as after a failed step.
         let Some(built) = db::batch(&self.merger.db, batch).await? else {
             return Ok(report("built", Some(batch)));
         };
-        let outcome = self.poll(claimed, &built).await?;
-        Ok(report(outcome, Some(batch)))
+        match self.poll(claimed, &built).await {
+            Ok(outcome) => Ok(report(outcome, Some(batch))),
+            Err(e) => {
+                telemetry::log_failure(
+                    &e.with_context("operation", "merge_queue_same_tick")
+                        .with_context("queue_id", queue.id)
+                        .with_context("queue_batch_id", batch),
+                    &request_id,
+                );
+                Ok(report("retry", Some(batch)))
+            }
+        }
     }
 
     /// Whether the train's commit has a root entry `.forge-ci.yml` (any

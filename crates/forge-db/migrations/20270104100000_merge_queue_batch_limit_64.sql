@@ -5,20 +5,24 @@
 -- with a CI definition keeps `merge_queue.ci_batch_max` (4). The schema
 -- allows 64 so both keys can be tuned without another migration.
 --
---   merge_queues.batch_limit   the queue's stored bound: 1..64. 64 (the
---                              schema's bound, forge_core::merge_queue::
---                              MAX_BATCH) until a red batch bisects it or a
---                              merge result cuts it; back to 64 after a
---                              landing. The bound a batch is built with is
---                              the smaller of it and the queue's kind
---                              (forge_core::merge_queue::batch_bound).
---   merge_queue_batches.size   1..64.
+--   merge_queues.batch_limit   the queue's stored bound: 1..64. Its values and
+--                              default do not change: 4 is the full mark
+--                              ("not lowered", forge_core::merge_queue::
+--                              FULL_MARK), 1..3 a bisection or a cut; the
+--                              bound a batch is built with is the queue's
+--                              kind lowered by it (batch_bound). No row is
+--                              rewritten, so a binary before S7 (which
+--                              refuses a stored bound above 4) still reads
+--                              every queue after a rollback.
+--   merge_queue_batches.size   1..64 (a rollback: Runbook merge-queue).
 --
--- ADR-0030's review pattern: each new CHECK is added NOT VALID and
--- validated (no ACCESS EXCLUSIVE scan beyond the validation's SHARE UPDATE
--- EXCLUSIVE) before the old one goes, so the column is never without a
--- bound (the whole file is one transaction anyway). Widening a range never
--- refuses an existing row.
+-- ADR-0030's review pattern: each new CHECK is added NOT VALID (a brief
+-- ACCESS EXCLUSIVE lock, no scan) and then validated (a scan under SHARE
+-- UPDATE EXCLUSIVE, writes go on) before the old one goes, so the column is
+-- never without a bound; the DROP and RENAME take a brief ACCESS EXCLUSIVE
+-- lock each. The whole file is one transaction, so its ACCESS EXCLUSIVE
+-- locks are held to its end — the tables are small (one row per queue, per
+-- batch). Widening a range never refuses an existing row.
 
 ALTER TABLE forge.merge_queues ADD CONSTRAINT merge_queues_batch_limit_s7
     CHECK (batch_limit BETWEEN 1 AND 64) NOT VALID;
@@ -33,13 +37,6 @@ ALTER TABLE forge.merge_queue_batches VALIDATE CONSTRAINT merge_queue_batches_si
 ALTER TABLE forge.merge_queue_batches DROP CONSTRAINT merge_queue_batches_size;
 ALTER TABLE forge.merge_queue_batches RENAME CONSTRAINT merge_queue_batches_size_s7
     TO merge_queue_batches_size;
-
--- A new queue starts at the schema's bound; its kind bounds the batch.
-ALTER TABLE forge.merge_queues ALTER COLUMN batch_limit SET DEFAULT 64;
--- A queue at the old full bound (4: not lowered by a bisection) is at the
--- new full bound. A lowered one (1..3) stays lowered until its next
--- landing resets it, as before.
-UPDATE forge.merge_queues SET batch_limit = 64 WHERE batch_limit = 4;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',

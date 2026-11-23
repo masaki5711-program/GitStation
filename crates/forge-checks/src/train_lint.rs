@@ -232,7 +232,7 @@ async fn lint_at(browse: &Browser, repo: RepoId, commit: &ObjectId) -> Result<Li
 /// `commit`'s documents through `index` (module docs), or read whole
 /// without one. A bound hit is an error, as in [`lint_at`].
 async fn lint_through(
-    index: Option<&DocIndex>,
+    index: Option<&std::sync::Arc<DocIndex>>,
     browse: &Browser,
     repo: RepoId,
     commit: &ObjectId,
@@ -305,7 +305,7 @@ impl TrainLint {
     }
 
     async fn lint_tree_of(&self, repo: RepoId, commit: &ObjectId) -> Result<Linted, ForgeError> {
-        lint_through(self.index.as_deref(), &self.browse, repo, commit).await
+        lint_through(self.index.as_ref(), &self.browse, repo, commit).await
     }
 
     /// Step 2 of the module docs for a repository that is not strict.

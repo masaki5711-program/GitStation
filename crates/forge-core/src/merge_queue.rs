@@ -8,11 +8,24 @@ use crate::{MergeRequestId, ProjectId};
 
 /// The most entries one batch can hold: the schema's bound (`CHECK 1..64`
 /// on `merge_queues.batch_limit` and `merge_queue_batches.size`, migration
-/// `merge_queue_batch_limit_64`, plan 18 S7). A queue's stored
-/// `batch_limit` is this until a red batch bisects it; the bound a batch
-/// is built with is the smaller of it and the queue's kind
-/// ([`batch_bound`]).
+/// `merge_queue_batch_limit_64`, plan 18 S7).
 pub const MAX_BATCH: usize = 64;
+
+/// The stored `batch_limit` that means "not lowered" (plan 18 S7): 4, the
+/// full bound of the binaries before S7, so a rollback to one of them reads
+/// every stored bound (they refuse a row above 4). A queue stores this
+/// after a landing and by default; a bisection or a cut stores a lowered
+/// bound below it ([`stored_lowered`]). The bound a batch is built with is
+/// [`batch_bound`].
+pub const FULL_MARK: usize = 4;
+
+/// The stored form of a lowered bound `limit` (a bisection, a merge
+/// result's cut): `1..FULL_MARK`. A cut deeper than that in a document
+/// batch is stored as `FULL_MARK - 1` — the next batch is smaller than
+/// needed, never larger, and the landing resets it.
+pub fn stored_lowered(limit: usize) -> usize {
+    limit.clamp(1, FULL_MARK - 1)
+}
 
 /// `merge_queue.doc_batch_max`'s default: a queue whose verdict is in
 /// process — no `.forge-ci.yml` at its base or its train (plan 18 S7,
@@ -23,13 +36,18 @@ pub const DEFAULT_DOC_BATCH: usize = 32;
 /// pipeline (plan 14 §9 decision 5, ADR-0030).
 pub const DEFAULT_CI_BATCH: usize = 4;
 
-/// The bound of the next batch: the queue's stored `batch_limit` (lowered
-/// by a bisection or a cut) and its kind's bound — `doc_max` when the
+/// The bound of the next batch: its kind's bound — `doc_max` when the
 /// verdict is in process (`in_process`: no CI definition), `ci_max`
-/// otherwise — each kept within `1..=`[`MAX_BATCH`].
+/// otherwise — lowered by the queue's stored `batch_limit` unless that is
+/// [`FULL_MARK`] ("not lowered"); always within `1..=`[`MAX_BATCH`].
 pub fn batch_bound(stored: usize, in_process: bool, doc_max: usize, ci_max: usize) -> usize {
     let kind = if in_process { doc_max } else { ci_max };
-    stored.min(kind).clamp(1, MAX_BATCH)
+    let lowered = if stored >= FULL_MARK {
+        MAX_BATCH
+    } else {
+        stored
+    };
+    lowered.min(kind).clamp(1, MAX_BATCH)
 }
 
 /// An entry reaped this many times (its batch passed the deadline) is
@@ -272,24 +290,22 @@ mod tests {
 
     #[test]
     fn a_batch_is_bound_by_its_kind_and_by_the_bisection() {
-        // A fresh queue (the stored bound is the schema's).
-        assert_eq!(
-            batch_bound(MAX_BATCH, true, DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH),
-            32
-        );
-        assert_eq!(
-            batch_bound(MAX_BATCH, false, DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH),
-            4
-        );
+        // A fresh or landed queue (the stored bound is the full mark).
+        let (doc, ci) = (DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH);
+        assert_eq!(batch_bound(FULL_MARK, true, doc, ci), 32);
+        assert_eq!(batch_bound(FULL_MARK, false, doc, ci), 4);
         // A bisected CI queue, a cut document queue.
-        assert_eq!(
-            batch_bound(2, false, DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH),
-            2
-        );
-        assert_eq!(batch_bound(5, true, DEFAULT_DOC_BATCH, DEFAULT_CI_BATCH), 5);
+        assert_eq!(batch_bound(2, false, doc, ci), 2);
+        assert_eq!(batch_bound(3, true, doc, ci), 3);
+        // A lowered bound is stored below the full mark: a rollback to a
+        // binary before S7 reads every stored bound.
+        assert_eq!(stored_lowered(2), 2);
+        assert_eq!(stored_lowered(4), 3);
+        assert_eq!(stored_lowered(31), 3);
+        assert_eq!(stored_lowered(0), 1);
         // Never 0, never past the schema.
         assert_eq!(batch_bound(0, true, 0, 0), 1);
-        assert_eq!(batch_bound(500, true, 500, 4), MAX_BATCH);
+        assert_eq!(batch_bound(FULL_MARK, true, 500, 4), MAX_BATCH);
     }
 
     #[test]

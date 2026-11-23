@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use forge_core::{ObjectId, RepoId};
-use forge_doc::lint::incremental::{KeyedSource, LintCache, LintStats};
+use forge_doc::lint::incremental::{KeyedSource, LintCache, LintStats, MissingBytes};
 use forge_doc::lint::{FileReport, Source};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{Browser, ListedBlob};
@@ -44,6 +44,26 @@ impl std::fmt::Debug for DocIndex {
         f.debug_struct("DocIndex")
             .field("max_bytes", &self.max_bytes)
             .finish_non_exhaustive()
+    }
+}
+
+/// A repository's cache taken out of the map; dropping it puts the cache
+/// back — unless a panic unwinds through it (the cache may be half
+/// updated: it is dropped, and read again next time).
+struct Taken {
+    index: Arc<DocIndex>,
+    repo: RepoId,
+    cache: Option<LintCache>,
+}
+
+impl Drop for Taken {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        if let Some(cache) = self.cache.take() {
+            self.index.put(self.repo, cache);
+        }
     }
 }
 
@@ -73,6 +93,8 @@ impl DocIndex {
             Err(poisoned) => {
                 let mut map = poisoned.into_inner();
                 map.clear();
+                // Once: the next lock is a plain one again.
+                self.caches.clear_poison();
                 tracing::warn!(
                     target: "forge_checks",
                     event = "forge.train_lint.index_reset",
@@ -84,10 +106,17 @@ impl DocIndex {
         }
     }
 
-    fn take(&self, repo: RepoId) -> LintCache {
-        self.lock()
+    /// `repo`'s cache, out of the map until the [`Taken`] is dropped.
+    fn take(self: &Arc<Self>, repo: RepoId) -> Taken {
+        let cache = self
+            .lock()
             .remove(&repo)
-            .map_or_else(|| LintCache::new(self.max_bytes), |k| k.cache)
+            .map_or_else(|| LintCache::new(self.max_bytes), |k| k.cache);
+        Taken {
+            index: Arc::clone(self),
+            repo,
+            cache: Some(cache),
+        }
     }
 
     fn put(&self, repo: RepoId, cache: LintCache) {
@@ -120,7 +149,7 @@ impl DocIndex {
     /// Errors: forge-git's, each with the commit; an inconsistency of the
     /// cache (`FG-SYS-0001 reason=doc_index_missing_bytes`).
     pub(super) async fn lint(
-        &self,
+        self: &Arc<Self>,
         browse: &Browser,
         repo: RepoId,
         commit: &ObjectId,
@@ -155,9 +184,12 @@ impl DocIndex {
                 read: 0,
             });
         }
-        let mut cache = self.take(repo);
+        // Put back when dropped: after the lint, on an error, and when the
+        // caller stops waiting (its budget) — the blocking lint owns it then.
+        let mut taken = self.take(repo);
+        let held = |oid: &str| taken.cache.as_ref().is_some_and(|c| c.holds(oid));
         // Only what the cache does not hold (and every type definition).
-        let wanted = |b: &&ListedBlob| !is_document_file(&b.path) || !cache.holds(&b.oid);
+        let wanted = |b: &&ListedBlob| !is_document_file(&b.path) || !held(&b.oid);
         let whole: Vec<ListedBlob> = chosen.whole.iter().filter(wanted).cloned().collect(); // clone: the read owns its list
         let prefix: Vec<&ListedBlob> = chosen.prefix.iter().filter(wanted).collect();
         let read = async {
@@ -177,13 +209,7 @@ impl DocIndex {
             Ok::<_, ForgeError>(bytes)
         }
         .await;
-        let bytes = match read {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                self.put(repo, cache);
-                return Err(e);
-            }
-        };
+        let bytes = read?;
         let read_now = whole
             .iter()
             .map(|b| &b.path)
@@ -211,18 +237,23 @@ impl DocIndex {
                     bytes: bytes.get(&b.oid).map(Vec::as_slice),
                 })
                 .collect();
+            let Some(cache) = taken.cache.as_mut() else {
+                return Err(MissingBytes {
+                    path: String::new(),
+                });
+            };
             let answer = cache.lint(&doctypes, &documents);
             drop(documents);
             drop(doctypes);
-            (cache, answer)
+            drop(taken);
+            answer
         })
         .await;
-        let (cache, answer) = linted.map_err(|e| {
+        let answer = linted.map_err(|e| {
             ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "train_lint_task_failed")
                 .with_context("panicked", e.is_panic())
         })?;
-        self.put(repo, cache);
         let (reports, stats) = answer.map_err(|missing| {
             ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "doc_index_missing_bytes")

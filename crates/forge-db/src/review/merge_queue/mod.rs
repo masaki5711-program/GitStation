@@ -16,7 +16,9 @@
 use std::time::Duration;
 
 use forge_core::ids::{MergeRequestId, ProjectId, UserId};
-use forge_core::merge_queue::{BatchState, EntryState, Isolation, MergeQueueChange, MAX_BATCH};
+use forge_core::merge_queue::{
+    stored_lowered, BatchState, EntryState, Isolation, MergeQueueChange, FULL_MARK, MAX_BATCH,
+};
 use forge_core::{MergeMethod, ObjectId, RefName, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -1132,7 +1134,7 @@ pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, Forg
         if let Some(limit) = end.batch_limit {
             sqlx::query("UPDATE forge.merge_queues SET batch_limit = $2 WHERE id = $1")
                 .bind(queue)
-                .bind(i32::try_from(limit.clamp(1, MAX_BATCH)).unwrap_or(1))
+                .bind(i32::try_from(stored_lowered(limit)).unwrap_or(1))
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| query_error(QUERY, e))?;
@@ -1178,7 +1180,8 @@ pub async fn entry_merged(db: &Db, entry: i64) -> Result<bool, ForgeError> {
     .await
 }
 
-/// `landing → landed`, and the queue's bound back to [`MAX_BATCH`].
+/// `landing → landed`, and the queue's bound back to [`FULL_MARK`] ("not
+/// lowered", plan 18 S7: readable by a binary before S7 after a rollback).
 pub async fn batch_landed(db: &Db, batch: i64) -> Result<bool, ForgeError> {
     const QUERY: &str = "merge_queue.batch_landed";
     db.within(QUERY, async {
@@ -1200,7 +1203,7 @@ pub async fn batch_landed(db: &Db, batch: i64) -> Result<bool, ForgeError> {
         };
         sqlx::query("UPDATE forge.merge_queues SET batch_limit = $2 WHERE id = $1")
             .bind(queue)
-            .bind(i32::try_from(MAX_BATCH).unwrap_or(4))
+            .bind(i32::try_from(FULL_MARK).unwrap_or(4))
             .execute(&mut *tx)
             .await
             .map_err(|e| query_error(QUERY, e))?;

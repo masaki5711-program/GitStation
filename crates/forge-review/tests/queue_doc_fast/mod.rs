@@ -135,11 +135,10 @@ async fn a_restart_mid_landing_recovers_a_same_tick_batch() {
     let mut w = world_with(DOC_BASE).await;
     let mrs = w.enqueued(2).await;
     let dying = w.worker("dying").with_crash_after_cas();
-    let crashed = dying
-        .tick()
-        .await
-        .expect_err("the same-tick landing stops after the swap");
-    assert_eq!(crashed.code(), ErrorCode::Internal);
+    // The landing stops after the swap: the tick still reports its build
+    // (`retry`, the failure logged) and the batch is left `landing`.
+    let crashed = dying.tick().await.expect("tick").expect("due");
+    assert_eq!(crashed.outcome, "retry");
     let batches =
         w.t.json_rows("SELECT id, state, train_sha FROM forge.merge_queue_batches")
             .await;

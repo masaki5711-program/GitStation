@@ -181,9 +181,10 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
   `batch_built` → `batch_landed`（または `entry_removed` / `batch_abandoned`）が続き、手番の `outcome` は `built` ではなく `landed` など。
   状態は今までどおり `testing → landing → landed` を通る。着地の途中で止まったら（`state = 'landing'`）、次の手番が上の Diagnose 5 の
   とおり git を見て決める。
-- `forge.merge_queues.batch_limit` は**保存した上限**で、ふだんは 64（スキーマの上限、`merge_queue_batch_limit_64`）。赤のバッチの二分や
-  マージ結果の切り詰めで下がり、着地で 64 に戻る。実際のバッチの上限は「保存した上限」と「キューの種類の上限（32 か 4）」の小さいほう。
-  `gstn queue list` の「次のバッチの上限」に 64 と出ても、CI のあるキューのバッチは 4 まで。
+- `forge.merge_queues.batch_limit` は**保存した上限**で、ふだんは 4（「下げていない」の印。S7 の前と同じ値）。赤のバッチの二分や
+  マージ結果の切り詰めで 1〜3 に下がり、着地で 4 に戻る。実際のバッチの上限は、印が 4 ならキューの種類の上限（32 か 4）、1〜3 なら
+  それと種類の上限の小さいほう。だから `gstn queue list` の「次のバッチの上限」が 4 でも、文書のキューのバッチは 32 まで。
+  スキーマ（`merge_queue_batch_limit_64`）はバッチの大きさ 64 まで許すが、保存した上限は 4 を超えない（下の「S7 の前に戻す」）。
 - 文書の赤い列車は半分にしない（計画 18 S1 のまま、最初に壊した段の MR だけを外して残りを作り直す）。
 - **増分の lint**: 列車の lint は `forge serve` のメモリの文書の索引（リポジトリごと、blob の id で引く。全体で
   `merge_queue.doc_index_bytes`、既定 64 MiB。古いものから捨てる）を使い、持っていない blob だけを読む。答えは全件の lint と同じ
@@ -233,6 +234,13 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
   `doc_lint_base_not_clean`）。着地したら、外れた MR を作者が入れ直す。サーバーの操作は要らない。
 - `FG-CI-0032 reason=doc_lint_failed` で外れた MR は、作者が直して新しい版を push し、`gstn queue add`（または自動マージ）で入れ直す。
   運用の操作は要らない。
+- **S7 の前のビルドに戻す**（ロールバック。**人の承認が要る**）: マイグレーション `20270104100000` は戻さない（CHECK を 1..64 に
+  広げただけで、行は書き換えていない）。保存した上限は S7 のビルドでも 1〜4 に収まるので、S7 の前のビルドがどのキューも読める
+  （それは 4 を超える保存値を `stored_queue_limit_invalid` で断る）。確かめる:
+  `SELECT id, batch_limit FROM forge.merge_queues WHERE batch_limit NOT BETWEEN 1 AND 4;`（0 行であること）。
+  大きさ 5 以上のバッチの行は S7 の前のビルドも読める（大きさは読むときに範囲を見ない）。生きた大きいバッチ
+  （`SELECT id, queue_id, state, size FROM forge.merge_queue_batches WHERE state IN ('testing', 'landing') AND size > 4;`）は、そのまま
+  試しの段か回復で終わる。戻した後は文書のキューも 4 件ずつのバッチになり、同じ手番での着地と文書の索引は無くなる（遅くなるだけ）。
 - **文書のバッチを小さくする**（32 件のバッチの lint や着地が予算・手番の上限 240 s に当たる、`train_lint_unavailable reason=train_budget`
   が続く、など）: サーバーの設定を `merge_queue.doc_batch_max = 4`（`FORGE_MERGE_QUEUE_DOC_BATCH_MAX=4`）にして `forge serve` を再起動する。
   **人の承認が要る**（ロールバック: 設定を戻して再起動。列の MR は失われない）。`forge serve` のメモリが足りないときは

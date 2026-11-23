@@ -62,7 +62,8 @@ async fn batch_limit_accepts_64_rejects_65() {
             "size {bad}"
         );
     }
-    // A new queue starts at the schema's bound (its kind bounds a batch).
+    // A new queue starts at the full mark, 4 ("not lowered": its kind
+    // bounds a batch), which a binary before S7 still reads.
     let defaults = t
         .json_rows(
             "SELECT column_default AS d FROM information_schema.columns \
@@ -70,5 +71,5 @@ async fn batch_limit_accepts_64_rejects_65() {
              AND column_name = 'batch_limit'",
         )
         .await;
-    assert_eq!(defaults[0]["d"].as_str(), Some("64"));
+    assert_eq!(defaults[0]["d"].as_str(), Some("4"));
 }
