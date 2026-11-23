@@ -92,6 +92,8 @@ mod matrix_rows_deploy;
 mod matrix_rows_spec_refs;
 // Plan 06 D-5 safety net: whole copies of a repository by agents.
 mod matrix_rows_repo_copy;
+// Plan 20 K3 (ADR-0040): the cross search.
+mod matrix_rows_search;
 mod spec_ref;
 // ── end M3 X1 ──
 

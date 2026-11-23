@@ -584,6 +584,17 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::lists::GROUPS_PATH,
             routes::lists::GROUPS_QUERY,
         )
+        // Plan 20 K3 (ADR-0040): the cross search; each hit decided by
+        // authorize() (ProjectRead, MergeRequestList).
+        .route(
+            Verb::Get,
+            routes::search::PATH,
+            Action::SearchQuery,
+            "Search projects and merge requests the caller may read (ranked, no count, opaque cursor)",
+            routes::search::search,
+        )
+        .responds::<routes::search::SearchPage>(Verb::Get, routes::search::PATH)
+        .queries(Verb::Get, routes::search::PATH, routes::search::QUERY)
         .route(
             Verb::Get,
             routes::users::PATH,

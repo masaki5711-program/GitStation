@@ -353,7 +353,9 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     Arc::new(db.clone()), // clone: the pool handle is shared
                     cursor_keys,
                 )
-                .with_api_config(&cfg.api),
+                .with_api_config(&cfg.api)
+                // Plan 20 K3: the search reads (it shares the list caps).
+                .with_search(Arc::new(db.clone())), // clone: the pool handle is shared
             );
         // ADR-0036: the portal's widget routes verify with the sign-in.
         if let Some(portal) = crate::portal::widgets(cfg, oidc.as_ref()) {

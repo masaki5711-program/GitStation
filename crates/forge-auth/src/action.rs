@@ -66,6 +66,11 @@ actions! {
     /// signed-in user; `read_api` on a token). Decided on the instance;
     /// every row is then decided again with `ProjectRead` (M1 phase 8b).
     ProjectList,
+    /// `GET /api/v1/search` (plan 20 K3, ADR-0040): may the caller search
+    /// at all — as `ProjectList` (any active signed-in user, `read_api`,
+    /// an agent too; never acting for a person, never CI). Every hit is
+    /// then decided again (`ProjectRead`, `MergeRequestList`).
+    SearchQuery,
     ProjectCreate,
     ProjectUpdate,
     /// Private ⇄ internal: Owner only (exposes a project to every signed-in user).
@@ -877,6 +882,7 @@ impl Action {
             | Action::SpecRead
             | Action::ContextRead
             | Action::ProjectList
+            | Action::SearchQuery
             | Action::MemberList
             | Action::ProtectedRefList
             | Action::GroupRead
@@ -1017,6 +1023,7 @@ impl Action {
             | Action::RepoPush
             | Action::RepoBrowse
             | Action::ProjectList
+            | Action::SearchQuery
             | Action::ProjectCreate
             | Action::ProjectUpdate
             | Action::ProjectVisibilityChange
@@ -1186,6 +1193,7 @@ impl Action {
             Action::RepoPush
             | Action::RepoBrowse
             | Action::ProjectList
+            | Action::SearchQuery
             | Action::ProjectCreate
             | Action::ProjectUpdate
             | Action::ProjectVisibilityChange
