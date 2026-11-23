@@ -258,16 +258,22 @@ async fn a_prepared_version_asks_for_no_spec_index_job_and_a_hand_over_asks_for_
         head: sha('a'),
     };
     let rid = RequestId::parse("req-hand-over").expect("id");
-    assert!(hand_over(&t.db, &request, rid.clone())
-        .await
-        .expect("hand over"));
+    assert_eq!(
+        hand_over(&t.db, &request, rid.clone())
+            .await
+            .expect("hand over"),
+        super::HandOver::Queued
+    );
     let found = jobs(&t).await;
     assert_eq!(found.len(), 1, "{found:?}");
     let prefix = format!("spec_index:{}:{}:{}:", p.get(), mr.iid, sha('a').as_str());
     assert!(found[0].0.starts_with(&prefix), "{}", found[0].0);
     assert_eq!(found[0].1, request);
     // Held while queued: nothing twice.
-    assert!(!hand_over(&t.db, &request, rid).await.expect("again"));
+    assert_eq!(
+        hand_over(&t.db, &request, rid).await.expect("again"),
+        super::HandOver::Pending
+    );
     t.drop_now().await;
 }
 

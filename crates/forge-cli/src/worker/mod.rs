@@ -84,6 +84,7 @@ mod spec_index_sweep;
 // ── M4 C2: CI pipelines (the `ci.pipeline_create` job) ──
 mod pipelines;
 mod prepare;
+mod prepare_sweep;
 // ── M3 X7: `forge/risk` (the `check.risk` job) ──
 mod risk;
 mod risk_sweep;
@@ -302,6 +303,9 @@ enum Task {
     RiskSweep,
     /// Dead `check.spec_index` jobs answered with `error` (`spec_index_sweep`, M3 X4).
     SpecIndexSweep,
+    /// The checks of dead `merge_request.prepare` jobs answered with
+    /// `error` (`prepare_sweep`, plan 18 S6).
+    PrepareSweep,
     // ── M3 O3 ──
     /// The maintenance's own job runner (`maintenance`).
     MaintenanceRunner,
@@ -413,6 +417,8 @@ fn tasks_with(
         Task::RiskSweep,
         // M3 X4: needs only the database.
         Task::SpecIndexSweep,
+        // Plan 18 S6: needs only the database.
+        Task::PrepareSweep,
         // M3 I2: needs only the database.
         Task::WebhookRetention,
     ];
@@ -596,6 +602,7 @@ impl Task {
             Self::SpecDriftSweep => spec_drift_sweep::NAME,
             Self::RiskSweep => risk_sweep::NAME,
             Self::SpecIndexSweep => spec_index_sweep::NAME,
+            Self::PrepareSweep => prepare_sweep::NAME,
             Self::MaintenanceRunner => maintenance::RUNNER_NAME,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
             Self::MirrorRunner => mirror::RUNNER_NAME,
@@ -637,6 +644,7 @@ impl Task {
             Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
             Self::RiskSweep => risk_sweep::PERIOD,
             Self::SpecIndexSweep => spec_index_sweep::PERIOD,
+            Self::PrepareSweep => prepare_sweep::PERIOD,
             Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
             Self::MirrorRunner => jobs::JOB_POLL_PERIOD,
@@ -692,6 +700,7 @@ impl Task {
             Self::SpecDriftSweep => spec_drift_sweep::run_spec_drift_sweep(db).await,
             Self::RiskSweep => risk_sweep::run_risk_sweep(db).await,
             Self::SpecIndexSweep => spec_index_sweep::run_spec_index_sweep(db).await,
+            Self::PrepareSweep => prepare_sweep::run_prepare_sweep(db).await,
             Self::EventsRetention => events_retention::run_events_retention(db).await,
             Self::CheckRunRetention => {
                 check_run_retention::run_check_run_retention(db, shared.check_run_retention_days)

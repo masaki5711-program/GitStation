@@ -19,16 +19,24 @@
 //! pipeline is enqueued as plan 18 S5 says, and only when the merged tree
 //! has a `.forge-ci.yml` (`Mergeability::with_ci_definition_probe`).
 //!
-//! Steps 3 and 4 run for a version this job added (or, on a later
-//! attempt, for the head it already recorded, unless the head's run is
-//! there). **Failures**: only step 1 fails the job (retried with the
-//! queue's backoff, dead at once for a malformed payload or a broken
-//! invariant — the codes and rules of the version job, the error carrying
-//! `step=refresh`). A failed step 2, 3 or 4 is handed over to its own job
-//! (`merge_request.mergeability`, `check.risk`, `check.spec_index`), which
-//! retries only that step and answers `error` on its last attempt, as for
-//! any version; the hand-over is logged once at warn
-//! (`forge.review.prepare_step_failed`, with the step's code and `step`).
+//! Steps 3 and 4 run for a version this job added; for a head already
+//! recorded (a later attempt, a reopen, a head pushed back) only the steps
+//! whose run the head lacks. **Failures**: only step 1 fails the job
+//! (retried with the queue's backoff, dead at once for a malformed payload
+//! or a broken invariant — the codes and rules of the version job, the
+//! error carrying `step=refresh`), and the read of the head before steps
+//! 3 and 4 (`step=checks`). A failed step 2, 3 or 4 is handed over to its
+//! own job (`merge_request.mergeability`, `check.risk`,
+//! `check.spec_index`), which retries only that step and answers `error`
+//! on its last attempt, as for any version (warn
+//! `forge.review.prepare_step_failed`, with the step's code and `step`).
+//! A risk or spec hand-over that queues no job — the key is held by a
+//! finished job, or the database refused — answers the step `error` at
+//! once (error `forge.review.prepare_hand_over_failed`): no check is left
+//! without an answer. A waiting mergeability job that cannot be settled is
+//! logged (warn `forge.review.prepare_backstop_unsettled`) and runs after
+//! its delay. A prepare job that dies after recording its version is
+//! answered by the worker's `prepare_sweep`.
 //! One info line per run (`forge.review.prepared`) says what each step did
 //! and how long it took.
 
@@ -40,6 +48,7 @@ use forge_checks::spec_checks::SpecChecks;
 use forge_core::{MergeRequestState, ObjectId, RequestId};
 use forge_db::checks::risk::RiskRequest;
 use forge_db::checks::spec_index::SpecIndexRequest;
+use forge_db::checks::HandOver;
 use forge_db::jobs::{ClaimedJob, JobFailure, JobFuture, JobHandler, JobKind};
 use forge_db::review::{
     pipeline_asked, refresh_payload, settle_backstop, Backstop, MergeabilityRequest, PREPARE_JOB,
@@ -88,12 +97,14 @@ impl PrepareHandler {
 /// What one step did, for the run's log line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
-    /// Not run (nothing to do for it).
+    /// Not run (nothing to do for it, or its answer is there already).
     Skipped,
     /// Ran and wrote its answer.
     Done,
     /// Failed; its own job retries it.
     HandedOver,
+    /// Failed, and no job of its own could take it over: answered `error`.
+    AnsweredError,
 }
 
 impl Step {
@@ -102,6 +113,7 @@ impl Step {
             Self::Skipped => "skipped",
             Self::Done => "done",
             Self::HandedOver => "handed_over",
+            Self::AnsweredError => "answered_error",
         }
     }
 }
@@ -110,7 +122,7 @@ fn millis(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Log a step's failure that its own job now retries.
+/// Log a failed step its own job now retries.
 fn handed_over(request_id: &RequestId, mr: i64, step: &'static str, e: &ForgeError) {
     tracing::warn!(
         target: "forge_cli",
@@ -125,6 +137,73 @@ fn handed_over(request_id: &RequestId, mr: i64, step: &'static str, e: &ForgeErr
     );
 }
 
+/// Log a failed step whose hand-over queued no job (`why`: `key_held`, or
+/// the code of the database failure): the step is answered `error` now,
+/// never left without an answer.
+fn not_handed_over(request_id: &RequestId, mr: i64, step: &'static str, e: &ForgeError, why: &str) {
+    tracing::error!(
+        target: "forge_cli",
+        event = "forge.review.prepare_hand_over_failed",
+        request_id = %request_id,
+        error_code = e.code().id(),
+        job_kind = PREPARE_JOB,
+        step,
+        merge_request_id = mr,
+        reason = why,
+        error = %e,
+        "a failed step of the prepare job could not be handed over; it is answered error"
+    );
+}
+
+/// Settle the waiting mergeability job; a failure is logged, never the
+/// job's (the waiting job then runs after its delay).
+async fn settle(
+    db: &Db,
+    (mr, seq): (forge_core::MergeRequestId, i64),
+    how: Backstop,
+    request_id: &RequestId,
+) {
+    if let Err(e) = settle_backstop(db, mr, seq, how).await {
+        tracing::warn!(
+            target: "forge_cli",
+            event = "forge.review.prepare_backstop_unsettled",
+            request_id = %request_id,
+            error_code = e.code().id(),
+            merge_request_id = mr.get(),
+            check_seq = seq,
+            settle = ?how,
+            "the waiting mergeability job could not be settled; it runs after its delay"
+        );
+    }
+}
+
+/// What becomes of a failed step after its hand-over: a job retries it
+/// (`HandedOver`), or none could be queued — its key is held by a
+/// finished job (the head was evaluated before under that key), or the
+/// database refused — and the caller answers it `error` (`AnsweredError`).
+fn after_hand_over(
+    handed: Result<HandOver, ForgeError>,
+    request_id: &RequestId,
+    mr: i64,
+    step: &'static str,
+    e: &ForgeError,
+) -> Step {
+    match handed {
+        Ok(HandOver::Queued | HandOver::Pending) => {
+            handed_over(request_id, mr, step, e);
+            Step::HandedOver
+        }
+        Ok(HandOver::Held) => {
+            not_handed_over(request_id, mr, step, e, "key_held");
+            Step::AnsweredError
+        }
+        Err(db) => {
+            not_handed_over(request_id, mr, step, e, db.code().id());
+            Step::AnsweredError
+        }
+    }
+}
+
 impl Inner {
     /// Step 2 for the request the refresh step made.
     async fn mergeability(
@@ -132,9 +211,9 @@ impl Inner {
         report: &RefreshReport,
         mr: forge_core::MergeRequestId,
         request_id: &RequestId,
-    ) -> Result<Step, ForgeError> {
+    ) -> Step {
         let Some(seq) = report.check_requested else {
-            return Ok(Step::Skipped);
+            return Step::Skipped;
         };
         let request = MergeabilityRequest {
             merge_request: mr,
@@ -150,19 +229,19 @@ impl Inner {
         .await;
         match ran {
             Ok(_) => {
-                settle_backstop(&self.db, mr, seq, Backstop::Drop).await?;
-                Ok(Step::Done)
+                settle(&self.db, (mr, seq), Backstop::Drop, request_id).await;
+                Step::Done
             }
             Err(e) => {
                 handed_over(request_id, mr.get(), "mergeability", &e);
-                settle_backstop(&self.db, mr, seq, Backstop::Wake).await?;
-                Ok(Step::HandedOver)
+                settle(&self.db, (mr, seq), Backstop::Wake, request_id).await;
+                Step::HandedOver
             }
         }
     }
 
-    /// Whether `head` already has forge's run `name` (a later attempt
-    /// skips a step whose answer is there).
+    /// Whether `head` already has forge's run `name` (a step whose answer
+    /// is there is not run again).
     async fn answered(
         &self,
         project: forge_core::ProjectId,
@@ -175,11 +254,56 @@ impl Inner {
             .any(|r| r.name.as_str() == name && r.reported_by.is_none()))
     }
 
-    /// Steps 3 and 4 on the merge request's current head.
+    /// Step 3 (`forge/risk`); its failure is handed over or answered.
+    async fn risk_step(
+        &self,
+        request: &RiskRequest,
+        mr: forge_core::MergeRequestId,
+        request_id: &RequestId,
+    ) -> Step {
+        let Err(e) = self.risk.run(request, request_id).await else {
+            return Step::Done;
+        };
+        // clone: the job keeps its origin request
+        let handed =
+            forge_db::checks::risk::hand_over(&self.db, request, mr, request_id.clone()).await;
+        match after_hand_over(handed, request_id, mr.get(), "risk", &e) {
+            Step::AnsweredError => {
+                self.risk.fail(request, request_id, &e).await;
+                Step::AnsweredError
+            }
+            other @ (Step::Skipped | Step::Done | Step::HandedOver) => other,
+        }
+    }
+
+    /// Step 4 (the spec checks); its failure is handed over or answered.
+    async fn spec_step(
+        &self,
+        request: &SpecIndexRequest,
+        mr: forge_core::MergeRequestId,
+        request_id: &RequestId,
+    ) -> Step {
+        let Err(e) = self.spec.run(request, request_id).await else {
+            return Step::Done;
+        };
+        // clone: the job keeps its origin request
+        let handed =
+            forge_db::checks::spec_index::hand_over(&self.db, request, request_id.clone()).await;
+        match after_hand_over(handed, request_id, mr.get(), "spec", &e) {
+            Step::AnsweredError => {
+                self.spec.fail(request, request_id, &e).await;
+                Step::AnsweredError
+            }
+            other @ (Step::Skipped | Step::Done | Step::HandedOver) => other,
+        }
+    }
+
+    /// Steps 3 and 4 on the merge request's current head; with
+    /// `skip_answered`, a step whose run the head has is not run again.
     async fn checks(
         &self,
         mr: forge_core::MergeRequestId,
-        later_attempt: bool,
+        skip_answered: bool,
         request_id: &RequestId,
     ) -> Result<(Step, Step), ForgeError> {
         let Some(now) = forge_db::review::refresh_target(&self.db, mr).await? else {
@@ -195,35 +319,21 @@ impl Inner {
             project,
             head: head.clone(), // clone: the spec request owns it too
         };
-        let risk = if later_attempt
+        let risk = if skip_answered
             && self
                 .answered(project, &head, forge_core::checks::RISK_CHECK)
                 .await?
         {
             Step::Skipped
         } else {
-            match self.risk.run(&risk_request, request_id).await {
-                Ok(_) => Step::Done,
-                Err(e) => {
-                    handed_over(request_id, mr.get(), "risk", &e);
-                    // clone: the job keeps its origin request
-                    forge_db::checks::risk::hand_over(
-                        &self.db,
-                        &risk_request,
-                        mr,
-                        request_id.clone(),
-                    )
-                    .await?;
-                    Step::HandedOver
-                }
-            }
+            self.risk_step(&risk_request, mr, request_id).await
         };
         let spec_request = SpecIndexRequest {
             project,
             iid: stored.iid,
             head,
         };
-        let spec = if later_attempt
+        let spec = if skip_answered
             && self
                 .answered(
                     project,
@@ -234,25 +344,13 @@ impl Inner {
         {
             Step::Skipped
         } else {
-            match self.spec.run(&spec_request, request_id).await {
-                Ok(_) => Step::Done,
-                Err(e) => {
-                    handed_over(request_id, mr.get(), "spec", &e);
-                    forge_db::checks::spec_index::hand_over(
-                        &self.db,
-                        &spec_request,
-                        request_id.clone(), // clone: the job keeps its origin request
-                    )
-                    .await?;
-                    Step::HandedOver
-                }
-            }
+            self.spec_step(&spec_request, mr, request_id).await
         };
         Ok((risk, spec))
     }
 
-    /// One run (module docs). `Err`: the job's failure (step 1, or a step
-    /// that could not be handed over).
+    /// One run (module docs). `Err`: the job's failure (step 1, or the
+    /// read of the head before steps 3 and 4).
     async fn run(&self, job: &ClaimedJob) -> Result<(), JobFailure> {
         let request = refresh_payload(&job.payload).map_err(JobFailure::permanent)?;
         let ask = pipeline_asked(&job.payload).map_err(JobFailure::permanent)?;
@@ -272,21 +370,19 @@ impl Inner {
                 .map_err(|e| failed(e.with_context("step", "refresh")))?;
         let refresh_ms = millis(started);
         let step = Instant::now();
-        let mergeability = self
-            .mergeability(&report, mr, &request_id)
-            .await
-            .map_err(|e| failed(e.with_context("step", "mergeability")))?;
+        let mergeability = self.mergeability(&report, mr, &request_id).await;
         let mergeability_ms = millis(step);
         let step = Instant::now();
-        let later_attempt = job.lease.attempt > 1;
-        let (risk, spec) =
-            if report.outcome == "added" || (later_attempt && report.outcome == "already_head") {
-                self.checks(mr, later_attempt, &request_id)
-                    .await
-                    .map_err(|e| failed(e.with_context("step", "checks")))?
-            } else {
-                (Step::Skipped, Step::Skipped)
-            };
+        // A version this job added is evaluated; any other outcome on an
+        // open merge request (the head was recorded already — a later
+        // attempt, a reopen, a head pushed back) evaluates only what the
+        // head still lacks (S6 review).
+        let (risk, spec) = match report.outcome {
+            "added" => self.checks(mr, false, &request_id).await,
+            "already_head" | "restored" => self.checks(mr, true, &request_id).await,
+            _ => Ok((Step::Skipped, Step::Skipped)),
+        }
+        .map_err(|e| failed(e.with_context("step", "checks")))?;
         tracing::info!(
             target: "forge_cli",
             event = "forge.review.prepared",

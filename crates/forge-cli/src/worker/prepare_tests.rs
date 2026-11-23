@@ -267,3 +267,233 @@ async fn a_doc_mr_without_forge_ci_yml_gets_no_pipeline_job() {
     assert_eq!(one[0]["n"], 1, "a definition, one job");
     w.t.drop_now().await;
 }
+
+/// A trigger refusing writes of `table` rows matching `when` (on `NEW`).
+async fn refuse(w: &World, name: &str, table: &str, when: &str) {
+    w.t.exec_superuser(&format!(
+        "CREATE FUNCTION forge.{name}() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF {when} THEN RAISE EXCEPTION 'synthetic s6 failure'; \
+         END IF; RETURN NEW; END $$"
+    ))
+    .await;
+    w.t.exec_superuser(&format!(
+        "CREATE TRIGGER {name} BEFORE INSERT OR UPDATE ON {table} \
+         FOR EACH ROW EXECUTE FUNCTION forge.{name}()"
+    ))
+    .await;
+}
+
+async fn allow(w: &World, name: &str, table: &str) {
+    w.t.exec_superuser(&format!("DROP TRIGGER {name} ON {table}"))
+        .await;
+}
+
+fn has(runs: &[(String, String, Option<String>)], name: &str) -> bool {
+    runs.iter().any(|(n, _, _)| n == name)
+}
+
+/// The mergeability step fails (its result cannot be stored): the waiting
+/// mergeability job is woken (ready now) and the prepare job still
+/// succeeds with the other steps done; that job alone then decides.
+#[tokio::test]
+async fn a_failed_mergeability_step_wakes_its_own_job() {
+    let mut w = World::new().await;
+    let base = main(&mut w).await;
+    let head = branch(&mut w, &base, "feature", &[("notes.md", "# Notes\n")]).await;
+    let mr = w.open("feature", "main").await;
+    refuse(
+        &w,
+        "s6_refuse_decision",
+        "forge.merge_request_mergeability",
+        "NEW.status = 'can_be_merged'",
+    )
+    .await;
+    let ran = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(matches!(ran, Ran::Succeeded(_)), "{ran:?}");
+    let woken =
+        w.t.json_rows(&format!(
+            "SELECT run_after <= now() AS ready FROM forge.jobs \
+             WHERE kind = 'merge_request.mergeability' AND state = 'queued' \
+             AND payload ->> 'merge_request_id' = '{}'",
+            mr.id.get()
+        ))
+        .await;
+    assert_eq!(woken.len(), 1, "{woken:?}");
+    assert_eq!(woken[0]["ready"], true, "woken, not waiting");
+    let runs_now = runs(&w, &head).await;
+    assert!(
+        has(&runs_now, forge_core::checks::RISK_CHECK),
+        "{runs_now:?}"
+    );
+    allow(&w, "s6_refuse_decision", "forge.merge_request_mergeability").await;
+    w.drain().await;
+    assert_eq!(w.status(&mr).await.status, MergeabilityStatus::CanBeMerged);
+    w.t.drop_now().await;
+}
+
+/// A failed spec step is handed over to its own `check.spec_index` job
+/// only; risk is done.
+#[tokio::test]
+async fn a_failed_spec_step_is_handed_over_to_its_own_job() {
+    let mut w = World::new().await;
+    let base = main(&mut w).await;
+    let head = branch(&mut w, &base, "feature", &[("notes.md", "# Notes\n")]).await;
+    let mr = w.open("feature", "main").await;
+    refuse(
+        &w,
+        "s6_refuse_spec",
+        "forge.check_runs",
+        "NEW.name = 'forge/spec-lint'",
+    )
+    .await;
+    let ran = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(matches!(ran, Ran::Succeeded(_)), "{ran:?}");
+    let jobs = kinds(&w, &mr, &head).await;
+    assert_eq!(
+        jobs.iter().filter(|k| *k == "check.spec_index").count(),
+        1,
+        "{jobs:?}"
+    );
+    assert!(!jobs.iter().any(|k| k == "check.risk"), "{jobs:?}");
+    allow(&w, "s6_refuse_spec", "forge.check_runs").await;
+    w.drain().await;
+    let after = runs(&w, &head).await;
+    assert!(
+        has(&after, forge_core::checks::SPEC_LINT_CHECK),
+        "{after:?}"
+    );
+    w.t.drop_now().await;
+}
+
+/// A failed risk step whose job key is held by a finished job (the head
+/// was evaluated before under that key, nothing will run) is answered
+/// `error` at once: never left without an answer.
+#[tokio::test]
+async fn a_hand_over_held_by_a_finished_job_answers_error() {
+    let mut w = World::new().await;
+    let base = main(&mut w).await;
+    let head = branch(&mut w, &base, "feature", &[("notes.md", "# Notes\n")]).await;
+    let mr = w.open("feature", "main").await;
+    w.t.exec_superuser(&format!(
+        "INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key, \
+         origin_request_id, finished_at) VALUES ('check.risk', '{{}}'::jsonb, 'succeeded', 5, \
+         90000, 'risk:{p}:{head}:mr{mr}', 'req-old', now())",
+        p = w.project.get(),
+        mr = mr.id.get(),
+    ))
+    .await;
+    refuse(
+        &w,
+        "s6_refuse_risk_answer",
+        "forge.check_runs",
+        "NEW.name = 'forge/risk' AND NEW.conclusion IS DISTINCT FROM 'error'",
+    )
+    .await;
+    let ran = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(matches!(ran, Ran::Succeeded(_)), "{ran:?}");
+    let answered = forge_db::checks::check_runs(&w.t.db, w.project, &oid(&head))
+        .await
+        .expect("runs");
+    let risk = answered
+        .iter()
+        .find(|r| r.name.as_str() == forge_core::checks::RISK_CHECK)
+        .expect("forge/risk answered");
+    assert_eq!(risk.conclusion, Some(forge_core::CheckConclusion::Error));
+    allow(&w, "s6_refuse_risk_answer", "forge.check_runs").await;
+    w.t.drop_now().await;
+}
+
+/// The version step decides the job's fate: a database failure while
+/// recording the version is retried; a malformed payload is dead at once.
+#[tokio::test]
+async fn a_failed_refresh_step_is_retried_and_a_malformed_payload_is_dead() {
+    let mut w = World::new().await;
+    let base = main(&mut w).await;
+    let _head = branch(&mut w, &base, "feature", &[("notes.md", "# Notes\n")]).await;
+    let _mr = w.open("feature", "main").await;
+    refuse(
+        &w,
+        "s6_refuse_version",
+        "forge.merge_request_versions",
+        "true",
+    )
+    .await;
+    let ran = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(matches!(ran, Ran::Retrying { .. }), "{ran:?}");
+    allow(&w, "s6_refuse_version", "forge.merge_request_versions").await;
+    w.t.exec_superuser(
+        "INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, \
+         origin_request_id) VALUES ('merge_request.prepare', '{\"merge_request_id\": 0}'::jsonb, \
+         'queued', 5, 420000, 'req-bad')",
+    )
+    .await;
+    let ran = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(matches!(ran, Ran::Dead { .. }), "{ran:?}");
+    w.t.drop_now().await;
+}
+
+/// Review of S6 (HIGH): a prepare job that dies after recording its
+/// version leaves the head's checks to no one (the version says
+/// `prepared`); the `prepare_sweep` answers them `error` once.
+#[tokio::test]
+async fn a_dead_prepare_job_after_its_version_gets_its_checks_answered() {
+    let mut w = World::new().await;
+    let base = main(&mut w).await;
+    let head = branch(&mut w, &base, "feature", &[("notes.md", "# Notes\n")]).await;
+    let mr = w.open("feature", "main").await;
+    // The version step ran; then the job died (its worker was killed).
+    let refs = forge_review::VersionRefs::new(
+        w.storage.git.clone(),  // clone: the refs own their handles
+        w.storage.root.clone(), // clone: as git
+    );
+    let report = forge_review::refresh_prepared(
+        &w.t.db,
+        &refs,
+        forge_db::review::RefreshRequest {
+            merge_request: mr.id,
+            pushed_by: None,
+        },
+        false,
+        &forge_core::RequestId::parse("req-died").expect("id"),
+    )
+    .await
+    .expect("version");
+    assert_eq!(report.outcome, "added");
+    w.t.exec_superuser(
+        "UPDATE forge.jobs SET state = 'dead', finished_at = now(), \
+         last_error_code = 'FG-DB-0007' WHERE kind = 'merge_request.prepare'",
+    )
+    .await;
+    assert!(runs(&w, &head).await.is_empty());
+    let cursor = std::sync::atomic::AtomicI64::new(0);
+    let next = crate::worker::prepare_sweep::sweep(&w.t.db, &cursor, 50)
+        .await
+        .expect("sweep");
+    assert_eq!(next, crate::worker::supervise::Next::AfterPeriod);
+    let answered = forge_db::checks::check_runs(&w.t.db, w.project, &oid(&head))
+        .await
+        .expect("runs");
+    for name in [
+        forge_core::checks::RISK_CHECK,
+        forge_core::checks::SPEC_LINT_CHECK,
+        forge_core::checks::SPEC_TRACE_CHECK,
+        forge_core::checks::DOC_LINT_CHECK,
+        forge_core::checks::CI_LINT_CHECK,
+    ] {
+        let run = answered
+            .iter()
+            .find(|r| r.name.as_str() == name)
+            .unwrap_or_else(|| panic!("{name} answered: {answered:?}"));
+        assert_eq!(run.conclusion, Some(forge_core::CheckConclusion::Error));
+        assert!(run.summary.contains("FG-DB-0007"), "{}", run.summary);
+    }
+    // Answered: the next sweep writes nothing more.
+    crate::worker::prepare_sweep::sweep(&w.t.db, &cursor, 50)
+        .await
+        .expect("again");
+    let again = forge_db::checks::check_runs(&w.t.db, w.project, &oid(&head))
+        .await
+        .expect("runs");
+    assert!(again.iter().all(|r| r.revision == 1), "{again:?}");
+    w.t.drop_now().await;
+}

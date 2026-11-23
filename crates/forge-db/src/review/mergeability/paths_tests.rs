@@ -1124,12 +1124,13 @@ async fn a_prepare_check_waits_behind_its_backstop_job() {
             .expect("wake")
     );
     assert_eq!(backstops(&t).await, [(second.check_seq, true, true)]);
-    // A request behind a queued ask inherits it and replaces the job.
+    // A request behind a queued ask inherits it and replaces the job,
+    // keeping its place in line (that one was ready: so is this one).
     let third = request_check_backstop(&t.db, mr.id, rid("req-p3"), false, delay)
         .await
         .expect("request")
         .expect("open");
     assert!(third.asked, "inherited");
-    assert_eq!(backstops(&t).await, [(third.check_seq, false, true)]);
+    assert_eq!(backstops(&t).await, [(third.check_seq, true, true)]);
     t.drop_now().await;
 }

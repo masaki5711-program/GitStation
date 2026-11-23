@@ -44,8 +44,9 @@
      自分のジョブ（`merge_request.mergeability`、`check.risk`、`check.spec_index`）で再試行される。そのジョブが `dead` になったら
      その種類として読む（最後の試行で `error` の結論を書くのは今までどおり）。
    - prepare が `dead` になった（版はあるが検査がない）とき: 待たせていた判定のジョブ（`merge_request.mergeability`、
-     `run_after` が未来）は `BACKSTOP_DELAY`（120 s）の後に自分で走る。`forge/risk` と spec の検査は、その MR に新しい push か
-     MR の再オープンで新しい prepare が作られるまで出ない。
+     `run_after` が未来）は `BACKSTOP_DELAY`（120 s）の後に自分で走る。`forge/risk` と spec の検査は worker の
+     `prepare_sweep`（60 s ごと）が死んだジョブのコードで `error` と答える（ログ `forge.worker.prepare_swept`）。
+     本当の結果は、その MR への新しい push か開き直しで作られる新しい prepare が書く。
 
 ## Mitigate
 

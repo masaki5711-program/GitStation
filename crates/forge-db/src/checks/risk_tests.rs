@@ -217,13 +217,30 @@ async fn a_prepared_version_asks_for_no_risk_job_and_a_hand_over_asks_for_the_sa
         head: sha('a'),
     };
     let rid = RequestId::parse("req-hand-over").expect("id");
-    assert!(hand_over(&t.db, &request, mr.id, rid.clone())
-        .await
-        .expect("hand over"));
+    assert_eq!(
+        hand_over(&t.db, &request, mr.id, rid.clone())
+            .await
+            .expect("hand over"),
+        crate::checks::HandOver::Queued
+    );
     let key_a = format!("risk:{}:{}:mr{}", p.get(), sha('a').as_str(), mr.id.get());
     assert_eq!(risk_keys(&t).await, [key_b, key_a]);
-    // Held: a second hand-over adds nothing.
-    assert!(!hand_over(&t.db, &request, mr.id, rid).await.expect("again"));
+    // Queued already: a second hand-over adds nothing, and says so.
+    assert_eq!(
+        hand_over(&t.db, &request, mr.id, rid.clone())
+            .await
+            .expect("again"),
+        crate::checks::HandOver::Pending
+    );
+    // Finished (a head evaluated before under that key): nothing will run.
+    t.exec_superuser(
+        "UPDATE forge.jobs SET state = 'succeeded', finished_at = now() WHERE kind = 'check.risk'",
+    )
+    .await;
+    assert_eq!(
+        hand_over(&t.db, &request, mr.id, rid).await.expect("held"),
+        crate::checks::HandOver::Held
+    );
     t.drop_now().await;
 }
 

@@ -143,10 +143,11 @@ pub(crate) async fn enqueue_superseding_on(
     enqueue_superseding_after_on(conn, job, merge_request, None).await
 }
 
-/// [`enqueue_superseding_on`]; with `delay` the new job is ready only
-/// `delay` from now, whatever the replaced ones waited (plan 18 S6: the
+/// [`enqueue_superseding_on`]; with `delay` the new job is ready `delay`
+/// from now — or when the earliest replaced job was, if that is sooner (S6
+/// review: a job already in line keeps its place) — plan 18 S6: the
 /// mergeability job behind a prepare job's own check, run only if that
-/// check never finishes).
+/// check never finishes.
 pub(crate) async fn enqueue_superseding_after_on(
     conn: &mut PgConnection,
     job: &NewJob,
@@ -164,7 +165,7 @@ pub(crate) async fn enqueue_superseding_after_on(
              VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7, \
                     CASE WHEN $10::float8 IS NULL \
                          THEN LEAST(pg_catalog.now(), (SELECT min(run_after) FROM gone)) \
-                         ELSE pg_catalog.now() + pg_catalog.make_interval(secs => $10::float8) \
+                         ELSE LEAST((SELECT min(run_after) FROM gone),                                     pg_catalog.now() + pg_catalog.make_interval(secs => $10::float8)) \
                     END) \
              ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead' \
              DO NOTHING \

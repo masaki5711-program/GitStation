@@ -1097,6 +1097,50 @@ pub use retention::{
     RETENTION_BATCH,
 };
 
+/// What a hand-over of a failed prepare step did (plan 18 S6,
+/// `risk::hand_over`, `spec_index::hand_over`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandOver {
+    /// A job was queued: it retries the step.
+    Queued,
+    /// A queued or running job of the same key exists: it answers.
+    Pending,
+    /// A finished job holds the key (the head was evaluated before under
+    /// that key): no job will run — the caller answers the step itself.
+    Held,
+}
+
+/// Enqueue `job` (a hand-over) and say what became of it.
+async fn hand_over_job(db: &crate::Db, job: &crate::jobs::NewJob) -> Result<HandOver, ForgeError> {
+    const QUERY: &str = "checks.hand_over_state";
+    if let crate::jobs::Enqueued::Queued(_) = crate::jobs::enqueue(db, job).await? {
+        return Ok(HandOver::Queued);
+    }
+    let key = job.dedup_key.as_ref().map(|k| k.as_str().to_owned());
+    let state: Option<String> = db
+        .within(QUERY, async {
+            let mut conn = db
+                .write_pool()
+                .acquire()
+                .await
+                .map_err(|e| crate::query_error(QUERY, e))?;
+            sqlx::query_scalar(
+                "SELECT state FROM forge.jobs WHERE kind = $1 AND dedup_key = $2                  AND state <> 'dead' ORDER BY id DESC LIMIT 1",
+            )
+            .bind(job.kind.as_str())
+            .bind(key)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| crate::query_error(QUERY, e))
+        })
+        .await?;
+    Ok(match state.as_deref() {
+        Some("queued" | "running") => HandOver::Pending,
+        // Succeeded, or gone between the two statements: nothing will run.
+        _ => HandOver::Held,
+    })
+}
+
 pub mod doc_lint_migration;
 pub mod risk;
 pub mod spec_drift;

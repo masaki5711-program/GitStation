@@ -175,13 +175,11 @@ pub const UNANSWERED_WINDOW_DAYS: i32 = 7;
 /// job — the one the `spec-index` subscriber would have asked for the
 /// version (the same key: the merge request's current state), so it
 /// retries, and answers `error` on its last attempt, as for any version.
-/// Whether a job was enqueued (`false`: the key is held — that head in
-/// that state is queued, running or done already).
 pub async fn hand_over(
     db: &Db,
     request: &SpecIndexRequest,
     origin: RequestId,
-) -> Result<bool, ForgeError> {
+) -> Result<super::HandOver, ForgeError> {
     const QUERY: &str = "checks.spec_index_hand_over";
     let state: Option<String> = db
         .within(QUERY, async {
@@ -196,10 +194,7 @@ pub async fn hand_over(
         })
         .await?;
     let job = spec_index_job(request, state.as_deref(), origin, None)?;
-    Ok(matches!(
-        jobs::enqueue(db, &job).await?,
-        jobs::Enqueued::Queued(_)
-    ))
+    super::hand_over_job(db, &job).await
 }
 
 /// At most `limit` [`UnansweredJob`]s, the oldest first: dead within

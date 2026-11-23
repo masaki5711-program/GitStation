@@ -102,7 +102,8 @@ pub use mergeability::{
     SWEEP_BATCH,
 };
 pub use prepare::{
-    prepare_job, prepared_version, BACKSTOP_DELAY, PREPARED, PREPARE_JOB, PREPARE_TIMEOUT,
+    prepare_job, prepared_version, unanswered_dead_prepares, UnansweredPrepare, BACKSTOP_DELAY,
+    PREPARED, PREPARE_JOB, PREPARE_TIMEOUT,
 };
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
 pub use settings::{

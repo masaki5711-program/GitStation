@@ -169,19 +169,15 @@ pub const UNANSWERED_WINDOW_DAYS: i32 = 7;
 /// Plan 18 S6: hand a failed risk step of the prepare job for version
 /// `head` of merge request `mr` over to this job — the one the `risk`
 /// subscriber would have asked for (the same key), so it retries, and
-/// answers `error` on its last attempt, as for any version. Whether a job
-/// was enqueued (`false`: the key is held).
+/// answers `error` on its last attempt, as for any version.
 pub async fn hand_over(
     db: &Db,
     request: &RiskRequest,
     mr: forge_core::MergeRequestId,
     origin: RequestId,
-) -> Result<bool, ForgeError> {
+) -> Result<super::HandOver, ForgeError> {
     let job = risk_job(request, &format!("mr{}", mr.get()), origin, None)?;
-    Ok(matches!(
-        jobs::enqueue(db, &job).await?,
-        jobs::Enqueued::Queued(_)
-    ))
+    super::hand_over_job(db, &job).await
 }
 
 /// At most `limit` [`UnansweredJob`]s with an id above `after_job_id`, by id

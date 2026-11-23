@@ -70,7 +70,7 @@ pub(crate) struct World {
     pub(crate) project: forge_core::ProjectId,
     alice: UserId,
     pushes: usize,
-    storage: crate::worker::provision::Storage,
+    pub(crate) storage: crate::worker::provision::Storage,
 }
 
 impl World {

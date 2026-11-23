@@ -1012,6 +1012,34 @@ p50 1.2 s かかった。調べ直して 1 点直した: 枝の先端は毎回�
 - 衝突の予測の絞り込みは、相手の集合が自分の今の head のものであるときだけ効く（`checked_head_sha = head_sha`）。prepare の後に
   積まれた予測は、判定が先に集合を書くので効きやすい。
 
+### レビュー対応（2026-11-21、rust・database のレビュー）
+
+1. **（HIGH）死んだ prepare の検査に答える**。版を記録した後で prepare が `dead` になると、印のある版なので購読側は積まず、
+   見回りは `check.risk` / `check.spec_index` の死んだジョブしか見ないので、`forge/risk` と spec の 4 つの検査（doc-lint、
+   ci-lint を含む）が永遠に出なかった。worker の新しい作業 `prepare_sweep`（60 s ごと、`risk_sweep` と同じカーソル）が、
+   7 日以内に死んだ prepare のうち、開いた MR の今の head にその検査がないもの（`unanswered_dead_prepares`、その MR に生きた
+   prepare があれば除く）に、死んだジョブのコードと要求 id で `error` を書く。答えた head は二度と並ばない。試験
+   `a_dead_prepare_job_after_its_version_gets_its_checks_answered`。上の「既知の限界」の 1 つ目はこれで閉じた。
+2. **引き継ぎがジョブを積めないとき**（MEDIUM 1、2）。`hand_over` は `HandOver::{Queued, Pending, Held}` を返す。`Held`
+   （キーを終わったジョブが持つ。A → B → A などで前にそのキーで評価した head）か、DB の失敗なら、その小段をその場で
+   `error` で答える（`Risk::fail`、`SpecChecks::fail`）。error `forge.review.prepare_hand_over_failed`（小段のコード、`reason`
+   = `key_held` か DB のコード）。もう prepare を失敗させない（判定をやり直させない）。warn
+   `forge.review.prepare_step_failed` は、本当に自分のジョブが再試行するときだけ出す。
+3. **待たせたジョブの後始末の失敗は prepare の失敗ではない**（MEDIUM 2）。warn `forge.review.prepare_backstop_unsettled`
+   を出して次の小段に進む（そのジョブは遅れの後に動く: 同じ seq の 2 回目の判定か、少し遅い再試行）。
+4. **時間**（MEDIUM 3）。`PREPARE_TIMEOUT` は 420 s（小段の予算の和 360 s に余裕）。`BACKSTOP_DELAY` は
+   `MERGEABILITY_TIMEOUT + 30 s` から作る。依頼から数えるので、判定がそれより長いと待たせたジョブと並ぶことがある。
+   「決して並ばない」という文は直した（並んでも同じ seq の 2 回目の判定で、結果は seq ごと 1 回）。
+5. **置き換えで列の場所を失わない**（MEDIUM 4）。遅れつきの置き換えは `LEAST(置き換えたジョブの最小の run_after,
+   now + delay)`。すでに動けるジョブを置き換えたら、新しいジョブもすぐ動ける（prepare の判定と並ぶことがある。上と同じ）。
+6. **記録済みの head**（LOW）。`already_head` と `restored` でも検査の小段を走らせ、その head に結果がある小段は飛ばす
+   （1 回目の試行でも。開き直しや前の head への push で、結果がなければ埋まる）。
+7. **衝突の予測の絞り込みと古い予測**（LOW）。`record_scan` は試した組だけを書き、試さなかった組を消さない。それでも
+   絞り込みで外れた組に古い「衝突」は残らない: 2 つの MR が衝突するのは同じパスを変えるときだけで、それは S4 の述語では
+   必ず「影響しうる」（外れない）。読み手は両方の head が今のものの予測しか信じない（`a_prediction_about_an_old_head_is_not_read`）。
+8. 試験を足した: 判定の小段の失敗で待たせたジョブが起きる、spec の小段の失敗の引き継ぎ、キーが持たれた引き継ぎは
+   `error` で答える、版の小段の DB の失敗は再試行・壊れたペイロードは即 `dead`。
+
 ### 証明について
 
 計画の証明（`a-burst` で作成から enqueue まで p95 ≤ 5 s、MR あたりのジョブ ≤ 2）は、負荷試験（`ops/loadtest/`）で測る。
