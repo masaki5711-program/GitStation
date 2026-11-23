@@ -1844,5 +1844,87 @@
     "none": "所属の情報はまだありません。PFS のアカウントでログインすると表示されます。",
     "empty": "なし",
     "invalid": "認証サーバーから届いた所属の情報が正しくないため、前回の内容を表示しています。PFS の利用者管理の担当に確認を依頼してください。"
+  },
+  "aiEval": {
+    "title": "AI の評価（承認済みの基準との比較）",
+    "running": "AI の評価を実行しています。終わると、ここに基準との比較が出ます。",
+    "unreadable": "評価の結果を表の形で読めなかったため、届いた文のまま表示します。",
+    "seeBelow": "基準との比較は下の「AI の評価」にあります",
+    "errorLine": "AI の評価を基準と比べられなかったため、マージを止めています（{{code}}）。次に:",
+    "errorNext": {
+      "noReport": "パイプラインを開き、評価のジョブが最後まで動いて eval-report.json を残したか確かめてから、パイプラインをやり直してください。",
+      "noBaseline": "比べる基準（evals/baselines/ のファイル）を、先に別のマージリクエストで入れてください。",
+      "malformed": "評価のジョブのログを開き、eval-report.json の書き方の誤りを直してください。",
+      "other": "パイプラインを開き、評価のジョブのログを確かめてください。"
+    },
+    "job": "評価のジョブ:",
+    "reasonCode": "理由のコード:",
+    "runbook": "手順書:",
+    "passedLine": "AI の評価は基準より悪くなっていません。この項目はマージを止めていません。",
+    "failedLine_one": "AI の答えが基準より悪くなった点が {{count}} 件あるため、マージを止めています。次に: 下の「止めている理由」を直して、もう一度プッシュしてください。",
+    "failedLine_other": "AI の答えが基準より悪くなった点が {{count}} 件あるため、マージを止めています。次に: 下の「止めている理由」を直して、もう一度プッシュしてください。",
+    "overview": "モデル {{models}}・ケース {{total}} 件（安全 {{safety}}、不具合の再現 {{reproduction}}）。",
+    "flakyNote_one": "答えが回ごとに揺れたケース {{count}} 件は、合否に数えていません。",
+    "flakyNote_other": "答えが回ごとに揺れたケース {{count}} 件は、合否に数えていません。",
+    "findingsTitle": "止めている理由",
+    "findingsCut": "理由が多いため一部だけ表示しています。すべては評価のジョブの eval-report.json にあります。",
+    "casesTitle": "見てほしいケース",
+    "passingCases_one": "合格したケース {{count}} 件を表示",
+    "passingCases_other": "合格したケース {{count}} 件を表示",
+    "passingCaption": "合格したケース",
+    "more_one": "ほかに {{count}} 件のケースがあります（すべて eval-report.json にあります）。",
+    "more_other": "ほかに {{count}} 件のケースがあります（すべて eval-report.json にあります）。",
+    "reason": {
+      "safetyFailed": "安全のケース {{subject}} が、すべての回では合格していません（安全のケースは毎回の合格が必要です）。",
+      "safetyMissing": "安全のケース {{subject}} が今回の評価にありません。",
+      "safetyRunsShort": "安全のケース {{subject}} の実行回数が基準より少なくなっています。",
+      "reproductionNotFixed": "不具合を再現するケース {{subject}} がまだ直っていません（半分を超える回での合格が必要です）。",
+      "caseNotReproducing": "不具合を再現するケース {{subject}} は基準で既に合格しており、不具合を再現していません。ケースを見直してください。",
+      "stableRegressed": "基準では毎回合格していたケース {{subject}} が、今回は半分以上の回で不合格です。",
+      "caseMissing": "基準では毎回合格していたケース {{subject}} が今回の評価にありません。",
+      "caseKindChanged": "ケース {{subject}} の種類が基準と変わっています。",
+      "metricPastDelta": "指標「{{subject}}」が、許される差を超えて基準より悪くなっています。"
+    },
+    "metric": {
+      "causeHitRate": "原因の的中率",
+      "falseAlarmRate": "誤報の率",
+      "p95Latency": "応答時間（95% がこの時間内）",
+      "attachPrecision": "添付資料の正確さ",
+      "abstainAccuracy": "「判断しない」の正しさ"
+    },
+    "kind": {
+      "regular": "通常",
+      "safety": "安全",
+      "reproduction": "不具合の再現"
+    },
+    "caseResult": {
+      "blocking": "止めている",
+      "flaky": "揺れ（数えない）",
+      "fixed": "直った",
+      "fail": "不合格（止めない）",
+      "pass": "合格"
+    },
+    "metricResult": {
+      "ok": "範囲内",
+      "pastDelta": "範囲外",
+      "shown": "参考"
+    },
+    "seconds": "{{value}} 秒",
+    "points": "{{value}} ポイント",
+    "allowedNone": "（参考の指標）",
+    "allowedUpTo": "{{value}} まで",
+    "newCase": "新しいケース",
+    "runCount": "{{runs}} 回中 {{passes}} 回合格",
+    "col": {
+      "metric": "指標",
+      "baseline": "基準",
+      "now": "今回",
+      "delta": "差",
+      "allowed": "許される差",
+      "result": "結果",
+      "case": "ケース",
+      "kind": "種類"
+    },
+    "metricsTitle": "指標（基準と今回）"
   }
 }

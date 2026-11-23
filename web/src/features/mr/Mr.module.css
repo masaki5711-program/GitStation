@@ -391,6 +391,71 @@
   color: var(--gs-color-text-muted);
 }
 
+/* The AI evaluation (AiEvalReport.tsx): the comparison of the bench with its
+ * baseline. A result is a word with a mark; the colour only repeats it. */
+.statusOk {
+  margin: var(--gs-space-2) 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-color-accent-strong);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.mark {
+  display: inline-block;
+  min-width: 1em;
+  font-weight: bold;
+}
+
+.subTitle {
+  margin: var(--gs-space-4) 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+  color: var(--gs-color-heading);
+}
+
+.evalTable {
+  width: 100%;
+  margin: var(--gs-space-3) 0;
+  border-collapse: collapse;
+  background: var(--gs-color-surface);
+}
+
+.evalCaption {
+  padding: 0 0 var(--gs-space-2);
+  text-align: left;
+  font-weight: bold;
+  color: var(--gs-color-heading);
+}
+
+.evalTable th,
+.evalTable td {
+  padding: var(--gs-space-1) var(--gs-space-3);
+  border-bottom: 1px solid var(--gs-color-border-subtle);
+  text-align: left;
+  vertical-align: top;
+  font-weight: normal;
+  overflow-wrap: anywhere;
+}
+
+.evalTable thead th {
+  border-bottom-color: var(--gs-color-border);
+  font-size: var(--gs-font-size-sm);
+  font-weight: bold;
+  color: var(--gs-color-text-muted);
+}
+
+.evalTable tbody th {
+  color: var(--gs-color-text);
+}
+
+.evalTable .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* A link that leaves GitStation: an arrow for the eye (the words are in .srOnly). */
 .externalMark::after {
   content: '\2197';
