@@ -62,6 +62,8 @@ pub mod request_id;
 pub mod risk;
 pub mod role;
 pub mod scope;
+// Plan 20 K1 (ADR-0040): the search tokenizer (NFKC, Japanese 2-grams).
+pub mod search_text;
 pub mod session_token;
 pub mod spec_version;
 // M4 C13: people's SSH public keys (ADR-0033 §2).
