@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use forge_errors::ErrorCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The schema of a v1 report (and baseline).
 pub const SCHEMA_V1: &str = "gitstation.ai-eval-report/v1";
@@ -72,7 +72,7 @@ pub const DEFAULT_ALLOWED: Allowed = Allowed {
 };
 
 /// What a case checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaseKind {
     /// An ordinary case (gate 3 when stable in the baseline).
@@ -96,7 +96,7 @@ impl CaseKind {
 }
 
 /// One case's result.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalCase {
     pub id: String,
@@ -123,7 +123,7 @@ impl EvalCase {
 }
 
 /// The summary metrics (plan 17 §1.6).
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Metrics {
     /// Cases whose expected cause class is among the top causes (0–1).
@@ -139,7 +139,7 @@ pub struct Metrics {
 }
 
 /// The allowed deltas of gate 4 (read from the baseline only).
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Allowed {
     /// How far the hit rate may fall (0–1).
@@ -151,7 +151,7 @@ pub struct Allowed {
 }
 
 /// A v1 report (or baseline), validated by [`parse`].
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalReport {
     pub schema: String,
@@ -160,7 +160,7 @@ pub struct EvalReport {
     pub cases: Vec<EvalCase>,
     pub metrics: Metrics,
     /// Honoured in a baseline only.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed: Option<Allowed>,
 }
 
@@ -762,6 +762,87 @@ pub fn evaluate(report: &EvalReport, baseline: &EvalReport) -> Evaluation {
         metrics,
         flaky,
     }
+}
+
+/// The branch of the baseline candidate for `models` (plan 17 P17-6):
+/// `refs/heads/ai-eval/baseline-<models>`. One per models, so the nightly
+/// run keeps ONE merge request up to date instead of opening one a night.
+pub fn baseline_branch(models: &str) -> String {
+    format!("refs/heads/{BASELINE_BRANCH_PREFIX}{models}")
+}
+
+/// The prefix of [`baseline_branch`] under `refs/heads/`.
+pub const BASELINE_BRANCH_PREFIX: &str = "ai-eval/baseline-";
+
+/// The baseline a nightly `report` proposes (plan 17 P17-6, §1.6 "夜間の
+/// 結果から人が承認したもの"), or `None` when it is the `baseline` already.
+///
+/// - The cases are the report's, sorted by id. A case the baseline has
+///   keeps the baseline's kind (as [`evaluate`] judges it); a
+///   `reproduction` case becomes `regular` — the miss it reproduced is
+///   fixed on the default branch, and a reproduction case that is green in
+///   the baseline would fail every later merge request
+///   (`case_not_reproducing`). From then on it guards against the miss
+///   coming back (gate 3).
+/// - The metrics are the report's.
+/// - `allowed` is the baseline's (none without a baseline): the report
+///   never sets its own gate, and the candidate never loosens it. A person
+///   changes `allowed` by hand in a merge request of its own.
+pub fn baseline_candidate(
+    report: &EvalReport,
+    baseline: Option<&EvalReport>,
+) -> Option<EvalReport> {
+    let base: BTreeMap<&str, CaseKind> = baseline
+        .map(|b| b.cases.iter().map(|c| (c.id.as_str(), c.kind)).collect())
+        .unwrap_or_default();
+    let mut cases: Vec<EvalCase> = report
+        .cases
+        .iter()
+        .map(|c| {
+            let kind = match base.get(c.id.as_str()).copied().unwrap_or(c.kind) {
+                CaseKind::Reproduction | CaseKind::Regular => CaseKind::Regular,
+                CaseKind::Safety => CaseKind::Safety,
+            };
+            EvalCase {
+                id: c.id.clone(), // clone: the candidate owns its cases
+                kind,
+                runs: c.runs,
+                passes: c.passes,
+            }
+        })
+        .collect();
+    cases.sort_by(|a, b| a.id.cmp(&b.id));
+    let candidate = EvalReport {
+        schema: SCHEMA_V1.to_owned(),
+        models: report.models.clone(), // clone: as above
+        cases,
+        metrics: report.metrics,
+        allowed: baseline.and_then(|b| b.allowed),
+    };
+    let same = baseline.is_some_and(|b| {
+        let mut sorted = b.clone(); // clone: compared in canonical order
+        sorted.cases.sort_by(|x, y| x.id.cmp(&y.id));
+        sorted == candidate
+    });
+    (!same).then_some(candidate)
+}
+
+/// The bytes of `report` as the baseline file: pretty JSON in a fixed
+/// field order (schema, models, cases, metrics, allowed) and a final
+/// newline, so the merge request's diff shows the cases that changed.
+/// Only fields [`parse`] accepted are written (no free text). Errors: a
+/// metric that is not finite (cannot happen after [`parse`]).
+pub fn render(report: &EvalReport) -> Result<Vec<u8>, ReportProblem> {
+    let mut bytes = serde_json::to_vec_pretty(report)
+        .map_err(|e| ReportProblem::new("render_failed", format!("{:?}", e.classify())))?;
+    bytes.push(b'\n');
+    if bytes.len() > MAX_REPORT_BYTES {
+        return Err(ReportProblem::new(
+            "too_large",
+            format!("{} bytes", bytes.len()),
+        ));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

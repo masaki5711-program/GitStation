@@ -31,6 +31,8 @@ struct Baselines {
     base: Option<ObjectId>,
     files: BTreeMap<(String, String), Vec<u8>>,
     fail: Option<ErrorCode>,
+    /// The repository's default branch (`refs/heads/main`).
+    default: Option<RefName>,
 }
 
 impl Baselines {
@@ -39,6 +41,7 @@ impl Baselines {
             base: Some(base_commit()),
             files: BTreeMap::new(),
             fail: None,
+            default: Some(RefName::parse("refs/heads/main").expect("ref")),
         }
     }
 
@@ -77,6 +80,11 @@ impl BaselineSource for Baselines {
         let key = (commit.as_str().to_owned(), path.to_owned());
         let found = self.files.get(&key).cloned(); // clone: the answer owns its bytes
         Box::pin(async move { Ok(found.map_or(SmallFile::Absent, SmallFile::Found)) })
+    }
+
+    fn default_branch(&self, _repo: RepoId) -> DefaultBranchFuture<'_> {
+        let default = self.default.clone(); // clone: the answer owns it
+        Box::pin(async move { Ok(default) })
     }
 }
 
@@ -120,6 +128,7 @@ fn job(name: &str) -> NewCiJob {
 struct World {
     t: FreshDb,
     project: ProjectId,
+    alice: forge_core::UserId,
     store: ArtifactStore,
     _dir: tempfile::TempDir,
 }
@@ -148,6 +157,7 @@ async fn world() -> World {
     World {
         t,
         project: created.project_id,
+        alice: alice.user_id,
         store: ArtifactStore::new(dir.path()),
         _dir: dir,
     }
@@ -157,15 +167,38 @@ impl World {
     /// A finished pipeline on commit `c`; `declared`: its `bench` job
     /// declares the report.
     async fn pipeline(&self, c: char, declared: bool, job_status: &str) -> i64 {
+        self.pipeline_from(
+            c,
+            declared,
+            job_status,
+            (Source::Push, "refs/heads/improve/x"),
+        )
+        .await
+    }
+
+    /// A finished nightly (C12) pipeline on `main`, run as alice.
+    async fn nightly(&self, c: char) -> i64 {
+        self.pipeline_from(c, true, "succeeded", (Source::Schedule, "refs/heads/main"))
+            .await
+    }
+
+    async fn pipeline_from(
+        &self,
+        c: char,
+        declared: bool,
+        job_status: &str,
+        (source, git_ref): (Source, &str),
+    ) -> i64 {
+        let scheduled = source == Source::Schedule;
         let new = NewPipeline {
             ai_eval_job: declared.then(|| "bench".to_owned()),
             request: PipelineRequest {
                 project: self.project,
-                git_ref: RefName::parse("refs/heads/improve/x").expect("ref"),
+                git_ref: RefName::parse(git_ref).expect("ref"),
                 sha: ObjectId::parse(&c.to_string().repeat(40)).expect("sha"),
-                source: Source::Push,
+                source,
                 merge_request: None,
-                triggered_by: None,
+                triggered_by: scheduled.then_some(self.alice),
             },
             request_id: "req-plan".to_owned(),
             definition_hash: Some(pl::definition_hash(b"version: 1")),
@@ -479,5 +512,95 @@ async fn a_stale_pending_pipeline_is_error() {
     let (conclusion, summary) = w.check('7').await.expect("run");
     assert_eq!(conclusion, "error");
     assert!(summary.contains("pipeline_stale"), "{summary}");
+    w.t.drop_now().await;
+}
+
+/// Plan 17 P17-6: a nightly (scheduled) run on the default branch that
+/// passes queues ONE baseline candidate with its check, and the job reads
+/// the candidate back; a push pipeline, a regression and an unchanged
+/// report queue nothing.
+#[tokio::test]
+async fn a_passing_nightly_queues_one_baseline_candidate() {
+    let w = world().await;
+    let old = report_json(&[("a/1", "regular", 3, 3)], 0.8);
+    let base = baselines(old.clone()); // clone: the unchanged run reuses it
+    let night = w.nightly('a').await;
+    let better = report_json(
+        &[("a/1", "regular", 3, 3), ("b/fix-1", "reproduction", 3, 3)],
+        0.85,
+    );
+    w.upload(night, &better).await;
+    let push = w.pipeline('b', true, "succeeded").await;
+    w.upload(push, &better).await;
+    let worse = w.nightly('c').await;
+    w.upload(worse, &report_json(&[("a/1", "regular", 0, 3)], 0.8))
+        .await;
+    let same = w.nightly('d').await;
+    w.upload(same, &old).await;
+    assert_eq!(w.sweep(&base).await.written, 4);
+    assert_eq!(w.check('a').await.expect("run").0, "success");
+    assert_eq!(w.check('c').await.expect("run").0, "failure");
+    let jobs =
+        w.t.json_rows(
+            "SELECT payload FROM forge.jobs WHERE kind = 'ai_eval.baseline_candidate' ORDER BY id",
+        )
+        .await;
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    assert_eq!(
+        forge_db::ci_ai_eval::baseline_candidate_payload(&jobs[0]["payload"]).expect("payload"),
+        (w.project, night)
+    );
+    let Candidate::Propose(p) = baseline_candidate(&w.t.db, &w.store, &base, night)
+        .await
+        .expect("candidate")
+    else {
+        panic!("no candidate");
+    };
+    assert_eq!(p.owner, w.alice);
+    assert_eq!(p.target.as_str(), "refs/heads/main");
+    assert_eq!(p.models, "qwen3-14b");
+    let proposed = ai_eval::parse(&p.content).expect("v1");
+    assert!(
+        proposed
+            .cases
+            .iter()
+            .all(|c| c.kind == ai_eval::CaseKind::Regular),
+        "the fixed reproduction case is regular in the baseline"
+    );
+    assert_eq!(
+        baseline_candidate(&w.t.db, &w.store, &base, push)
+            .await
+            .expect("push"),
+        Candidate::Skip("not_scheduled")
+    );
+    let mut elsewhere = baselines(old);
+    elsewhere.default = Some(RefName::parse("refs/heads/develop").expect("ref"));
+    assert_eq!(
+        baseline_candidate(&w.t.db, &w.store, &elsewhere, night)
+            .await
+            .expect("elsewhere"),
+        Candidate::Skip("not_default_branch")
+    );
+    w.t.drop_now().await;
+}
+
+/// Plan 17 §5.4: no baseline yet — the check is `error`, and the nightly
+/// run proposes the first one (a person approves it).
+#[tokio::test]
+async fn a_nightly_without_baseline_proposes_the_first_one() {
+    let w = world().await;
+    let night = w.nightly('e').await;
+    w.upload(night, &report_json(&[("a/1", "regular", 3, 3)], 0.8))
+        .await;
+    w.sweep(&Baselines::empty()).await;
+    assert_eq!(w.check('e').await.expect("run").0, "error");
+    let queued =
+        w.t.json_rows("SELECT id FROM forge.jobs WHERE kind = 'ai_eval.baseline_candidate'")
+            .await;
+    assert_eq!(queued.len(), 1);
+    let found = baseline_candidate(&w.t.db, &w.store, &Baselines::empty(), night)
+        .await
+        .expect("candidate");
+    assert!(matches!(found, Candidate::Propose(_)), "{found:?}");
     w.t.drop_now().await;
 }

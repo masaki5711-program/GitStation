@@ -4,6 +4,15 @@
 `.forge-ci.yml` のジョブが成果物 `eval-report.json` を宣言したパイプラインだけ、forge の worker（タスク `ci_ai_eval`、10 秒ごと）が
 ベンチの報告を基準 `evals/baselines/<models>.json`（パイプラインのコミットのもの）と比べて書く。形と判定は `docs/ai-eval-report.md`。
 
+**夜間の基準の候補**（計画 17 P17-6）: 定期（C12）のパイプラインが既定のブランチで通ると、forge が `ai-eval/baseline-<models>` から
+基準の候補の **下書きの MR を 1 本** 保つ（毎晩更新、人が承認）。形と止め方は `docs/ai-eval-report.md` の「夜間のベンチと基準の候補」。
+候補が出ない・MR が増えないとき: `forge serve` のログ `forge.ai_eval.baseline_proposed`（`outcome`・`reason`: `unchanged` /
+`baseline_moved`（夜のコミットの後に基準が変わった）/ `branch_exists`（閉じた候補のブランチが残っている: 消せば再開）/
+`owner_not_allowed`（定期の持ち主が MR を開けない・push できない: `forge.ai_eval.baseline_refused` の `error_code`。持ち主を Maintainer に）/
+`target_missing`）と `forge.ai_eval.baseline_skipped`（`not_scheduled` / `not_default_branch` / `no_report` / `not_passing` / `unchanged` など）。
+ジョブ: `SELECT state, attempts, last_error_code FROM forge.jobs WHERE kind = 'ai_eval.baseline_candidate' ORDER BY id DESC LIMIT 5;`
+（`dead` なら `last_error_code` の runbook）。
+
 ## Trigger
 
 - `forge worker` のログに `forge.ai_eval.check_written`（warn）`error_code=FG-AIASSET-0002`: ベンチが使える報告を残さなかった。

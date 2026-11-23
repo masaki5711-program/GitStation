@@ -333,6 +333,16 @@ the reverted merge request's author and recorded as `merge_request.revert_drafte
 codes: FG-REVIEW-0029 RevertRefused, FG-REVIEW-0030 RevertConflict (a conflicting revert
 opens nothing). Tests: `tests/revert_git.rs`.
 
+**Plan 17 P17-6 — nightly AI evaluation baseline candidate** (`src/ai_baseline.rs`,
+ADR-0034 Amendment P17-6): `BaselineProposer::propose` (the job `ai_eval.baseline_candidate`,
+`forge serve`, queued by the worker's `ci_ai_eval` task) puts the baseline a passing scheduled
+run proposes on the branch `ai-eval/baseline-<models>` and keeps ONE draft merge request of it
+into the default branch (a new commit a night on the open one; a closed, unmerged branch is
+left alone). Decided as the schedule owner's `MergeRequestCreate` and `RepoPush` of the branch;
+audited as `system` (`forge-ai-eval`), the commit is the server's. Logged
+`forge.ai_eval.baseline_proposed` (`outcome`, `reason`). No new code. Tests:
+`tests/ai_baseline_git.rs` (`nightly_opens_one_baseline_mr`).
+
 **M4 C14 — deterministic autofix** (`src/autofix.rs`, `src/autofix_settings.rs`,
 ADR-0017 Amendment C14): `Autofixer::tick` (the `forge serve` task `autofix`) starts a
 queued attempt (forge-db's `autofix-triggers` subscriber: a failed merge-result

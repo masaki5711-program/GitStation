@@ -23,11 +23,14 @@
 //! pipeline row `FOR UPDATE SKIP LOCKED`, then the check's locks.
 
 use forge_core::checks::AI_EVAL_CHECK;
-use forge_core::{ObjectId, ProjectId, RefName, RepoId};
+use std::time::Duration;
+
+use forge_core::{ObjectId, ProjectId, RefName, RepoId, RequestId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::change::{ChangeContext, ChangeTx, Settle};
 use crate::checks::{write_run, NewCheckRun, Reported};
+use crate::jobs::{DedupKey, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::pipelines::{JobStatus, PipelineStatus};
 use crate::projects::lock_shared;
 use crate::{query_error, read_query_error, Db};
@@ -96,6 +99,12 @@ pub struct AiEvalTarget {
     pub age_secs: i64,
     /// Read failures since the check was last written ([`record_failure`]).
     pub failures: i32,
+    /// The pipeline's branch.
+    pub git_ref: RefName,
+    /// A scheduled pipeline's owner (the person it ran as: C12 records
+    /// the schedule's owner as `triggered_by`); `None` for every other
+    /// source. Plan 17 P17-6: only a scheduled run proposes a baseline.
+    pub scheduled_by: Option<UserId>,
 }
 
 type TargetRow = (
@@ -112,6 +121,8 @@ type TargetRow = (
     Option<String>,
     i64,
     i32,
+    String,
+    Option<i64>,
 );
 
 /// The target of `pipeline` (`None`: gone, or it declares no report).
@@ -126,7 +137,7 @@ pub async fn target(db: &Db, pipeline: i64) -> Result<Option<AiEvalTarget>, Forg
                    a.id, a.size_bytes, a.sha256, \
                    CASE WHEN p.merge_request_id IS NOT NULL THEN m.target_branch \
                         WHEN p.source = 'merge_queue' THEN p.ref END, \
-                   extract(epoch FROM now() - p.created_at)::bigint, p.ai_eval_failures \
+                   extract(epoch FROM now() - p.created_at)::bigint, p.ai_eval_failures,                    p.ref, CASE WHEN p.source = 'schedule' THEN p.triggered_by END \
                  FROM forge.ci_pipelines p \
                  LEFT JOIN forge.merge_requests m ON m.id = p.merge_request_id \
                  LEFT JOIN forge.repositories r ON r.project_id = p.project_id \
@@ -157,6 +168,8 @@ pub async fn target(db: &Db, pipeline: i64) -> Result<Option<AiEvalTarget>, Forg
         base,
         age_secs,
         failures,
+        git_ref,
+        scheduled_by,
     )) = row
     else {
         return Ok(None);
@@ -193,6 +206,8 @@ pub async fn target(db: &Db, pipeline: i64) -> Result<Option<AiEvalTarget>, Forg
         },
         age_secs,
         failures,
+        git_ref: RefName::parse(&git_ref).map_err(|_| unreadable("stored_ref_invalid"))?,
+        scheduled_by: scheduled_by.map(UserId::new),
     }))
 }
 
@@ -243,6 +258,19 @@ pub async fn record(
     ctx: &ChangeContext,
     target: &AiEvalTarget,
     run: &NewCheckRun,
+) -> Result<AiEvalCheck, ForgeError> {
+    record_then(db, ctx, target, run, None).await
+}
+
+/// [`record`], and `then` queued in the same transaction when the run is
+/// written (never for a superseded or skipped pipeline): plan 17 P17-6's
+/// baseline candidate ([`baseline_candidate_job`]).
+pub async fn record_then(
+    db: &Db,
+    ctx: &ChangeContext,
+    target: &AiEvalTarget,
+    run: &NewCheckRun,
+    then: Option<&NewJob>,
 ) -> Result<AiEvalCheck, ForgeError> {
     const QUERY: &str = "ci_ai_eval.record";
     if run.name.as_str() != AI_EVAL_CHECK {
@@ -307,6 +335,9 @@ pub async fn record(
             return Ok(Settle::CommitDerived(AiEvalCheck::Superseded));
         }
         let (reported, change) = write_run(&mut tx, ctx, (project, &target.sha), None, run).await?;
+        if let Some(job) = then {
+            let _enqueued = tx.enqueue_job(job).await?;
+        }
         Ok(Settle::Commit(
             change,
             AiEvalCheck::Written(Box::new(reported)),
@@ -314,6 +345,54 @@ pub async fn record(
     }
     .await;
     tx.settle("check_run.reported", outcome).await
+}
+
+/// The job that proposes a baseline from a nightly run (plan 17 P17-6):
+/// run by `forge serve` (it writes a branch, next to the browse cache).
+pub const BASELINE_CANDIDATE_JOB: &str = "ai_eval.baseline_candidate";
+/// The bound of one proposal (git: two file reads, a blob, a tree, a
+/// commit, one ref; the database: a few short transactions).
+pub const BASELINE_CANDIDATE_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn job_internal(reason: &'static str) -> ForgeError {
+    unreadable(reason).with_context("kind", BASELINE_CANDIDATE_JOB)
+}
+
+/// The `ai_eval.baseline_candidate` job of `pipeline` in `project` (one per
+/// pipeline: its dedup key).
+pub fn baseline_candidate_job(
+    project: ProjectId,
+    pipeline: i64,
+    origin_request_id: RequestId,
+) -> Result<NewJob, ForgeError> {
+    let key = format!("ai_eval_baseline:{}:{pipeline}", project.get());
+    Ok(NewJob {
+        kind: JobKind::parse(BASELINE_CANDIDATE_JOB)
+            .ok_or_else(|| job_internal("invalid_job_kind"))?,
+        payload: serde_json::json!({ "project_id": project.get(), "pipeline_id": pipeline }),
+        max_attempts: MaxAttempts::DEFAULT,
+        timeout: JobTimeout::new(BASELINE_CANDIDATE_TIMEOUT)
+            .ok_or_else(|| job_internal("job_timeout"))?,
+        dedup_key: Some(DedupKey::parse(&key).ok_or_else(|| job_internal("dedup_key"))?),
+        origin_request_id,
+        origin_event_seq: None,
+    })
+}
+
+/// `(project, pipeline)` of a claimed `ai_eval.baseline_candidate` job
+/// (`FG-SYS-0001 reason=invalid_job_payload` for anything else: forge
+/// wrote it).
+pub fn baseline_candidate_payload(
+    payload: &serde_json::Value,
+) -> Result<(ProjectId, i64), ForgeError> {
+    let id = |key: &str| {
+        payload
+            .get(key)
+            .and_then(serde_json::Value::as_i64)
+            .filter(|id| *id > 0)
+            .ok_or_else(|| job_internal("invalid_job_payload"))
+    };
+    Ok((ProjectId::new(id("project_id")?), id("pipeline_id")?))
 }
 
 #[cfg(test)]
