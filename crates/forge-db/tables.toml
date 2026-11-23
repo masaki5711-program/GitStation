@@ -78,6 +78,9 @@ guarded_functions = [
     # M4 C11: a deployment's identity never changes; its approval is set
     # once; it only moves forward.
     "deployments_guard",
+    # Plan 19 L5-2: an advice keeps at least its request's input class and
+    # never changes but for superseded_by.
+    "llm_advice_guard",
 ]
 
 [tables.events]
@@ -972,6 +975,32 @@ ro_columns = ["*"]
 # How old a snapshot and the master's copy may be for a binding to apply
 # (one row, the configuration's org.*_age_hours, written at start).
 [tables.org_access_policy]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# ── Plan 19 L5-2 (20270108100000, ADR-0039): the local LLM's records. The
+# input itself is never stored (its SHA-256 only); written by the gateway
+# (the worker) and by people's feedback ──
+[tables.llm_requests]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.llm_advice]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# One verdict per (advice, finding, person); never deleted (the rates).
+[tables.llm_advice_feedback]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# A project's llm.review (no row = off); a person's change is audited by
+# the command (L5-4).
+[tables.project_llm]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]

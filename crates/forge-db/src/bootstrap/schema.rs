@@ -1028,6 +1028,18 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── Plan 19 L5-2: the local LLM's records (20270108100000) ──
+        ("forge.llm_requests", operational()),
+        ("forge.llm_advice", operational()),
+        (
+            "forge.llm_advice_feedback",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:UPDATE"]),
+                ro("llm_advice_feedback")?,
+            ]
+            .concat(),
+        ),
+        ("forge.project_llm", operational()),
     ])
 }
 
@@ -1245,6 +1257,11 @@ const LATER_TABLES: &[&str] = &[
     // ── ADR-0038 §2: org bindings (20270101100000) ──
     "org_bindings",
     "org_access_policy",
+    // ── Plan 19 L5-2: the local LLM's records (20270108100000) ──
+    "llm_requests",
+    "llm_advice",
+    "llm_advice_feedback",
+    "project_llm",
 ];
 
 /// Every table the first migration creates.
