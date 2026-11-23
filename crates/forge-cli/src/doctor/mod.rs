@@ -57,6 +57,8 @@ mod maintenance;
 mod mirror;
 // M3 N1: FG-INT-0015 (the mail queue and the relay).
 mod notify;
+// Plan 19 L5-3: the local LLM gateway (no database).
+mod llm;
 mod oidc;
 // ADR-0038 §1: the PFS org master's copy.
 mod org;
@@ -224,6 +226,7 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
         checks.push(git_check().await);
         checks.push(web_ui_check());
         checks.push(skip("auth.oidc", "configuration invalid"));
+        checks.push(skip(llm::NAME, "configuration invalid"));
         for name in backup::NAMES {
             checks.push(skip(name, "configuration invalid"));
         }
@@ -254,6 +257,8 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
     checks.push(web_ui_check());
     // M2 MR4: the sign-in's provider (needs no database).
     checks.push(oidc::oidc_check(&cfg).await);
+    // Plan 19 L5-3: the local LLM gateway (no database).
+    checks.push(llm::gateway_check(&cfg).await);
     // M3 I2: the webhook settings (no database).
     checks.extend(webhooks::config_checks(&cfg));
     // M3 O1: the backups (no database).

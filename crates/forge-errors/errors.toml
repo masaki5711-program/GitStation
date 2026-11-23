@@ -3799,3 +3799,47 @@ cause = "Plan 19 §3.1, §5 (ADR-0039): findings of a valid answer quoted text t
 diagnosis = "The gateway logs it once per advice with `llm_request_id`, `purpose`, `dropped` and `kept`; `forge_llm_requests_total{purpose,outcome}` is unaffected (the advice is written). Many per advice for one model or prompt version: compare `SELECT prompt_version, count(*) FROM forge.llm_requests WHERE purpose = '<purpose>' GROUP BY 1`."
 fix = "Nothing for single advices. A rising share after a prompt or model change: roll it back (runbook llm-advice-quality) and add the cases to the eval set."
 test = "evidence_outside_input_dropped"
+
+# ── Plan 19 L5-3 (ADR-0039): the gateway (forge-llm) ──
+
+[[error]]
+code = "FG-LLM-0001"
+name = "LlmUnavailable"
+http_status = 503
+severity = "warn"
+user_message_ja = "AI（ローカル LLM）に今つながりません。AI の助言なしで続けられます。"
+user_message_en = "The AI (local LLM) cannot be reached right now. You can continue without the AI advice."
+user_message_id = "AI (LLM lokal) tidak dapat dihubungi saat ini. Anda dapat melanjutkan tanpa saran AI."
+cause = "Plan 19 §8.1 (ADR-0039): the gateway could not get an answer from the in-house Ollama (`llm.endpoint`): `reason` = `connect` / `connect_timeout` (nothing listens, the host is down), `timeout` (no answer within `llm.timeout_ms`), `gateway_timeout` (the whole checked call, two attempts, took longer than twice the timeout plus 5 s), `status_<code>` (Ollama answered an error — 500 is typically out of GPU memory, e.g. while the `gpu-eval` bench holds the GPU; 404 the model is not pulled), `body_too_large`, `body_invalid`, `redirect`, `request`. Also raised by the background model check when `/api/tags` cannot be read. The request is recorded `failed`; nothing else stops — the advice screens fall back to the view without AI and a check built on it is `error`, never success (ADR-0003)."
+diagnosis = "The worker logs `forge.llm.request_finished` with `error_code=FG-LLM-0001`, `reason`, `purpose`, `llm_request_id`, `model`; the model check logs it with `task=llm_model_check` once per streak. Metrics: `forge_llm_requests_total{outcome=\"FG-LLM-0001\"}`. From the worker host (read-only): `curl -s <llm.endpoint>/api/tags`, `nvidia-smi` (GPU memory), Kanflow's own Ollama status. `SELECT state, error_code, count(*) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1, 2`."
+fix = "Runbook llm-gateway: bring Ollama back (the Kanflow side owns the process), free the GPU (the bench runs at night), or pull the pinned model. Requests are not retried by the gateway; the feature that asked retries on its own schedule. If it lasts, pause the gateway (`llm.paused = true`, an approved runbook step in production)."
+runbook = "llm-gateway"
+test = "llm_unavailable_is_an_error_never_a_success"
+
+[[error]]
+code = "FG-LLM-0003"
+name = "LlmModelDigestMismatch"
+http_status = 503
+severity = "alert"
+user_message_ja = "AI のモデルが決められたものと違うため、AI の助言を止めています。管理者が確認します。"
+user_message_en = "The AI advice is stopped because the AI model is not the pinned one. An administrator will check it."
+user_message_id = "Saran AI dihentikan karena model AI bukan model yang ditetapkan. Administrator akan memeriksanya."
+cause = "Plan 19 §8.1, plan 17 §6 (ADR-0039): the model Ollama serves under `llm.model`'s `name:tag` has a digest other than the pinned `sha256:…` (someone pulled a new version, or the shared Ollama was updated for Kanflow), or the model is not there (`reason=model_missing`). The gateway stops all inference until the digest matches again: waiting requests are failed with this code (`reason=stopped`, recorded `abandoned`), new ones are refused. A model must never change silently — its advice would no longer be the evaluated one."
+diagnosis = "The worker logs it once per streak with `task=llm_model_check`, `model`, `expected_digest` and `actual_digest` (or `reason=model_missing`); later requests carry `reason=stopped`. Check (read-only): `curl -s <llm.endpoint>/api/tags` and compare the model's `digest` with `llm.model` in the configuration; ask the Kanflow side whether they changed the model."
+fix = "Runbook llm-model-update: either put the pinned model back on Ollama (`ollama pull name:tag` of the evaluated version, agreed with Kanflow), or change `llm.model` to the new digest in a reviewed MR after the eval set passed with it. The gateway checks again every 10 minutes and resumes on its own when the digests match."
+runbook = "llm-model-update"
+test = "model_digest_mismatch_stops_gateway"
+
+[[error]]
+code = "FG-LLM-0004"
+name = "LlmQueueDeadline"
+http_status = 503
+severity = "warn"
+user_message_ja = "AI が混んでいて時間内に助言を作れませんでした。AI の助言なしで続けられます。"
+user_message_en = "The AI was too busy to make the advice in time. You can continue without it."
+user_message_id = "AI terlalu sibuk untuk membuat saran tepat waktu. Anda dapat melanjutkan tanpanya."
+cause = "Plan 19 §8.1 (ADR-0017 §3): a request waited in the gateway's queue past its tier's deadline — interactive (a diagnosis, an approval summary) 2 minutes, a review or an autofix 30 minutes, batch 6 hours — without getting a turn: the slot (`llm.concurrency`, default 1) was held by long requests, Kanflow's users kept the shared GPU busy (`ai-busy`: only interactive work starts then), or Kanflow could not be asked (one start per minute). The request is recorded `abandoned`; nothing else stops."
+diagnosis = "The worker logs `forge.llm.request_finished` with `error_code=FG-LLM-0004`, `priority`, `deadline_s`, `purpose`, `llm_request_id`. Look at `forge.llm.metrics` (`waiting`, `running`, `forge_llm_queue_wait_seconds{priority}`, `forge_llm_yield_total{reason}`) and `forge.llm.kanflow_gate` state changes around the time; `SELECT priority, state, count(*), max(finished_at - queued_at) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1, 2`."
+fix = "Runbook llm-gateway: a burst passes by itself; a lasting backlog means the shared GPU is too small for both users — raise `llm.concurrency` to 2 only if the GPU has room, move batch work to the night, or give forge its own GPU host (plan 19 §1.1 G3)."
+runbook = "llm-gateway"
+test = "a_request_waiting_past_its_deadline_is_abandoned"

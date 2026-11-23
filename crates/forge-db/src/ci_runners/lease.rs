@@ -67,6 +67,9 @@ pub const EXCLUSIVE_RUNNER_TAGS: [&str; 1] = [GPU_EVAL_TAG];
 /// claimed only for a project of [`GpuEvalPolicy::projects`] with fewer
 /// than [`GpuEvalPolicy::max_running_per_project`] such jobs running; the
 /// GPU runner's claims are serialized (an advisory lock) so the count holds.
+/// Plan 19 §1.1: while interactive LLM inference is queued or running
+/// (`forge.llm_requests`), such a job waits — at most
+/// `forge_core::llm::GPU_EVAL_MAX_DELAY` after it became pending.
 pub const GPU_EVAL_TAG: &str = "gpu-eval";
 
 /// How long a claim or a heartbeat holds the lease.
@@ -267,6 +270,11 @@ pub async fn claim_with(
                    AND (NOT $3 = ANY(j.tags) OR (j.project_id = ANY($4::bigint[]) \
                      AND (SELECT count(*) FROM forge.ci_jobs g WHERE g.project_id = j.project_id \
                        AND g.status = 'running' AND $3 = ANY(g.tags)) < $5)) \
+                   AND (NOT $3 = ANY(j.tags) \
+                     OR j.updated_at <= now() - make_interval(secs => $6) \
+                     OR NOT EXISTS (SELECT 1 FROM forge.llm_requests l \
+                       WHERE l.state IN ('queued', 'running') AND l.priority = 'interactive' \
+                         AND l.queued_at > now() - make_interval(secs => $7))) \
                    AND p.status IN ('pending', 'running') AND pr.deleted_at IS NULL \
                  ORDER BY j.id LIMIT 1 \
                  FOR UPDATE OF j, p SKIP LOCKED FOR SHARE OF pr, n SKIP LOCKED",
@@ -276,6 +284,9 @@ pub async fn claim_with(
             .bind(GPU_EVAL_TAG)
             .bind(&gpu.projects)
             .bind(i64::from(gpu.max_running_per_project))
+            // Plan 19 §1.1: a bench waits for interactive LLM inference.
+            .bind(forge_core::llm::GPU_EVAL_MAX_DELAY.as_secs_f64())
+            .bind(crate::llm::INTERACTIVE_STALE_SECS as f64)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| query_error(QUERY, e))?;

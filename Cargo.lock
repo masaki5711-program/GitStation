@@ -1137,6 +1137,7 @@ dependencies = [
  "forge-git",
  "forge-hosting",
  "forge-integ",
+ "forge-llm",
  "forge-notify",
  "forge-oidc",
  "forge-pipelines",
@@ -1315,6 +1316,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "forge-llm"
+version = "0.1.0"
+dependencies = [
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
