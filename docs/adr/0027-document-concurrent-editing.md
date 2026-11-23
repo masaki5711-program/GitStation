@@ -65,12 +65,12 @@
   - 改訂中の文書は MR ごとに `forge.merge_request_documents`（migration `20270105100000`）に記録する。MR を開くとき（forge-web）と、
     版ごとの `check.spec_index` の仕事（forge-checks）で、マージベースと head の間で blob が変わった `.md` のうち文書（`doctype` と
     `<id>.md`、訳は `<id>.<lang>.md`）を導く。最も早く開いた MR が改訂を持つ。
-  - **MR を開くときに止める**（`FG-DOC-0006`、409）。push は止めない。版の仕事が 2 つ目の改訂を見つけたら記録し
+  - **MR を開くときに止める**（`FG-DOC-0006`、409。型の定義 `.forge/doctypes/` の無いリポジトリでは何も読まない。導けない・5 秒を超えるときは止めずに記録して通す＝fail open。版の仕事でも同じで、仕事は失敗させない）。push は止めない。版の仕事が 2 つ目の改訂を見つけたら記録し
     （`forge.doc_revision.second_revision`）、`GET …/documents/{doc_id}/status` で `holds: false` と見せる。
   - 編集の宣言は `forge.document_edit_claims`（文書ごとに 1 つ、30 分、データベースの時計）。取得・延長・自分の解除は
     `DocumentEditClaim`（Developer 以上、人だけ）、他人の宣言の解除は `DocumentEditClaimRevoke`（Maintainer 以上、人だけ、監査
-    `document.edit_claim.revoked`）。他人の生きた宣言は `FG-DOC-0007`。MR を開くと、その作者の宣言は解ける。
-  - 文書の版: `GET …/documents/{doc_id}/versions`。既定のブランチに適用されたマージのうち、文書の blob を変えたものが次の版。
+    `document.edit_claim.revoked`）。他人の生きた宣言は `FG-DOC-0007`。MR を開くと、その作者の宣言は解ける。**監査に残るのは他人の宣言の解除（revoke）だけ**（取得・延長・自分の解除は監査しない。ADR の 3 の「解除は監査に残る」は他人の解除を指す）。1 人が 1 つのプロジェクトで持てる生きた宣言は 20 まで。
+  - 文書の版: `GET …/documents/{doc_id}/versions`。既定のブランチに適用されたマージのうち、文書の blob を変えたものが次の版。マージキューの着地も同じマージの記録（`merge_request_merges`）を残すので数える。
   - `gstn doc status|versions|claim|release`。
 - **まだ作っていないもの**（段 4 の後半 part B、承認を変える別のブランチの後）: **マージのときに止める**（`evaluate_merge`）、
   電子の承認の追加分（ADR-0028）、「軽微な訂正」の印、版のタグ `refs/tags/doc/<id>/r<N>`、リポジトリの設定

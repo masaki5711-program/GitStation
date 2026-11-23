@@ -126,7 +126,7 @@ fn commit(repo: &std::path::Path, parent: Option<&str>, files: &[(&str, &str)]) 
 
 fn doc(version: &str) -> String {
     format!(
-        "---\ndoctype: qms.procedure\nid: QP-07-001\ntitle: Synthetic procedure\nowner: qa\n---\n\n# Purpose\n\n{version}\n"
+        "---\ndoctype: qms.procedure\nid: QP-07-001\ntitle: Synthetic procedure\nowner: qa\nclassification: internal\n---\n\n# Purpose\n\n{version}\n"
     )
 }
 
@@ -281,34 +281,34 @@ impl World {
 /// the README.
 async fn with_branches() -> World {
     let w = world().await;
-    let base = commit(
-        &w.path,
-        None,
-        &[("README.md", "# Web\n"), ("docs/QP-07-001.md", &doc("v1"))],
-    );
+    let base = commit_files(&w.path, None, &files("# Web\n", "v1", &[]));
     w.branch("main", &base);
-    let a = commit(
-        &w.path,
-        Some(&base),
-        &[("README.md", "# Web\n"), ("docs/QP-07-001.md", &doc("a"))],
-    );
-    let b = commit(
-        &w.path,
-        Some(&base),
-        &[("README.md", "# Web\n"), ("docs/QP-07-001.md", &doc("b"))],
-    );
-    let c = commit(
-        &w.path,
-        Some(&base),
-        &[
-            ("README.md", "# Web 2\n"),
-            ("docs/QP-07-001.md", &doc("v1")),
-        ],
-    );
+    let a = commit_files(&w.path, Some(&base), &files("# Web\n", "a", &[]));
+    let b = commit_files(&w.path, Some(&base), &files("# Web\n", "b", &[]));
+    let c = commit_files(&w.path, Some(&base), &files("# Web 2\n", "v1", &[]));
     w.branch("a", &a);
     w.branch("b", &b);
     w.branch("c", &c);
     w
+}
+
+/// The README, the type definition (a repository holds documents only
+/// with one), QP-07-001 at `version`, and `extra` files.
+fn files<'a>(
+    readme: &'a str,
+    version: &str,
+    extra: &[(&'a str, &'a str)],
+) -> Vec<(&'a str, String)> {
+    let mut out = vec![
+        ("README.md", readme.to_owned()),
+        (
+            ".forge/doctypes/qms.procedure.yml",
+            "name: qms.procedure\n".to_owned(),
+        ),
+        ("docs/QP-07-001.md", doc(version)),
+    ];
+    out.extend(extra.iter().map(|(p, c)| (*p, (*c).to_owned())));
+    out
 }
 
 #[tokio::test]
@@ -596,4 +596,78 @@ async fn the_versions_are_the_applied_merges_that_changed_the_document() {
     let missing = format!("/api/v1/projects/{}/documents/QP-99/versions", w.project);
     let (s, r) = w.send("GET", &missing, person(w.reporter), None).await;
     assert_eq!(s, StatusCode::NOT_FOUND, "{r}");
+}
+
+/// `files`, committed.
+fn commit_files(repo: &std::path::Path, parent: Option<&str>, f: &[(&str, String)]) -> String {
+    let borrowed: Vec<(&str, &str)> = f.iter().map(|(p, c)| (*p, c.as_str())).collect();
+    commit(repo, parent, &borrowed)
+}
+
+/// Review HIGH 1: deriving the documents fails (a blob git cannot read):
+/// the merge request is created all the same — the rule fails open.
+#[tokio::test]
+async fn a_document_that_cannot_be_read_does_not_stop_the_merge_request() {
+    let w = with_branches().await;
+    let (s, first) = w.open(w.dev, "a").await;
+    assert_eq!(s, StatusCode::CREATED, "{first}");
+    // `d` changes the document too, but its blob is gone from the store.
+    let base = git(&w.path, &["rev-parse", "refs/heads/main"], None, None);
+    let d = commit_files(&w.path, Some(&base), &files("# Web\n", "d", &[]));
+    w.branch("d", &d);
+    let blob = git(
+        &w.path,
+        &["hash-object", "--stdin"],
+        Some(doc("d").as_bytes()),
+        None,
+    );
+    std::fs::remove_file(w.path.join("objects").join(&blob[..2]).join(&blob[2..]))
+        .expect("remove the blob");
+    let (s, second) = w.open(w.dev2, "d").await;
+    assert_eq!(s, StatusCode::CREATED, "{second}");
+}
+
+/// Review HIGH 1: a repository without type definitions (`.forge/doctypes/`)
+/// holds no document: nothing is derived, nothing refused.
+#[tokio::test]
+async fn a_repository_without_type_definitions_is_not_checked() {
+    let w = world().await;
+    let base = commit(&w.path, None, &[("docs/QP-07-001.md", &doc("v1"))]);
+    w.branch("main", &base);
+    for name in ["x", "y"] {
+        let c = commit(&w.path, Some(&base), &[("docs/QP-07-001.md", &doc(name))]);
+        w.branch(name, &c);
+        let (s, mr) = w.open(w.dev, name).await;
+        assert_eq!(s, StatusCode::CREATED, "{mr}");
+    }
+    assert_eq!(w.status(w.dev).await["revisions"], json!([]));
+}
+
+fn confidential_doc() -> String {
+    "---\ndoctype: qms.procedure\nid: QP-07-002\ntitle: Secret procedure\nowner: qa\nclassification: confidential\n---\n\n# Purpose\n\nx\n".to_owned()
+}
+
+/// Review HIGH 3 (plan 06 D-5): the status of a confidential or unknown
+/// document is answered to an AI agent as absent; a person sees it.
+#[tokio::test]
+async fn an_agent_is_answered_a_confidential_document_status_as_absent() {
+    let w = world().await;
+    let secret = confidential_doc();
+    let base = commit_files(
+        &w.path,
+        None,
+        &files("# Web\n", "v1", &[("docs/QP-07-002.md", secret.as_str())]),
+    );
+    w.branch("main", &base);
+    let agent = person(w.dev).as_agent(true);
+    let uri = |id: &str| format!("/api/v1/projects/{}/documents/{id}/status", w.project);
+    let (s, body) = w.send("GET", &uri("QP-07-002"), agent.clone(), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(code(&body), "FG-REPO-0005");
+    let (s, body) = w.send("GET", &uri("QP-99"), agent.clone(), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{body}");
+    let (s, body) = w.send("GET", &uri("QP-07-001"), agent, None).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    let (s, body) = w.send("GET", &uri("QP-07-002"), person(w.dev), None).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
 }

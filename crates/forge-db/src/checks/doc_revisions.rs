@@ -18,7 +18,9 @@
 //!   `document.edit_claim.revoked`). [`release_claims_of`] drops a person's
 //!   claims when they open a merge request revising those documents.
 
-use forge_core::doc_revision::{DocEditClaimChange, DocKey, EDIT_CLAIM_MINUTES};
+use forge_core::doc_revision::{
+    DocEditClaimChange, DocKey, EDIT_CLAIM_MINUTES, MAX_LIVE_CLAIMS_PER_PERSON,
+};
 use forge_core::{AuditDetails, MergeRequestId, ProjectId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -452,6 +454,30 @@ pub async fn take_edit_claim_decided<P>(
             Some((_, true)) => ClaimOutcome::Extended,
             Some((_, false)) | None => ClaimOutcome::Taken,
         };
+        if outcome == ClaimOutcome::Taken {
+            let doc = doc_id.to_owned();
+            let held: i64 = tx
+                .step(|c| async move {
+                    sqlx::query_scalar(
+                        "SELECT count(*) FROM forge.document_edit_claims \
+                         WHERE project_id = $1 AND user_id = $2 AND doc_id <> $3 \
+                         AND expires_at > now()",
+                    )
+                    .bind(project.get())
+                    .bind(caller.get())
+                    .bind(doc)
+                    .fetch_one(c)
+                    .await
+                    .map_err(|e| query_error("doc_revisions.claim_count", e))
+                })
+                .await?;
+            if held >= MAX_LIVE_CLAIMS_PER_PERSON {
+                return Err(ForgeError::new(ErrorCode::RequestInvalid)
+                    .with_context("reason", "too_many_claims")
+                    .with_context("limit", MAX_LIVE_CLAIMS_PER_PERSON)
+                    .with_context("project_id", project.get()));
+            }
+        }
         let sql = format!(
             "INSERT INTO forge.document_edit_claims \
              (project_id, doc_id, user_id, merge_request_iid, claimed_at, expires_at) \

@@ -38,11 +38,11 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, WriteParts};
-use crate::routes::browse::{load_project_lookup, rev_body, RevBody};
+use crate::routes::browse::{load_project_lookup, rev_body, RevBody, Target};
 use crate::routes::context::audience;
 use crate::routes::documents::{index_at, ref_id, tip_marks, visible_original, DocIncompleteBody};
 use crate::routes::projects::PREFIX as PROJECT_PREFIX;
-use crate::routes::specs::{caller_of, respond, revision};
+use crate::routes::specs::{caller_of, charge, respond, revision};
 use crate::routes::write::{bounded, json, no_store};
 
 /// `GET` a document's open revisions and edit claim.
@@ -292,11 +292,67 @@ fn may<B>(w: &WriteParts<ProjectCtx, B>, action: Action) -> bool {
     forge_auth::authorize(w.proof.principal(), action, &w.proof.ctx().resource()).is_ok()
 }
 
+/// For an AI agent audience, the document must be one the document API
+/// would give it ([`visible_original`] at the default branch's tip:
+/// confidential there, unknown, or no default branch → `FG-REPO-0005`, the
+/// withheld event logged). A person is decided by the route alone.
+async fn withheld_from_agent(
+    state: &AppState,
+    request: Dispatched<ProjectCtx>,
+    raw_path: &str,
+) -> (Dispatched<ProjectCtx>, Result<(), ForgeError>) {
+    const ROUTE: &str = "documents_status";
+    // The request is only borrowed outside the awaits (it is not `Sync`).
+    let prepared = (|| {
+        let who = audience(&request)?;
+        if !who.is_agent() {
+            return Ok(None);
+        }
+        let (_, id) = params(raw_path, "/status")?;
+        let t = Target::of(state, &request)?;
+        let caller = caller_of(&request)?;
+        charge(state, caller, 1)?;
+        Ok(Some((who, id, t, caller)))
+    })();
+    let (who, id, t, caller) = match prepared {
+        Ok(Some(p)) => p,
+        Ok(None) => return (request, Ok(())),
+        Err(e) => return (request, Err(e)),
+    };
+    let read = async {
+        let rev = match revision(&t, None).await {
+            Ok(rev) => rev,
+            Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => {
+                return Err(ForgeError::new(ErrorCode::NotFound)
+                    .with_context("reason", "doc_confidential")
+                    .with_context("doc_id", id.clone()) // clone: the log's copy
+                    .with_context("detail", "no_default_branch"));
+            }
+            Err(e) => return Err(e),
+        };
+        let index = index_at(&t, &rev).await?;
+        let tip = tip_marks(state, caller, &t, who, &rev).await?;
+        Ok((index, tip))
+    }
+    .await;
+    let decided = match read {
+        Ok((index, tip)) => {
+            visible_original(&request, ROUTE, who, (&index, &tip), &id, None).map(drop)
+        }
+        Err(e) => Err(e),
+    };
+    (request, decided)
+}
+
 /// `GET …/documents/{doc_id}/status` → `200`.
 pub async fn status(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let raw_path = request.raw_path().to_owned();
+    // Review HIGH 3 (plan 06 D-5): an AI agent is answered a confidential
+    // or unknown document as absent, before anything about it is read.
+    let (request, withheld) = withheld_from_agent(&state, request, &raw_path).await;
     let w = request.into_write();
     let built = async {
+        withheld?;
         let doc = ids(&w, &raw_path, "/status")?;
         let got = bounded(
             &state,

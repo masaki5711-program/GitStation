@@ -31,17 +31,20 @@
 //! crate calls them (`tests/decided_callers.rs`).
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use forge_auth::{Action, Authorized, ProjectCtx};
 use forge_core::doc_revision::DocKey;
+use forge_core::RequestId;
 use forge_core::{MergeRequestId, ObjectId, ProjectId, RefName, RepoId, UserId};
 use forge_db::checks::doc_revisions::{
     self as db, ClaimOutcome, EditClaim, OpenRevision, MAX_DOCUMENTS_PER_MERGE_REQUEST,
 };
 use forge_db::Db;
 use forge_doc::document::parse_document;
+use forge_doc::lint::DOCTYPES_DIR;
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::browse::{BlobListing, Browser, ListedBlob, RefLookup};
+use forge_git::browse::{BlobListing, Browser, ListedBlob, RefLookup, RepoPath};
 
 use crate::doc_lint::{is_document_file, read_cap, select, DocLimits, DocTree};
 use crate::{account, caller, change_context, loaded, require, ChecksRequest};
@@ -145,6 +148,23 @@ async fn read_listed(
     Ok(tree)
 }
 
+/// Whether `commit` has a type definition (`.forge/doctypes/…`): a
+/// document names a type the repository defines (the lint's
+/// `doctype_unknown` otherwise), so without one there is no document.
+async fn has_doctypes(
+    browse: &Browser,
+    repo: RepoId,
+    commit: &ObjectId,
+) -> Result<bool, ForgeError> {
+    let dir = RepoPath::parse(DOCTYPES_DIR).map_err(|rule| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "doctypes_dir_invalid")
+            .with_context("rule", rule)
+    })?;
+    let listed = browse.blobs_under(repo, commit.as_str(), &[dir], 1).await?;
+    Ok(!listed.blobs.is_empty() || listed.truncated)
+}
+
 /// The documents `head` revises against `base` (module docs). Errors:
 /// forge-git's (`FG-GIT-…`, the browse timeout and caps), each with the
 /// commit.
@@ -159,6 +179,20 @@ pub async fn revised_documents(
         let c = c.as_str().to_owned();
         move |e: ForgeError| e.with_context("commit", c)
     };
+    if base == Some(head) {
+        return Ok(Revised::default());
+    }
+    // A repository without type definitions holds no document the rule
+    // applies to: one small listing, and no reading of the trees (system
+    // code repositories never pay for the rest).
+    let typed_head = has_doctypes(browse, repo, head).await.map_err(at(head))?;
+    let typed_base = match base {
+        Some(b) => has_doctypes(browse, repo, b).await.map_err(at(b))?,
+        None => false,
+    };
+    if !typed_head && !typed_base {
+        return Ok(Revised::default());
+    }
     let head_listing = browse
         .blobs_in_tree(repo, head.as_str(), limits.max_tree_entries)
         .await
@@ -236,6 +270,125 @@ pub async fn revised_by_branches(
     Ok(Some((head, revised)))
 }
 
+/// The longest the revision rule may add to opening a merge request or to
+/// a version job (every git and database step has its own timeout too).
+pub const REVISION_BUDGET: Duration = Duration::from_secs(5);
+
+/// [`revised_by_branches`] for the create route, **failing open**: the
+/// rule is a safeguard, not the merge request. A failure or the
+/// [`REVISION_BUDGET`] is logged (`forge.doc_revision.unavailable`, warn,
+/// with its code) and answers `None` — nothing is refused; the version
+/// job records the documents later (and marks a second revision).
+pub async fn revised_for_open(
+    browse: &Browser,
+    repo: RepoId,
+    (source, target): (&RefName, &RefName),
+    project: ProjectId,
+    request_id: &RequestId,
+) -> Option<(ObjectId, Revised)> {
+    let limits = DocLimits::default();
+    let read = revised_by_branches(browse, repo, source, target, &limits);
+    let failed = match tokio::time::timeout(REVISION_BUDGET, read).await {
+        Ok(Ok(planned)) => return planned,
+        Ok(Err(e)) => e,
+        Err(_) => budget_spent(),
+    };
+    unavailable(&failed, request_id, project, "open");
+    None
+}
+
+fn budget_spent() -> ForgeError {
+    ForgeError::new(ErrorCode::RequestTimeout)
+        .with_context("operation", "doc_revision")
+        .with_context("timeout_ms", REVISION_BUDGET.as_millis())
+}
+
+fn unavailable(e: &ForgeError, request_id: &RequestId, project: ProjectId, at: &'static str) {
+    tracing::warn!(
+        target: "forge_checks",
+        event = "forge.doc_revision.unavailable",
+        error_code = e.code().id(),
+        error = %e,
+        request_id = %request_id,
+        project_id = project.get(),
+        at,
+        "the documents a merge request revises could not be derived; the one-revision rule is skipped this time"
+    );
+}
+
+/// What [`record_version`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionRecord {
+    /// The version's documents were recorded (their number).
+    Recorded(usize),
+    /// They could not be derived or stored: logged, nothing changed.
+    Skipped,
+}
+
+/// The `check.spec_index` job's step for merge request `mr` at `head`:
+/// derive the documents it revises against `base`, record them, and log a
+/// second revision of a document an earlier open merge request holds (the
+/// mark, `forge.doc_revision.second_revision`, `FG-DOC-0006`). **Never
+/// fails the job**: the spec, doc and ci checks do not depend on it — a
+/// failure or the [`REVISION_BUDGET`] is logged
+/// (`forge.doc_revision.unavailable`) and answers
+/// [`VersionRecord::Skipped`].
+pub async fn record_version(
+    db: &Db,
+    browse: &Browser,
+    limits: &DocLimits,
+    (project, iid, mr): (ProjectId, i64, MergeRequestId),
+    repo: RepoId,
+    (base, head): (Option<&ObjectId>, &ObjectId),
+    request_id: &RequestId,
+) -> VersionRecord {
+    let run = async {
+        let revised = revised_documents(browse, repo, base, head, limits).await?;
+        if let Some(bound) = revised.incomplete {
+            tracing::info!(
+                target: "forge_checks",
+                event = "forge.doc_revision.incomplete",
+                error_code = ErrorCode::DocIndexBounded.id(),
+                request_id = %request_id,
+                project_id = project.get(),
+                iid,
+                head_sha = head.as_str(),
+                bound,
+                documents = revised.keys.len(),
+                "the documents a version revises were read within a bound: some may be missing"
+            );
+        }
+        db::record_merge_request_documents(db, project, mr, head.as_str(), &revised.keys).await?;
+        let open = db::open_revisions(db, project, &revised.keys).await?;
+        for key in &revised.keys {
+            let holder = open.iter().find(|r| &r.key == key);
+            if let Some(h) = holder.filter(|h| h.merge_request != mr) {
+                tracing::warn!(
+                    target: "forge_checks",
+                    event = "forge.doc_revision.second_revision",
+                    error_code = ErrorCode::DocRevisionOpen.id(),
+                    request_id = %request_id,
+                    project_id = project.get(),
+                    iid,
+                    head_sha = head.as_str(),
+                    doc_id = %key.doc_id,
+                    lang = key.lang.as_deref(),
+                    holder_iid = h.iid,
+                    "a merge request revises a document an earlier open merge request holds"
+                );
+            }
+        }
+        Ok::<usize, ForgeError>(revised.keys.len())
+    };
+    let failed = match tokio::time::timeout(REVISION_BUDGET, run).await {
+        Ok(Ok(n)) => return VersionRecord::Recorded(n),
+        Ok(Err(e)) => e,
+        Err(_) => budget_spent(),
+    };
+    unavailable(&failed, request_id, project, "version");
+    VersionRecord::Skipped
+}
+
 /// The open revisions of a document and its live edit claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentStatus {
@@ -249,7 +402,13 @@ pub struct DocumentStatus {
 #[derive(Clone)]
 pub struct DocRevisions {
     db: Db,
+    /// One revision lock per project (review MEDIUM: two creates of this
+    /// process never both pass the refusal; another process's race is left
+    /// to the version job's mark).
+    locks: std::sync::Arc<std::sync::Mutex<ProjectLocks>>,
 }
+
+type ProjectLocks = std::collections::HashMap<ProjectId, std::sync::Arc<tokio::sync::Mutex<()>>>;
 
 impl std::fmt::Debug for DocRevisions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -273,7 +432,25 @@ fn refusal(project: ProjectId, open: &[OpenRevision], keys: &[DocKey]) -> Option
 
 impl DocRevisions {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self {
+            db,
+            locks: std::sync::Arc::default(),
+        }
+    }
+
+    /// Hold `project`'s revision lock (the refusal, the create and the
+    /// record of a merge request revising documents) until the guard drops.
+    pub async fn serialize(&self, project: ProjectId) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            // A panic while holding the map cannot leave it inconsistent
+            // (one insert): a poisoned map is used as it is.
+            let mut map = self
+                .locks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::sync::Arc::clone(map.entry(project).or_default())
+        };
+        lock.lock_owned().await
     }
 
     /// `GET …/documents/{doc_id}/status` (`RepoBrowse`): the open

@@ -49,12 +49,13 @@ const CLAIM: [Row; 14] = [
 ];
 
 #[rustfmt::skip]
-const REVOKE: [Row; 14] = [
+const REVOKE: [Row; 15] = [
     row(A::DocumentEditClaimRevoke, W::Maintainer, F::PrivateProject, Allow),
     row(A::DocumentEditClaimRevoke, W::Owner, F::PrivateProject, Allow),
     row(A::DocumentEditClaimRevoke, W::Admin, F::PrivateProject, Allow),
     row(A::DocumentEditClaimRevoke, W::MaintainerTokenApi, F::PrivateProject, Allow),
     row(A::DocumentEditClaimRevoke, W::Developer, F::PrivateProject, deny(E::Forbidden)),
+    row(A::DocumentEditClaimRevoke, W::DevTokenApi, F::PrivateProject, deny(E::Forbidden)),
     row(A::DocumentEditClaimRevoke, W::Reporter, F::PrivateProject, deny(E::Forbidden)),
     row(A::DocumentEditClaimRevoke, W::Guest, F::PrivateProject, deny(E::Forbidden)),
     row(A::DocumentEditClaimRevoke, W::AgentMaintainerTokenApi, F::PrivateProject, deny(E::Forbidden)),

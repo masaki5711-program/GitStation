@@ -29,6 +29,11 @@ use crate::ids::{ProjectId, UserId};
 /// extended (ADR-0027 §3: "操作がないと 30 分で切れる").
 pub const EDIT_CLAIM_MINUTES: i64 = 30;
 
+/// Live claims one person may hold in one project at most (review
+/// MEDIUM: a claim is a hint for one document being edited, not a way to
+/// lock a repository). One more is `FG-WEB-0006 reason=too_many_claims`.
+pub const MAX_LIVE_CLAIMS_PER_PERSON: i64 = 20;
+
 /// A document key as stored: the document's `id` and, for a translation,
 /// its language (`None`: the original).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

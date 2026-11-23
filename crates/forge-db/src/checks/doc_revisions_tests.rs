@@ -408,3 +408,24 @@ async fn a_refused_decision_writes_nothing() {
         None
     );
 }
+
+#[tokio::test]
+async fn one_person_holds_a_bounded_number_of_live_claims() {
+    let w = world().await;
+    let max = forge_core::doc_revision::MAX_LIVE_CLAIMS_PER_PERSON;
+    for n in 0..max {
+        w.take(w.alice, &format!("D-{n}"), &format!("req-cap-{n}"))
+            .await
+            .expect("within the cap");
+    }
+    let e = w
+        .take(w.alice, "D-over", "req-cap-over")
+        .await
+        .expect_err("over");
+    assert_eq!(e.code(), ErrorCode::RequestInvalid);
+    // Extending one held already is no new claim; another person is not counted.
+    w.take(w.alice, "D-0", "req-cap-extend")
+        .await
+        .expect("extend");
+    w.take(w.bob, "D-over", "req-cap-bob").await.expect("bob");
+}
