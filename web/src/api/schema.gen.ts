@@ -6293,6 +6293,14 @@ export interface components {
              *     not listed (a binding gives them nothing).
              */
             members: components["schemas"]["OrgBindingMemberBody"][];
+            /**
+             * @description `true` unless the caller has administrator rights: `members` then
+             *     lists only the people reached through their primary unit by
+             *     bindings without `min_rank`, with the highest role among those
+             *     (rank and concurrent units are the person's and the
+             *     administrators', ADR-0038 §6). The roles themselves are unchanged.
+             */
+            members_limited: boolean;
             /** @description More people than listed (200). */
             members_truncated: boolean;
             viewer: components["schemas"]["OrgBindingsViewerBody"];

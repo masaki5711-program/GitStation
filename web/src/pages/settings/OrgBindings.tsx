@@ -97,12 +97,21 @@ export function OrgBoundMembers({ scope }: { scope: BindingScope }) {
   const list = useOrgBindings(scope);
   if (list.isPending) return <Loading />;
   if (list.isError) return <QueryError error={list.error} onRetry={() => void list.refetch()} />;
-  const { members, members_truncated: truncated, bindings } = list.data;
+  const { members, members_truncated: truncated, members_limited: limited, bindings } = list.data;
   if (bindings.length === 0) return <p className={styles.muted}>{t('orgBindings.noBindings')}</p>;
-  if (members.length === 0) return <p>{t('orgBindings.noMembers')}</p>;
+  // ADR-0038 §6: rank and concurrent units are the person's and the administrators'.
+  const limitedNote = limited ? <p className={styles.hint}>{t('orgBindings.membersLimited')}</p> : null;
+  if (members.length === 0)
+    return (
+      <>
+        <p>{t('orgBindings.noMembers')}</p>
+        {limitedNote}
+      </>
+    );
   return (
     <>
       <p className={styles.hint}>{t('orgBindings.membersHint')}</p>
+      {limitedNote}
       <div className={styles.scroll} role="region" aria-label={t('orgBindings.membersTitle')} tabIndex={0}>
         <table className={styles.table}>
           <thead>

@@ -92,10 +92,16 @@ VALUES (true, 86400, 86400);
 --   - a binding matches a unit on the chain: the unit itself, or one above
 --     it when the binding includes descendants; `primary` bindings only the
 --     primary unit's chain; `min_rank` against the snapshot's rank.
+-- via_primary: the binding matches through the primary unit's chain (the
+-- members list shows non-administrators only such matches of bindings
+-- without min_rank: rank and concurrent units stay the person's and the
+-- administrators', ADR-0038 §6).
 -- SECURITY DEFINER: the snapshot's plant and rank are not on the read pool
--- (ADR-0038 §6); only the binding ids and roles leave the function.
+-- (ADR-0038 §6). EXECUTE for forge_app only: per-binding matches of any
+-- person are a rank oracle, so the read pool reaches them only through
+-- forge.org_binding_role (the role, which the role loaders show anyway).
 CREATE FUNCTION forge.org_binding_matches(p_user bigint, p_kind text, p_target bigint)
-    RETURNS TABLE (binding_id bigint, binding_role text)
+    RETURNS TABLE (binding_id bigint, binding_role text, via_primary boolean)
     LANGUAGE plpgsql STABLE
     SECURITY DEFINER
     SET search_path = pg_catalog, forge, pg_temp
@@ -159,7 +165,7 @@ BEGIN
         SELECT c.start, c.is_primary FROM chain c GROUP BY c.start, c.is_primary
         HAVING bool_and(c.ok) AND bool_or(c.parent_code IS NULL)
     )
-    SELECT DISTINCT b.id, b.role
+    SELECT b.id, b.role, bool_or(w.is_primary)
       FROM whole w
       JOIN chain c ON c.start = w.start AND c.is_primary = w.is_primary
       JOIN forge.org_bindings b ON b.plant_code = v_plant AND b.org_code = c.code
@@ -167,17 +173,21 @@ BEGIN
        AND (c.depth = 0 OR b.include_descendants)
        AND (b.membership = 'any' OR w.is_primary)
        AND (b.min_rank IS NULL OR (v_rank IS NOT NULL AND v_rank >= b.min_rank))
-       AND b.role IN ('reporter', 'developer');
+       AND b.role IN ('reporter', 'developer')
+     GROUP BY b.id, b.role;
 END
 $$;
 REVOKE ALL ON FUNCTION forge.org_binding_matches(bigint, text, bigint) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION forge.org_binding_matches(bigint, text, bigint) TO forge_app, forge_ro;
+GRANT EXECUTE ON FUNCTION forge.org_binding_matches(bigint, text, bigint) TO forge_app;
 
 -- The highest role the bindings of (p_kind, p_target) give p_user now
--- (null: none). Never above developer.
+-- (null: none). Never above developer. SECURITY DEFINER: the read pool's
+-- role loaders call it without EXECUTE on forge.org_binding_matches.
 CREATE FUNCTION forge.org_binding_role(p_user bigint, p_kind text, p_target bigint)
     RETURNS text
     LANGUAGE sql STABLE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, forge, pg_temp
 AS $$
     SELECT CASE WHEN bool_or(m.binding_role = 'developer') THEN 'developer'
                 WHEN count(*) > 0 THEN 'reporter' END
@@ -206,10 +216,18 @@ GRANT SELECT ON forge.org_bindings TO forge_ro;
 GRANT SELECT, UPDATE ON forge.org_access_policy TO forge_app;
 GRANT SELECT ON forge.org_access_policy TO forge_ro;
 
+-- The members list (forge_db::org_bindings::members) narrows the people to
+-- those holding a bound unit (or one below it) before matching them: the
+-- containment probe `org_units @> '[{"code": …}]'` per unit.
+CREATE INDEX user_org_profiles_units ON forge.user_org_profiles
+    USING gin (org_units jsonb_path_ops);
+
 INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
-    ('function', 'forge.org_binding_matches(bigint,text,bigint)')
+    ('function', 'forge.org_binding_matches(bigint,text,bigint)'),
+    ('function', 'forge.org_binding_role(bigint,text,bigint)'),
+    ('function', 'forge.org_role_max(text,text)')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20270101100000, "guarded_changes": ["forge.org_binding_matches"]}');
+    '{"version": 20270101100000, "guarded_changes": ["forge.org_binding_matches", "forge.org_binding_role", "forge.org_role_max"]}');

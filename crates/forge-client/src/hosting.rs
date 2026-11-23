@@ -857,11 +857,19 @@ fn org_bindings_human(body: &Value) -> String {
     } else {
         ""
     };
+    // ADR-0038 §6: a non-administrator sees primary-unit matches without
+    // min_rank only.
+    let limited = if body.get("members_limited") == Some(&Value::Bool(true)) {
+        "
+(primary-unit matches of bindings without min_rank only; administrators see all)"
+    } else {
+        ""
+    };
     format!(
         "bindings:
 {bindings}
 people:
-{members}{more}"
+{members}{more}{limited}"
     )
 }
 

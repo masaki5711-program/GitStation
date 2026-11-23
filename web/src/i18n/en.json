@@ -463,6 +463,7 @@
     "explain": "Make the people of a department, section or team Reporter or Developer in one step. Transfers made in the portal's user management apply within about 5 minutes. Add Maintainers and Owners by hand as members above.",
     "membersTitle": "People from the organisation",
     "membersHint": "These people are here through an organisation binding. They cannot be removed here; change the binding below instead.",
+    "membersLimited": "Only people matched through their primary unit by bindings without a minimum rank are listed here; rank and concurrent units are visible to administrators only.",
     "noBindings": "No organisation is bound.",
     "noMembers": "Nobody matches the bindings yet (a person's organisation is confirmed when they sign in on the web).",
     "source": "Source",

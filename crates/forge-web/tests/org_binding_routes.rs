@@ -338,6 +338,61 @@ async fn the_owner_binds_a_department_and_its_people_get_developer_below() {
     t.drop_now().await;
 }
 
+fn admin_session(user: UserId) -> Principal {
+    Principal::authenticated(
+        user,
+        true,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
+}
+
+/// ADR-0038 §6: the Owner cannot read rank through the list — a binding
+/// with `min_rank` discloses its people to administrators only.
+#[tokio::test]
+async fn a_rank_filtered_binding_discloses_its_people_to_administrators_only() {
+    let t = FreshDb::migrated().await;
+    let w = world(&t).await;
+    let root = user(&t, "root").await;
+    let r = || router(&t.db);
+    let bindings = format!("/api/v1/groups/{}/org-bindings", w.acme.group_id.get());
+    // carol's rank is 15: the threshold decides whether she matches.
+    for (threshold, matches) in [(10, true), (20, false)] {
+        let ask = json!({
+            "plant_code": "P001", "org_code": "DEP-1", "include_descendants": true,
+            "min_rank": threshold, "role": "developer"
+        });
+        let made = call(r(), "POST", &bindings, session(w.alice), Some(ask)).await;
+        assert_eq!(made.status, StatusCode::CREATED, "{}", made.json);
+        for who in [session(w.alice), session(w.carol)] {
+            let seen = call(r(), "GET", &bindings, who, None).await;
+            assert_eq!(seen.status, StatusCode::OK, "{}", seen.json);
+            assert_eq!(seen.json["members"], json!([]), "{}", seen.json);
+            assert_eq!(seen.json["members_limited"], true);
+        }
+        let full = call(r(), "GET", &bindings, admin_session(root), None).await;
+        assert_eq!(full.status, StatusCode::OK, "{}", full.json);
+        assert_eq!(full.json["members_limited"], false);
+        let names: Vec<&str> = full.json["members"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|p| p["username"].as_str()).collect())
+            .unwrap_or_default();
+        assert_eq!(names, if matches { vec!["carol"] } else { vec![] });
+        let id = made.json["id"].as_i64().expect("id");
+        let gone = call(
+            r(),
+            "DELETE",
+            &format!("{bindings}/{id}"),
+            session(w.alice),
+            None,
+        )
+        .await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.json);
+    }
+    t.drop_now().await;
+}
+
 #[tokio::test]
 async fn binding_changes_are_the_owners_in_a_session_and_capped_at_developer() {
     let t = FreshDb::migrated().await;

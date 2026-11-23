@@ -134,6 +134,29 @@ web のセッションだけ・本人と変更者は不可（ADR-0031）。文�
 - API: `GET|POST /api/v1/{projects|groups}/{id}/org-bindings`、`DELETE …/org-bindings/{binding_id}`、組織の選択用に
   `GET /api/v1/org-units`（`UserSearch`。名前・level・親だけ）。誤りは FG-AUTH-0029（入力・重複・件数）、FG-AUTH-0030（台帳に無い）、
   FG-AUTH-0031（Developer を超えるロール）。`gstn member org-bindings` / `member org-units`（足す・外すはブラウザだけ）。
+- 結び付けで入っている人の一覧（`GET …/org-bindings` の `members`、レビュー後 2026-11-23）: §6 のとおり職位・ランクと兼務は
+  本人と管理者だけのもの。管理者の権限が効いていない人（Owner も、`MemberList` で読める社内の利用者も）には、**主所属のたどりで、
+  `min_rank` の無い結び付け**に当たる人だけを、その中で一番高いロールで見せる（`members_limited: true`）。`min_rank` を変えたり
+  兼務の課を結び付けたりして、ほかの人のランクや兼務を推し量ることはできない。ロールそのもの（判定）は変わらない。
+  一覧は、結び付けた組織とその配下を持つ写しに先に絞ってから（`org_units` の GIN 索引）照らし合わせる。
+- `forge.org_binding_matches()` の EXECUTE は `forge_app` だけ（結び付けごとの当たりは推し量りの材料になる）。読み取りのプールの
+  ロールの loader は SECURITY DEFINER の `forge.org_binding_role()`（ロールだけを返す）を通す。一覧は書き込みのプールで読む。
+- 件数の上限（100）は、対象ごとの advisory lock の中で数えてから足す（同時の追加で超えない）。
+- `GET /api/v1/org-units` はトークン（`read_api`）でも読める。組織の木（名前・level・親）は人の情報ではなく、同じ名前は
+  `GET /api/v1/users?search=` でも見えるため（§6 で人のものとするランク・職位・工場・兼務・長の社員番号は含まない）。`gstn member
+  org-units` もこれを使う。
+
+### 2.5 結び付けを数えない所（段 B の判断、2026-11-23）
+
+ロールの loader を通らず、手で付けた所属（`project_members` / `group_members`）だけを見る問い合わせが 3 つある。どれも
+**少なく見せる側に倒れる**（権限を与えない）ので、段 B ではそのままにし、コードに理由を書いた:
+
+- `forge_db::portal::project_people`（仕様の公開のお知らせの宛先）: 結び付けで入った人には送らない。部ごと結び付けると宛先の上限
+  を食いつぶすため。ポータルで読むときは `authorize()` が組織からのロールで判定する。
+- `forge_db::review::user_lists::related_ctes`（承認できる MR・活動の一覧の「自分のプロジェクト」）: 結び付けだけで入った
+  プロジェクトは並べない。各行は `authorize()` で判定される。
+- `forge_db::review::approvals::approvers_on` の直属のグループ: 結び付けはグループの承認ルールの「グループのメンバー」には
+  ならない（ロールは `project_roles_on` で組織からのものも入る）。組織による承認は段 C（§3）が別に決める。
 
 ## 3. 承認 — 組織による承認者の指定（Phase 3）
 

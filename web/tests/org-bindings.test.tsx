@@ -42,6 +42,8 @@ const bound = (canManage: boolean, bindings: unknown[] = [binding]) => ({
       ? []
       : [{ user_id: 21, username: 'jiro', display_name: 'JIRO', role: 'developer', binding_id: 11, org_code: 'SEC-1', unit }],
   members_truncated: false,
+  // A non-administrator's view (ADR-0038 §6).
+  members_limited: true,
   viewer: { can_manage: canManage },
 });
 
@@ -65,6 +67,12 @@ describe('org bindings on the members screen', () => {
     expect(within(region).getByText('jiro')).toBeTruthy();
     expect(within(region).getByText('組織から（品質保証課）')).toBeTruthy();
     expect(within(region).queryByRole('button')).toBeNull();
+    // Rank and concurrent units are the administrators': the list says so.
+    expect(
+      screen.getByText(
+        'ここには、主所属で当てはまり、職位ランクの条件が無い結び付けの人だけを出します。ランクや兼務は管理者だけが見られます。',
+      ),
+    ).toBeTruthy();
     // Not the Owner: the bindings are shown, not changed.
     expect(screen.getByText('結び付けを変えられるのは Owner と管理者だけです。')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '結び付ける' })).toBeNull();

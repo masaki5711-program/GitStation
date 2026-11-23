@@ -4,6 +4,12 @@
 //!   bindings of the group or project, the people they give a role to now
 //!   (the members screen's 「組織から」 rows; at most 200) and `viewer`
 //!   (whether the caller could change them: a hint, the route decides).
+//!   ADR-0038 §6: rank and concurrent units are the person's and the
+//!   administrators'. A reader without administrator rights in effect
+//!   (`UserOrgAdminRead`, the decision of the admin org-profile route) —
+//!   the Owner included — gets only the people reached through their
+//!   primary unit by bindings without `min_rank` (`members_limited`), so
+//!   varying `min_rank` or binding a concurrent unit infers nothing.
 //! - `POST …/org-bindings` (`OrgBindingManage`: the Owner, a person in a
 //!   web session): `{plant_code, org_code, include_descendants, membership,
 //!   min_rank, role, reason}` → `201` the binding. A role above Developer
@@ -13,17 +19,21 @@
 //! - `GET /api/v1/org-units?search=&plant=&limit=` (`UserSearch`: every
 //!   signed-in user, as the people pickers that show the same names): the
 //!   units of the org master's copy for the picker (names, level, parent;
-//!   never the head's staff id).
+//!   never the head's staff id). A token with `read_api` reaches it too,
+//!   as it reaches `GET /api/v1/users?search=` with the same unit names:
+//!   the unit tree is organisation data, not a person's (§6 lists what is
+//!   personal: rank, positions, plant, concurrent units, the head's staff
+//!   id — none of them is here), so it is not session-only.
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use forge_auth::{Action, GroupCtx, InstanceCtx, ProjectCtx, ResourceCtx};
+use forge_auth::{Action, GroupCtx, InstanceCtx, ProjectCtx, Resource, ResourceCtx};
 use forge_core::{parse_positive_id, GroupId, ProjectId, UserId};
 use forge_errors::ForgeError;
 use forge_hosting::{
-    BindingTarget, BoundMember, NewBinding, OrgMembership, PickUnit, StoredBinding, UnitName,
-    MAX_ORG_UNITS,
+    BindingTarget, BoundMember, NewBinding, OrgMemberDisclosure, OrgMembership, PickUnit,
+    StoredBinding, UnitName, MAX_ORG_UNITS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -196,6 +206,12 @@ pub struct OrgBindingsBody {
     pub members: Vec<OrgBindingMemberBody>,
     /// More people than listed (200).
     pub members_truncated: bool,
+    /// `true` unless the caller has administrator rights: `members` then
+    /// lists only the people reached through their primary unit by
+    /// bindings without `min_rank`, with the highest role among those
+    /// (rank and concurrent units are the person's and the
+    /// administrators', ADR-0038 §6). The roles themselves are unchanged.
+    pub members_limited: bool,
     pub viewer: OrgBindingsViewerBody,
 }
 
@@ -466,7 +482,13 @@ async fn listed(
     state: &AppState,
     target: BindingTarget,
     can_manage: bool,
+    full: bool,
 ) -> Result<Value, ForgeError> {
+    let disclosure = if full {
+        OrgMemberDisclosure::Full
+    } else {
+        OrgMemberDisclosure::PrimaryUnit
+    };
     let hosting = hosting(state)?;
     let bindings = bounded(state, "org_binding_list", hosting.org_bindings(target)).await?;
     let (members, members_truncated) = if bindings.is_empty() {
@@ -475,7 +497,7 @@ async fn listed(
         bounded(
             state,
             "org_binding_members",
-            hosting.org_binding_members(target),
+            hosting.org_binding_members(target, disclosure),
         )
         .await?
     };
@@ -483,8 +505,21 @@ async fn listed(
         bindings: bindings.into_iter().map(binding_body).collect(),
         members: members.into_iter().map(member_body).collect(),
         members_truncated,
+        members_limited: !full,
         viewer: OrgBindingsViewerBody { can_manage },
     })
+}
+
+/// Whether the proof's caller may see everyone's org facts (ADR-0038 §6):
+/// the same decision as the admin org-profile route (`UserOrgAdminRead`:
+/// administrator rights in effect, a person's credential).
+fn sees_org_facts<R: ResourceCtx>(proof: &forge_auth::Authorized<R>) -> bool {
+    forge_auth::authorize(
+        proof.principal(),
+        Action::UserOrgAdminRead,
+        &Resource::Instance,
+    )
+    .is_ok()
 }
 
 /// Whether the proof's caller could add or remove bindings (a hint).
@@ -501,7 +536,13 @@ fn can_manage<R: ResourceCtx>(proof: &forge_auth::Authorized<R>) -> bool {
 pub async fn list_project(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let w = request.into_write();
     let target = BindingTarget::Project(*w.proof.id());
-    let built = listed(&state, target, can_manage(&w.proof)).await;
+    let built = listed(
+        &state,
+        target,
+        can_manage(&w.proof),
+        sees_org_facts(&w.proof),
+    )
+    .await;
     respond(&w.ctx, StatusCode::OK, built)
 }
 
@@ -509,7 +550,13 @@ pub async fn list_project(state: AppState, request: Dispatched<ProjectCtx>) -> R
 pub async fn list_group(state: AppState, request: Dispatched<GroupCtx>) -> Response {
     let w = request.into_write();
     let target = BindingTarget::Group(*w.proof.id());
-    let built = listed(&state, target, can_manage(&w.proof)).await;
+    let built = listed(
+        &state,
+        target,
+        can_manage(&w.proof),
+        sees_org_facts(&w.proof),
+    )
+    .await;
     respond(&w.ctx, StatusCode::OK, built)
 }
 

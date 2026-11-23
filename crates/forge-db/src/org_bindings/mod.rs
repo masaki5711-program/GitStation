@@ -14,7 +14,8 @@
 //!   `decide` (forge-hosting: `OrgBindingManage`, the Owner).
 //! - **Reads** (read pool): [`list`] (the bindings with their unit's names),
 //!   [`members`] (the people a binding gives a role to now: the members
-//!   screen's 「組織から」 rows), [`units`] (the master's units for the
+//!   screen's 「組織から」 rows, as [`MemberDisclosure`] allows; on the
+//!   write pool), [`units`] (the master's units for the
 //!   picker).
 //! - [`publish_ages`]: `forge serve` / `forge worker` copy the configured
 //!   `org.*_age_hours` into `forge.org_access_policy`, which the SQL
@@ -348,42 +349,90 @@ type MemberSql = (
     Option<String>,
 );
 
+/// How much of the people a binding reaches a reader may see (ADR-0038
+/// §6: rank and concurrent units are the person's and the
+/// administrators').
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberDisclosure {
+    /// Administrators: every match, the highest role.
+    Full,
+    /// Everyone else (the Owner included): only the matches through the
+    /// person's primary unit's chain of bindings without `min_rank`, and
+    /// the highest role among those. Varying `min_rank` or binding a
+    /// concurrent unit then tells the reader nothing; the primary unit is
+    /// already shown to every signed-in user (§6, step A).
+    PrimaryUnit,
+}
+
+impl MemberDisclosure {
+    fn full(self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
 /// The people the bindings of `target` give a role to now, by user id (at
-/// most [`MAX_MEMBERS`]; `true` = there are more). The same function as
-/// the role loaders (`forge.org_binding_matches`), so the list and the
-/// roles agree; the people without a valid, recent snapshot are not
-/// listed. Bindings of the groups above are not listed here (as inherited
-/// members are not).
+/// most [`MAX_MEMBERS`]; `true` = there are more), as `disclosure` allows.
+/// The same function as the role loaders (`forge.org_binding_matches`), so
+/// the list and the roles agree; the people without a valid, recent
+/// snapshot are not listed. Bindings of the groups above are not listed
+/// here (as inherited members are not).
+///
+/// The people are narrowed first to the snapshots holding a bound unit or
+/// one below it (the GIN probe on `org_units`; the primary unit only for
+/// [`MemberDisclosure::PrimaryUnit`]), so the matching runs for them only.
+/// It runs on the write pool: the read pool has no EXECUTE on the matching
+/// function (migration 20270101100000).
 pub async fn members(
     db: &Db,
     target: BindingTarget,
+    disclosure: MemberDisclosure,
 ) -> Result<(Vec<BoundMember>, bool), ForgeError> {
     const QUERY: &str = "org_bindings.members";
     let limit = i64::try_from(MAX_MEMBERS + 1).unwrap_or(i64::MAX);
     let rows: Vec<MemberSql> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "SELECT u.id, u.username, u.display_name, best.binding_role, b.id, b.org_code, \
+                "WITH RECURSIVE bound AS ( \
+                   SELECT DISTINCT b.plant_code, b.org_code, b.include_descendants \
+                   FROM forge.org_bindings b \
+                   WHERE b.target_kind = $1 AND b.target_id = $2 \
+                     AND ($4 OR b.min_rank IS NULL)), \
+                 reach (plant_code, code, depth, descend) AS ( \
+                   SELECT plant_code, org_code, 0, include_descendants FROM bound \
+                   UNION \
+                   SELECT m.plant_code, m.code, r.depth + 1, true FROM reach r \
+                   JOIN forge.org_units_master m \
+                     ON m.plant_code = r.plant_code AND m.parent_code = r.code \
+                   WHERE r.descend AND r.depth < 8), \
+                 codes AS (SELECT DISTINCT code FROM reach), \
+                 candidates AS ( \
+                   SELECT DISTINCT p.user_id FROM codes c \
+                   JOIN forge.user_org_profiles p ON p.org_units @> CASE WHEN $4 \
+                     THEN jsonb_build_array(jsonb_build_object('code', c.code)) \
+                     ELSE jsonb_build_array(jsonb_build_object('code', c.code, 'primary', true)) \
+                     END \
+                   WHERE p.invalid_since IS NULL) \
+                 SELECT u.id, u.username, u.display_name, best.binding_role, b.id, b.org_code, \
                  m.level, m.name_ja, m.name_en, m.name_id \
-                 FROM forge.users u \
-                 JOIN forge.user_org_profiles p ON p.user_id = u.id \
+                 FROM candidates cd JOIN forge.users u ON u.id = cd.user_id \
                  CROSS JOIN LATERAL (SELECT x.binding_id, x.binding_role \
                    FROM forge.org_binding_matches(u.id, $1, $2) x \
+                   JOIN forge.org_bindings xb ON xb.id = x.binding_id \
+                   WHERE $4 OR (x.via_primary AND xb.min_rank IS NULL) \
                    ORDER BY (x.binding_role = 'developer') DESC, x.binding_id LIMIT 1) best \
                  JOIN forge.org_bindings b ON b.id = best.binding_id \
                  LEFT JOIN forge.org_units_master m \
                    ON m.plant_code = b.plant_code AND m.code = b.org_code \
                  WHERE u.state = 'active' AND u.kind = 'human' \
-                   AND EXISTS (SELECT 1 FROM forge.org_bindings t \
-                     WHERE t.target_kind = $1 AND t.target_id = $2) \
                  ORDER BY u.id LIMIT $3",
             )
             .bind(target.kind())
             .bind(target.id())
             .bind(limit)
-            .fetch_all(db.pool().executor())
+            .bind(disclosure.full())
+            .fetch_all(db.write_pool())
             .await
-            .map_err(|e| read_query_error(QUERY, e))
+            .map_err(|e| query_error(QUERY, e))
         })
         .await?;
     let truncated = rows.len() > MAX_MEMBERS;
@@ -635,6 +684,22 @@ pub async fn create_decided<P>(
         let decided = decide(&facts)?;
         tx.step(|c| in_master(c, &new.plant_code, &new.org_code))
             .await?;
+        // The target is locked FOR SHARE only (as the member commands lock
+        // it), so two adds could both count 99: the count and the insert
+        // are serialized per target by a transaction advisory lock.
+        tx.step(|c| async move {
+            sqlx::query(
+                "SELECT pg_advisory_xact_lock(hashtextextended( \
+                 'org_bindings:' || $1 || ':' || $2::text, 0))",
+            )
+            .bind(target.kind())
+            .bind(target.id())
+            .execute(c)
+            .await
+            .map(drop)
+            .map_err(|e| query_error("org_bindings.cap_lock", e))
+        })
+        .await?;
         let count: i64 = tx
             .step(|c| async move {
                 sqlx::query_scalar(

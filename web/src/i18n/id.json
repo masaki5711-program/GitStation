@@ -463,6 +463,7 @@
     "explain": "Jadikan orang-orang dari departemen, seksi, atau tim sebagai Reporter atau Developer sekaligus. Mutasi di manajemen pengguna portal berlaku dalam sekitar 5 menit. Tambahkan Maintainer dan Owner secara manual sebagai anggota di atas.",
     "membersTitle": "Orang dari organisasi",
     "membersHint": "Orang-orang ini masuk melalui pengikatan organisasi. Mereka tidak bisa dikeluarkan di sini; ubah pengikatannya di bawah.",
+    "membersLimited": "Di sini hanya ditampilkan orang yang cocok lewat unit utamanya pada pengikatan tanpa peringkat minimum; peringkat dan unit rangkap hanya terlihat oleh administrator.",
     "noBindings": "Belum ada organisasi yang diikat.",
     "noMembers": "Belum ada yang cocok dengan pengikatan (organisasi seseorang dipastikan saat masuk lewat web).",
     "source": "Sumber",

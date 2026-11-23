@@ -7,7 +7,8 @@
 use forge_auth::{Action, Authorized, GroupCtx, LoadedGroup, ProjectCtx};
 use forge_core::{GroupId, ProjectId};
 use forge_db::org_bindings::{
-    self, BindingTarget, BoundMember, NewBinding, PickUnit, StoredBinding, TargetFacts,
+    self, BindingTarget, BoundMember, MemberDisclosure, NewBinding, PickUnit, StoredBinding,
+    TargetFacts,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -56,13 +57,14 @@ impl Hosting {
         org_bindings::list(&self.db, target).await
     }
 
-    /// The people the bindings of a group or project give a role to now
-    /// (`true`: more than listed).
+    /// The people the bindings of a group or project give a role to now,
+    /// as `disclosure` allows (`true`: more than listed).
     pub async fn org_binding_members(
         &self,
         target: BindingTarget,
+        disclosure: MemberDisclosure,
     ) -> Result<(Vec<BoundMember>, bool), ForgeError> {
-        org_bindings::members(&self.db, target).await
+        org_bindings::members(&self.db, target, disclosure).await
     }
 
     /// The master's units for the picker.

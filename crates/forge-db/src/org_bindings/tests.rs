@@ -599,16 +599,22 @@ async fn bindings_are_listed_audited_removed_and_their_people_shown() {
     );
     let team = person(&w.t, "team1", &[("TEAM-1", true)], None).await;
     let _other = person(&w.t, "dep2", &[("DEP-2", true)], None).await;
-    let (people, truncated) = members(&w.t.db, target).await.expect("members");
+    let (people, truncated) = members(&w.t.db, target, MemberDisclosure::Full)
+        .await
+        .expect("members");
     assert!(!truncated);
     assert_eq!(people.len(), 1, "{people:?}");
     assert_eq!(people[0].user_id, team);
     assert_eq!(people[0].role, Role::Reporter);
     assert_eq!(people[0].binding_id, stored.id);
     // The group has none.
-    let (none, _) = members(&w.t.db, BindingTarget::Group(w.g.group_id))
-        .await
-        .expect("members");
+    let (none, _) = members(
+        &w.t.db,
+        BindingTarget::Group(w.g.group_id),
+        MemberDisclosure::Full,
+    )
+    .await
+    .expect("members");
     assert!(none.is_empty());
 
     let audits =
@@ -715,4 +721,133 @@ fn the_field_rules_match_the_table() {
         ..ok
     })
     .is_ok());
+}
+
+/// ADR-0038 §6: rank and concurrent units are the person's and the
+/// administrators'. The list a non-administrator reads (the Owner who made
+/// the bindings included) holds only the matches through the primary
+/// unit's chain of bindings without `min_rank`: varying `min_rank` or
+/// binding a concurrent unit tells them nothing.
+#[tokio::test]
+async fn a_non_administrator_cannot_infer_rank_or_concurrent_units_from_the_list() {
+    let w = world().await;
+    let target = BindingTarget::Project(w.p.project_id);
+    let mgr = person(&w.t, "mgr", &[("TEAM-1", true)], Some(55)).await;
+    let staff = person(&w.t, "staff", &[("TEAM-1", true)], Some(15)).await;
+    let conc = person(&w.t, "conc", &[("DEP-2", true), ("SEC-1", false)], None).await;
+
+    // A rank-filtered binding: nobody is disclosed, whatever the threshold.
+    for threshold in [10, 50, 60] {
+        let mut ranked = new_binding("DEP-1", true, Role::Developer);
+        ranked.min_rank = Some(threshold);
+        let made = bind(&w.t, target, w.owner, &ranked).await;
+        let (seen, _) = members(&w.t.db, target, MemberDisclosure::PrimaryUnit)
+            .await
+            .expect("members");
+        assert!(seen.is_empty(), "min_rank {threshold}: {seen:?}");
+        let (full, _) = members(&w.t.db, target, MemberDisclosure::Full)
+            .await
+            .expect("members");
+        let expected: Vec<UserId> = [(mgr, 55), (staff, 15)]
+            .into_iter()
+            .filter(|(_, rank)| *rank >= threshold)
+            .map(|(who, _)| who)
+            .collect();
+        assert_eq!(full.iter().map(|m| m.user_id).collect::<Vec<_>>(), expected);
+        delete_decided(&w.t.db, &ctx(), target, made.id, w.owner, |_| Ok(()))
+            .await
+            .expect("delete");
+    }
+
+    // A rank filter next to a plain binding: the plain one is disclosed,
+    // with its own role — the manager and the staff member look alike.
+    let mut ranked = new_binding("DEP-1", true, Role::Developer);
+    ranked.min_rank = Some(50);
+    bind(&w.t, target, w.owner, &ranked).await;
+    let plain = bind(
+        &w.t,
+        target,
+        w.owner,
+        &new_binding("SEC-1", true, Role::Reporter),
+    )
+    .await;
+    let (seen, _) = members(&w.t.db, target, MemberDisclosure::PrimaryUnit)
+        .await
+        .expect("members");
+    let shown: Vec<(UserId, Role, i64)> = seen
+        .iter()
+        .map(|m| (m.user_id, m.role, m.binding_id))
+        .collect();
+    // conc reaches SEC-1 only through a concurrent unit: not listed.
+    assert_eq!(
+        shown,
+        [
+            (mgr, Role::Reporter, plain.id),
+            (staff, Role::Reporter, plain.id)
+        ]
+    );
+    // The administrators see every match and the highest role.
+    let (full, _) = members(&w.t.db, target, MemberDisclosure::Full)
+        .await
+        .expect("members");
+    let all: Vec<(UserId, Role)> = full.iter().map(|m| (m.user_id, m.role)).collect();
+    assert_eq!(
+        all,
+        [
+            (mgr, Role::Developer),
+            (staff, Role::Reporter),
+            (conc, Role::Reporter)
+        ]
+    );
+    // The roles themselves are unchanged by what the list discloses.
+    assert_eq!(
+        project_role(&w.t, w.p.project_id, mgr).await,
+        Some(Role::Developer)
+    );
+    assert_eq!(
+        project_role(&w.t, w.p.project_id, conc).await,
+        Some(Role::Reporter)
+    );
+
+    // The read pool cannot ask the matching function about anyone.
+    let err = sqlx::query("SELECT * FROM forge.org_binding_matches($1, 'project', $2)")
+        .bind(mgr.get())
+        .bind(w.p.project_id.get())
+        .execute(w.t.db.pool().executor())
+        .await
+        .expect_err("forge_ro has no EXECUTE");
+    assert!(err.to_string().contains("permission denied"), "{err}");
+    w.t.drop_now().await;
+}
+
+/// The cap holds under concurrent adds: the count and the insert are
+/// serialized per target.
+#[tokio::test]
+async fn concurrent_adds_never_exceed_the_cap() {
+    let w = world().await;
+    let target = BindingTarget::Group(w.g.group_id);
+    for rank in 0..i32::try_from(MAX_BINDINGS - 1).expect("cap") {
+        let mut b = new_binding("DEP-1", false, Role::Reporter);
+        b.min_rank = Some(rank);
+        bind(&w.t, target, w.owner, &b).await;
+    }
+    let add = |rank: i32| {
+        let db = w.t.db.clone();
+        let owner = w.owner;
+        async move {
+            let mut b = new_binding("DEP-1", false, Role::Reporter);
+            b.min_rank = Some(rank);
+            create_decided(&db, &ctx(), target, owner, &b, |_| Ok(())).await
+        }
+    };
+    let (a, b) = tokio::join!(add(900), add(901));
+    let results = [a, b];
+    let made = results.iter().filter(|r| r.is_ok()).count();
+    assert_eq!(made, 1, "{results:?}");
+    for err in results.iter().filter_map(|r| r.as_ref().err()) {
+        assert_reason(err, ErrorCode::OrgBindingInvalid, "too_many");
+    }
+    let stored = list(&w.t.db, target).await.expect("list");
+    assert_eq!(i64::try_from(stored.len()).expect("len"), MAX_BINDINGS);
+    w.t.drop_now().await;
 }

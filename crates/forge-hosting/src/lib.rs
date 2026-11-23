@@ -65,8 +65,9 @@ pub use forge_db::groups::{CreatedGroup, MemberChange, Updated};
 pub use forge_db::members::{MemberRow, MAX_PAGE as MAX_MEMBER_PAGE};
 /// ADR-0038 §2: org bindings.
 pub use forge_db::org_bindings::{
-    BindingTarget, BoundMember, Membership as OrgMembership, NewBinding, PickUnit, StoredBinding,
-    UnitName, MAX_UNITS as MAX_ORG_UNITS,
+    BindingTarget, BoundMember, MemberDisclosure as OrgMemberDisclosure,
+    Membership as OrgMembership, NewBinding, PickUnit, StoredBinding, UnitName,
+    MAX_UNITS as MAX_ORG_UNITS,
 };
 pub use forge_db::org_master::{LocalizedName, UnitLevel};
 pub use forge_db::projects::{CreatedProject, Deletion, VisibilityOutcome};

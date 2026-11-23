@@ -7856,6 +7856,10 @@
             },
             "type": "array"
           },
+          "members_limited": {
+            "description": "`true` unless the caller has administrator rights: `members` then\nlists only the people reached through their primary unit by\nbindings without `min_rank`, with the highest role among those\n(rank and concurrent units are the person's and the\nadministrators', ADR-0038 §6). The roles themselves are unchanged.",
+            "type": "boolean"
+          },
           "members_truncated": {
             "description": "More people than listed (200).",
             "type": "boolean"
@@ -7868,6 +7872,7 @@
           "bindings",
           "members",
           "members_truncated",
+          "members_limited",
           "viewer"
         ],
         "type": "object"

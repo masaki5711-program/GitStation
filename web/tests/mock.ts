@@ -37,6 +37,7 @@ export const NO_ORG_BINDINGS = {
   bindings: [],
   members: [],
   members_truncated: false,
+  members_limited: true,
   viewer: { can_manage: false },
 };
 

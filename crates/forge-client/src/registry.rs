@@ -360,7 +360,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn member org-bindings --project 7 --json", "gstn member org-bindings --group 3"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/org-bindings", "GET /api/v1/groups/{id}/org-bindings"],
-        output: r#"{"type":"object","required":["bindings","members","members_truncated","viewer"],"properties":{"bindings":{"type":"array","items":{"type":"object","required":["id","plant_code","org_code","include_descendants","membership","min_rank","role","reason","created_by","created_at","unit"]}},"members":{"type":"array","items":{"type":"object","required":["user_id","username","display_name","role","binding_id","org_code","unit"]}},"members_truncated":{"type":"boolean"},"viewer":{"type":"object","required":["can_manage"]}}}"#,
+        output: r#"{"type":"object","required":["bindings","members","members_truncated","members_limited","viewer"],"properties":{"bindings":{"type":"array","items":{"type":"object","required":["id","plant_code","org_code","include_descendants","membership","min_rank","role","reason","created_by","created_at","unit"]}},"members":{"type":"array","items":{"type":"object","required":["user_id","username","display_name","role","binding_id","org_code","unit"]}},"members_truncated":{"type":"boolean"},"members_limited":{"type":"boolean"},"viewer":{"type":"object","required":["can_manage"]}}}"#,
     },
     CommandSpec {
         name: "member org-units",
