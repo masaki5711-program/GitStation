@@ -5,18 +5,20 @@
 //! - The search itself is decided on the instance by the registry (any
 //!   active signed-in user, `read_api`, an agent too; never acting for a
 //!   person, never CI): an anonymous or disabled caller loads nothing.
-//! - **Every hit is decided by `authorize()`**, never by SQL: the reader
-//!   returns ranked candidates whatever the caller may see, the projects'
-//!   access facts are read in one statement for the page, and a hit shows
-//!   only when `prove(ProjectRead)` allows its project — and, for a merge
-//!   request, `prove(MergeRequestList)` on that project too (the merge
-//!   request read rule: Reporter). Nothing of a hit (title, path,
-//!   snippet) is built before that. The decision is made once per project
-//!   per request.
-//! - **No count**: the answer never says how many matched (that would
-//!   count what the caller cannot read). A page scans at most
-//!   [`SCAN_BUDGET`] candidates; when the budget ends first it is short,
-//!   with `has_more: true`.
+//! - **Decided before the read** (review of K3, HIGH): every project is
+//!   decided with `authorize()` first, on the project list's access facts
+//!   (`ProjectPageLoader`): `ProjectRead` for a project's entry, also
+//!   `MergeRequestList` (Reporter) for its merge requests. The search
+//!   statement then ranks, pages and skips **only** rows of those
+//!   projects, so a short page, `has_more` or a `project=` filter can never
+//!   reveal how many hidden rows match (a private project's id answers
+//!   exactly like a missing one). Past [`MAX_PROJECT_SCAN`] projects the
+//!   search is refused (`FG-KNOW-0001 reason=project_scan_limit`).
+//! - **And again per hit**: a hit shows only when `prove(ProjectRead)`
+//!   (and `MergeRequestList`) allow it on the same facts; nothing of a hit
+//!   (title, path, snippet) is built before that.
+//! - **No count**: the answer never says how many matched. A page scans
+//!   at most [`SCAN_BUDGET`] candidates.
 //! - **An AI audience** (`is_agent_audience`, plan 06 D-5) gets no
 //!   `confidential` row: they are left out by the read itself, so neither
 //!   shown nor counted.
@@ -417,6 +419,78 @@ pub(crate) fn walk(
     Ok(out)
 }
 
+/// Projects scanned per page for the readable sets (the list's scan size).
+const PROJECT_PAGE: u32 = 1_000;
+/// The most projects one search scans for its readable sets; past it the
+/// search is refused (`FG-KNOW-0001 reason=project_scan_limit`) rather than
+/// answered from an incomplete set (ADR-0040: an SQL superset then).
+const MAX_PROJECT_SCAN: usize = 20_000;
+
+/// What the caller may read, decided before any search row is read.
+#[derive(Debug, Default)]
+pub(crate) struct Readable {
+    /// Projects whose own entry may show (`ProjectRead`).
+    pub(crate) projects: Vec<ProjectId>,
+    /// Projects whose merge requests may show (also `MergeRequestList`).
+    pub(crate) merge_requests: Vec<ProjectId>,
+    /// The allowed projects' records (paths for the hits).
+    pub(crate) records: Vec<ProjectRecord>,
+}
+
+/// The readable sets of `viewer`: every project in id order through the
+/// project list's loader (the same access facts), each decided with
+/// `authorize()`; only `only` when the request names a project (a project
+/// the caller cannot read then gives the same empty sets as one that does
+/// not exist).
+async fn readable(
+    state: &AppState,
+    lists: &Lists,
+    principal: &Principal,
+    viewer: UserId,
+    only: Option<ProjectId>,
+) -> Result<Readable, ForgeError> {
+    let mut out = Readable::default();
+    let mut after: Option<ProjectId> = None;
+    let mut scanned = 0usize;
+    let page_rows = usize::try_from(PROJECT_PAGE).unwrap_or(usize::MAX);
+    loop {
+        let rows = bounded(
+            state,
+            "search_projects",
+            lists
+                .projects
+                .project_page(after, viewer, None, PROJECT_PAGE),
+        )
+        .await?;
+        scanned += rows.len();
+        let full = rows.len() >= page_rows;
+        after = rows.last().map(|r| r.id);
+        for record in rows {
+            if only.is_some_and(|p| p != record.id) {
+                continue;
+            }
+            let allow = decide(principal, &record)?;
+            if !allow.project {
+                continue;
+            }
+            out.projects.push(record.id);
+            if allow.merge_requests {
+                out.merge_requests.push(record.id);
+            }
+            out.records.push(record);
+        }
+        if !full {
+            return Ok(out);
+        }
+        if scanned >= MAX_PROJECT_SCAN {
+            return Err(ForgeError::new(ErrorCode::SearchUnavailable)
+                .with_context("operation", "search_projects")
+                .with_context("reason", "project_scan_limit")
+                .with_context("limit", MAX_PROJECT_SCAN));
+        }
+    }
+}
+
 async fn page(
     state: &AppState,
     raw_query: Option<&str>,
@@ -437,42 +511,42 @@ async fn page(
     let purpose = purpose(viewer, &request, agent);
     let offset = open_cursor(lists, &purpose, request.cursor.as_deref())?;
     let _slot = lists.acquire_slot(viewer)?;
+    let readable = readable(state, lists, principal, viewer, request.project)
+        .await
+        .map_err(|e| with_query(e, &request))?;
     let filter = CandidateFilter {
         kinds: request.kinds.clone(), // clone: the filter owns its kinds
         project: request.project,
         exclude_confidential: agent,
+        readable_projects: readable.projects,
+        readable_merge_requests: readable.merge_requests,
     };
-    let tsquery = request.query.tsquery_literal();
-    let candidates = bounded(
-        state,
-        "search_candidates",
-        reader.candidates(&tsquery, &filter, offset, SCAN_BUDGET + 1),
-    )
-    .await
-    .map_err(|e| with_query(e, &request))?;
-    let mut ids: Vec<ProjectId> = candidates.iter().map(|c| c.project).collect();
-    ids.sort_unstable();
-    ids.dedup();
-    let records = if ids.is_empty() {
+    let candidates = if filter.readable_projects.is_empty() {
+        // Nothing the caller may read: no read at all.
         Vec::new()
     } else {
+        let tsquery = request.query.tsquery_literal();
         bounded(
             state,
-            "search_projects",
-            reader.project_records(&ids, viewer),
+            "search_candidates",
+            reader.candidates(&tsquery, &filter, offset, SCAN_BUDGET + 1),
         )
         .await
         .map_err(|e| with_query(e, &request))?
     };
     let budget = usize::try_from(SCAN_BUDGET).unwrap_or(usize::MAX);
-    let decided = walk(
-        principal,
-        &candidates,
-        &records,
-        &request.query,
-        request.limit,
-        budget,
-    )?;
+    // Snippets cost CPU (normalizing stored text): off the async workers.
+    let (who, query, limit) = (principal.clone(), request.query.clone(), request.limit);
+    let records = readable.records;
+    let (decided, candidates) = tokio::task::spawn_blocking(move || {
+        walk(&who, &candidates, &records, &query, limit, budget).map(|d| (d, candidates))
+    })
+    .await
+    .map_err(|e| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "search_walk_failed")
+            .with_context("panicked", e.is_panic())
+    })??;
     let consumed = u32::try_from(decided.consumed).unwrap_or(u32::MAX);
     let next = offset.saturating_add(consumed);
     let has_more = candidates.len() > decided.consumed && next <= MAX_POSITION;

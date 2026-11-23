@@ -53,3 +53,5 @@
 - 分かち書きの規則（`forge-core::search_text`: NFKC、小文字、和文の 2-gram）を変えたら、古い行と問い合わせが合わなくなる。リリースの手順に `forge search reindex` を入れる。
 - バックアップには索引を入れなくてよい（復元の後に作り直す）。
 - 問い合わせの文字列はログ・監査に残さない（個人の調べ物・機密の語を含みうる）。
+- `FG-KNOW-0001 reason=project_scan_limit`: 検索は読めるプロジェクトを先に決める（ADR-0040 Amendment K3-R）。2 万プロジェクトを超えたら検索を断る。回避はせず、SQL の上位集合への移行（ADR の改訂）を起票する。
+- `subtree_too_large` の残りのプロジェクトは `search_index_state` に `failed`（`FG-KNOW-0002`）で残る。`forge search reindex` で `ok` に戻る。

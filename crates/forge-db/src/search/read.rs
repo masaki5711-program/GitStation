@@ -23,16 +23,29 @@ pub const MAX_OFFSET: u32 = 10_000;
 /// together).
 pub(crate) const SET_TIMEOUT_SQL: &str = "SET LOCAL statement_timeout = 2000";
 
-const CANDIDATES_SQL: &str = "SELECT e.source_kind, e.project_id, e.source_key, e.title, \
-       e.body_text, e.classification, e.truncated, \
+/// The most matches ranked per query: the newest [`MAX_RANKED`] matching
+/// rows of the caller's readable projects are ranked, older ones are not
+/// (ADR-0040: bounded work per query; a more specific query finds them).
+pub const MAX_RANKED: u32 = 5_000;
+/// The body characters a candidate carries (the snippet's source).
+pub const SNIPPET_SOURCE_CHARS: u32 = 16_384;
+
+pub(crate) const CANDIDATES_SQL: &str = "WITH matched AS ( \
+       SELECT e.id, e.tokens, e.source_updated_at FROM forge.search_entries e \
+       WHERE e.tokens @@ $1::tsquery \
+         AND ((e.source_kind = 'project' AND e.project_id = ANY ($7::bigint[])) \
+           OR (e.source_kind = 'merge_request' AND e.project_id = ANY ($8::bigint[]))) \
+         AND (cardinality($2::text[]) = 0 OR e.source_kind = ANY ($2::text[])) \
+         AND ($3::bigint IS NULL OR e.project_id = $3) \
+         AND (NOT $4 OR e.classification <> 'confidential') \
+       ORDER BY e.source_updated_at DESC, e.id DESC \
+       LIMIT 5000) \
+     SELECT e.source_kind, e.project_id, e.source_key, e.title, \
+       left(e.body_text, 16384) AS body_text, e.classification, e.truncated, \
        to_char(e.source_updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
          AS source_updated_at \
-     FROM forge.search_entries e \
-     WHERE e.tokens @@ $1::tsquery \
-       AND (cardinality($2::text[]) = 0 OR e.source_kind = ANY ($2::text[])) \
-       AND ($3::bigint IS NULL OR e.project_id = $3) \
-       AND (NOT $4 OR e.classification <> 'confidential') \
-     ORDER BY ts_rank_cd(e.tokens, $1::tsquery) DESC, e.source_updated_at DESC, e.id DESC \
+     FROM matched m JOIN forge.search_entries e ON e.id = m.id \
+     ORDER BY ts_rank_cd(m.tokens, $1::tsquery) DESC, m.source_updated_at DESC, m.id DESC \
      OFFSET $5 LIMIT $6";
 
 #[derive(sqlx::FromRow)]
@@ -45,6 +58,10 @@ struct Row {
     classification: String,
     truncated: bool,
     source_updated_at: String,
+}
+
+fn ids(projects: &[ProjectId]) -> Vec<i64> {
+    projects.iter().map(|p| p.get()).collect()
 }
 
 /// A stored kind this build does not know (K4's `document` written by a
@@ -103,6 +120,8 @@ pub async fn candidates(
                 .bind(filter.exclude_confidential)
                 .bind(i64::from(offset))
                 .bind(i64::from(max_rows))
+                .bind(ids(&filter.readable_projects))
+                .bind(ids(&filter.readable_merge_requests))
                 .fetch_all(&mut *tx)
                 .await
                 .map_err(|e| read_query_error("search.candidates", e))?;

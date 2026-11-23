@@ -46,8 +46,14 @@ CREATE TABLE forge.search_entries (
     indexed_at         timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT search_entries_source UNIQUE (source_kind, project_id, source_key)
 );
--- The search itself (`tokens @@ $1::tsquery`).
-CREATE INDEX search_entries_tokens ON forge.search_entries USING gin (tokens);
+-- The search itself (`tokens @@ $1::tsquery`). fastupdate stays on (an
+-- entry adds up to 50 000 keys; the pending list batches them), with a
+-- small pending list (512 kB instead of the 4 MB default) so a search never
+-- scans much unmerged data and the flush a writer pays stays short;
+-- autovacuum merges it. Unchanged entries are not rewritten (forge-db
+-- search::upsert), which keeps the list short too.
+CREATE INDEX search_entries_tokens ON forge.search_entries USING gin (tokens)
+    WITH (fastupdate = on, gin_pending_list_limit = 512);
 -- A project's rows (delete on purge, rebuild of one project).
 CREATE INDEX search_entries_project ON forge.search_entries (project_id);
 

@@ -80,7 +80,7 @@ fn one_character_cjk_piece_is_a_prefix() {
         &[
             QueryTerm {
                 text: "a".into(),
-                prefix: true
+                prefix: false
             },
             QueryTerm {
                 text: "設".into(),
@@ -221,4 +221,36 @@ proptest! {
         let word = &words[pick % words.len()];
         prop_assert!(matches(&text, &word.to_uppercase()));
     }
+}
+
+#[test]
+fn at_most_one_prefix_term_and_never_a_one_letter_prefix() {
+    let prefixes = |raw: &str| -> Vec<String> {
+        SearchQuery::parse(raw)
+            .unwrap()
+            .terms()
+            .iter()
+            .filter(|t| t.prefix)
+            .map(|t| t.text.clone())
+            .collect()
+    };
+    assert_eq!(prefixes("設 備 abc"), vec!["abc"]);
+    assert_eq!(prefixes("設 備"), vec!["備"]);
+    assert_eq!(prefixes("abc x"), Vec::<String>::new());
+    assert_eq!(prefixes("ab cd ef"), vec!["ef"]);
+    assert!(SearchQuery::parse("a b c d")
+        .unwrap()
+        .terms()
+        .iter()
+        .all(|t| !t.prefix));
+}
+
+#[test]
+fn snippet_needles_are_deduplicated_and_capped() {
+    let q = SearchQuery::parse("aa bb aa cc dd ee ff gg hh ii jj").unwrap();
+    assert_eq!(q.needles.len(), MAX_NEEDLES);
+    let long = "x".repeat(SNIPPET_SCAN_CHARS * 2);
+    let s = snippet(&long, &q, 10);
+    assert!(s.highlights.is_empty());
+    assert!(s.cut_after);
 }

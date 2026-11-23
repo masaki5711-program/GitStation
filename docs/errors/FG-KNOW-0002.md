@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-Plan 20 K2 (ADR-0040): one entry, or one project's entries, of the search index could not be written as asked, or not completely: `reason=truncated` (an entry's body is over 256 KB or its vector over 50 000 terms: the rest is not searchable, the row says `truncated`), `reason=subtree_too_large` (a group move or user rename touched more projects than one subscriber step refreshes: the rest keep their old path in the index until the rebuild), `reason=write_failed` (the rebuild could not write one project's entries; the cause is chained). The index is derived: nothing a person wrote is lost.
+Plan 20 K2 (ADR-0040): one entry, or one project's entries, of the search index could not be written as asked, or not completely: `reason=truncated` (an entry's body is over 256 KB or its vector over 50 000 terms: the rest is not searchable, the row says `truncated`), `reason=subtree_too_large` (a group move or user rename touched more projects than one subscriber step refreshes: the rest keep their old path in the index until the rebuild and are recorded `failed` with this code in forge.search_index_state), `reason=write_failed` (the rebuild could not write one project's entries; the cause is chained). The index is derived: nothing a person wrote is lost.
 
 ## 調べ方 (diagnosis)
 

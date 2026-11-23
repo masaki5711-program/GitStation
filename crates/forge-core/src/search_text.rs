@@ -13,8 +13,9 @@
 //!    and, when indexing, also its last character alone (so a 1-character
 //!    CJK piece of a query, searched as a prefix, finds every position); a
 //!    word run is one term (cut to [`MAX_WORD_CHARS`] characters).
-//! 4. **Query**: every term must match (`&`); the last word, and a
-//!    1-character CJK piece, match as a prefix (`:*`).
+//! 4. **Query**: every term must match (`&`); at most one term is a
+//!    prefix (`:*`): the last word when it has 2+ characters, else the
+//!    last 1-character CJK piece.
 //!
 //! The text form of the vector and the query is built here (quoted
 //! lexemes, weights A / B / C, positions), so the database never parses
@@ -321,14 +322,17 @@ impl SearchQuery {
         if chars < MIN_QUERY_CHARS {
             return Err(QueryRejection::TooShort);
         }
-        let last_word = pieces.iter().rposition(|p| !p.cjk);
+        // At most one prefix term per query (a prefix scans many GIN keys):
+        // the last word when it has 2+ characters, otherwise the last
+        // one-character CJK piece. Every other term is exact.
+        let prefix_at = pieces
+            .iter()
+            .rposition(|p| !p.cjk)
+            .filter(|i| pieces.get(*i).is_some_and(|p| p.chars.len() >= 2))
+            .or_else(|| pieces.iter().rposition(|p| p.cjk && p.chars.len() == 1));
         let mut terms: Vec<QueryTerm> = Vec::new();
         for (i, piece) in pieces.iter().enumerate() {
-            let prefix_piece = if piece.cjk {
-                piece.chars.len() == 1
-            } else {
-                Some(i) == last_word
-            };
+            let prefix_piece = Some(i) == prefix_at;
             for text in piece_terms(piece, false) {
                 let term = QueryTerm {
                     text,
@@ -339,16 +343,17 @@ impl SearchQuery {
                 }
             }
         }
-        let needles = pieces
-            .iter()
-            .map(|p| {
-                if p.cjk {
-                    p.chars.iter().collect()
-                } else {
-                    p.chars.iter().take(MAX_WORD_CHARS).collect()
-                }
-            })
-            .collect();
+        let mut needles: Vec<String> = Vec::new();
+        for p in &pieces {
+            let needle: String = if p.cjk {
+                p.chars.iter().collect()
+            } else {
+                p.chars.iter().take(MAX_WORD_CHARS).collect()
+            };
+            if !needles.contains(&needle) && needles.len() < MAX_NEEDLES {
+                needles.push(needle);
+            }
+        }
         Ok(Self { terms, needles })
     }
 
@@ -399,8 +404,11 @@ pub struct Snippet {
     pub cut_after: bool,
 }
 
-/// The most text a snippet scans for matches (a body is at most 256 KB).
-const SNIPPET_SCAN_CHARS: usize = 300_000;
+/// The most text a snippet scans for matches (the reader hands over at
+/// most this much of a body; the CPU per hit stays bounded).
+pub const SNIPPET_SCAN_CHARS: usize = 16_384;
+/// The most distinct query pieces a snippet looks for.
+pub const MAX_NEEDLES: usize = 8;
 
 /// The snippet of `text` for `query`: at most `max_chars` characters
 /// around the first match (the start of the text without one). Pure.

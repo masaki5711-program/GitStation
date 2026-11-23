@@ -30,7 +30,10 @@ use crate::{query_error, Db};
 
 mod read;
 
-pub use read::{candidates, MAX_CANDIDATES, MAX_OFFSET, SEARCH_STATEMENT_TIMEOUT};
+pub use read::{
+    candidates, MAX_CANDIDATES, MAX_OFFSET, MAX_RANKED, SEARCH_STATEMENT_TIMEOUT,
+    SNIPPET_SOURCE_CHARS,
+};
 
 /// The subscriber's name (`forge.event_subscribers`).
 pub const SEARCH_INDEX_SUBSCRIBER: &str = "search-index";
@@ -112,7 +115,9 @@ fn log_item(
     );
 }
 
-/// Upsert one entry (title A, ids B, body C).
+/// Upsert one entry (title A, ids B, body C). An entry whose text, vector,
+/// classification and cut are unchanged is not rewritten (no dead tuple,
+/// no GIN pending-list entry: events like a draft toggle repeat often).
 async fn upsert(
     conn: &mut PgConnection,
     origin: &Origin,
@@ -149,7 +154,12 @@ async fn upsert(
          ON CONFLICT (source_kind, project_id, source_key) DO UPDATE SET \
            title = EXCLUDED.title, body_text = EXCLUDED.body_text, tokens = EXCLUDED.tokens, \
            classification = EXCLUDED.classification, truncated = EXCLUDED.truncated, \
-           source_updated_at = EXCLUDED.source_updated_at, indexed_at = now()",
+           source_updated_at = EXCLUDED.source_updated_at, indexed_at = now() \
+         WHERE (forge.search_entries.title, forge.search_entries.body_text, \
+                forge.search_entries.tokens, forge.search_entries.classification, \
+                forge.search_entries.truncated) \
+           IS DISTINCT FROM (EXCLUDED.title, EXCLUDED.body_text, EXCLUDED.tokens, \
+                EXCLUDED.classification, EXCLUDED.truncated)",
     )
     .bind(entry.kind.as_str())
     .bind(entry.project.get())
@@ -277,32 +287,65 @@ async fn refresh_subtree(
     kind: &'static str,
     owner: i64,
 ) -> Result<(), ForgeError> {
-    let limit = i64::try_from(MAX_SUBTREE_PROJECTS).unwrap_or(i64::MAX) + 1;
-    let projects: Vec<i64> = sqlx::query_scalar(
-        "WITH RECURSIVE tree (id, kind, owner_id) AS ( \
-           SELECT n.id, n.kind, n.owner_id FROM forge.namespaces n \
-           WHERE n.kind = $1 AND n.owner_id = $2 \
-           UNION ALL \
-           SELECT c.id, c.kind, c.owner_id FROM forge.namespaces c JOIN tree t ON c.parent_id = t.id) \
-         SELECT owner_id FROM tree WHERE kind = 'project' ORDER BY owner_id LIMIT $3",
-    )
-    .bind(kind)
-    .bind(owner)
-    .bind(limit)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(|e| query_error("search.subtree", e))?;
-    if projects.len() > MAX_SUBTREE_PROJECTS {
+    refresh_subtree_capped(conn, origin, kind, owner, MAX_SUBTREE_PROJECTS).await
+}
+
+/// The projects below a namespace, in id order (`$3` = how many to skip,
+/// `$4` = how many at most).
+const SUBTREE_SQL: &str = "WITH RECURSIVE tree (id, kind, owner_id) AS ( \
+       SELECT n.id, n.kind, n.owner_id FROM forge.namespaces n \
+       WHERE n.kind = $1 AND n.owner_id = $2 \
+       UNION ALL \
+       SELECT c.id, c.kind, c.owner_id FROM forge.namespaces c JOIN tree t ON c.parent_id = t.id) \
+     SELECT owner_id FROM tree WHERE kind = 'project' ORDER BY owner_id OFFSET $3 LIMIT $4";
+
+/// [`refresh_subtree`] with the cap given (tests lower it). Past the cap,
+/// the projects left with their old path are recorded `failed`
+/// (`FG-KNOW-0002`) in search_index_state, so the staleness is visible and
+/// `forge search reindex` repairs it (runbook search-index).
+pub(crate) async fn refresh_subtree_capped(
+    conn: &mut PgConnection,
+    origin: &Origin,
+    kind: &'static str,
+    owner: i64,
+    cap: usize,
+) -> Result<(), ForgeError> {
+    let cap_i64 = i64::try_from(cap).unwrap_or(i64::MAX);
+    let projects: Vec<i64> = sqlx::query_scalar(SUBTREE_SQL)
+        .bind(kind)
+        .bind(owner)
+        .bind(0i64)
+        .bind(cap_i64.saturating_add(1))
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error("search.subtree", e))?;
+    if projects.len() > cap {
         log_item(
             origin,
             "subtree_too_large",
             SourceKind::Project,
             ProjectId::new(owner),
             "",
-            MAX_SUBTREE_PROJECTS,
+            cap,
         );
+        sqlx::query(&format!(
+            "INSERT INTO forge.search_index_state (project_id, state, last_error_code, attempts, updated_at) \
+             SELECT s.owner_id, 'failed', $5, 1, now() FROM ({}) AS s (owner_id) \
+             ON CONFLICT (project_id) DO UPDATE SET state = 'failed', \
+               last_error_code = EXCLUDED.last_error_code, \
+               attempts = forge.search_index_state.attempts + 1, updated_at = now()",
+            SUBTREE_SQL
+        ))
+        .bind(kind)
+        .bind(owner)
+        .bind(cap_i64)
+        .bind(i64::MAX)
+        .bind(ErrorCode::SearchIndexItemFailed.id())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error("search.subtree_stale", e))?;
     }
-    for id in projects.into_iter().take(MAX_SUBTREE_PROJECTS) {
+    for id in projects.into_iter().take(cap) {
         refresh_project(conn, origin, ProjectId::new(id)).await?;
     }
     Ok(())
@@ -438,22 +481,26 @@ pub struct ReindexReport {
     pub orphans_removed: u64,
 }
 
-/// Rebuild one project's rows in one transaction: delete them, write the
-/// project's entry and every merge request's, record the state.
+/// The bounds of one project's rebuild transaction (runbook search-index):
+/// a statement may run 30 s, a lock is waited for 5 s.
+const REINDEX_TIMEOUTS_SQL: &str =
+    "SET LOCAL statement_timeout = 30000; SET LOCAL lock_timeout = 5000";
+/// Orphan rows removed per statement.
+const ORPHAN_BATCH: i64 = 1_000;
+
+/// Rebuild one project's rows in one transaction: write the project's
+/// entry and every merge request's (unchanged rows are not rewritten),
+/// remove the rows of merge requests that are gone, record the state.
 async fn reindex_one(db: &Db, origin: &Origin, project: ProjectId) -> Result<u64, ForgeError> {
     let mut tx = db
         .write_pool()
         .begin()
         .await
         .map_err(|e| query_error("search.reindex_begin", e))?;
-    sqlx::query(
-        "DELETE FROM forge.search_entries WHERE project_id = $1 \
-         AND source_kind IN ('project', 'merge_request')",
-    )
-    .bind(project.get())
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| query_error("search.reindex_clear", e))?;
+    sqlx::raw_sql(REINDEX_TIMEOUTS_SQL)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| query_error("search.reindex_timeouts", e))?;
     refresh_project(&mut tx, origin, project).await?;
     let iids: Vec<i64> = sqlx::query_scalar(
         "SELECT iid FROM forge.merge_requests WHERE project_id = $1 ORDER BY iid",
@@ -465,6 +512,16 @@ async fn reindex_one(db: &Db, origin: &Origin, project: ProjectId) -> Result<u64
     for iid in &iids {
         refresh_merge_request(&mut tx, origin, project, *iid).await?;
     }
+    let keys: Vec<String> = iids.iter().map(i64::to_string).collect();
+    sqlx::query(
+        "DELETE FROM forge.search_entries WHERE project_id = $1 \
+         AND source_kind = 'merge_request' AND NOT (source_key = ANY ($2::text[]))",
+    )
+    .bind(project.get())
+    .bind(&keys)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| query_error("search.reindex_clear", e))?;
     sqlx::query(
         "INSERT INTO forge.search_index_state (project_id, state, last_error_code, attempts, updated_at) \
          SELECT $1, 'ok', NULL, 0, now() WHERE EXISTS (SELECT 1 FROM forge.projects WHERE id = $1) \
@@ -515,14 +572,24 @@ pub async fn reindex(
     let projects: Vec<ProjectId> = match project {
         Some(p) => vec![p],
         None => {
-            let removed = sqlx::query(
-                "DELETE FROM forge.search_entries e WHERE NOT EXISTS \
-                 (SELECT 1 FROM forge.projects p WHERE p.id = e.project_id)",
-            )
-            .execute(db.write_pool())
-            .await
-            .map_err(|e| query_error("search.reindex_orphans", e))?;
-            report.orphans_removed = removed.rows_affected();
+            // In batches: one statement never holds many row locks.
+            loop {
+                let removed = sqlx::query(
+                    "DELETE FROM forge.search_entries WHERE id IN ( \
+                       SELECT e.id FROM forge.search_entries e WHERE NOT EXISTS \
+                         (SELECT 1 FROM forge.projects p WHERE p.id = e.project_id) \
+                       LIMIT $1)",
+                )
+                .bind(ORPHAN_BATCH)
+                .execute(db.write_pool())
+                .await
+                .map_err(|e| query_error("search.reindex_orphans", e))?
+                .rows_affected();
+                report.orphans_removed += removed;
+                if removed < u64::try_from(ORPHAN_BATCH).unwrap_or(u64::MAX) {
+                    break;
+                }
+            }
             sqlx::query_scalar::<_, i64>("SELECT id FROM forge.projects ORDER BY id")
                 .fetch_all(db.write_pool())
                 .await
@@ -568,14 +635,6 @@ impl forge_core::search::SearchReader for Db {
     ) -> forge_core::namespace_resolver::LookupFuture<'a, Vec<forge_core::search::SearchCandidate>>
     {
         Box::pin(candidates(self, tsquery, filter, offset, max_rows))
-    }
-
-    fn project_records<'a>(
-        &'a self,
-        ids: &'a [ProjectId],
-        viewer: forge_core::UserId,
-    ) -> forge_core::namespace_resolver::LookupFuture<'a, Vec<forge_core::ProjectRecord>> {
-        Box::pin(crate::lists::project_records(self, ids, viewer))
     }
 }
 

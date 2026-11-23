@@ -249,18 +249,26 @@ struct Fake {
     fail: Option<ErrorCode>,
     hang: bool,
     calls: AtomicUsize,
+    pages: AtomicUsize,
     filters: Mutex<Vec<(CandidateFilter, u32)>>,
 }
 
 impl ProjectPageLoader for Fake {
+    /// Every scripted project, whatever the viewer may see (in id order).
     fn project_page<'a>(
         &'a self,
-        _: Option<ProjectId>,
+        after: Option<ProjectId>,
         _: UserId,
         _: Option<UserId>,
-        _: u32,
+        max_rows: u32,
     ) -> LookupFuture<'a, Vec<ProjectRecord>> {
-        Box::pin(async { Ok(Vec::new()) })
+        self.pages.fetch_add(1, Ordering::SeqCst);
+        let rows: Vec<ProjectRecord> = records()
+            .into_iter()
+            .filter(|r| after.is_none_or(|a| r.id > a))
+            .take(usize::try_from(max_rows).expect("fits"))
+            .collect();
+        Box::pin(async move { Ok(rows) })
     }
 }
 
@@ -292,6 +300,12 @@ impl SearchReader for Fake {
             .candidates
             .iter()
             .filter(|c| !(filter.exclude_confidential && c.classification == "confidential"))
+            // As the SQL: only the caller's readable sets, then the project.
+            .filter(|c| match c.kind {
+                SourceKind::Project => filter.readable_projects.contains(&c.project),
+                SourceKind::MergeRequest => filter.readable_merge_requests.contains(&c.project),
+            })
+            .filter(|c| filter.project.is_none_or(|p| p == c.project))
             .skip(usize::try_from(offset).expect("fits"))
             .take(usize::try_from(max_rows).expect("fits"))
             .cloned()
@@ -306,18 +320,6 @@ impl SearchReader for Fake {
                 None => Ok(rows),
             }
         })
-    }
-
-    fn project_records<'a>(
-        &'a self,
-        ids: &'a [ProjectId],
-        _: UserId,
-    ) -> LookupFuture<'a, Vec<ProjectRecord>> {
-        let found: Vec<ProjectRecord> = records()
-            .into_iter()
-            .filter(|r| ids.contains(&r.id))
-            .collect();
-        Box::pin(async move { Ok(found) })
     }
 }
 
@@ -417,7 +419,11 @@ async fn the_cursor_continues_after_the_consumed_candidates() {
         .iter()
         .map(|(_, o)| *o)
         .collect();
-    assert_eq!(offsets, vec![0, 3]);
+    assert_eq!(
+        offsets,
+        vec![0, 1],
+        "hidden rows are never read, so never skipped"
+    );
 }
 
 #[tokio::test]
@@ -499,4 +505,78 @@ async fn a_bad_query_is_refused_before_any_read() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error_code"], "FG-WEB-0006");
     assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+}
+
+// --- review of K3 (HIGH): hidden matches are not countable ------------------
+
+/// `n` merge requests in `project`, titled `mr <project>-<i>`.
+fn many(project: i64, n: usize) -> Vec<SearchCandidate> {
+    (1..=n)
+        .map(|i| {
+            candidate(
+                SourceKind::MergeRequest,
+                project,
+                &i.to_string(),
+                &format!("mr {project}-{i}"),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn hidden_only_matches_give_an_empty_last_page() {
+    let mut hidden = many(HIDDEN, 400);
+    hidden.extend(many(GUEST, 50));
+    hidden.extend(many(DELETED, 50));
+    hidden.extend(many(GONE, 50));
+    let fake = Arc::new(Fake {
+        candidates: hidden,
+        ..Fake::default()
+    });
+    let (status, body) = get(&fake, URI, Some(person())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"], serde_json::json!([]));
+    assert_eq!(body["has_more"], false, "nothing hints at hidden matches");
+    assert_eq!(body["next_cursor"], Value::Null);
+    // The read was narrowed to what the caller may read, before ranking.
+    let filters = fake.filters.lock().expect("lock");
+    let (filter, _) = &filters[0];
+    assert_eq!(filter.readable_projects, vec![ProjectId::new(READABLE)]);
+    assert_eq!(
+        filter.readable_merge_requests,
+        vec![ProjectId::new(READABLE)]
+    );
+}
+
+#[tokio::test]
+async fn hidden_matches_never_shorten_a_page() {
+    // 300 hidden matches rank before 5 readable ones.
+    let mut list = many(HIDDEN, 300);
+    list.extend(many(READABLE, 5));
+    let fake = Arc::new(Fake {
+        candidates: list,
+        ..Fake::default()
+    });
+    let uri = "/api/v1/search?q=%E8%A8%AD%E5%82%99&limit=5";
+    let (status, body) = get(&fake, uri, Some(person())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().expect("items").len(), 5);
+    assert_eq!(body["has_more"], false);
+}
+
+#[tokio::test]
+async fn private_project_filter_is_like_a_missing_one() {
+    let mut list = many(HIDDEN, 30);
+    list.extend(many(READABLE, 3));
+    let fake = Arc::new(Fake {
+        candidates: list,
+        ..Fake::default()
+    });
+    let hidden = format!("/api/v1/search?q=%E8%A8%AD%E5%82%99&limit=1&project={HIDDEN}");
+    let missing = "/api/v1/search?q=%E8%A8%AD%E5%82%99&limit=1&project=999";
+    let a = get(&fake, &hidden, Some(person())).await;
+    let b = get(&fake, missing, Some(person())).await;
+    assert_eq!(a.0, StatusCode::OK);
+    assert_eq!(a, b);
+    assert_eq!(a.1["has_more"], false);
 }

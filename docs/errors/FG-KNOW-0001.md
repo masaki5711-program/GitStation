@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-Plan 20 K3 (ADR-0040): `GET /api/v1/search` could not read its candidates: the search statement over forge.search_entries (`tokens @@ query`, ranked) hit its statement timeout, or the database failed (the cause is chained: FG-DB-0001 / FG-DB-0002 / FG-DB-0009), or the read was not answered within the route's lookup timeout. The project facts the hits are decided with are read by the same rule (`operation=search_projects`). Not a refusal: nothing about any hit was shown.
+Plan 20 K3 (ADR-0040): `GET /api/v1/search` could not read its candidates: the search statement over forge.search_entries (`tokens @@ query`, ranked) hit its statement timeout, or the database failed (the cause is chained: FG-DB-0001 / FG-DB-0002 / FG-DB-0009), or the read was not answered within the route's lookup timeout. The readable projects are decided first from the project list's access facts (`operation=search_projects`, read by the same rule); more than 20 000 projects to decide is `reason=project_scan_limit` (the search refuses rather than answer from an incomplete set). Not a refusal: nothing about any hit was shown.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `operation` (`search_candidates`: the ranked read; `search_projects`: the access facts of the hits' projects), `timeout_ms` when the route's own bound fired, the chained FG-DB code otherwise, `query_chars` and `query_terms` (the query's length and term count — never the words, which may be personal or confidential) and the request_id. Many timeouts with short queries: a very common 2-gram matches most rows (look at the table size: `SELECT count(*) FROM forge.search_entries`); timeouts on every query: the GIN index `search_entries_tokens` is missing or bloated, or the database is slow (runbook db-unavailable).
+The log event carries `operation` (`search_candidates`: the ranked read; `search_projects`: the readable projects decided before it; with `reason=project_scan_limit` and `limit` the instance outgrew the per-search decision: ADR-0040 Amendment K3-R), `timeout_ms` when the route's own bound fired, the chained FG-DB code otherwise, `query_chars` and `query_terms` (the query's length and term count — never the words, which may be personal or confidential) and the request_id. Many timeouts with short queries: a very common 2-gram matches most rows (look at the table size: `SELECT count(*) FROM forge.search_entries`); timeouts on every query: the GIN index `search_entries_tokens` is missing or bloated, or the database is slow (runbook db-unavailable).
 
 ## 対処 (fix)
 

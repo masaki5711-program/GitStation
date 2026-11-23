@@ -30,8 +30,12 @@ impl SourceKind {
     }
 }
 
-/// What narrows the candidates of a query (never widens: every returned
-/// row is still decided with `authorize()`).
+/// What a query may match. The readable sets are the caller's decision
+/// (`authorize()` on the same access facts as the project list), made
+/// **before** the read: the database never ranks, counts or pages a row of
+/// a project the caller cannot read, so a short page or `has_more` cannot
+/// reveal hidden matches. Every returned row is still decided again with
+/// `authorize()`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CandidateFilter {
     /// Only these kinds (empty: every kind).
@@ -41,6 +45,12 @@ pub struct CandidateFilter {
     /// Leave out `confidential` rows (an AI audience, plan 06 D-5: they
     /// are neither shown nor counted).
     pub exclude_confidential: bool,
+    /// The projects whose own entry the caller may read (`ProjectRead`).
+    /// Empty: no project entry matches.
+    pub readable_projects: Vec<crate::ProjectId>,
+    /// The projects whose merge requests the caller may read (`ProjectRead`
+    /// and `MergeRequestList`). Empty: no merge request matches.
+    pub readable_merge_requests: Vec<crate::ProjectId>,
 }
 
 /// One ranked candidate of a query, as stored: shown only after
@@ -64,10 +74,9 @@ pub struct SearchCandidate {
 
 /// The search's reads, for `GET /api/v1/search` (plan 20 K3). forge-db
 /// implements it and `forge serve` injects it (forge-web never depends on
-/// forge-db, CLAUDE.md §3-9). **It decides nothing**: the candidates are
-/// every matching row whatever the viewer may see (narrowed only by
-/// `filter`), and the project records carry the viewer's raw access facts
-/// for `authorize()`. The caller bounds each call with its own timeout.
+/// forge-db, CLAUDE.md §3-9). It decides nothing: it narrows by `filter`,
+/// whose readable sets are the caller's `authorize()` decisions. The
+/// caller bounds each call with its own timeout.
 pub trait SearchReader: Send + Sync {
     /// The ranked candidates of `tsquery` (a
     /// [`crate::search_text::SearchQuery::tsquery_literal`]) after
@@ -81,12 +90,4 @@ pub trait SearchReader: Send + Sync {
         offset: u32,
         max_rows: u32,
     ) -> crate::namespace_resolver::LookupFuture<'a, Vec<SearchCandidate>>;
-
-    /// The projects of `ids` that exist, each with `viewer`'s access facts
-    /// (one statement, as the project list reads its rows).
-    fn project_records<'a>(
-        &'a self,
-        ids: &'a [crate::ProjectId],
-        viewer: crate::UserId,
-    ) -> crate::namespace_resolver::LookupFuture<'a, Vec<crate::ProjectRecord>>;
 }

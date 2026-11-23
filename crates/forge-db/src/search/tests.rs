@@ -122,20 +122,29 @@ async fn raw_event(t: &FreshDb, kind: &str, project: ProjectId, payload: &str) {
         .expect("sequencer");
 }
 
+/// A filter that may read every project (the route decides the sets).
+async fn readable_all(t: &FreshDb) -> CandidateFilter {
+    let ids: Vec<ProjectId> = t
+        .json_rows("SELECT id FROM forge.projects ORDER BY id")
+        .await
+        .iter()
+        .map(|r| ProjectId::new(r["id"].as_i64().expect("id")))
+        .collect();
+    CandidateFilter {
+        readable_projects: ids.clone(),
+        readable_merge_requests: ids,
+        ..CandidateFilter::default()
+    }
+}
+
 async fn titles(t: &FreshDb, query: &str) -> Vec<(String, String)> {
     let q = SearchQuery::parse(query).expect("query");
-    candidates(
-        &t.db,
-        &q.tsquery_literal(),
-        &CandidateFilter::default(),
-        0,
-        50,
-    )
-    .await
-    .expect("candidates")
-    .into_iter()
-    .map(|c| (c.kind.as_str().to_owned(), c.title))
-    .collect()
+    candidates(&t.db, &q.tsquery_literal(), &readable_all(t).await, 0, 50)
+        .await
+        .expect("candidates")
+        .into_iter()
+        .map(|c| (c.kind.as_str().to_owned(), c.title))
+        .collect()
 }
 
 async fn snapshot(t: &FreshDb) -> Vec<serde_json::Value> {
@@ -346,6 +355,7 @@ async fn candidates_narrow_by_kind_project_and_confidential() {
         other.project_id.get()
     ))
     .await;
+    let all = readable_all(&t).await;
     let q = SearchQuery::parse("pump").expect("query").tsquery_literal();
     let count = |filter: CandidateFilter| {
         let q = q.clone();
@@ -357,26 +367,24 @@ async fn candidates_narrow_by_kind_project_and_confidential() {
                 .len()
         }
     };
-    assert_eq!(count(CandidateFilter::default()).await, 3);
+    assert_eq!(count(all.clone()).await, 3);
     let mrs = CandidateFilter {
         kinds: vec![SourceKind::MergeRequest],
-        ..CandidateFilter::default()
+        ..all.clone()
     };
     assert_eq!(count(mrs).await, 1);
     let one = CandidateFilter {
         project: Some(web.project_id),
-        ..CandidateFilter::default()
+        ..all.clone()
     };
     assert_eq!(count(one).await, 2);
     let agent = CandidateFilter {
         exclude_confidential: true,
-        ..CandidateFilter::default()
+        ..all.clone()
     };
     assert_eq!(count(agent).await, 2);
     // Paging by offset.
-    let page = candidates(&t.db, &q, &CandidateFilter::default(), 2, 50)
-        .await
-        .expect("page");
+    let page = candidates(&t.db, &q, &all, 2, 50).await.expect("page");
     assert_eq!(page.len(), 1);
     let refused = candidates(
         &t.db,
@@ -405,4 +413,157 @@ fn set_timeout_matches_the_constant() {
 fn cut_keeps_character_boundaries() {
     assert_eq!(cut("設備", 4), ("設", true));
     assert_eq!(cut("abc", 3), ("abc", false));
+}
+
+// --- review of K2/K3 ---------------------------------------------------------
+
+/// Rows of projects outside the readable sets are never ranked or returned,
+/// and with no readable project nothing matches at all.
+#[tokio::test]
+async fn unreadable_projects_rows_are_never_read() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = project(&t, "alice", "web", "Pump").await;
+    let (bob, secret) = project(&t, "bob", "secret", "Pump secret").await;
+    open(&t, alice, web.project_id, "Pump fix", "", "fix").await;
+    open(&t, bob, secret.project_id, "Pump leak", "", "leak").await;
+    let request = RequestId::parse("req-reindex").expect("request id");
+    reindex(&t.db, &request, None).await.expect("reindex");
+    let q = SearchQuery::parse("pump").expect("query").tsquery_literal();
+    let only_web = CandidateFilter {
+        readable_projects: vec![web.project_id],
+        readable_merge_requests: vec![web.project_id],
+        ..CandidateFilter::default()
+    };
+    let rows = candidates(&t.db, &q, &only_web, 0, 50).await.expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|c| c.project == web.project_id));
+    // The project yes, its merge requests no (a Guest).
+    let project_only = CandidateFilter {
+        readable_projects: vec![web.project_id],
+        ..CandidateFilter::default()
+    };
+    let rows = candidates(&t.db, &q, &project_only, 0, 50)
+        .await
+        .expect("rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, SourceKind::Project);
+    // A project filter on an unreadable project: as on a missing one.
+    let filtered = CandidateFilter {
+        project: Some(secret.project_id),
+        ..only_web.clone()
+    };
+    assert!(candidates(&t.db, &q, &filtered, 0, 50)
+        .await
+        .expect("rows")
+        .is_empty());
+    let nothing = candidates(&t.db, &q, &CandidateFilter::default(), 0, 50)
+        .await
+        .expect("rows");
+    assert!(nothing.is_empty());
+}
+
+#[tokio::test]
+async fn a_candidate_carries_at_most_the_snippet_source() {
+    let t = FreshDb::migrated().await;
+    let (_alice, web) = project(&t, "alice", "web", "Web").await;
+    let long = format!("needle {}", "あ".repeat(40_000));
+    let mut conn = t.superuser().await;
+    let origin = Origin::of_request(&RequestId::parse("req-long").expect("request id"));
+    let entry = Entry {
+        kind: SourceKind::Project,
+        project: web.project_id,
+        key: String::new(),
+        title: "Web",
+        ids: String::new(),
+        body: &long,
+    };
+    upsert(&mut conn, &origin, &entry, "2026-11-23T00:00:00Z")
+        .await
+        .expect("upsert");
+    let q = SearchQuery::parse("needle")
+        .expect("query")
+        .tsquery_literal();
+    let rows = candidates(&t.db, &q, &readable_all(&t).await, 0, 5)
+        .await
+        .expect("rows");
+    assert_eq!(
+        rows[0].body.chars().count(),
+        usize::try_from(SNIPPET_SOURCE_CHARS).expect("fits")
+    );
+}
+
+#[tokio::test]
+async fn an_unchanged_entry_is_not_rewritten() {
+    let t = FreshDb::migrated().await;
+    let (_alice, web) = project(&t, "alice", "web", "Web").await;
+    let mut conn = t.superuser().await;
+    let origin = Origin::of_request(&RequestId::parse("req-same").expect("request id"));
+    for _ in 0..2 {
+        refresh_project(&mut conn, &origin, web.project_id)
+            .await
+            .expect("refresh");
+    }
+    let rows = t
+        .json_rows("SELECT xmin::text AS x FROM forge.search_entries")
+        .await;
+    let first = rows[0]["x"].clone();
+    refresh_project(&mut conn, &origin, web.project_id)
+        .await
+        .expect("refresh");
+    let rows = t
+        .json_rows("SELECT xmin::text AS x FROM forge.search_entries")
+        .await;
+    assert_eq!(rows[0]["x"], first, "no new row version");
+}
+
+#[tokio::test]
+async fn a_subtree_over_the_cap_marks_the_rest_stale() {
+    let t = FreshDb::migrated().await;
+    let owner = users::create(
+        &t.db,
+        &system("req-user-carol"),
+        &NewUser::human("carol", "carol", "carol@example.test"),
+    )
+    .await
+    .expect("user");
+    let mut ids = Vec::new();
+    for name in ["a1", "a2", "a3"] {
+        let p = projects::create(
+            &t.db,
+            &system(&format!("req-project-{name}")),
+            &NewProject::new(name, owner.namespace_id, name, owner.user_id),
+        )
+        .await
+        .expect("project");
+        ids.push(p.project_id.get());
+    }
+    let mut conn = t.superuser().await;
+    let origin = Origin::of_request(&RequestId::parse("req-subtree").expect("request id"));
+    refresh_subtree_capped(&mut conn, &origin, "user", owner.user_id.get(), 1)
+        .await
+        .expect("subtree");
+    let state = t
+        .json_rows(
+            "SELECT project_id, state, last_error_code FROM forge.search_index_state \
+             ORDER BY project_id",
+        )
+        .await;
+    let stale: Vec<i64> = state
+        .iter()
+        .map(|r| r["project_id"].as_i64().expect("id"))
+        .collect();
+    assert_eq!(stale, ids[1..].to_vec());
+    assert!(state
+        .iter()
+        .all(|r| r["state"] == "failed" && r["last_error_code"] == "FG-KNOW-0002"));
+}
+
+#[test]
+fn the_statement_bounds_match_their_constants() {
+    assert!(read::CANDIDATES_SQL.contains(&format!("LIMIT {MAX_RANKED})")));
+    assert!(read::CANDIDATES_SQL.contains(&format!("left(e.body_text, {SNIPPET_SOURCE_CHARS})")));
+    assert_eq!(
+        usize::try_from(SNIPPET_SOURCE_CHARS).expect("fits"),
+        forge_core::search_text::SNIPPET_SCAN_CHARS
+    );
 }
