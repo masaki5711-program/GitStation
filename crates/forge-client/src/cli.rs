@@ -619,6 +619,26 @@ pub enum MemberCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// The org bindings and the people they bring in (adding or removing a
+    /// binding is the browser's: a web session only).
+    #[command(name = "org-bindings")]
+    OrgBindings {
+        #[command(flatten)]
+        target: MemberTarget,
+    },
+    /// The org master's units, to name a binding's unit.
+    #[command(name = "org-units")]
+    OrgUnits {
+        /// A code prefix or part of a name (1..=64 characters).
+        #[arg(long, value_name = "TEXT")]
+        search: Option<String>,
+        /// Only this plant's units.
+        #[arg(long, value_name = "PLANT")]
+        plant: Option<String>,
+        /// At most this many units, 1..=50 (server default 20).
+        #[arg(long, value_parser = parse_limit, value_name = "N")]
+        limit: Option<u32>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

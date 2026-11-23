@@ -806,6 +806,93 @@ pub fn member(cli: &Cli, cmd: &MemberCommand, env: EnvFn<'_>, io: &mut Io<'_>) -
                 &format!("Removed user {user_id} from {label} {id}"),
             )
         }
+        MemberCommand::OrgBindings { target: t } => {
+            let (route, _, _) = target(t)?;
+            let route = format!("{}/org-bindings", route.trim_end_matches("/members"));
+            let c = client(cli, env, io)?;
+            let body = call(&c, Method::Get, &route, &[], None)?;
+            let human = org_bindings_human(&body);
+            emit(io, cli, body, &human)
+        }
+        MemberCommand::OrgUnits {
+            search,
+            plant,
+            limit,
+        } => {
+            let mut query: Vec<(String, String)> = Vec::new();
+            if let Some(s) = search {
+                query.push(("search".to_string(), s.clone())); // clone: the query owns it
+            }
+            if let Some(p) = plant {
+                query.push(("plant".to_string(), p.clone()));
+            }
+            if let Some(n) = limit {
+                query.push(("limit".to_string(), n.to_string()));
+            }
+            let c = client(cli, env, io)?;
+            let body = call(&c, Method::Get, "/api/v1/org-units", &query, None)?;
+            let human = org_units_human(&body);
+            emit(io, cli, body, &human)
+        }
+    }
+}
+
+const ORG_BINDING_KEYS: [&str; 6] = [
+    "id",
+    "plant_code",
+    "org_code",
+    "include_descendants",
+    "membership",
+    "role",
+];
+const ORG_MEMBER_KEYS: [&str; 5] = ["user_id", "username", "display_name", "role", "org_code"];
+
+/// The bindings, then the people they bring in.
+fn org_bindings_human(body: &Value) -> String {
+    let bindings = list_human(body, "bindings", "", "", &ORG_BINDING_KEYS);
+    let members = list_human(body, "members", "", "", &ORG_MEMBER_KEYS);
+    let more = if body.get("members_truncated") == Some(&Value::Bool(true)) {
+        "
+(more people than listed)"
+    } else {
+        ""
+    };
+    format!(
+        "bindings:
+{bindings}
+people:
+{members}{more}"
+    )
+}
+
+/// One unit per line: plant, code, level, Japanese name.
+fn org_units_human(body: &Value) -> String {
+    let lines: Vec<String> = body
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|i| {
+                    let unit = i.get("unit").cloned().unwrap_or(Value::Null);
+                    format!(
+                        "{}  {}  {}  {}",
+                        text(i, "plant_code"),
+                        text(&unit, "code"),
+                        text(&unit, "level"),
+                        text(&unit, "name_ja")
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if lines.is_empty() {
+        "(none)".to_string()
+    } else {
+        lines.join(
+            "
+",
+        )
     }
 }
 

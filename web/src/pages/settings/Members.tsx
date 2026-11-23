@@ -1,7 +1,9 @@
 // Members of a project or a group: the direct members, add (a user found by
 // search), change a role, remove. Inherited roles are not listed (the API
 // lists direct members only). Refusals ("would leave no Owner", "the member
-// list changed") are shown with their reason + request id.
+// list changed") are shown with their reason + request id. ADR-0038 §2: the
+// people an org binding brings in are listed apart (「組織から（…）」, not
+// removable here), and the Owner manages the bindings below.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,6 +21,7 @@ import { OrgCode } from '../../features/OrgProfile';
 import { formatDate, roleLabel } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
+import { OrgBindingsSection, OrgBoundMembers } from './OrgBindings';
 import styles from './Settings.module.css';
 import { PageHeader } from '../../ui/PageHeader';
 
@@ -139,6 +142,10 @@ export function MembersScreen({ scope }: { scope: Scope }) {
       <Section id="members-add-title" title={t('members.add')}>
         <AddMember scope={scope} members={list.data?.members ?? []} />
       </Section>
+      <Section id="members-org-title" title={t('orgBindings.membersTitle')}>
+        <OrgBoundMembers scope={scope} />
+      </Section>
+      <OrgBindingsSection scope={scope} />
     </>
   );
 }

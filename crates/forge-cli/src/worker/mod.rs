@@ -176,6 +176,8 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             .with_portal_news(crate::portal::news_policy(cfg)?)
             .with_org_ages(crate::portal::org_ages(cfg));
         forge_db::check_schema(&db, &MIGRATOR).await?;
+        // ADR-0038 §4: the org bindings' SQL reads the maximum ages there.
+        forge_db::org_bindings::publish_ages(&db).await?;
         // Plan 18 S2: the job runners wait on the process's wake hub.
         let (db, wake_hub) = crate::wake::attach(db, cfg)?;
         // M3 O3: the database must know the window's time zone.

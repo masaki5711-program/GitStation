@@ -717,6 +717,14 @@ async fn finish_steps(
         "projects.purge.finish.project_ai_assets",
     )
     .await?;
+    // ADR-0038 §2: the project's org bindings.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.org_bindings WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.org_bindings",
+    )
+    .await?;
     // M4 C8: the merge queue — entries reference the batches, the queues,
     // the merge requests and the merge attempts; batches the queues.
     delete_rows(

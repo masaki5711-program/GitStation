@@ -117,6 +117,24 @@ web のセッションだけ・本人と変更者は不可（ADR-0031）。文�
 - メンバーの画面に「組織から（生産技術部）」と出どころを出す。手で付けた所属と区別する。
 - 結び付けで入っている人は、メンバーの画面から外せない（結び付けを変える）。
 
+### 2.4 実装メモ（段 B）
+
+- 表 `forge.org_bindings`（migration `20270101100000`、tables.toml では `derived`。人の変更は命令が監査
+  `org_binding.created` / `org_binding.deleted` をグループ・プロジェクトに残す）。対象は `group_id` か `project_id` のどちらか 1 つ、
+  ロールは CHECK `org_bindings_role_cap` で `reporter` / `developer` だけ。同じ組織・範囲・条件の重複は一意の索引で拒否。
+- 判定への入れ方: ロールの loader の共通の SQL（`forge_db::roles::chain_role_columns!`）で、グループ・プロジェクトの各段の
+  ロールを `forge.org_role_max(手で付けたロール, forge.org_binding_role(利用者, 対象))` にした。一覧・解決・承認者のロール
+  （`project_roles_on`）も同じ SQL なので、全部が同じ答えになる。`authorize()` は変えていない（action `OrgBindingManage` を足しただけ）。
+- `forge.org_binding_matches()`（SECURITY DEFINER。読み取りのプールは写しの工場・ランクを読めないため）が §4 を確かめる:
+  人で有効、写しが不正でなく工場があり `confirmed_at` が上限以内、台帳の写しが上限以内、所属ごとに親のたどりが切れずに
+  上の `level` へ進む（切れた所属は何も与えない）。上限は `forge.org_access_policy`（`forge serve` / `forge worker` が起動時に
+  設定 `org.*_age_hours` から写す）。結び付けの無い対象では関数を呼ばない（索引を引くだけ）。
+- 結び付けで付いたロールは `MemberRoles.direct`（その対象そのものでのロール）にも入る。グループ配下の可視性の
+  「通り抜け」（下に役割がある人に private なグループの名前だけを見せる）は手で付けた所属だけで決め、結び付けは数えない。
+- API: `GET|POST /api/v1/{projects|groups}/{id}/org-bindings`、`DELETE …/org-bindings/{binding_id}`、組織の選択用に
+  `GET /api/v1/org-units`（`UserSearch`。名前・level・親だけ）。誤りは FG-AUTH-0029（入力・重複・件数）、FG-AUTH-0030（台帳に無い）、
+  FG-AUTH-0031（Developer を超えるロール）。`gstn member org-bindings` / `member org-units`（足す・外すはブラウザだけ）。
+
 ## 3. 承認 — 組織による承認者の指定（Phase 3）
 
 ### 3.1 承認者の選び方（共通の形）

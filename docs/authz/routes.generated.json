@@ -585,6 +585,33 @@
     "word": "fixed"
   },
   {
+    "action": "MemberList",
+    "method": "GET",
+    "path": "/api/v1/groups/{id}/org-bindings",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "OrgBindingManage",
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/org-bindings",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "OrgBindingManage",
+    "method": "DELETE",
+    "path": "/api/v1/groups/{id}/org-bindings/{binding_id}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "SubgroupCreate",
     "method": "POST",
     "path": "/api/v1/groups/{id}/subgroups",
@@ -706,6 +733,15 @@
     "method": "POST",
     "path": "/api/v1/namespaces/tombstones/release",
     "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserSearch",
+    "method": "GET",
+    "path": "/api/v1/org-units",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1470,6 +1506,33 @@
     "action": "CodeownersEnforcementToggle",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/merge-settings/codeowners-enforcement",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberList",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/org-bindings",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "OrgBindingManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/org-bindings",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "OrgBindingManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/org-bindings/{binding_id}",
     "people_only": true,
     "public": false,
     "scope": "fixed",

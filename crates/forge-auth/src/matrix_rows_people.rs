@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 48] = [
+const GROUPS: [[Row; 2]; 49] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -128,6 +128,8 @@ const GROUPS: [[Row; 2]; 48] = [
     // administrator's session is the twin); a bot — pfs-ai-bot — and a
     // service account are refused even in a session.
     both!(A::AiAssetsSettingManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::PrivateProject),
+    // ADR-0038 §5: org bindings are the Owner's, a person's in a session.
+    both!(A::OrgBindingManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::PrivateProject),
     // M4 C6: CI secrets are a Maintainer's (a person's).
     both!(A::CiVariableManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // M4 C11: deploy configuration and approval are kept for people.

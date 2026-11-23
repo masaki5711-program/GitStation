@@ -721,6 +721,41 @@ export interface paths {
         patch: operations["patch_api_v1_groups_id_members_user_id"];
         trace?: never;
     };
+    "/api/v1/groups/{id}/org-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A group's org bindings and the people they give a role to now (as the member list) */
+        get: operations["get_api_v1_groups_id_org_bindings"];
+        put?: never;
+        /** Bind an org unit to a group as Reporter or Developer (never above; inherited by everything below; the Owner, people only, a web session); audited */
+        post: operations["post_api_v1_groups_id_org_bindings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/groups/{id}/org-bindings/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a group's org binding (the Owner, people only, a web session); audited */
+        delete: operations["delete_api_v1_groups_id_org_bindings_binding_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/groups/{id}/subgroups": {
         parameters: {
             query?: never;
@@ -921,6 +956,23 @@ export interface paths {
         put?: never;
         /** Release a namespace tombstone so its path can be used again (the target's Owner, or an administrator) */
         post: operations["post_api_v1_namespaces_tombstones_release"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/org-units": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The org master's units for the binding picker (names, level, parent; at most 50) */
+        get: operations["get_api_v1_org_units"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1999,6 +2051,41 @@ export interface paths {
         put: operations["put_api_v1_projects_id_merge_settings_codeowners_enforcement"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/org-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's org bindings and the people they give a role to now (as the member list) */
+        get: operations["get_api_v1_projects_id_org_bindings"];
+        put?: never;
+        /** Bind an org unit to a project as Reporter or Developer (never above; the Owner, people only, a web session); audited */
+        post: operations["post_api_v1_projects_id_org_bindings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/org-bindings/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a project's org binding (the Owner, people only, a web session); audited */
+        delete: operations["delete_api_v1_projects_id_org_bindings_binding_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -6003,6 +6090,28 @@ export interface components {
             /** @description The full commit id (lowercase hex). */
             sha: string;
         };
+        /** @description `POST …/org-bindings`. */
+        NewOrgBinding: {
+            /**
+             * @description Also the units below it (by the org master's hierarchy). Default
+             *     `false`.
+             */
+            include_descendants?: boolean;
+            membership?: null | components["schemas"]["OrgMembershipName"];
+            /**
+             * Format: int32
+             * @description Only people whose position rank is at least this (0..=999).
+             */
+            min_rank?: number | null;
+            /** @description The unit's code in the org master (`^[A-Z0-9][A-Z0-9_-]{0,19}$`). */
+            org_code: string;
+            /** @description The unit's plant (`^[A-Z0-9]{1,4}$`). */
+            plant_code: string;
+            /** @description Why (1..=500 characters), shown with the binding. */
+            reason?: string | null;
+            /** @description `reporter` or `developer` (a binding never gives more). */
+            role: components["schemas"]["RoleName"];
+        };
         /** @description `POST …/pipelines`. */
         NewPipelineRun: {
             /** @description The branch: `main` or `refs/heads/main`. */
@@ -6044,6 +6153,74 @@ export interface components {
             /** Format: int64 */
             id: number;
         };
+        /** @description Who added a binding. */
+        OrgBindingAuthorBody: {
+            /** Format: int64 */
+            id: number;
+            username: string;
+        };
+        /** @description One binding. */
+        OrgBindingBody: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            created_by: components["schemas"]["OrgBindingAuthorBody"];
+            /** Format: int64 */
+            id: number;
+            include_descendants: boolean;
+            /** @description `primary` or `any`. */
+            membership: string;
+            /** Format: int32 */
+            min_rank: number | null;
+            org_code: string;
+            plant_code: string;
+            reason: string | null;
+            /** @description `reporter` or `developer`. */
+            role: string;
+            unit: null | components["schemas"]["OrgBindingUnitBody"];
+        };
+        /** @description A person a binding gives a role to now. */
+        OrgBindingMemberBody: {
+            /** Format: int64 */
+            binding_id: number;
+            display_name: string;
+            /** @description The bound unit (the person is in it or below it). */
+            org_code: string;
+            /** @description The highest role the bindings give (`reporter` / `developer`). */
+            role: string;
+            unit: null | components["schemas"]["OrgBindingUnitBody"];
+            /** Format: int64 */
+            user_id: number;
+            username: string;
+        };
+        /** @description A unit's level and names as a binding shows them. */
+        OrgBindingUnitBody: {
+            /** @description `division`, `department`, `section` or `team`. */
+            level: string;
+            name_en: string | null;
+            name_id: string | null;
+            name_ja: string;
+        };
+        /** @description A group's or project's bindings and the people they bring in. */
+        OrgBindingsBody: {
+            bindings: components["schemas"]["OrgBindingBody"][];
+            /**
+             * @description In user id order; people without a valid, recent org snapshot are
+             *     not listed (a binding gives them nothing).
+             */
+            members: components["schemas"]["OrgBindingMemberBody"][];
+            /** @description More people than listed (200). */
+            members_truncated: boolean;
+            viewer: components["schemas"]["OrgBindingsViewerBody"];
+        };
+        /** @description What the caller could do now (a hint; the route decides again). */
+        OrgBindingsViewerBody: {
+            can_manage: boolean;
+        };
+        /**
+         * @description Which of a person's units a binding looks at.
+         * @enum {string}
+         */
+        OrgMembershipName: "primary" | "any";
         /**
          * @description One unit of the PFS org master (ADR-0038 §1): its code, level and
          *     names.
@@ -6069,6 +6246,12 @@ export interface components {
              *     or the copy is older than `org.master_max_age_hours` (ADR-0038 §4).
              */
             stale: boolean;
+            unit: components["schemas"]["OrgNameBody"];
+        };
+        /** @description One unit of the org master's copy, for the picker. */
+        OrgPickUnitBody: {
+            parent_code: string | null;
+            plant_code: string;
             unit: components["schemas"]["OrgNameBody"];
         };
         /** @description The snapshot of the identity provider's org claims. */
@@ -6100,6 +6283,10 @@ export interface components {
             path: null | components["schemas"]["OrgPathBody"];
             /** @description The person's main department (at most one; listed first). */
             primary: boolean;
+        };
+        /** @description `GET /api/v1/org-units`. */
+        OrgUnitsBody: {
+            items: components["schemas"]["OrgPickUnitBody"][];
         };
         /** @description The person a service account belongs to. */
         OwnerBody: {
@@ -9871,6 +10058,102 @@ export interface operations {
             };
         };
     };
+    get_api_v1_groups_id_org_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgBindingsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_groups_id_org_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewOrgBinding"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgBindingBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_groups_id_org_bindings_binding_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_api_v1_groups_id_subgroups: {
         parameters: {
             query?: never;
@@ -10342,6 +10625,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReleasedBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_org_units: {
+        parameters: {
+            query?: {
+                /** @description 1..=64 characters: a code prefix or part of a name (ja / en / id; ASCII case folded) */
+                search?: string;
+                /** @description Only this plant's units (^[A-Z0-9]{1,4}$) */
+                plant?: string;
+                /** @description At most this many units, 1..=50 (default 20) */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgUnitsBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -13210,6 +13529,102 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MergeSettingsBody"];
                 };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_org_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgBindingsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_org_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewOrgBinding"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgBindingBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_org_bindings_binding_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error: registered code, localized message, request id */
             default: {

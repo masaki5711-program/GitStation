@@ -28,8 +28,10 @@ use std::time::Duration;
 pub mod accounts;
 // M3 R6: a protection rule's merge rule.
 mod merge_rules;
+// ADR-0038 §2: org bindings.
 mod moves;
 mod operator;
+mod org_bindings;
 // M3 S0: service accounts and their tokens.
 pub mod service_accounts;
 // M3 I1a: integrations and their project bindings.
@@ -61,6 +63,12 @@ use forge_errors::{ErrorCode, ForgeError};
 
 pub use forge_db::groups::{CreatedGroup, MemberChange, Updated};
 pub use forge_db::members::{MemberRow, MAX_PAGE as MAX_MEMBER_PAGE};
+/// ADR-0038 §2: org bindings.
+pub use forge_db::org_bindings::{
+    BindingTarget, BoundMember, Membership as OrgMembership, NewBinding, PickUnit, StoredBinding,
+    UnitName, MAX_UNITS as MAX_ORG_UNITS,
+};
+pub use forge_db::org_master::{LocalizedName, UnitLevel};
 pub use forge_db::projects::{CreatedProject, Deletion, VisibilityOutcome};
 /// A protection rule's state as a route loader reads it.
 pub use forge_db::protected_refs::RuleState as ProtectionRuleState;

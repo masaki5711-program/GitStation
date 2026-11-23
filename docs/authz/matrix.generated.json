@@ -17,6 +17,7 @@
   { "action": "MemberManage", "allow": 20, "deny": 56, "public": false, "git_operation": false },
   { "action": "MemberList", "allow": 11, "deny": 20, "public": false, "git_operation": false },
   { "action": "ProtectedRefList", "allow": 7, "deny": 16, "public": false, "git_operation": false },
+  { "action": "OrgBindingManage", "allow": 7, "deny": 32, "public": false, "git_operation": false },
   { "action": "MergeRequestCreate", "allow": 12, "deny": 33, "public": false, "git_operation": false },
   { "action": "MergeRequestRead", "allow": 5, "deny": 18, "public": false, "git_operation": false },
   { "action": "MergeRequestList", "allow": 5, "deny": 17, "public": false, "git_operation": false },

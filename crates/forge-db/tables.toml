@@ -960,3 +960,18 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── ADR-0038 §2 (20270101100000): org bindings — the people of an org unit
+# get Reporter or Developer on a group or project (never above); a person's
+# add or removal is audited by the command on the group or project ──
+[tables.org_bindings]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# How old a snapshot and the master's copy may be for a binding to apply
+# (one row, the configuration's org.*_age_hours, written at start).
+[tables.org_access_policy]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
