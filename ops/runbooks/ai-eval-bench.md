@@ -32,6 +32,8 @@
    あるか、ベンチがそのパスに書いたかを確かめる（`out/eval-report.json` は宣言にならない）。
 4. ジョブの失敗: `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>`、ログは `gstn pipeline log`。
    GPU の Runner: `gstn runner list`（タグ `gpu-eval` の Runner が `online` か）、runbook `ci-runner`。
+   ジョブが FG-CI-0029（GPU の無い Runner がタグ `gpu-eval` を持つ）・FG-CI-0030（モデル置き場がマニフェストと合わない、**alert**）で
+   終わったなら、runbook `ci-runner`（GPU の Runner とモデル置き場）と、モデルを入れ替えている途中なら runbook `ai-model-update`。
 5. `forge.ai_eval.check_written` の他のコード:
    - FG-AIASSET-0003 BaselineMissing: `detail` が基準のパスと merge base のコミット。基準は **ベースのブランチとの merge base** から読む
      （MR の中で足した基準は使わない）。`git merge-base <sha> <ターゲットの先端>` と `git show <merge base>:evals/baselines/<models>.json` で確かめる。
@@ -63,3 +65,5 @@
 
 - ADR-0034、計画 17 §1.6・§5.3・§5.4、`docs/ai-eval-report.md`
 - runbook `ci-runner`（Runner・成果物の保存）、`ci-pipelines`（パイプラインの作成）、`checks-reporting`（チェックとマージの条件）
+- runbook `ai-model-update`（モデル・ベンチのイメージの更新、新しいモデルの基準を先に入れる）、`ai-asset-release`（リリースの前の確かめ）、
+  `ai-asset-rollback`（展開した束の戻し）
