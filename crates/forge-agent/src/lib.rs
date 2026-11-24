@@ -35,7 +35,8 @@ pub use manifest::{
 pub use path::{case_key, check_install_path, is_managed_path, is_per_checkout_path};
 pub use scan::{scan, ScanPolicy};
 pub use sign::{
-    public_key_from_seed, sign_digest, verify_signature, KeyRing, PublicKey, SIGNATURE_DOMAIN,
+    public_key_from_seed, sign_digest, sign_digest_in, verify_signature, verify_signature_in,
+    KeyRing, PublicKey, SignatureDomain, SIGNATURE_DOMAIN,
 };
 
 use forge_errors::ErrorCode;

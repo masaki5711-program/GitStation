@@ -2,10 +2,11 @@
 //! The dependency direction gate (CLAUDE.md §3-9, ADR-0001 and its M1 phase
 //! 8b amendment): `forge-web / forge-cli → feature crates (forge-hosting,
 //! forge-review, forge-checks, forge-integ, forge-notify, forge-oidc) →
-//! forge-auth / forge-git / forge-db → forge-core → forge-agent → forge-ci →
-//! forge-doc → forge-errors` (forge-doc: plan 13 stage 2, ADR-0026 §8;
-//! forge-ci: M4 C1, the pure `.forge-ci.yml` parse / lint / plan;
-//! forge-agent: plan 16 A1, ADR-0032, the pure agent part checks). Every
+//! forge-auth / forge-git / forge-db → forge-core → forge-edge → forge-agent →
+//! forge-ci → forge-doc → forge-errors` (forge-doc: plan 13 stage 2, ADR-0026
+//! §8; forge-ci: M4 C1, the pure `.forge-ci.yml` parse / lint / plan;
+//! forge-agent: plan 16 A1, ADR-0032, the pure agent part checks;
+//! forge-edge: plan 21 E1, ADR-0041, the pure edge release checks). Every
 //! workspace crate's normal and build dependencies on other forge crates
 //! are checked against the layer table; a crate missing from the table
 //! fails too, so a new crate must be placed before it builds green.
@@ -26,9 +27,20 @@ const ALLOWED: &[(&str, &[&str])] = &[
     // digest, Ed25519 verify and static scan, between forge-core and
     // forge-ci; shared with gstn (`gstn agent verify`).
     ("forge-agent", &["forge-errors"]),
+    // Plan 21 E1 (contract 9, ADR-0041): the pure edge manifest / digest /
+    // signature, release lint, waves, halt decision and install windows,
+    // between forge-core and forge-agent (it signs through forge-agent's
+    // domain signer); shared with gstn (`gstn edge release verify`).
+    ("forge-edge", &["forge-agent", "forge-errors"]),
     (
         "forge-core",
-        &["forge-agent", "forge-ci", "forge-doc", "forge-errors"],
+        &[
+            "forge-edge",
+            "forge-agent",
+            "forge-ci",
+            "forge-doc",
+            "forge-errors",
+        ],
     ),
     ("forge-auth", &["forge-core", "forge-errors"]),
     ("forge-git", &["forge-core", "forge-errors"]),
@@ -165,7 +177,13 @@ const ALLOWED: &[(&str, &[&str])] = &[
     // and the pure agent part verification (ADR-0032, plan 16 A1).
     (
         "forge-client",
-        &["forge-errors", "forge-doc", "forge-ci", "forge-agent"],
+        &[
+            "forge-errors",
+            "forge-doc",
+            "forge-ci",
+            "forge-agent",
+            "forge-edge",
+        ],
     ),
     // The CI runner binary (M4 C4, contract 9, ADR-0029): the client side
     // only, never a server crate; no row lists it, so nothing depends on it.

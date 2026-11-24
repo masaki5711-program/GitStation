@@ -395,7 +395,14 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::SigningKeyFileInvalid
         | ErrorCode::PartCapabilityUndeclared
         | ErrorCode::AgentLockMismatch
-        | ErrorCode::McpEndpointNotAllowed => false,
+        | ErrorCode::McpEndpointNotAllowed
+        // Plan 21 E1: edge releases are linted and verified by forge-edge
+        // (gstn, later forge-fleet and the device agent), never by a merge.
+        | ErrorCode::EdgeReleaseDefinitionInvalid
+        | ErrorCode::EdgeManifestInvalid
+        | ErrorCode::EdgeSigningKeyUnavailable
+        | ErrorCode::EdgeSignatureInvalid
+        | ErrorCode::EdgeRolloutPolicyInvalid => false,
     }
 }
 

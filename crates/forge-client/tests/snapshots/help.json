@@ -7317,6 +7317,151 @@
     {
       "args": [
         {
+          "description": "The release file ({manifest, digest, key_id, signature}).",
+          "kind": "option",
+          "name": "--release",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The edge public key list (default: edge-keys.json in the gstn configuration directory).",
+          "kind": "option",
+          "name": "--keys",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A directory holding the release's blobs at their manifest paths.",
+          "kind": "option",
+          "name": "--blobs",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn edge release verify --release release.json",
+        "gstn edge release verify --release release.json --blobs ./blobs --json"
+      ],
+      "name": "edge release verify",
+      "output": {
+        "properties": {
+          "arch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blobs": {
+            "type": "integer"
+          },
+          "blobs_checked": {
+            "type": "integer"
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keys": {
+            "enum": [
+              "local"
+            ]
+          },
+          "os": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payloads": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "problems": {
+            "items": {
+              "properties": {
+                "error_code": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "error_code",
+                "reason",
+                "subject"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "release": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revocation_checked": {
+            "type": "boolean"
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "release",
+          "verified",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Check a signed edge release file on this computer, as the device agent does before installing: the manifest's form (FG-EDGE-0002), its digest and its Ed25519 signature in the edge domain with the local edge public keys (FG-EDGE-0004; a missing or stale key list is FG-EDGE-0003). With --blobs, every blob's size and SHA-256 against the verified manifest (FG-EDGE-0004 blob_mismatch / blob_missing). Exit 1 with the most serious problem's code. Local only: revocation is not checked against the server."
+    },
+    {
+      "args": [
+        {
           "description": "The asset repository (default: the repository found upward).",
           "kind": "option",
           "name": "--dir",

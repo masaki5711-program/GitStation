@@ -1,8 +1,12 @@
-//! Ed25519 signatures over part digests (plan 16 §2.2, ADR-0032 §4).
+//! Ed25519 signatures over digests (plan 16 §2.2, ADR-0032 §4; generalized
+//! by plan 21 E1, ADR-0041 §3).
 //!
-//! The signed message is [`SIGNATURE_DOMAIN`] ‖ the 32 digest bytes, so a
-//! signature made for a part can never be replayed as a signature of
-//! anything else the same key might sign later. Verification is ring's
+//! The signed message is a [`SignatureDomain`] ‖ the 32 digest bytes, so a
+//! signature made in one domain (an agent part) can never be replayed as a
+//! signature in another (an edge release manifest), even if both were made
+//! with the same key. [`verify_signature`] / [`sign_digest`] keep the agent
+//! part domain [`SIGNATURE_DOMAIN`]; [`verify_signature_in`] /
+//! [`sign_digest_in`] take the domain. Verification is ring's
 //! `ED25519` (RFC 8032: a non-canonical `S` or a public key that does not
 //! decode is refused). A key is found by `kid`; an unknown kid is
 //! `FG-AGENT-0003` (the local keys are missing or stale) and a revoked one
@@ -16,8 +20,31 @@ use serde::Deserialize;
 
 use crate::{Digest, Problem};
 
-/// The prefix of every signed message.
+/// The prefix of every agent part signature's message (unchanged since A1,
+/// so every existing part signature still verifies).
 pub const SIGNATURE_DOMAIN: &[u8] = b"forge-agent-part-signature-v1\0";
+
+/// What a signature is for: the prefix of the signed message. Each signed
+/// kind of thing has its own constant, ending in a NUL so no domain's
+/// prefix runs into another's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignatureDomain(&'static [u8]);
+
+impl SignatureDomain {
+    /// Agent parts (plan 16, ADR-0032 §4): [`SIGNATURE_DOMAIN`].
+    pub const AGENT_PART: SignatureDomain = SignatureDomain(SIGNATURE_DOMAIN);
+
+    /// A domain for another signed kind (its crate owns the constant, e.g.
+    /// forge-edge's manifest domain). `prefix` must be a fixed literal that
+    /// names the kind and a version and ends in `\0`.
+    pub const fn new(prefix: &'static [u8]) -> SignatureDomain {
+        SignatureDomain(prefix)
+    }
+
+    pub fn as_bytes(&self) -> &'static [u8] {
+        self.0
+    }
+}
 
 const MAX_KEYS: usize = 64;
 
@@ -99,15 +126,30 @@ impl KeyRing {
     }
 }
 
-fn message(digest: &Digest) -> Vec<u8> {
-    let mut m = Vec::with_capacity(SIGNATURE_DOMAIN.len() + 32);
-    m.extend_from_slice(SIGNATURE_DOMAIN);
+fn message(domain: SignatureDomain, digest: &Digest) -> Vec<u8> {
+    let mut m = Vec::with_capacity(domain.0.len() + 32);
+    m.extend_from_slice(domain.0);
     m.extend_from_slice(&digest.0);
     m
 }
 
-/// Verify `signature` (base64 of 64 bytes) of `digest` by key `kid`.
+/// Verify `signature` (base64 of 64 bytes) of an agent part `digest` by key
+/// `kid` ([`SignatureDomain::AGENT_PART`]).
 pub fn verify_signature(
+    ring_: &KeyRing,
+    kid: &str,
+    digest: &Digest,
+    signature: &str,
+) -> Result<(), Problem> {
+    verify_signature_in(SignatureDomain::AGENT_PART, ring_, kid, digest, signature)
+}
+
+/// Verify `signature` (base64 of 64 bytes) of `digest` in `domain` by key
+/// `kid`. The problems carry the agent codes (`FG-AGENT-0002` /
+/// `FG-AGENT-0003`) and a stable `reason`; a crate verifying another domain
+/// maps them to its own codes by `reason`.
+pub fn verify_signature_in(
+    domain: SignatureDomain,
     ring_: &KeyRing,
     kid: &str,
     digest: &Digest,
@@ -138,17 +180,30 @@ pub fn verify_signature(
             )
         })?;
     UnparsedPublicKey::new(&ED25519, key.key)
-        .verify(&message(digest), &sig)
+        .verify(&message(domain, digest), &sig)
         .map_err(|_| Problem::about(ErrorCode::PartSignatureInvalid, "bad_signature", &key.kid))
 }
 
-/// Sign `digest` with the Ed25519 key whose 32-byte seed is `seed`; base64
-/// of the 64-byte signature. For the publisher (forge-marketplace, A5) and
-/// tests; the seed never leaves the caller.
+/// Sign an agent part `digest` with the Ed25519 key whose 32-byte seed is
+/// `seed`; base64 of the 64-byte signature. For the publisher
+/// (forge-marketplace, A5) and tests; the seed never leaves the caller.
+// The signed kind's own wrapper of the domain signer (clippy.toml).
+#[allow(clippy::disallowed_methods)]
 pub fn sign_digest(seed: &[u8; 32], digest: &Digest) -> Result<String, Problem> {
+    sign_digest_in(SignatureDomain::AGENT_PART, seed, digest)
+}
+
+/// Sign `digest` in `domain` (base64 of the 64-byte signature). Each caller
+/// is restricted by `clippy.toml` (`disallowed-methods`) to its one
+/// signing step.
+pub fn sign_digest_in(
+    domain: SignatureDomain,
+    seed: &[u8; 32],
+    digest: &Digest,
+) -> Result<String, Problem> {
     let pair = Ed25519KeyPair::from_seed_unchecked(seed)
         .map_err(|_| key_problem("signing_key_invalid", None))?;
-    Ok(STANDARD.encode(pair.sign(&message(digest)).as_ref()))
+    Ok(STANDARD.encode(pair.sign(&message(domain, digest)).as_ref()))
 }
 
 /// The public key (base64 of 32 bytes) of the seed.

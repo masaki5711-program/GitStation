@@ -276,6 +276,48 @@ fn verify_rejects_one_byte_change() {
     assert_eq!(e.reason, "signature_malformed");
 }
 
+/// Plan 21 E1 (ADR-0041 §3): the generalized signing keeps the agent part
+/// domain byte for byte — a signature made over the A1 message (domain ‖
+/// digest, signed directly with ring) still verifies, and the domain
+/// functions with `AGENT_PART` are the same functions.
+#[test]
+fn existing_part_signatures_still_verify_after_domains() {
+    use ring::signature::Ed25519KeyPair;
+    let part = parse_part(&hook_part(HOOK, &[])).unwrap();
+    let pair = Ed25519KeyPair::from_seed_unchecked(&SEED).unwrap();
+    let mut msg = b"forge-agent-part-signature-v1 ".to_vec();
+    msg.extend_from_slice(&part.digest.0);
+    let a1 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        pair.sign(&msg).as_ref(),
+    );
+    let ring_ = keyring(&SEED, "k1", false);
+    assert_eq!(verify_signature(&ring_, "k1", &part.digest, &a1), Ok(()));
+    assert_eq!(sign_digest(&SEED, &part.digest).unwrap(), a1);
+    assert_eq!(
+        sign_digest_in(SignatureDomain::AGENT_PART, &SEED, &part.digest).unwrap(),
+        a1
+    );
+    assert_eq!(SignatureDomain::AGENT_PART.as_bytes(), SIGNATURE_DOMAIN);
+}
+
+#[test]
+fn a_signature_in_another_domain_does_not_verify_as_a_part() {
+    const OTHER: SignatureDomain = SignatureDomain::new(b"forge-test-other-v1 ");
+    let part = parse_part(&hook_part(HOOK, &[])).unwrap();
+    let ring_ = keyring(&SEED, "k1", false);
+    let other = sign_digest_in(OTHER, &SEED, &part.digest).unwrap();
+    let e = verify_signature(&ring_, "k1", &part.digest, &other).unwrap_err();
+    assert_eq!((e.code.id(), e.reason), ("FG-AGENT-0002", "bad_signature"));
+    assert_eq!(
+        verify_signature_in(OTHER, &ring_, "k1", &part.digest, &other),
+        Ok(())
+    );
+    let part_sig = sign_digest(&SEED, &part.digest).unwrap();
+    let e = verify_signature_in(OTHER, &ring_, "k1", &part.digest, &part_sig).unwrap_err();
+    assert_eq!(e.reason, "bad_signature");
+}
+
 #[test]
 fn unknown_key_id_is_signing_key_unavailable() {
     let part = parse_part(&hook_part(HOOK, &[])).unwrap();

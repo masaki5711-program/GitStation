@@ -937,6 +937,10 @@ gstn = "ai-asset status"
 reason = "A read tool for an agent waits for the asset releases (plan 17 P17-7); gstn and the settings screen show it meanwhile."
 
 [[not_api]]
+gstn = "edge release verify"
+reason = "Local only: verifies a signed edge release file (and its blobs) with local edge keys (plan 21 E1)."
+
+[[not_api]]
 gstn = "agent verify"
 reason = "Local only: checks .claude/ against agent.lock.json and part signatures with local keys (plan 16 A1)."
 
