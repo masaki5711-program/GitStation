@@ -38,6 +38,8 @@ mod backup;
 // M3 C1: required checks have a reporter.
 // M3 S2: the act-as keys.
 mod act_as;
+// Plan 16 A3: the agent part signing keys (FG-AGENT-0003).
+mod agent;
 mod checks;
 // M4 C2: CI pipelines.
 mod ci;
@@ -101,7 +103,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 45] = [
+const DB_CHECKS: [&str; 46] = [
     "db.bootstrap",
     "db.connections",
     // Plan 18 S2: FG-DB-0023 (the server's NOTIFY queue).
@@ -178,6 +180,8 @@ const DB_CHECKS: [&str; 45] = [
     portal::NEWS,
     // ADR-0038 §1: FG-INT-0028 (the org master's copy is stale).
     org::NAME,
+    // Plan 16 A3: FG-AGENT-0003 (the agent part signing keys).
+    agent::NAME,
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -337,6 +341,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let portal_news = portal::news_check(db, cfg).await;
     let org_claims = oidc::org_claims_check(db, cfg).await;
     let org_master = org::master_check(db, cfg).await;
+    let agent_keys = agent::signing_keys_check(db, cfg).await;
     vec![
         bootstrap,
         connections,
@@ -385,6 +390,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         portal_news,
         org_claims,
         org_master,
+        agent_keys,
     ]
 }
 

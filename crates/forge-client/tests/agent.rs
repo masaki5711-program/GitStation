@@ -1,4 +1,6 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)] // tests may fail loudly
+// Plan 16 A3 review: the test signs with a synthetic seed (clippy.toml).
+#![allow(clippy::disallowed_methods)]
 //! `gstn agent verify` (plan 16 A1, ADR-0032) as a user runs it: the real
 //! binary in a git working tree, no host and no token; the part, the lock
 //! and the keys are synthetic (a fixed test seed).

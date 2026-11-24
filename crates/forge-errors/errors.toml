@@ -3070,11 +3070,25 @@ severity = "alert"
 user_message_ja = "エージェントの部品を確かめる鍵がありません。鍵を更新してからもう一度確かめてください。"
 user_message_en = "The key to verify the agent parts is not available. Update the keys and verify again."
 user_message_id = "Kunci untuk memverifikasi bagian agen tidak tersedia. Perbarui kunci lalu verifikasi lagi."
-cause = "Plan 16 §2.2 (ADR-0032 §4): the key list needed to verify a part signature is missing, unreadable or does not name the part's key. `reason`: `keys_missing` (gstn: no `agent-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable`, `keys_invalid` (not the JSON key list, a duplicate or empty kid, a public key that is not 32 bytes of base64), `unknown_key` (the lock names a `key_id` the list does not hold: the local list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The server-side key file (`agent.signing_keys_file`) comes with A3."
+cause = "Plan 16 §2.2 (ADR-0032 §4): the key list needed to verify a part signature is missing, unreadable or does not name the part's key. `reason`: `keys_missing` (gstn: no `agent-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable`, `keys_invalid` (not the JSON key list, a duplicate or empty kid, a public key that is not 32 bytes of base64), `unknown_key` (the lock names a `key_id` the list does not hold: the local list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The server-side key file (`agent.signing_keys_file`) has its own code, FG-AGENT-0014."
 diagnosis = "`gstn agent verify --json`: `reason` and `subject` (the kid). Look at the key list file (`--keys`, or `agent-keys.json` in the gstn configuration directory): which kids it holds and whether it parses. Runbook agent-signing-key."
 fix = "Get the current public keys from the administrator (from A5: `GET /api/v1/agent-keys`) into `agent-keys.json`, then verify again. A kid nobody issued is a tampering sign: runbook agent-supply-chain."
 runbook = "agent-signing-key"
 test = "unknown_key_id_is_signing_key_unavailable"
+
+[[error]]
+code = "FG-AGENT-0014"
+name = "SigningKeyFileInvalid"
+http_status = 503
+severity = "alert"
+user_message_ja = "エージェントの部品に署名するサーバーの鍵が使えません。管理者に連絡してください。"
+user_message_en = "The server key that signs agent parts cannot be used. Contact the administrator."
+user_message_id = "Kunci server yang menandatangani bagian agen tidak dapat digunakan. Hubungi administrator."
+cause = "Plan 16 A3 (ADR-0032 A3 amendment): the server's signing key file `agent.signing_keys_file` (`config_key`; the Ed25519 seeds `<kid> <64 hex>` per line, kid 1..=65535, the highest signs; only public keys are in `forge.agent_signing_keys`) cannot be used. `reason`: `insecure_permissions` (with `mode`: on Unix the file is readable by group or others; or with `rule=owner` and `owner_uid`: on Linux another user owns it — refused, a signing seed is a secret), `keys_unreadable` (with `config_reason`: `not_absolute`, `unreadable`, `invalid` = not a regular file or over 64 KiB), `keys_invalid` (with `rule` = `invalid_line` / `invalid_key_id` / `invalid_key` / `duplicate` / `empty`, and `line`), `signing_key_invalid`; doctor `agent.signing_keys` against `forge.agent_signing_keys` (with `kid`): `key_not_registered` (a kid of the file has no registered public key), `key_mismatch` (the file's seed does not give the registered public key: a wrong or forged file), `key_revoked` (a revoked key is still in the file), `signing_key_retired` (the highest kid, which signs, is retired). Never the key material."
+diagnosis = "`forge doctor` line `agent.signing_keys` (`reason`, `kid`, `mode`, `rule`, `config_reason`, `line`). Read only: `ls -ln` of the file (owner = the forge service user, mode 600) and `SELECT kid, public_key, retired_at, revoked_at FROM forge.agent_signing_keys` on the read pool. Runbook agent-signing-key."
+fix = "An approved runbook step (agent-signing-key): `chmod 600` and `chown` the file to the forge service user; fix the named line; register a new kid's public key before it signs (`forge admin agent-key`, A5, on the maintenance connection); remove a revoked key from the file; add a new kid when the signing key is retired. A `key_mismatch` nobody explains, or a file others could read, is a key theft suspicion: runbook agent-supply-chain."
+runbook = "agent-signing-key"
+test = "key_file_insecure_permissions_refused"
 
 [[error]]
 code = "FG-AGENT-0005"

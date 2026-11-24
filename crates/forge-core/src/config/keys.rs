@@ -400,6 +400,8 @@ pub const KEYS: &[Key] = &[
         "FORGE_ORG_MAX_PROFILE_AGE_HOURS",
     ),
     boolean("org.allow_large_shrink", "FORGE_ORG_ALLOW_LARGE_SHRINK"),
+    // Plan 16 A3: the agent marketplace's signing keys (ADR-0032, ADR-0013).
+    text("agent.signing_keys_file", "FORGE_AGENT_SIGNING_KEYS_FILE"),
     // M4 C11: deployments over SSH (ADR-0031).
     text("deploy.ssh_key_file", "FORGE_DEPLOY_SSH_KEY_FILE"),
     text("deploy.ssh_program", "FORGE_DEPLOY_SSH_PROGRAM"),
