@@ -10,6 +10,7 @@ import jaCore from 'virtual:i18n/ja-core';
 import jaRest from 'virtual:i18n/ja-rest';
 
 import {
+  assertReadable,
   eagerFiles,
   keysInFiles,
   keysInSource,
@@ -88,6 +89,26 @@ describe('eagerFiles', () => {
     expect(eager.has(p('pages/OnlyLazy.ts'))).toBe(false);
     expect(eager.has(p('pages/Shared.tsx'))).toBe(true);
     expect([...keysInFiles(eager)].sort()).toEqual(['eager.a', 'eager.b', 'eager.md', 'shared.key']);
+  });
+
+  it('fails on a specifier or key it cannot read instead of leaving it out of core', () => {
+    for (const body of [
+      `const m = () => import("./md");`,
+      'const m = () => import(`./md`);',
+      `import { A } from "./a";`,
+      `import {\n  A,\n} from "./a";`,
+      `import "./a";`,
+      `t("eager.a");`,
+      't(`eager.${x}`);',
+    ]) {
+      const p = tree({ 'main.tsx': `// ok\n${body}`, 'pages/screenLoaders.ts': '' });
+      expect(() => eagerFiles(p('main.tsx'), p('pages/screenLoaders.ts'))).toThrow(/main\.tsx:[24]: write a single-quoted/);
+      rmSync(root, { recursive: true, force: true });
+      root = '';
+    }
+    expect(() => {
+      assertReadable('x.ts', `import { a } from './a';\n// Arriving from "next" on a tab\nconst s = "from here";\nt('a.b');`);
+    }).not.toThrow();
   });
 });
 

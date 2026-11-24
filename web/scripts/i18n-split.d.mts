@@ -4,3 +4,4 @@ export function eagerFiles(entry: string, lazyLoaders: string): { eager: Set<str
 export function keysInFiles(files: Iterable<string>): Set<string>;
 export function splitDictionary(dict: Dict, used: ReadonlySet<string>): { core: Dict; rest: Dict };
 export function splitJa(srcDir: string): { core: Dict; rest: Dict };
+export function assertReadable(file: string, source: string): void;

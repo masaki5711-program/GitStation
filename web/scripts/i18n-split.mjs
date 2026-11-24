@@ -2,7 +2,7 @@
 // bundled, but only the strings the first load can show sit in the main
 // chunk ("core"); the strings only the lazy screens use ("rest") are a
 // separate chunk that a lazy screen waits for before it renders
-// (src/i18n/jaRest.ts, src/pages/lazyScreens.tsx).
+// (`loadJaRest` in src/i18n/index.ts, src/pages/lazyScreens.tsx).
 //
 // The split is mechanical, so a new key never needs hand placement:
 // - eager files = every src file reachable from src/main.tsx through static
@@ -12,6 +12,8 @@
 //   plural forms `a.b_one`, `a.b_other`, …); rest = every other key.
 // Keys are always string literals (tests/i18n.test.ts fails on an unused
 // key, so a key built at run time cannot exist), which makes the scan exact.
+// A form the scan cannot read (a double-quoted or template specifier or key)
+// is an error, never a file or key silently left out of core.
 //
 // Used by the Vite plugin in vite.config.ts (`virtual:i18n/ja-core`,
 // `virtual:i18n/ja-rest`) and by tests/i18n-split.test.ts.
@@ -26,6 +28,21 @@ const STATIC_IMPORT = /(?:^|[\s;])(?:import|export)\s+(?:[^'";]*?\sfrom\s+)?'([^
 const DYNAMIC_IMPORT = /\bimport\(\s*'([^']+)'\s*\)/g;
 const PLURAL = /_(zero|one|two|few|many|other)$/;
 const EXTENSIONS = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
+/** A double-quoted or template `import(…)` or `t(…)`; a double-quoted
+ * `import "…"` or `… from "…"` on an import / export line (`}` ends a
+ * multi-line one), so prose in a comment is not taken for one. */
+const UNREADABLE = /\bimport\(\s*["`]|\bt\(\s*["`]|^\s*(?:import|export|\})[^\n]*\bfrom\s+"|^\s*import\s+"/m;
+
+/** Throws when `source` uses an import or key form the scan cannot read. */
+export function assertReadable(file, source) {
+  const m = UNREADABLE.exec(source);
+  if (m !== null) {
+    const line = source.slice(0, m.index).split('\n').length;
+    throw new Error(
+      `i18n-split: ${file}:${line}: write a single-quoted string here (${m[0]}…); the ja split cannot read it`,
+    );
+  }
+}
 
 /** The file a relative specifier names, or null (packages, CSS, JSON). */
 function resolveImport(from, specifier) {
@@ -62,6 +79,7 @@ export function eagerFiles(entry, lazyLoaders) {
     if (eager.has(file)) continue;
     eager.add(file);
     const source = readFileSync(file, 'utf8');
+    assertReadable(file, source);
     for (const spec of matches(source, STATIC_IMPORT)) {
       const target = resolveImport(file, spec);
       if (target !== null) stack.push(target);
