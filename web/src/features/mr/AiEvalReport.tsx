@@ -26,10 +26,10 @@ import {
   type AiEvalFinding,
   type AiEvalMetric,
   type RunCount,
+  AI_EVAL_TITLE_ID,
 } from './aiEval';
 import styles from './Mr.module.css';
 
-export const AI_EVAL_TITLE_ID = 'mr-ai-eval-title';
 const FINDINGS_ID = 'mr-ai-eval-findings';
 
 /** A summary that does not read is shown as written, up to this many characters. */
