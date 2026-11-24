@@ -392,6 +392,7 @@ impl World {
                 &proof,
                 ready(self.repo),
                 &oid(&self.head),
+                None,
             )
             .await
     }
@@ -423,6 +424,7 @@ impl World {
                     required_approvals: required,
                     users: users.iter().map(|u| (*u).to_owned()).collect(),
                     groups: Vec::new(),
+                    selectors: Vec::new(),
                 },
                 expected.as_deref(),
             )
@@ -915,6 +917,7 @@ async fn missing_and_disabled_accounts_answer_alike() {
         required_approvals: 1,
         users: vec![user.to_owned()],
         groups: Vec::new(),
+        selectors: Vec::new(),
     };
     let missing = w
         .review

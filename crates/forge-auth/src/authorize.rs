@@ -759,6 +759,14 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // administrator included. Adding one is session-only (above): a
         // token never adds a key; the backstop as for `TokenCreate`.
         (Action::SshKeyList | Action::SshKeyDelete, Resource::Token { owner }) => own_token(*owner),
+        // ADR-0038 §3.5: one's own delegation, for nobody else — an
+        // administrator included. Setting one is a person's, in a session
+        // (above).
+        (Action::ApprovalDelegationRead, Resource::Token { owner }) => own_token(*owner),
+        (Action::ApprovalDelegationManage, Resource::Token { owner }) => {
+            people_only()?;
+            own_token(*owner)
+        }
         (Action::SshKeyAdd, Resource::Token { owner }) => {
             if matches!(principal.credential(), Credential::Token(_)) {
                 return Err(
@@ -1540,10 +1548,24 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             admin_only()
         }
         (Action::DeployCreate, Resource::Project(p)) => need(Role::Developer, p.role),
+        // ADR-0038 §3.6: who may approve deployments is a grant — Owner
+        // and above (administrators), people only.
+        (Action::DeployApproversManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Owner, p.role)
+        }
         // Approving (ADR-0031 decision 6 and its amendment): a web
         // session (a token was refused above as session-only); people
         // only; never the requester nor anyone behind the SHA,
         // administrators included, before any role; Maintainer and above.
+        //
+        // ADR-0038 §3.4 (step C): when the environment names approvers, only
+        // a person they name approves (`d.approvers`, loaded for the caller
+        // — or for the delegator they approve for, who passes the same
+        // self checks): named as a user, Reporter and above; through a
+        // group or an organisation selector, Maintainer and above (a
+        // condition added, never a widening); not named,
+        // `FG-DEPLOY-0014`.
         (Action::DeployApprove, Resource::Deployment(d)) => {
             people_only()?;
             let own = |reason: &'static str| {
@@ -1557,7 +1579,42 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             if d.change_authors.contains(&user) {
                 return Err(own("change_author"));
             }
-            need(Role::Maintainer, d.project.role)
+            if let Some(delegator) = d.on_behalf_of {
+                if d.requested_by == Some(delegator) {
+                    return Err(own("delegator_requester"));
+                }
+                if d.change_authors.contains(&delegator) {
+                    return Err(own("delegator_change_author"));
+                }
+            }
+            // Review of ADR-0038 step C: a named delegation that does not
+            // hold is told only to someone who may approve at all.
+            if let Some(reason) = d.delegation_refused {
+                need(Role::Reporter, d.project.role)?;
+                return Err(deny(ErrorCode::ApprovalDelegationInactive)
+                    .with_context("reason", reason)
+                    .with_context("environment", d.tier.as_str()));
+            }
+            let Some(required) = d.approvers.required_role() else {
+                let crate::model::ApproverGate::NotListed(reason) = d.approvers else {
+                    return Err(deny(ErrorCode::Internal).with_context("reason", "gate_role"));
+                };
+                need(Role::Reporter, d.project.role)?;
+                return Err(deny(ErrorCode::DeployApproverNotListed)
+                    .with_context("reason", reason)
+                    .with_context("environment", d.tier.as_str()));
+            };
+            need(required, d.project.role)?;
+            // Review of ADR-0038 step C: the person the approval counts for
+            // holds the same role on the project now (the caller's
+            // administrator bypass does not lend it to them).
+            if d.on_behalf_of.is_some() && !d.delegator_role.is_some_and(|r| r >= required) {
+                return Err(deny(ErrorCode::Forbidden)
+                    .with_context("reason", "delegator_role")
+                    .with_context("required_role", required.as_str())
+                    .with_context("actual_role", d.delegator_role.map_or("none", Role::as_str)));
+            }
+            Ok(())
         }
 
         // --- merge queue (M4 C8, plan 14 §4.2, ADR-0030) ---
@@ -1665,6 +1722,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::SshKeyList
             | Action::SshKeyAdd
             | Action::SshKeyDelete
+            | Action::ApprovalDelegationRead
+            | Action::ApprovalDelegationManage
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
             | Action::UserMergeRequestList
@@ -1756,6 +1815,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::CiVariableManage
             | Action::DeployRead
             | Action::DeployEnvironmentManage
+            | Action::DeployApproversManage
             | Action::DeployTargetManage
             | Action::DeployCreate
             | Action::DeployApprove

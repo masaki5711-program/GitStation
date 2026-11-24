@@ -112,6 +112,7 @@ pub(crate) fn refusal_without_git(facts: &DbFacts<'_>) -> Vec<BlockReason> {
         committers: Committers::Known(std::collections::BTreeMap::new()),
         changed: ChangedPathsFact::Known(Vec::new()),
         codeowners: CodeownersFact::Absent,
+        targets: crate::approvals::SelectorTargets::default(),
     };
     let approvals = ApprovalFacts {
         approvals: Vec::new(),

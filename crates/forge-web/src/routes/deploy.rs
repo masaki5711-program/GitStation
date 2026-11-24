@@ -20,6 +20,14 @@
 //!   Maintainer who is a person in a web session (every tier), not the
 //!   requester nor anyone behind the SHA → `200` (`queued`);
 //!   `409 FG-DEPLOY-0010` when it is not waiting for an approval.
+//! - ADR-0038 §3.4–§3.6 (step C): `GET …/deploy/approvers` (`DeployRead`)
+//!   lists each environment's approvers; `PUT
+//!   …/deploy/environments/{tier}/approvers` (`DeployApproversManage`,
+//!   Owner, people only) sets them (users, groups, selectors,
+//!   `approvals_required`, `allow_delegation`). With approvers, only a
+//!   person they name approves (`403 FG-DEPLOY-0014` otherwise), and
+//!   `?on_behalf_of=<username>` approves for a delegator where the
+//!   environment allows it.
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -28,8 +36,8 @@ use forge_auth::{DeploymentCtx, ProjectCtx};
 use forge_core::deploy::DeployTier;
 use forge_core::{parse_positive_id, ProjectId, UserId};
 use forge_deploy::{
-    ChangeRequest, Deploy, EnvironmentSpec, StoredDeployment, StoredEnvironment, StoredTarget,
-    TargetSpec,
+    ApproverNames, ApproversSpec, ChangeRequest, Deploy, EnvironmentSpec, StoredDeployment,
+    StoredEnvironment, StoredTarget, TargetSpec,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use serde::{Deserialize, Serialize};
@@ -50,6 +58,17 @@ pub const TARGET: &str = "/api/v1/projects/{id}/deploy/environments/{tier}/targe
 pub const DEPLOYMENTS: &str = "/api/v1/projects/{id}/deployments";
 /// `POST` an approval.
 pub const APPROVE: &str = "/api/v1/projects/{id}/deployments/{deployment_id}/approve";
+/// `GET` every environment's approvers.
+pub const APPROVERS: &str = "/api/v1/projects/{id}/deploy/approvers";
+/// `PUT` one environment's approvers.
+pub const ENVIRONMENT_APPROVERS: &str =
+    "/api/v1/projects/{id}/deploy/environments/{tier}/approvers";
+/// The query of [`APPROVE`].
+pub const APPROVE_QUERY: &[crate::registry::QueryParam] = &[crate::registry::QueryParam {
+    name: "on_behalf_of",
+    description: "Approve for this person (a username) who delegated to the caller for now, where the environment allows delegation (ADR-0038 §3.5)",
+    integer_range: None,
+}];
 /// The body cap (fifty freeze windows, a host key).
 pub const MAX_BODY: usize = 16 * 1024;
 
@@ -114,6 +133,71 @@ pub struct NewDeployment {
     pub sha: String,
 }
 
+/// `PUT …/deploy/environments/{tier}/approvers` (ADR-0038 §3.4).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PutApprovers {
+    /// Usernames (at most 20). Named people approve from Reporter.
+    #[serde(default)]
+    pub users: Vec<String>,
+    /// Group full paths (at most 10): their direct members who are
+    /// Maintainer and above.
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// Organisation selectors (at most 5, ADR-0038 §3.1): Maintainer and
+    /// above whom they find for the requester.
+    #[serde(default)]
+    #[schema(value_type = Vec<Object>)]
+    pub selectors: Vec<serde_json::Value>,
+    /// How many of them must approve (1..=20).
+    pub approvals_required: i32,
+    /// A delegate may approve for a named person (default false).
+    #[serde(default)]
+    pub allow_delegation: bool,
+}
+
+/// A named approver user.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeployApproverUser {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    pub username: String,
+    pub display_name: String,
+}
+
+/// A named approver group.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeployApproverGroup {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    pub full_path: String,
+    pub display_name: String,
+}
+
+/// One environment's approvers.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApproversBody {
+    pub tier: String,
+    /// No users, groups or selectors: any Maintainer approves (as before).
+    pub unrestricted: bool,
+    pub users: Vec<DeployApproverUser>,
+    pub groups: Vec<DeployApproverGroup>,
+    #[schema(value_type = Vec<Object>)]
+    pub selectors: Vec<serde_json::Value>,
+    pub approvals_required: i32,
+    pub allow_delegation: bool,
+}
+
+/// `GET …/deploy/approvers`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApproversList {
+    pub environments: Vec<ApproversBody>,
+}
+
 /// A target (its pin by fingerprint; never a private key).
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -143,6 +227,10 @@ pub struct EnvironmentBody {
     pub frozen_now: bool,
     pub targets: Vec<TargetBody>,
     pub updated_at: String,
+    /// ADR-0038 §3: how many approvals a deployment needs.
+    pub approvals_required: i32,
+    /// ADR-0038 §3.5: a delegate may approve.
+    pub allow_delegation: bool,
 }
 
 /// `GET …/deploy/environments`.
@@ -178,6 +266,8 @@ pub struct DeploymentBody {
     pub commit_subject: Option<String>,
     pub commit_author_name: Option<String>,
     pub commit_author_email: Option<String>,
+    /// ADR-0038 §3: the approvals given so far.
+    pub approvals: i64,
 }
 
 /// `GET …/deployments`.
@@ -212,6 +302,8 @@ fn environment_body(e: StoredEnvironment, targets: Vec<TargetBody>) -> Environme
         frozen_now: e.frozen_now,
         targets,
         updated_at: e.updated_at,
+        approvals_required: e.approvals_required,
+        allow_delegation: e.allow_delegation,
     }
 }
 
@@ -234,6 +326,7 @@ fn deployment_body(d: StoredDeployment) -> DeploymentBody {
         commit_subject: d.commit_subject,
         commit_author_name: d.commit_author_name,
         commit_author_email: d.commit_author_email,
+        approvals: d.approvals,
     }
 }
 
@@ -255,6 +348,8 @@ enum Shape {
     Target(DeployTier, String),
     Deployments,
     Approve(i64),
+    Approvers,
+    EnvironmentApprovers(DeployTier),
 }
 
 /// The project and the shape of a deployment path (the raw path: never
@@ -270,6 +365,8 @@ fn path_of(raw_path: &str) -> Result<(ProjectId, Shape), ForgeError> {
     let shape = match parts.as_slice() {
         ["deploy", "environments"] => Shape::Environments,
         ["deploy", "environments", t] => Shape::Environment(tier(t)?),
+        ["deploy", "approvers"] => Shape::Approvers,
+        ["deploy", "environments", t, "approvers"] => Shape::EnvironmentApprovers(tier(t)?),
         ["deploy", "environments", t, "targets", name] => {
             if name.is_empty() {
                 return Err(param_invalid("name", "invalid_target_name"));
@@ -348,6 +445,7 @@ macro_rules! body_loader {
     };
 }
 body_loader!(PutEnvironment);
+body_loader!(PutApprovers);
 body_loader!(PutTarget);
 body_loader!(NewDeployment);
 
@@ -372,13 +470,37 @@ impl ApprovalOf {
             return Ok(absent());
         };
         // An unknown deployment is the invisible project 404 too.
-        let Some(stored) = deploy(state)?.deployment(id, deployment).await? else {
+        let service = deploy(state)?;
+        let Some(stored) = service.deployment(id, deployment).await? else {
             return Ok(absent());
+        };
+        // ADR-0038 §3.4, §3.5: the caller (or the delegator they approve
+        // for) against the environment's approvers.
+        let params = crate::routes::browse::query(parts.uri.query(), &["on_behalf_of"])?;
+        // Without a caller `authorize()` refuses before any fact counts. A
+        // delegator that does not resolve or holds no delegation to the
+        // caller is a fact too: `authorize()` refuses first (review of
+        // ADR-0038 step C: no username or delegation oracle for someone who
+        // may not approve).
+        let fact = match viewer {
+            None => forge_deploy::ApproverFact::own(forge_auth::ApproverGate::Unrestricted),
+            Some(caller) => match crate::routes::browse::take(&params, "on_behalf_of") {
+                Some(name) => match service.delegator(name, caller).await? {
+                    Some(d) => {
+                        service
+                            .approver_gate(id, &stored, caller, Some(d))
+                            .await?
+                            .fact
+                    }
+                    None => service.unknown_delegator(id, &stored).await?,
+                },
+                None => service.approver_gate(id, &stored, caller, None).await?.fact,
+            },
         };
         Ok(Lookup::Found {
             ctx: DeploymentCtx::new(
                 projects::loaded(&record),
-                forge_deploy::loaded_deployment(&stored),
+                forge_deploy::loaded_deployment(&stored, fact),
             ),
             canonical: None,
             tombstone: None,
@@ -558,10 +680,116 @@ pub async fn request(state: AppState, request: Dispatched<ProjectCtx, NewDeploym
 pub async fn approve(state: AppState, request: Dispatched<DeploymentCtx>) -> Response {
     let w = request.into_write();
     let built = async {
+        let on_behalf_of = w.proof.ctx().deployment().on_behalf_of;
         let stored = deploy(&state)?
-            .approve(&change_request(&w), &w.proof)
+            .approve(&change_request(&w), &w.proof, on_behalf_of)
             .await?;
         json(deployment_body(stored))
+    }
+    .await;
+    match built {
+        Ok(value) => no_store(StatusCode::OK, value),
+        Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
+fn approvers_body(e: forge_deploy::EnvironmentApprovers, names: &ApproverNames) -> ApproversBody {
+    ApproversBody {
+        tier: e.tier.as_str().to_owned(),
+        unrestricted: e.unrestricted(),
+        users: e
+            .users
+            .iter()
+            .filter_map(|u| names.users.get(u))
+            .map(|u| DeployApproverUser {
+                id: u.id.get(),
+                username: u.username.clone(), // clone: the names stay for the next
+                display_name: u.display_name.clone(),
+            })
+            .collect(),
+        groups: e
+            .groups
+            .iter()
+            .filter_map(|g| names.groups.get(g))
+            .map(|g| DeployApproverGroup {
+                id: g.id.get(),
+                full_path: g.full_path.clone(), // clone: as above
+                display_name: g.display_name.clone(),
+            })
+            .collect(),
+        selectors: e
+            .selectors
+            .iter()
+            .map(forge_core::approver::ApproverSelector::to_value)
+            .collect(),
+        approvals_required: e.required,
+        allow_delegation: e.allow_delegation,
+    }
+}
+
+async fn approver_names(
+    state: &AppState,
+    envs: &[forge_deploy::EnvironmentApprovers],
+) -> Result<ApproverNames, ForgeError> {
+    let users: Vec<UserId> = envs.iter().flat_map(|e| e.users.iter().copied()).collect();
+    let groups: Vec<forge_core::GroupId> =
+        envs.iter().flat_map(|e| e.groups.iter().copied()).collect();
+    bounded(
+        state,
+        "deploy_approver_names",
+        deploy(state)?.approver_names(&users, &groups),
+    )
+    .await
+}
+
+/// `GET …/deploy/approvers` → `200`.
+pub async fn approvers(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let w = request.into_write();
+    let built = async {
+        let envs = bounded(
+            &state,
+            "deploy_approvers",
+            deploy(&state)?.approvers(&w.proof),
+        )
+        .await?;
+        let names = approver_names(&state, &envs).await?;
+        json(ApproversList {
+            environments: envs
+                .into_iter()
+                .map(|e| approvers_body(e, &names))
+                .collect(),
+        })
+    }
+    .await;
+    match built {
+        Ok(value) => no_store(StatusCode::OK, value),
+        Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
+/// `PUT …/deploy/environments/{tier}/approvers` → `200`.
+pub async fn put_approvers(
+    state: AppState,
+    request: Dispatched<ProjectCtx, PutApprovers>,
+) -> Response {
+    let path = request.raw_path().to_owned();
+    let w = request.into_write();
+    let built = async {
+        let (_, Shape::EnvironmentApprovers(tier)) = path_of(&path)? else {
+            return Err(param_invalid("tier", "unknown_environment"));
+        };
+        let spec = ApproversSpec {
+            users: w.input.users.clone(), // clone: the spec owns them
+            groups: w.input.groups.clone(),
+            selectors: w.input.selectors.clone(),
+            required: w.input.approvals_required,
+            allow_delegation: w.input.allow_delegation,
+        };
+        let stored = deploy(&state)?
+            .put_approvers(&change_request(&w), &w.proof, tier, &spec)
+            .await?;
+        let names = approver_names(&state, std::slice::from_ref(&stored)).await?;
+        json(approvers_body(stored, &names))
     }
     .await;
     match built {
@@ -590,6 +818,17 @@ mod unit {
         assert_eq!(
             path_of("/api/v1/projects/7/deployments/12/approve").expect("approve"),
             (ProjectId::new(7), Shape::Approve(12))
+        );
+        assert_eq!(
+            path_of("/api/v1/projects/7/deploy/approvers").expect("approvers"),
+            (ProjectId::new(7), Shape::Approvers)
+        );
+        assert_eq!(
+            path_of("/api/v1/projects/7/deploy/environments/prod/approvers").expect("env"),
+            (
+                ProjectId::new(7),
+                Shape::EnvironmentApprovers(DeployTier::Prod)
+            )
         );
         for bad in [
             "/api/v1/projects/0/deployments",

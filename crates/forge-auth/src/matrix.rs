@@ -494,6 +494,10 @@ pub(crate) enum Fixture {
         requested_by_me: bool,
         mr_author_me: bool,
         project: crate::matrix_review::MrProject,
+        /// ADR-0038 §3.4: the caller against the environment's approvers.
+        approvers: crate::model::ApproverGate,
+        /// ADR-0038 §3.5: whom the caller approves for.
+        behalf: DeployBehalf,
     },
     /// A binding as an act-as request reaches it (M3 X3):
     /// `matrix_rows_bindings.rs`.
@@ -522,6 +526,26 @@ pub(crate) struct Row {
 pub(crate) const ME: UserId = UserId::new(1);
 #[cfg(test)]
 pub(crate) const OTHER: UserId = UserId::new(2);
+
+/// ADR-0038 §3.5: the delegator of a deployment approval who is neither
+/// the requester nor behind the SHA.
+#[cfg(test)]
+pub(crate) const DELEGATOR: UserId = UserId::new(3);
+
+/// Whom a deployment approval of the matrix is given for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeployBehalf {
+    /// The caller themself.
+    Own,
+    /// The requester (a Maintainer).
+    Requester,
+    /// [`DELEGATOR`], holding this role on the project now.
+    Delegator(Option<Role>),
+    /// [`DELEGATOR`] (a Maintainer), without a delegation to the caller.
+    NoDelegation,
+    /// A name that does not resolve.
+    UnknownDelegator,
+}
 
 #[cfg(test)]
 impl Actor {
@@ -1320,6 +1344,8 @@ impl Fixture {
                 requested_by_me,
                 mr_author_me,
                 project,
+                approvers,
+                behalf,
             } => Resource::Deployment(crate::model::DeploymentView {
                 project: match project {
                     crate::matrix_review::MrProject::Private => private,
@@ -1336,6 +1362,24 @@ impl Fixture {
                     vec![OTHER, ME]
                 } else {
                     vec![OTHER]
+                },
+                approvers,
+                on_behalf_of: match behalf {
+                    DeployBehalf::Own | DeployBehalf::UnknownDelegator => None,
+                    DeployBehalf::Requester => Some(OTHER),
+                    DeployBehalf::Delegator(_) | DeployBehalf::NoDelegation => Some(DELEGATOR),
+                },
+                delegator_role: match behalf {
+                    DeployBehalf::Own | DeployBehalf::UnknownDelegator => None,
+                    DeployBehalf::Requester | DeployBehalf::NoDelegation => Some(Role::Maintainer),
+                    DeployBehalf::Delegator(role) => role,
+                },
+                delegation_refused: match behalf {
+                    DeployBehalf::NoDelegation => Some("no_delegation"),
+                    DeployBehalf::UnknownDelegator => Some("unknown_delegator"),
+                    DeployBehalf::Own | DeployBehalf::Requester | DeployBehalf::Delegator(_) => {
+                        None
+                    }
                 },
             }),
             Fixture::Mr(mr) => mr.resource(role),

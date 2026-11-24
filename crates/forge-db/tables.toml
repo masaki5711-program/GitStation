@@ -1057,3 +1057,32 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── ADR-0038 §3 (20270102100000, step C): approvers of a deploy environment
+# (users, groups, organisation selectors), set by an Owner or an
+# administrator (`deploy_environment.approvers_set`, on the project); the
+# approvals of a deployment (derived: written with `deployment.approved` in
+# the same transaction); a person's delegation of approvals (set and removed
+# by the person, audited on them) ──
+[tables.deploy_environment_approvers]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+[tables.deployment_approvals]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.approval_delegations]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "user"
+audit_id_column = "delegator_id"
+unaudited_columns = []
+txn_audited_columns = []

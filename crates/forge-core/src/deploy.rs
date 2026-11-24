@@ -413,12 +413,31 @@ pub enum DeployChange {
         sha: String,
         status: DeploymentStatus,
     },
-    /// `deployment.approved`.
+    /// `deployment.approved`: one approval (ADR-0038 §3: the deployment
+    /// is `queued` once `approvals` reaches `required`).
     Approved {
         project: ProjectId,
         deployment: i64,
         tier: DeployTier,
         sha: String,
+        /// The delegator the approver approved for (ADR-0038 §3.5).
+        on_behalf_of: Option<crate::UserId>,
+        /// The distinct people the deployment's approvals count for now.
+        approvals: i64,
+        required: i32,
+        queued: bool,
+    },
+    /// `deploy_environment.approvers_set` (ADR-0038 §3.4, §3.6): who may
+    /// approve the environment's deployments (an Owner's or an
+    /// administrator's change). Ids, codes and counts only.
+    ApproversSet {
+        project: ProjectId,
+        tier: DeployTier,
+        users: Vec<crate::UserId>,
+        groups: Vec<crate::GroupId>,
+        selectors: Vec<serde_json::Value>,
+        required: i32,
+        allow_delegation: bool,
     },
     /// The worker side (the system): `deployment.started` (`running`),
     /// `.succeeded`, `.failed`, `.rolled_back`, `.rollback_failed`,
@@ -443,6 +462,7 @@ impl DeployChange {
             Self::TargetSet { created: false, .. } => "deploy_target.updated",
             Self::Requested { .. } => "deployment.requested",
             Self::Approved { .. } => "deployment.approved",
+            Self::ApproversSet { .. } => "deploy_environment.approvers_set",
             Self::Progress {
                 abandoned: true, ..
             } => "deployment.abandoned",
@@ -466,6 +486,7 @@ impl DeployChange {
             | Self::TargetSet { project, .. }
             | Self::Requested { project, .. }
             | Self::Approved { project, .. }
+            | Self::ApproversSet { project, .. }
             | Self::Progress { project, .. } => *project,
         }
     }
@@ -530,11 +551,36 @@ impl DeployChange {
                 deployment,
                 tier,
                 sha,
+                on_behalf_of,
+                approvals,
+                required,
+                queued,
             } => serde_json::json!({
                 "project_id": project.get(),
                 "deployment_id": deployment,
                 "environment": tier.as_str(),
                 "sha": sha,
+                "on_behalf_of": on_behalf_of.map(|u| u.get()),
+                "approvals": approvals,
+                "required": required,
+                "queued": queued,
+            }),
+            Self::ApproversSet {
+                project,
+                tier,
+                users,
+                groups,
+                selectors,
+                required,
+                allow_delegation,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "environment": tier.as_str(),
+                "user_ids": users.iter().map(|u| u.get()).collect::<Vec<_>>(),
+                "group_ids": groups.iter().map(|g| g.get()).collect::<Vec<_>>(),
+                "selectors": selectors,
+                "approvals_required": required,
+                "allow_delegation": allow_delegation,
             }),
             Self::Progress {
                 project,

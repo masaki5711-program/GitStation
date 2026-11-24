@@ -203,7 +203,13 @@ impl World {
         prove(
             &self.principal(user, credential),
             Action::DeployApprove,
-            DeploymentCtx::new(loaded_project, loaded_deployment(&stored)),
+            DeploymentCtx::new(
+                loaded_project,
+                loaded_deployment(
+                    &stored,
+                    crate::ApproverFact::own(forge_auth::ApproverGate::Unrestricted),
+                ),
+            ),
         )
     }
 }
@@ -314,7 +320,7 @@ async fn the_requester_cannot_approve_their_own_deployment() {
         .expect("allowed");
     let approved = w
         .deploy
-        .approve(&request("req-a1"), &proof)
+        .approve(&request("req-a1"), &proof, None)
         .await
         .expect("approve");
     assert_eq!(approved.status, DeploymentStatus::Queued);
@@ -338,7 +344,7 @@ async fn requesting_the_same_sha_again_waits_for_a_new_approval() {
         .await
         .expect("allowed");
     w.deploy
-        .approve(&request("req-a1"), &proof)
+        .approve(&request("req-a1"), &proof, None)
         .await
         .expect("approve");
     // A retried deployment of the same SHA is a new request: it waits.

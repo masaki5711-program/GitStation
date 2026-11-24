@@ -1054,6 +1054,18 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── ADR-0038 §3 (step C): approvers and delegations (20270102100000) ──
+        ("forge.deploy_environment_approvers", operational()),
+        // Written once, never changed (review of step C): no UPDATE.
+        (
+            "forge.deployment_approvals",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("deployment_approvals")?,
+            ]
+            .concat(),
+        ),
+        ("forge.approval_delegations", operational()),
         // ── Plan 16 A3: the agent marketplace (20270103100000): no DELETE
         // on the published tables, UPDATE of the changing columns only ──
         // The keys: forge_app reads; forge_seq writes, only through
@@ -1371,6 +1383,10 @@ const LATER_TABLES: &[&str] = &[
     // ── ADR-0038 §2: org bindings (20270101100000) ──
     "org_bindings",
     "org_access_policy",
+    // ── ADR-0038 §3 (step C): approvers and delegations (20270102100000) ──
+    "deploy_environment_approvers",
+    "deployment_approvals",
+    "approval_delegations",
     // ── Plan 16 A3: the agent marketplace (20270103100000) ──
     "agent_signing_keys",
     "agent_parts",

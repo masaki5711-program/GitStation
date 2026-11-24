@@ -2002,10 +2002,18 @@
           "name": "--group",
           "repeatable": false,
           "required": false
+        },
+        {
+          "description": "An organisation selector as a JSON object (repeatable, at most 5), e.g. {\"relation\":\"requester_section\",\"min_rank\":55}.",
+          "kind": "option",
+          "name": "--selector",
+          "repeatable": false,
+          "required": false
         }
       ],
       "examples": [
-        "gstn approval-rule set --project 7 --name backend --required 2 --target-pattern refs/heads/main --group acme/backend"
+        "gstn approval-rule set --project 7 --name backend --required 2 --target-pattern refs/heads/main --group acme/backend",
+        "gstn approval-rule set --project 7 --name manager --required 1 --selector '{\"relation\":\"requester_section\",\"min_rank\":55,\"escalate\":\"parent\"}'"
       ],
       "name": "approval-rule set",
       "output": {
@@ -3551,6 +3559,13 @@
           "name": "--sha",
           "repeatable": false,
           "required": true
+        },
+        {
+          "description": "Approve for this person (a username) who delegated to you for now (FG-REVIEW-0033 otherwise).",
+          "kind": "option",
+          "name": "--on-behalf-of",
+          "repeatable": false,
+          "required": false
         }
       ],
       "examples": [
@@ -7818,6 +7833,131 @@
         "api"
       ],
       "summary": "Request a deployment of a commit (Developer): pending_approval when the environment requires an approval (always prod), queued otherwise; 409 FG-DEPLOY-0002 in a freeze window."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn deploy approvers --project 7 --json"
+      ],
+      "name": "deploy approvers",
+      "output": {
+        "required": [
+          "environments"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/deploy/approvers"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Each deployment environment's approvers (ADR-0038 §3.4): named users, groups, organisation selectors, how many approvals a deployment needs and whether a delegate may approve; unrestricted = any Maintainer (project readers)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "dev, stg or prod.",
+          "kind": "positional",
+          "name": "tier",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A username (repeatable, at most 20).",
+          "kind": "option",
+          "name": "--user",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A group full path (repeatable, at most 10).",
+          "kind": "option",
+          "name": "--group",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "An organisation selector as a JSON object (repeatable, at most 5).",
+          "kind": "option",
+          "name": "--selector",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "How many of them must approve (1..=20, default 1).",
+          "kind": "option",
+          "name": "--required",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A delegate may approve for a named person.",
+          "kind": "flag",
+          "name": "--allow-delegation",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn deploy approvers-set --project 7 prod --user qa-lead --selector '{\"relation\":\"requester_department\",\"min_rank\":55}' --required 2"
+      ],
+      "name": "deploy approvers-set",
+      "output": {
+        "required": [
+          "tier",
+          "unrestricted",
+          "users",
+          "groups",
+          "selectors",
+          "approvals_required",
+          "allow_delegation"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/deploy/environments/{tier}/approvers"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Set who may approve an environment's deployments (an Owner, a person): named users approve from Reporter, group members and people a selector finds from Maintainer; nobody else once any is named (FG-DEPLOY-0014). No --user, --group or --selector: any Maintainer. Audited."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn delegation show --json"
+      ],
+      "name": "delegation show",
+      "output": {
+        "required": [
+          "mine",
+          "to_me"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/approval-delegation"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Your delegation of approvals (who approves for you and when) and the people who delegate to you (ADR-0038 §3.5). Setting one is done in the browser (個人設定 → 代理の承認): a token is refused."
     },
     {
       "args": [

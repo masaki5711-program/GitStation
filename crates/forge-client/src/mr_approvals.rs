@@ -108,6 +108,48 @@ fn state_human(body: &Value) -> String {
 conflict: the head does not merge cleanly into the target (resolve it first)",
         );
     }
+    // ADR-0038 §3.3: who can approve, and why no one can.
+    for e in list("eligible") {
+        let people: Vec<String> = e["people"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| crate::error::sanitize(p["username"].as_str().unwrap_or("")))
+            .collect();
+        let rule = crate::error::sanitize(e["rule"].as_str().unwrap_or(""));
+        if people.is_empty() {
+            let why: Vec<String> = e["unresolved"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|u| {
+                    let reason = crate::error::sanitize(u["reason"].as_str().unwrap_or(""));
+                    match u["detail"].as_str() {
+                        Some(d) => format!("{reason} ({})", crate::error::sanitize(d)),
+                        None => reason,
+                    }
+                })
+                .collect();
+            out.push_str(&format!(
+                "\nrule {rule}: no one can approve{}",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", why.join(", "))
+                }
+            ));
+        } else {
+            out.push_str(&format!(
+                "\nrule {rule} can be approved by {}{}",
+                people.join(", "),
+                if e["more"] == Value::Bool(true) {
+                    ", ..."
+                } else {
+                    ""
+                }
+            ));
+        }
+    }
     let blocks = list("blocked_by");
     if blocks.is_empty() {
         out.push_str("\nnothing blocks on approvals");
@@ -125,21 +167,26 @@ conflict: the head does not merge cleanly into the target (resolve it first)",
     out
 }
 
-/// `gstn mr approve`.
+/// `gstn mr approve` (`--on-behalf-of`: ADR-0038 §3.5).
 pub fn approve(
     cli: &Cli,
     (project, iid): (i64, i64),
     sha: &str,
+    on_behalf_of: Option<&str>,
     env: EnvFn<'_>,
     io: &mut Io<'_>,
 ) -> Result<()> {
     let c = client(cli, env, io)?;
+    let req = match on_behalf_of {
+        Some(who) => json!({ "sha": sha, "on_behalf_of": who }),
+        None => json!({ "sha": sha }),
+    };
     let body = call(
         &c,
         Method::Post,
         &format!("{}/approve", one(project, iid)),
         &[],
-        Some(&json!({ "sha": sha })),
+        Some(&req),
     )?;
     let h = answer_human(&body);
     emit(io, cli, body, &h)
@@ -210,7 +257,18 @@ pub fn approval_rule(
             target_pattern,
             user,
             group,
+            selector,
         } => {
+            let selectors = selector
+                .iter()
+                .map(|s| serde_json::from_str::<Value>(s))
+                .collect::<std::result::Result<Vec<Value>, _>>()
+                .map_err(|_| {
+                    crate::error::ClientError::local(
+                        forge_errors::ErrorCode::CliUsageInvalid,
+                        "reason=selector_not_json",
+                    )
+                })?;
             let c = client(cli, env, io)?;
             // U2 follow-up: the rule this replaces, as read now (`null`: no
             // rule has the name, create only); changed in between is
@@ -225,6 +283,7 @@ pub fn approval_rule(
                 "required_approvals": required,
                 "users": user,
                 "groups": group,
+                "selectors": selectors,
                 "expected_updated_at": expected,
             });
             let body = call(

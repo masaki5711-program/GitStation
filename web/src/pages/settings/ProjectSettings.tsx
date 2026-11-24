@@ -26,6 +26,7 @@ import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefresh
 import { AiAssetsSection } from './AiAssetsSettings';
 import { AutoMergeSection } from './AutoMergeSettings';
 import { AutofixSection } from './AutofixSettings';
+import { DeployApproversSection } from './DeployApprovers';
 import { DocLintMigrationSection } from './DocLintMigration';
 import { GeneralForm, MoveForm } from './Forms';
 import { IntegrationBindingsSection } from './IntegrationBindings';
@@ -42,6 +43,7 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
   useDocumentTitle(t('settings.title'));
   // Edit controls of the merge sections come from these flags only (U2).
   const viewer = useMergeViewer(projectId);
+  const session = useSession();
   if (project.isPending) return <Loading />;
   if (project.isError) {
     return (
@@ -90,6 +92,8 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       <MergingSection projectId={projectId} />
       <ApprovalRulesSection projectId={projectId} canManage={viewer.can_manage} />
       <MergeConditionsSection projectId={projectId} canManage={viewer.can_manage} />
+      {/* ADR-0038 §3.6: who approves deployments is an Owner's (or an administrator's). */}
+      <DeployApproversSection projectId={projectId} canManage={p.role === 'owner' || session.user.is_admin} />
       <AutoMergeSection projectId={projectId} />
       <AutofixSection projectId={projectId} />
       <AiAssetsSection projectId={projectId} />

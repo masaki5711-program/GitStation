@@ -133,6 +133,37 @@ R5 の 4 回目から、コミッターは push を受けた時点で記録す�
 | `FG-SYS-0001 reason=stored_approval_rule_invalid`（`approval_rule_id`） | 保存された承認の規則の `target_pattern` をこの版が読めない。その project の評価（`GET …/approvals`、`…/status`、マージ）と規則の一覧が失敗する（読めない規則を飛ばすと条件が緩むので閉じる側） | 読む: `SELECT id, name, target_pattern, updated_at FROM forge.approval_rules WHERE id = <approval_rule_id>;`。Maintainer が `gstn approval-rule remove --project <id> --name <name> --yes` で消し、正しい pattern で作り直す `[MUTATING — needs approval]`（戻し方: 同じ値で `gstn approval-rule set`） |
 | warn `forge.web.approver_names_incomplete`（`error_code`、`request_id`、`project_id`、`missing_users`、`missing_groups`） | 規則の答えで名前を引けない承認者がいた（グループの namespace の行が無い、または名前の読み取りの失敗・時間切れ）。その承認者は `users` / `groups` から外れるが `user_ids` / `group_ids` には残る。**マージの判定には影響しない**（評価は id だけを読む）。画面はその規則の保存を出さない | 読み取りの失敗なら `error_code` のコードの runbook。名前が無いなら `SELECT g.id, n.id FROM forge.groups g LEFT JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = g.id WHERE g.id = ANY('{<group_ids>}');` で namespace の行の欠けを確かめ、runbook namespace-data へ |
 
+### 組織・名指し・代理による承認者（ADR-0038 段 C）
+
+承認の規則の承認者は、利用者（名指し）・グループ・**組織の selector**（申請者の課 / 部 / 指定した組織 の職位ランク N 以上、
+または職位コード）を混ぜて書ける。どれかに当てはまる人の承認を `required_approvals` 人分数える（同じ人は 1 回）。
+本人・変更者・古い head・人でない、の除外は selector より先（職位が高くても自分の MR は数えない）。
+
+- **selector は承認した時点の写しで判定する**: 承認の行の `approver_org`（コード・階層・ランク・職位・digest だけ）を、MR の
+  作成者の **今の** 主所属から求めた組織と比べる。承認の時に写しが古い・不正だった承認は selector に当てはまらない
+  （`not_in_rule`）。後で異動しても、その時に正しかった承認は有効。
+- `escalate: parent`: 申請者の組織に **承認できる人（Developer 以上の人、作成者を除く）が 0 人** のときだけ 1 つ上の組織で選び直す。
+  人数を数えられない（工場の写しが 2 000 人を超える）ときは広げない。
+- **代理**: 本人が 個人設定 → 代理の承認 で代理の人と期間（最長 30 日）を登録すると、代理の人は `on_behalf_of` を付けて
+  本人の代わりに承認できる（承認の行に `on_behalf_of` が残る）。代理の代理は無い。本人が作成者・変更者・無効なら数えない。
+
+`gstn mr approvals --project <id> --iid <iid>` の `eligible`（画面の「承認できる人」）が規則ごとに承認できる人を出す。0 人のとき:
+
+| `eligible[].unresolved[].reason` / 状態 | 意味 | 対処 |
+|---|---|---|
+| `requester_org_unknown`（`detail` = `no_snapshot` / `stale_snapshot` / `invalid_snapshot` / `master_stale` / `master_missing` / `not_in_master` …） | MR の作成者の所属を確かめられない（ADR-0038 §4、閉じる側） | 作成者が一度 web で PFS にログインし直す（写しが新しくなる）。`master_*` なら runbook oidc-login 「組織の台帳の写し」 |
+| `requester_no_section` / `requester_no_department` | 作成者の主所属の上に課 / 部が無い（台帳の階層） | 規則を `relation: unit` で組織を指定するものに変えるか、名指しの承認者を足す（Maintainer） |
+| `unit_not_in_master` | `relation: unit` の組織コードが台帳の写しに無い（閉じた・誤り） | 規則のコードを直す |
+| `people` が空で `unresolved` も空 | 組織は決まったが、条件（ランク・職位、Developer 以上）に当てはまる人がいない | `escalate: parent` を付ける、名指しの人を足す、職位の条件を見直す |
+| `incomplete: true` | 工場の写しの人数が多く、候補を数えられなかった | 一覧は短いことがある。承認自体はそれぞれの写しで判定される |
+
+代理の承認の拒否は FG-REVIEW-0033（代理が無い・期間外・別の人）。本人の承認（本人または別の代理の分）がもうあるときは
+FG-REVIEW-0034（1 人 1 件。本人が自分で承認すると代理の承認は `unapproved` で終わる）。代理の承認は、本人のロールが Developer 未満なら
+数えない（`role_insufficient`）。本人が代理を外す・別の人に替えると、その代理の承認は `delegation_ended` で終わる。期間が切れた代理の承認は
+新しい版に引き継がない（`new_commits`）。読む（読み取りのみ）:
+`SELECT delegator_id, delegate_id, starts_at, ends_at FROM forge.approval_delegations WHERE delegator_id = <user id>;`、
+承認の行: `SELECT approver_id, on_behalf_of, approver_org FROM forge.merge_request_approvals WHERE merge_request_id = <id> AND revoked_at IS NULL;`
+
 ## Diagnose（読み取りのみ）
 
 1. `gstn mr approvals --project <id> --iid <n> --json` で `approvals`・`rules`・`codeowners`・`blocked_by` を見る。
@@ -142,7 +173,7 @@ R5 の 4 回目から、コミッターは push を受けた時点で記録す�
    `git --git-dir <repo> rev-list <head> ^<target の先端>` と
    `SELECT id, actor_user_id, details -> 'refs' FROM forge.audit_log WHERE project_id = <id> AND action = 'repository.pushed' ORDER BY id DESC LIMIT 50;`
 4. 承認が消えた: `SELECT id, approver_id, head_sha, target_branch, revoked_at, revoked_reason FROM forge.merge_request_approvals WHERE merge_request_id = <mr_id> ORDER BY id;`
-   （`new_commits` = 新しい版、`target_changed` = target の変更、`unapproved` = 本人の取り消し。イベント `merge_request.unapproved` も同じ）。
+   （`new_commits` = 新しい版、`target_changed` = target の変更、`unapproved` = 本人の取り消し、`delegation_ended` = 代理を外した・替えた。イベント `merge_request.unapproved` も同じ）。
 
 ## Mitigate
 

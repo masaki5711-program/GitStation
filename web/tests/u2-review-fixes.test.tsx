@@ -130,6 +130,7 @@ describe('HIGH 2: approval rule names', () => {
       target_pattern: 'refs/heads/main',
       users: ['jiro'],
       groups: ['acme'],
+      selectors: [],
       expected_updated_at: RULE.updated_at,
     });
   });

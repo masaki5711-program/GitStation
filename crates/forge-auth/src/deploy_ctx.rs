@@ -5,7 +5,7 @@
 //! was decided on cannot disagree.
 
 use forge_core::deploy::DeployTier;
-use forge_core::{ProjectId, UserId};
+use forge_core::{ProjectId, Role, UserId};
 
 use crate::model::{DeploymentView, ProjectView, Resource};
 use crate::prove::{sealed, LoadedProject, ResourceCtx};
@@ -20,6 +20,14 @@ pub struct LoadedDeployment {
     /// The people behind the SHA: merge request authors, pushers, the
     /// commit author and committer (as accounts).
     pub change_authors: Vec<UserId>,
+    /// ADR-0038 §3.4: the caller against the environment's approvers.
+    pub approvers: crate::model::ApproverGate,
+    /// ADR-0038 §3.5: the delegator the caller approves for.
+    pub on_behalf_of: Option<UserId>,
+    /// The delegator's native role on the project now.
+    pub delegator_role: Option<Role>,
+    /// Why the named delegation does not hold now.
+    pub delegation_refused: Option<&'static str>,
 }
 
 /// A deployment of a project (`DeployApprove`). The id is the project and
@@ -57,6 +65,10 @@ impl ResourceCtx for DeploymentCtx {
             tier: self.deployment.tier,
             requested_by: self.deployment.requested_by,
             change_authors: self.deployment.change_authors.clone(), // clone: the resource owns it
+            approvers: self.deployment.approvers,
+            on_behalf_of: self.deployment.on_behalf_of,
+            delegator_role: self.deployment.delegator_role,
+            delegation_refused: self.deployment.delegation_refused,
         })
     }
     fn id(&self) -> (ProjectId, i64) {

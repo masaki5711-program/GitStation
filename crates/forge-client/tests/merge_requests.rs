@@ -1027,7 +1027,7 @@ fn approval_rule_commands_call_their_routes() {
     assert_eq!(
         serde_json::from_str::<Value>(&r.body).expect("json"),
         json!({"target_pattern": "refs/heads/main", "required_approvals": 2, "users": ["rita"],
-               "groups": [], "expected_updated_at": "2026-11-03T00:00:00.123456Z"})
+               "groups": [], "selectors": [], "expected_updated_at": "2026-11-03T00:00:00.123456Z"})
     );
     // A name no rule has: create only.
     let o = gstn(

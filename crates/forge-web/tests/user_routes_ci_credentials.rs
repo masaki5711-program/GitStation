@@ -261,6 +261,27 @@ const ROUTES: &[(&str, &str, &str, Option<&str>)] = &[
         "/api/v1/user/sessions/0123456789abcdef",
         None,
     ),
+    // ADR-0038 §3.5 (step C): the delegation of approvals.
+    (
+        "GET",
+        "/api/v1/user/approval-delegation",
+        "/api/v1/user/approval-delegation",
+        None,
+    ),
+    (
+        "PUT",
+        "/api/v1/user/approval-delegation",
+        "/api/v1/user/approval-delegation",
+        Some(
+            r#"{"delegate":"bob","starts_at":"2026-12-01T00:00:00Z","ends_at":"2026-12-05T00:00:00Z"}"#,
+        ),
+    ),
+    (
+        "DELETE",
+        "/api/v1/user/approval-delegation",
+        "/api/v1/user/approval-delegation",
+        None,
+    ),
     (
         "GET",
         "/api/v1/user/notification-preferences",

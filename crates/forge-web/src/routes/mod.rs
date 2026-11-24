@@ -66,6 +66,8 @@ pub mod context;
 pub mod tokens;
 // M4 C13: the caller's SSH keys (ADR-0033 §2).
 pub mod ssh_keys;
+// ADR-0038 §3.5: a person's delegation of approvals.
+pub mod approval_delegation;
 pub mod user_activity;
 pub mod user_merge_requests;
 // ADR-0036: the PFS portal's home widgets.

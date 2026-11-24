@@ -103,6 +103,7 @@ impl World {
             (self.web.project_id, self.mr.iid),
             who,
             None,
+            &crate::review::ApproveAs::own_unknown(),
             |_| Ok(()),
             |_, facts, id| {
                 assert!(facts.approvals.iter().any(|a| a.approval.id == id));
@@ -334,6 +335,7 @@ async fn an_approval_past_the_cap_is_refused() {
         (w.web.project_id, w.mr.iid),
         w.bob,
         None,
+        &crate::review::ApproveAs::own_unknown(),
         |_| Ok(()),
         |_, _, _| (true, None),
     )
@@ -351,6 +353,7 @@ async fn approval_rules_are_put_replaced_and_removed() {
         required_approvals: required,
         users,
         groups: Vec::new(),
+        selectors: Vec::new(),
     };
     let put = |new: NewApprovalRule, request: &'static str| {
         let db = w.t.db.clone();
@@ -743,5 +746,278 @@ async fn a_carry_keeps_or_ends_each_approval_by_its_approved_head() {
         Some(oid('a')),
         "still bob's first head"
     );
+    w.t.drop_now().await;
+}
+
+// ── Review of ADR-0038 step C: delegated approvals ──────────────────────
+
+impl World {
+    /// `who` approves for `on_behalf_of` (or themself).
+    async fn approve_for(
+        &self,
+        who: UserId,
+        on_behalf_of: Option<UserId>,
+        request: &str,
+    ) -> Result<(ApproveOutcome, StoredApproval), ForgeError> {
+        approve_mr_decided(
+            &self.t.db,
+            &as_user(who, request),
+            (self.web.project_id, self.mr.iid),
+            who,
+            None,
+            &crate::review::ApproveAs {
+                on_behalf_of,
+                org: forge_core::approver::PersonOrg::Unknown("not_read".to_owned()),
+            },
+            |_| Ok(()),
+            |_, _, _| (true, None),
+        )
+        .await
+        .map(|(o, a, ())| (o, a))
+    }
+
+    /// `delegator` delegates to `delegate` from a day ago for ten days.
+    async fn delegate(&self, delegator: UserId, delegate: &str, request: &str) {
+        let (s, e): (String, String) = sqlx::query_as(
+            "SELECT to_char((now() - interval '1 day') AT TIME ZONE 'UTC', \
+               'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
+             to_char((now() + interval '9 days') AT TIME ZONE 'UTC', \
+               'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')",
+        )
+        .fetch_one(&mut self.t.superuser().await)
+        .await
+        .expect("period");
+        let (outcome, _) = set_delegation_decided(
+            &self.t.db,
+            &as_user(delegator, request),
+            delegator,
+            delegate,
+            &s,
+            &e,
+        )
+        .await
+        .expect("delegation");
+        assert_eq!(outcome, DelegationOutcome::Set);
+    }
+
+    async fn revoked_reason(&self, approval: forge_core::ApprovalId) -> Option<String> {
+        sqlx::query_scalar("SELECT revoked_reason FROM forge.merge_request_approvals WHERE id = $1")
+            .bind(approval.get())
+            .fetch_one(&mut self.t.superuser().await)
+            .await
+            .expect("row")
+    }
+}
+
+async fn carol(w: &World) -> UserId {
+    users::create(
+        &w.t.db,
+        &system("req-user-carol"),
+        &NewUser::human("carol", "carol", "carol@example.test"),
+    )
+    .await
+    .expect("carol")
+    .user_id
+}
+
+#[tokio::test]
+async fn one_person_holds_one_live_approval_and_a_removed_delegation_ends_its_approvals() {
+    let w = world().await;
+    let carol = carol(&w).await;
+    // Bob (no role on the project) and Alice (its Owner) delegate to Carol.
+    w.delegate(w.bob, "carol", "req-delegate-bob").await;
+    let (_, for_bob) = w
+        .approve_for(carol, Some(w.bob), "req-for-bob")
+        .await
+        .expect("for bob");
+    // The delegator's role is loaded with the approval (`None`: none).
+    let facts = approval_facts(&w.t.db, w.web.project_id, w.mr.id)
+        .await
+        .expect("facts");
+    let d = facts.approvals[0].delegator.as_ref().expect("delegator");
+    assert_eq!((d.user, d.role), (w.bob, None));
+    // Bob approves himself: his delegate's approval for him ends.
+    let _ = w.approve(w.bob, "req-bob-self").await;
+    assert_eq!(
+        w.revoked_reason(for_bob.id).await.as_deref(),
+        Some("unapproved")
+    );
+    assert_eq!(w.live().await.len(), 1);
+    // Carol approving for Bob now is refused: Bob's approval is there.
+    let twice = w
+        .approve_for(carol, Some(w.bob), "req-for-bob-again")
+        .await
+        .expect_err("bob holds one");
+    assert_eq!(twice.code(), ErrorCode::ApprovalPersonAlreadyApproved);
+    // The index is the backstop: a second live row for Bob is refused by
+    // the database itself (23505, before any deferred trigger).
+    let raw = sqlx::query(
+        "INSERT INTO forge.merge_request_approvals (merge_request_id, project_id, approver_id, \
+         head_sha, target_branch, credential_origin, on_behalf_of) \
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', 'session', $5)",
+    )
+    .bind(w.mr.id.get())
+    .bind(w.web.project_id.get())
+    .bind(carol.get())
+    .bind(oid('a').as_str())
+    .bind(w.bob.get())
+    .execute(&mut w.t.superuser().await)
+    .await
+    .expect_err("unique per person");
+    let constraint = raw
+        .as_database_error()
+        .and_then(|e| e.constraint())
+        .map(str::to_owned);
+    assert_eq!(
+        constraint.as_deref(),
+        Some("merge_request_approvals_one_live_per_person")
+    );
+    // Alice delegates to Carol too; Carol approves for her (role Owner).
+    w.delegate(w.alice, "carol", "req-delegate-alice").await;
+    let (_, for_alice) = w
+        .approve_for(carol, Some(w.alice), "req-for-alice")
+        .await
+        .expect("for alice");
+    let facts = approval_facts(&w.t.db, w.web.project_id, w.mr.id)
+        .await
+        .expect("facts");
+    let a = facts
+        .approvals
+        .iter()
+        .find(|a| a.approval.id == for_alice.id)
+        .and_then(|a| a.delegator.as_ref())
+        .expect("alice");
+    assert_eq!(a.role, Some(forge_core::Role::Owner));
+    // Alice removes her delegation: Carol's approval for her ends with it.
+    let removed = remove_delegation_decided(&w.t.db, &as_user(w.alice, "req-undelegate"), w.alice)
+        .await
+        .expect("remove");
+    assert_eq!(removed, DelegationOutcome::Removed);
+    assert_eq!(
+        w.revoked_reason(for_alice.id).await.as_deref(),
+        Some("delegation_ended")
+    );
+    let ended = w.events("merge_request.unapproved").await;
+    assert_eq!(
+        ended.last().expect("event")["reason"],
+        "delegation_ended",
+        "{ended:?}"
+    );
+    // Bob's own approval is untouched.
+    let live = w.live().await;
+    assert_eq!(live.len(), 1);
+    assert_eq!((live[0].approver, live[0].on_behalf_of), (w.bob, None));
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_carry_ends_an_approval_whose_delegation_no_longer_holds() {
+    let w = world().await;
+    let carol = carol(&w).await;
+    w.keep_approvals().await;
+    w.delegate(w.bob, "carol", "req-delegate").await;
+    let (_, for_bob) = w
+        .approve_for(carol, Some(w.bob), "req-for-bob")
+        .await
+        .expect("for bob");
+    // The delegation's period passes (as if time went by).
+    let mut su = w.t.superuser().await;
+    sqlx::raw_sql(&format!(
+        "BEGIN; \
+         INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
+           request_id, details) VALUES ('system', 'approval_delegation.set', 'succeeded', \
+           'user', {bob}, 'req-test-expire', '{{}}'); \
+         UPDATE forge.approval_delegations SET starts_at = now() - interval '3 days', \
+           ends_at = now() - interval '1 day' WHERE delegator_id = {bob}; \
+         COMMIT;",
+        bob = w.bob.get()
+    ))
+    .execute(&mut su)
+    .await
+    .expect("expire");
+    w.carry("req-v2", ('a', 'b'), &['a']).await;
+    assert!(w.live().await.is_empty(), "not carried");
+    assert_eq!(
+        w.revoked_reason(for_bob.id).await.as_deref(),
+        Some("new_commits")
+    );
+    w.t.drop_now().await;
+}
+
+/// Re-review of ADR-0038 step C (HIGH): a delegate who approved more merge
+/// requests than one change may end is still revocable — the delegation
+/// row goes at once and the approvals end in batches of their own.
+#[tokio::test]
+async fn a_delegation_with_more_approvals_than_one_change_holds_is_still_removed() {
+    let w = world().await;
+    let carol = carol(&w).await;
+    w.delegate(w.bob, "carol", "req-delegate").await;
+    let many = usize::try_from(super::approvals::DELEGATED_BATCH).expect("batch") + 11;
+    for n in 0..many {
+        let (mr, ()) = open_mr_decided(
+            &w.t.db,
+            &as_user(w.alice, &format!("req-open-{n}")),
+            w.web.project_id,
+            w.alice,
+            &NewMergeRequest {
+                title: format!("Change {n}"),
+                description: String::new(),
+                source_branch: RefName::parse(&format!("refs/heads/f{n}")).expect("branch"),
+                target_branch: RefName::parse("refs/heads/main").expect("branch"),
+                draft: false,
+            },
+            |_| Ok(()),
+        )
+        .await
+        .expect("open");
+        record_mr_version(
+            &w.t.db,
+            &system(&format!("req-v-{n}")),
+            mr.id,
+            &oid('a'),
+            Some(w.alice),
+        )
+        .await
+        .expect("version");
+        let _ = approve_mr_decided(
+            &w.t.db,
+            &as_user(carol, &format!("req-for-bob-{n}")),
+            (w.web.project_id, mr.iid),
+            carol,
+            None,
+            &crate::review::ApproveAs {
+                on_behalf_of: Some(w.bob),
+                org: forge_core::approver::PersonOrg::Unknown("not_read".to_owned()),
+            },
+            |_| Ok(()),
+            |_, _, _| (true, None),
+        )
+        .await
+        .expect("approve for bob");
+    }
+    let live = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM forge.merge_request_approvals \
+             WHERE on_behalf_of = $1 AND revoked_at IS NULL",
+        )
+        .bind(w.bob.get())
+        .fetch_one(&mut w.t.superuser().await)
+        .await
+        .expect("count")
+    };
+    assert_eq!(live().await, i64::try_from(many).expect("many"));
+    let removed = remove_delegation_decided(&w.t.db, &as_user(w.bob, "req-undelegate"), w.bob)
+        .await
+        .expect("removed, however many approvals");
+    assert_eq!(removed, DelegationOutcome::Removed);
+    assert_eq!(live().await, 0);
+    let ended: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM forge.events WHERE event_type = 'merge_request.unapproved' \
+         AND payload ->> 'reason' = 'delegation_ended'",
+    )
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("events");
+    assert_eq!(ended, i64::try_from(many).expect("many"));
     w.t.drop_now().await;
 }

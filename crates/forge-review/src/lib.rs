@@ -42,7 +42,8 @@ use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
 pub use forge_db::review::{
-    ApproveOutcome, ApproverNames, RuleOutcome, StoredApproval, StoredApprovalRule,
+    ApproveOutcome, ApproverNames, DelegationOutcome, RuleOutcome, StoredApproval,
+    StoredApprovalRule, StoredDelegation,
 };
 pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, UserName, MAX_PAGE};
 

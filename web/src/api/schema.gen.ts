@@ -1415,6 +1415,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/deploy/approvers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Each deployment environment's approvers: named users, groups, organisation selectors, how many approvals a deployment needs and whether a delegate may approve; unrestricted = any Maintainer (project readers) */
+        get: operations["get_api_v1_projects_id_deploy_approvers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/deploy/environments": {
         parameters: {
             query?: never;
@@ -1442,6 +1459,23 @@ export interface paths {
         get?: never;
         /** Create or change a deployment environment ({"requires_approval", "auto_rollback", "approval_ttl_minutes"?, "auto_deploy_ref"?, "freeze_windows"?}): 201 created or 200 changed; prod always requires an approval and never rolls back or deploys by itself (400 FG-WEB-0006); audited (people only; Maintainer) */
         put: operations["put_api_v1_projects_id_deploy_environments_tier"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deploy/environments/{tier}/approvers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set who may approve an environment's deployments ({"users", "groups", "selectors", "approvals_required", "allow_delegation"?}): named users approve from Reporter, group members and people a selector finds from Maintainer; nobody else once any is named (403 FG-DEPLOY-0014); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 for an unknown user or group, an invalid selector or too many; audited (people only; Owner) */
+        put: operations["put_api_v1_projects_id_deploy_environments_tier_approvers"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1493,7 +1527,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer) */
+        /** Approve a deployment waiting for one: 200 queued until approval_expires_at once the environment's approvals_required is reached (pending_approval with approvals until then); 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); 403 FG-DEPLOY-0014 when the environment names approvers and the caller is not one; ?on_behalf_of= for a delegator who holds the role the approval needs (403 FG-AUTH-0003 otherwise; 403 FG-REVIEW-0033 without an active delegation, told only to a Reporter or above); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer, or a named approver) */
         post: operations["post_api_v1_projects_id_deployments_deployment_id_approve"];
         delete?: never;
         options?: never;
@@ -3261,6 +3295,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/approval-delegation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's delegation of approvals (who approves for them and when; null without one) and the people who delegate to the caller and whose period has not ended */
+        get: operations["get_api_v1_user_approval_delegation"];
+        /** Set the caller's delegation ({"delegate", "starts_at", "ends_at"}: an active person, not oneself, at most 30 days; replaces any): the delegate may approve merge requests for the caller, and deployments where the environment allows it (web sessions only; audited) */
+        put: operations["put_api_v1_user_approval_delegation"];
+        post?: never;
+        /** Remove the caller's delegation of approvals (204, also when there was none; web sessions only; audited) */
+        delete: operations["delete_api_v1_user_approval_delegation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user/merge-requests": {
         parameters: {
             query?: never;
@@ -3697,6 +3750,11 @@ export interface components {
             created_at: string;
             /** @description The head and target branch (without `refs/heads/`) it was given for. */
             head_sha: string;
+            /**
+             * Format: int64
+             * @description ADR-0038 §3.5: the person it was given for.
+             */
+            on_behalf_of_id: number | null;
             target_branch: string;
         };
         /** @description One approval rule. */
@@ -3708,6 +3766,8 @@ export interface components {
             name: string;
             /** Format: int32 */
             required_approvals: number;
+            /** @description ADR-0038 §3.1: the selectors in their canonical form. */
+            selectors: Record<string, never>[];
             target_pattern: string | null;
             /**
              * @description UTC, RFC 3339 to the microsecond: an opaque token — send it back
@@ -3742,6 +3802,11 @@ export interface components {
              */
             conflict: boolean;
             /**
+             * @description ADR-0038 §3.3: who can approve, for each rule that applies and
+             *     names approvers (empty: none names any).
+             */
+            eligible: components["schemas"]["RuleEligibilityBody"][];
+            /**
              * @description The merge request's head (`null` before its first version: nothing
              *     to approve, nothing evaluated).
              */
@@ -3764,11 +3829,19 @@ export interface components {
              */
             committer_push_audit_id: number | null;
             counted: boolean;
+            /** @description ADR-0038 §3.5: the username of the person it was given for. */
+            on_behalf_of: string | null;
             uncounted_reason: string | null;
             username: string;
         };
         /** @description `POST …/approve`. */
         ApproveMergeRequest: {
+            /**
+             * @description ADR-0038 §3.5: approve for this person (a username) who delegated
+             *     to the caller for now (FG-REVIEW-0033 otherwise; FG-REVIEW-0034 when
+             *     the person already holds a live approval).
+             */
+            on_behalf_of?: string | null;
             /**
              * @description The head commit the approver reviewed (required): another head is
              *     refused (FG-REVIEW-0008 stale_view).
@@ -3790,6 +3863,22 @@ export interface components {
             id: number;
             /** @description What a rule write names the user by. */
             username: string;
+        };
+        /** @description One environment's approvers. */
+        ApproversBody: {
+            allow_delegation: boolean;
+            /** Format: int32 */
+            approvals_required: number;
+            groups: components["schemas"]["DeployApproverGroup"][];
+            selectors: Record<string, never>[];
+            tier: string;
+            /** @description No users, groups or selectors: any Maintainer approves (as before). */
+            unrestricted: boolean;
+            users: components["schemas"]["DeployApproverUser"][];
+        };
+        /** @description `GET …/deploy/approvers`. */
+        ApproversList: {
+            environments: components["schemas"]["ApproversBody"][];
         };
         /** @description One artifact's metadata. */
         ArtifactBody: {
@@ -4807,6 +4896,27 @@ export interface components {
             secret: string;
             webhook: components["schemas"]["WebhookBody"];
         };
+        /** @description One delegation. */
+        DelegationBody: {
+            /** @description The period covers now. */
+            active: boolean;
+            delegate_display_name: string;
+            /** Format: int64 */
+            delegate_id: number;
+            delegate_username: string;
+            delegator_display_name: string;
+            /** Format: int64 */
+            delegator_id: number;
+            delegator_username: string;
+            ends_at: string;
+            /** @description UTC, RFC 3339. */
+            starts_at: string;
+        };
+        /** @description `GET /api/v1/user/approval-delegation`. */
+        DelegationState: {
+            mine: null | components["schemas"]["DelegationBody"];
+            to_me: components["schemas"]["DelegationBody"][];
+        };
         /**
          * @description `DELETE /api/v1/projects/{id}`: when the grace period began and when
          *     the purge may start.
@@ -4862,9 +4972,28 @@ export interface components {
              */
             next_before: number | null;
         };
+        /** @description A named approver group. */
+        DeployApproverGroup: {
+            display_name: string;
+            full_path: string;
+            /** Format: int64 */
+            id: number;
+        };
+        /** @description A named approver user. */
+        DeployApproverUser: {
+            display_name: string;
+            /** Format: int64 */
+            id: number;
+            username: string;
+        };
         /** @description A deployment. */
         DeploymentBody: {
             approval_expires_at?: string | null;
+            /**
+             * Format: int64
+             * @description ADR-0038 §3: the approvals given so far.
+             */
+            approvals: number;
             approved_at?: string | null;
             /** Format: int64 */
             approved_by?: number | null;
@@ -5453,6 +5582,16 @@ export interface components {
             /** @description The caller's own live claim was extended (else it was taken). */
             extended: boolean;
         };
+        /** @description One person who can approve for a rule now (ADR-0038 §3.3). */
+        EligiblePersonBody: {
+            display_name: string;
+            /** Format: int64 */
+            id: number;
+            primary_org: null | components["schemas"]["OrgPathBody"];
+            username: string;
+            /** @description `user`, `group` or `selector`. */
+            via: string;
+        };
         /** @description `POST …/merge-queue`. */
         EnqueueMergeRequest: {
             /**
@@ -5484,8 +5623,15 @@ export interface components {
         };
         /** @description An environment and its targets. */
         EnvironmentBody: {
+            /** @description ADR-0038 §3.5: a delegate may approve. */
+            allow_delegation: boolean;
             /** Format: int32 */
             approval_ttl_minutes: number;
+            /**
+             * Format: int32
+             * @description ADR-0038 §3: how many approvals a deployment needs.
+             */
+            approvals_required: number;
             auto_deploy_ref?: string | null;
             auto_rollback: boolean;
             /** @description `<start>/<end>` in UTC. */
@@ -7031,7 +7177,7 @@ export interface components {
             expected_updated_at: string | null;
             /**
              * @description Group full paths whose direct members may approve for the rule
-             *     (no users and no groups: any eligible person).
+             *     (no users, no groups and no selectors: any eligible person).
              */
             groups?: string[];
             /**
@@ -7040,11 +7186,41 @@ export interface components {
              */
             required_approvals: number;
             /**
+             * @description ADR-0038 §3.1: organisation selectors (at most 5), e.g.
+             *     `{"relation": "requester_section", "min_rank": 55}`; keys
+             *     `relation` (`requester_section` | `requester_department` | `unit`),
+             *     `unit`, `include_descendants`, `min_rank` or `positions`,
+             *     `escalate` (`none` | `parent`).
+             */
+            selectors?: Record<string, never>[];
+            /**
              * @description A protected-ref pattern (`refs/heads/main`, `refs/heads/release/*`);
              *     absent: every target.
              */
             target_pattern?: string | null;
             /** @description Usernames who may approve for the rule. */
+            users?: string[];
+        };
+        /** @description `PUT …/deploy/environments/{tier}/approvers` (ADR-0038 §3.4). */
+        PutApprovers: {
+            /** @description A delegate may approve for a named person (default false). */
+            allow_delegation?: boolean;
+            /**
+             * Format: int32
+             * @description How many of them must approve (1..=20).
+             */
+            approvals_required: number;
+            /**
+             * @description Group full paths (at most 10): their direct members who are
+             *     Maintainer and above.
+             */
+            groups?: string[];
+            /**
+             * @description Organisation selectors (at most 5, ADR-0038 §3.1): Maintainer and
+             *     above whom they find for the requester.
+             */
+            selectors?: Record<string, never>[];
+            /** @description Usernames (at most 20). Named people approve from Reporter. */
             users?: string[];
         };
         /** @description `PUT …/auto-merge`. */
@@ -7086,6 +7262,15 @@ export interface components {
              *     comes back by itself at the expiry).
              */
             for_minutes?: number | null;
+        };
+        /** @description `PUT /api/v1/user/approval-delegation`. */
+        PutDelegation: {
+            /** @description The delegate's username (an active person, not the caller). */
+            delegate: string;
+            /** @description After `starts_at` and now, at most 30 days after `starts_at`. */
+            ends_at: string;
+            /** @description A timestamp with a time zone (RFC 3339). */
+            starts_at: string;
         };
         /** @description `PUT …/doc-lint/migration`. */
         PutDocLintMigration: {
@@ -7552,6 +7737,17 @@ export interface components {
             secret: string;
             /** Format: int32 */
             secret_version: number;
+        };
+        /** @description Who can approve for one rule (ADR-0038 §3.3). */
+        RuleEligibilityBody: {
+            /** @description Some selector's people could not be read (the list may be short). */
+            incomplete: boolean;
+            /** @description More people than listed. */
+            more: boolean;
+            /** @description At most 20, by username. */
+            people: components["schemas"]["EligiblePersonBody"][];
+            rule: string;
+            unresolved: components["schemas"]["UnresolvedBody"][];
         };
         /** @description One approval rule's state on this merge request. */
         RuleStatusBody: {
@@ -8346,6 +8542,19 @@ export interface components {
              *     1000 unread rows, newest first; older visible ones are not counted).
              */
             count: number;
+        };
+        /** @description A selector that names no unit for this merge request's author. */
+        UnresolvedBody: {
+            /**
+             * @description The ADR-0038 §4 reason behind `requester_org_unknown`
+             *     (`no_snapshot`, `stale_snapshot`, `master_stale`, …).
+             */
+            detail: string | null;
+            /**
+             * @description `requester_org_unknown`, `requester_no_section`,
+             *     `requester_no_department` or `unit_not_in_master`.
+             */
+            reason: string;
         };
         /** @description `PATCH /api/v1/groups/{id}`: at least one field. */
         UpdateGroup: {
@@ -12190,6 +12399,37 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_deploy_approvers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApproversList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_deploy_environments: {
         parameters: {
             query?: never;
@@ -12244,6 +12484,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_deploy_environments_tier_approvers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                tier: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutApprovers"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApproversBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -12362,7 +12638,10 @@ export interface operations {
     };
     post_api_v1_projects_id_deployments_deployment_id_approve: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Approve for this person (a username) who delegated to the caller for now, where the environment allows delegation (ADR-0038 §3.5) */
+                on_behalf_of?: string;
+            };
             header?: never;
             path: {
                 deployment_id: number;
@@ -16651,6 +16930,95 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UserActivityList"];
                 };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_approval_delegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationState"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_user_approval_delegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutDelegation"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_user_approval_delegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error: registered code, localized message, request id */
             default: {

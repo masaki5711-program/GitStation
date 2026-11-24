@@ -71,6 +71,7 @@ impl World {
                 &proof,
                 ready(self.repo),
                 &oid(mr.head_sha.as_deref().expect("head")),
+                None,
             )
             .await
             .expect("approve");

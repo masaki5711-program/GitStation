@@ -22,14 +22,19 @@ pub enum UnapproveReason {
     /// head (a new row with `carried_from`). The row's `revoked_reason`
     /// only — the carry's event is the new row's `merge_request.approved`.
     Carried,
+    /// ADR-0038 §3.5 (review of step C): an approval given on a person's
+    /// behalf ended because that person removed (or replaced) the
+    /// delegation.
+    DelegationEnded,
 }
 
 impl UnapproveReason {
-    pub const ALL: [UnapproveReason; 4] = [
+    pub const ALL: [UnapproveReason; 5] = [
         Self::Unapproved,
         Self::NewCommits,
         Self::TargetChanged,
         Self::Carried,
+        Self::DelegationEnded,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -38,6 +43,7 @@ impl UnapproveReason {
             Self::NewCommits => "new_commits",
             Self::TargetChanged => "target_changed",
             Self::Carried => "carried",
+            Self::DelegationEnded => "delegation_ended",
         }
     }
 
@@ -77,6 +83,9 @@ pub enum UncountedReason {
     /// evaluate (only on `merge_request.approved` of a carry: whether it
     /// counts is `evaluate_merge()`'s, as always).
     Carried,
+    /// ADR-0038 §3.5: given on someone's behalf whose delegation was removed
+    /// or given to another person since.
+    DelegationEnded,
 }
 
 impl UncountedReason {
@@ -91,6 +100,7 @@ impl UncountedReason {
             Self::CommittersUnknown => "committers_unknown",
             Self::NotInRule => "not_in_rule",
             Self::Carried => "carried",
+            Self::DelegationEnded => "delegation_ended",
         }
     }
 }
@@ -108,6 +118,8 @@ pub enum ApprovalRuleChange {
         required_approvals: i32,
         users: Vec<UserId>,
         groups: Vec<GroupId>,
+        /// ADR-0038 §3.1: the selectors' canonical forms (codes only).
+        selectors: Vec<serde_json::Value>,
         created: bool,
     },
     Removed {
@@ -133,6 +145,7 @@ impl ApprovalRuleChange {
                 required_approvals,
                 users,
                 groups,
+                selectors,
                 created,
             } => serde_json::json!({
                 "approval_rule_id": rule.get(),
@@ -141,6 +154,7 @@ impl ApprovalRuleChange {
                 "required_approvals": required_approvals,
                 "user_ids": users.iter().map(|u| u.get()).collect::<Vec<_>>(),
                 "group_ids": groups.iter().map(|g| g.get()).collect::<Vec<_>>(),
+                "selectors": selectors,
                 "created": created,
             }),
             Self::Removed { rule, name } => serde_json::json!({

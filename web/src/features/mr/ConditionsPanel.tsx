@@ -21,10 +21,13 @@ import {
   useUnapprove,
   useVersions,
 } from '../../api/mergeRequests';
-import type { ApprovalAnswer, MergeStatus } from '../../api/types';
+import { useApprovalState } from '../../api/approvers';
+import type { ApprovalAnswer, MergeStatus, RuleEligibility } from '../../api/types';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
+import { orgPathNames } from '../OrgProfile';
+import { unresolvedText } from '../approvers';
 import { checkBadge, formatDateTime } from '../labels';
 import { ActionError } from './ActionError';
 import { StateBadge } from './StateBadge';
@@ -98,7 +101,7 @@ export function ConditionsPanel({
       {status.isSuccess && (
         <>
           <Reasons status={status.data} />
-          <Approvals status={status.data} />
+          <Approvals projectId={projectId} iid={iid} status={status.data} />
           <Checks status={status.data} />
           <Actions
             projectId={projectId}
@@ -154,11 +157,20 @@ function Reasons({ status }: { status: MergeStatus }) {
   );
 }
 
-function Approvals({ status }: { status: MergeStatus }) {
+function Approvals({ projectId, iid, status }: { projectId: number; iid: number; status: MergeStatus }) {
   const { t, i18n } = useTranslation();
   const a = status.approvals;
   const rules = a?.rules.filter((r) => r.applies) ?? [];
   const given = a?.approvals ?? [];
+  // ADR-0038 §3.3: who can approve, read only when a rule of its own applies.
+  const named = rules.some((r) => r.name !== '@protected_branch');
+  const state = useApprovalState(projectId, iid, named);
+  const behalf = new Map(
+    (state.data?.approvals ?? [])
+      .filter((x) => x.on_behalf_of !== null)
+      .map((x) => [x.approver_id, x.on_behalf_of ?? ''] as const),
+  );
+  const eligible = state.data?.eligible ?? [];
   const suspended = !status.codeowners.enforced && status.codeowners.suspended_until !== null;
   if (rules.length === 0 && given.length === 0 && !suspended) return null;
   return (
@@ -177,18 +189,23 @@ function Approvals({ status }: { status: MergeStatus }) {
       )}
       {given.length > 0 && (
         <ul className={styles.plainList} aria-label={t('mr.conditions.given', { count: given.length })}>
-          {given.map((g) => (
-            <li key={g.approver_id}>
-              {g.counted
-                ? t('mr.conditions.counts', { name: g.username })
-                : t('mr.conditions.notCounted', {
-                    name: g.username,
-                    why: t(uncountedKey(g.uncounted_reason)),
-                  })}
-            </li>
-          ))}
+          {given.map((g) => {
+            const forWhom = behalf.get(g.approver_id);
+            return (
+              <li key={g.approver_id}>
+                {g.counted
+                  ? t('mr.conditions.counts', { name: g.username })
+                  : t('mr.conditions.notCounted', {
+                      name: g.username,
+                      why: t(uncountedKey(g.uncounted_reason)),
+                    })}
+                {forWhom !== undefined && ` ${t('approvers.panel.onBehalf', { name: forWhom })}`}
+              </li>
+            );
+          })}
         </ul>
       )}
+      {eligible.length > 0 && <Eligible rules={eligible} />}
       {suspended && (
         <p className={styles.warning}>
           {t('mr.conditions.codeownersSuspended', {
@@ -196,6 +213,48 @@ function Approvals({ status }: { status: MergeStatus }) {
           })}
         </p>
       )}
+    </>
+  );
+}
+
+/** Who can approve for each rule, and why no one can (ADR-0038 §3.3). */
+function Eligible({ rules }: { rules: RuleEligibility[] }) {
+  const { t, i18n } = useTranslation();
+  return (
+    <>
+      <h4 className={styles.conditionsSub}>{t('approvers.panel.title')}</h4>
+      <ul className={styles.plainList} data-testid="mr-eligible">
+        {rules.map((r) => {
+          if (r.people.length === 0) {
+            const why =
+              r.unresolved.length > 0
+                ? r.unresolved.map((u) => unresolvedText(t, u.reason, u.detail)).join(' ')
+                : t('approvers.none.noMatch');
+            return (
+              <li key={r.rule}>
+                <p className={styles.warning}>{t('approvers.panel.nobody', { rule: r.rule })}</p>
+                <p className={styles.nextHint}>{why}</p>
+              </li>
+            );
+          }
+          const names = r.people.map((p) =>
+            p.primary_org === null
+              ? p.display_name
+              : t('approvers.panel.personOrg', {
+                  name: p.display_name,
+                  org: orgPathNames(p.primary_org, i18n.language).join(' / '),
+                }),
+          );
+          const list = new Intl.ListFormat(i18n.language, { style: 'short', type: 'unit' }).format(names);
+          return (
+            <li key={r.rule}>
+              {t('approvers.panel.people', { rule: r.rule, names: list })}
+              {r.more && ` ${t('approvers.panel.more')}`}
+              {r.incomplete && <p className={styles.nextHint}>{t('approvers.panel.incomplete')}</p>}
+            </li>
+          );
+        })}
+      </ul>
     </>
   );
 }

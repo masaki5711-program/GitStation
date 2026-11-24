@@ -143,6 +143,10 @@ fn a_deploy_change_never_carries_a_key_or_output() {
         deployment: 3,
         tier: DeployTier::Prod,
         sha: "a".repeat(40),
+        on_behalf_of: None,
+        approvals: 1,
+        required: 1,
+        queued: true,
     };
     assert_eq!(a.action(), "deployment.approved");
     assert_eq!(a.project(), ProjectId::new(7));

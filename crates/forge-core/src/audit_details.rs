@@ -179,6 +179,16 @@ pub enum AuditDetails {
         user: UserId,
         fingerprint: String,
     },
+    /// `approval_delegation.set` (ADR-0038 §3.5, audit-only, on the
+    /// delegator): who approves for them and when (UTC, RFC 3339).
+    ApprovalDelegationSet {
+        delegator: UserId,
+        delegate: UserId,
+        starts_at: String,
+        ends_at: String,
+    },
+    /// `approval_delegation.removed` (ADR-0038 §3.5, audit-only).
+    ApprovalDelegationRemoved { delegator: UserId, delegate: UserId },
     // ── D4 MR3b: repository provisioning ──
     /// `repository.created` (D4 MR3b): the provisioning job created (or
     /// adopted) the bare repository and marked it ready. Also the payload of
@@ -612,6 +622,8 @@ impl AuditDetails {
             Self::TokenRevoked { .. } => "token.revoked",
             Self::SshKeyAdded { .. } => "ssh_key.added",
             Self::SshKeyDeleted { .. } => "ssh_key.deleted",
+            Self::ApprovalDelegationSet { .. } => "approval_delegation.set",
+            Self::ApprovalDelegationRemoved { .. } => "approval_delegation.removed",
             // ── D4 MR3b ──
             Self::RepositoryCreated { .. } => "repository.created",
             Self::RepositoryReprovisionRequested { .. } => "repository.reprovision_requested",
@@ -686,7 +698,9 @@ impl AuditDetails {
             | Self::ServiceAccountCreated { .. }
             | Self::ServiceAccountUpdated { .. }
             | Self::SshKeyAdded { .. }
-            | Self::SshKeyDeleted { .. } => None,
+            | Self::SshKeyDeleted { .. }
+            | Self::ApprovalDelegationSet { .. }
+            | Self::ApprovalDelegationRemoved { .. } => None,
             Self::ProjectCreated { .. } => Some(EventType::ProjectCreated),
             Self::TokenCreated { .. } => Some(EventType::TokenCreated),
             Self::TokenRevoked { .. } => Some(EventType::TokenRevoked),
@@ -981,6 +995,24 @@ impl AuditDetails {
                 "ssh_key_id": key_id,
                 "user_id": user.get(),
                 "fingerprint": fingerprint,
+            }),
+            Self::ApprovalDelegationSet {
+                delegator,
+                delegate,
+                starts_at,
+                ends_at,
+            } => serde_json::json!({
+                "user_id": delegator.get(),
+                "delegate_id": delegate.get(),
+                "starts_at": starts_at,
+                "ends_at": ends_at,
+            }),
+            Self::ApprovalDelegationRemoved {
+                delegator,
+                delegate,
+            } => serde_json::json!({
+                "user_id": delegator.get(),
+                "delegate_id": delegate.get(),
             }),
             // ── D4 MR3b ──
             Self::RepositoryCreated {
@@ -1278,6 +1310,8 @@ impl AuditDetails {
             | Self::TokenRevoked { .. }
             | Self::SshKeyAdded { .. }
             | Self::SshKeyDeleted { .. }
+            | Self::ApprovalDelegationSet { .. }
+            | Self::ApprovalDelegationRemoved { .. }
             | Self::ServiceAccountCreated { .. }
             | Self::ServiceAccountUpdated { .. }
             | Self::RepositoryCreated { .. }

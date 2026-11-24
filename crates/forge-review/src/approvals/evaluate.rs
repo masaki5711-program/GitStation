@@ -20,6 +20,19 @@
 //! - every changed path's last-matching CODEOWNERS rule needs one counted
 //!   approval by one of its owners (a user, or a direct member of a group)
 //!   — `codeowner_approval_missing` (once per rule);
+//! - ADR-0038 §3 (step C): a rule's approvers mix users, groups and
+//!   organisation selectors (any one of them qualifies). A selector matches
+//!   on the snapshot recorded **with the approval** (the approver's
+//!   organisation at approval time) against the unit it names for the
+//!   merge request's author now ([`SelectorTargets`]); an approval without
+//!   a known snapshot, or a selector that names no unit, matches nothing
+//!   (fail closed). The exclusions above (stale, inactive, not a person,
+//!   role, author, committer) come first, whatever a selector says.
+//! - ADR-0038 §3.5: an approval given on someone's behalf counts as theirs
+//!   (their user, groups and recorded snapshot), once the delegator also
+//!   passes the exclusions (active, a person, not the author, not a
+//!   committer); each person counts once per requirement, however many
+//!   approvals are theirs.
 //! - an unusable CODEOWNERS file — `codeowners_invalid`;
 //! - (both CODEOWNERS requirements only while enforcement is on: M3 R6's
 //!   time-boxed suspension, ADR-0024 §9, drops them — never the
@@ -30,8 +43,9 @@
 //!   (CODEOWNERS and the configuration rule are then not evaluated: never
 //!   "no owners").
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use forge_core::approver::{matches, ApproverSelector, PersonOrg, Target, Unresolved};
 use forge_core::ids::{ApprovalId, GroupId, UserId};
 use forge_core::{ObjectId, RefName, Role, UncountedReason, UserKind};
 use forge_db::review::{ApprovalFacts, ApproverFacts, StoredApprovalRule};
@@ -91,6 +105,18 @@ pub enum CodeownersFact {
     Invalid(CodeownersError),
 }
 
+/// The unit each selector names for the merge request's author now
+/// (ADR-0038 §3.1; `escalate: parent` already applied), by selector. A
+/// selector absent from it names no unit (fail closed).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SelectorTargets(pub Vec<(ApproverSelector, Result<Target, Unresolved>)>);
+
+impl SelectorTargets {
+    pub fn get(&self, selector: &ApproverSelector) -> Option<&Result<Target, Unresolved>> {
+        self.0.iter().find(|(s, _)| s == selector).map(|(_, t)| t)
+    }
+}
+
 /// The inputs of the approval half of one decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalInputs {
@@ -109,6 +135,8 @@ pub struct ApprovalInputs {
     pub codeowners_enforced: bool,
     /// M3 R6: the target's protection's minimum counted approvals (0: none).
     pub minimum: u32,
+    /// ADR-0038 §3.1: the units the rules' selectors name for the author.
+    pub targets: SelectorTargets,
 }
 
 impl ApprovalInputs {
@@ -126,6 +154,7 @@ impl ApprovalInputs {
             committer_approvals_excluded: true,
             codeowners_enforced: true,
             minimum: 0,
+            targets: SelectorTargets::default(),
         }
     }
 }
@@ -141,6 +170,8 @@ pub struct ApprovalStatus {
     /// `committer`: the audit row of a push by the approver that carried a
     /// range commit.
     pub committer_push: Option<i64>,
+    /// ADR-0038 §3.5: the person the approval was given for.
+    pub on_behalf_of: Option<(UserId, String)>,
 }
 
 /// One approval rule's state.
@@ -200,33 +231,104 @@ fn classify(inputs: &ApprovalInputs, a: &ApproverFacts) -> (Option<UncountedReas
         Some(UncountedReason::RoleInsufficient)
     } else if a.approval.approver == inputs.author {
         Some(UncountedReason::Author)
+    } else if a.delegator.as_ref().is_some_and(|d| !d.active) {
+        // ADR-0038 §3.5: the person it counts for passes the same checks.
+        Some(UncountedReason::Inactive)
+    } else if a
+        .delegator
+        .as_ref()
+        .is_some_and(|d| d.kind != UserKind::Human)
+    {
+        Some(UncountedReason::NotHuman)
+    } else if a.delegator.as_ref().is_some_and(|d| !d.delegation_holds) {
+        // Removed, or given to another person: it no longer counts, even
+        // before the clean-up ends it.
+        Some(UncountedReason::DelegationEnded)
+    } else if a
+        .delegator
+        .as_ref()
+        .is_some_and(|d| !d.role.is_some_and(|r| r >= Role::Developer))
+    {
+        // Review of ADR-0038 step C: an approval counts for the delegator
+        // only while they could approve themself.
+        Some(UncountedReason::RoleInsufficient)
+    } else if a
+        .delegator
+        .as_ref()
+        .is_some_and(|d| d.user == inputs.author)
+    {
+        Some(UncountedReason::Author)
     } else if !inputs.committer_approvals_excluded {
         // M3 R6: the project counts committers' approvals.
         None
     } else {
         match &inputs.committers {
             Committers::Unknown(_) => Some(UncountedReason::CommittersUnknown),
-            Committers::Known(pushers) => match pushers.get(&a.approval.approver) {
-                Some(audit) => return (Some(UncountedReason::Committer), Some(*audit)),
-                None => None,
-            },
+            Committers::Known(pushers) => {
+                let behalf = a.delegator.as_ref().map(|d| d.user);
+                match [Some(a.approval.approver), behalf]
+                    .into_iter()
+                    .flatten()
+                    .find_map(|u| pushers.get(&u))
+                {
+                    Some(audit) => return (Some(UncountedReason::Committer), Some(*audit)),
+                    None => None,
+                }
+            }
         }
     };
     (reason, None)
 }
 
-fn in_rule(rule: &StoredApprovalRule, a: &ApproverFacts) -> bool {
-    (rule.users.is_empty() && rule.groups.is_empty())
-        || rule.users.contains(&a.approval.approver)
-        || rule.groups.iter().any(|g| a.groups.contains(g))
+/// The person an approval counts for (ADR-0038 §3.5): the delegator of an
+/// approval given on their behalf, else the approver.
+pub fn counts_for(a: &ApproverFacts) -> UserId {
+    a.delegator.as_ref().map_or(a.approval.approver, |d| d.user)
+}
+
+fn groups_of(a: &ApproverFacts) -> &BTreeSet<GroupId> {
+    a.delegator.as_ref().map_or(&a.groups, |d| &d.groups)
+}
+
+/// Whether the snapshot recorded with `a` matches `selector` for this
+/// merge request (fail closed: no target, no known snapshot — no match).
+fn selector_matches(
+    targets: &SelectorTargets,
+    selector: &ApproverSelector,
+    a: &ApproverFacts,
+) -> bool {
+    let Some(Ok(target)) = targets.get(selector) else {
+        return false;
+    };
+    match &a.approval.approver_org {
+        Some(PersonOrg::Known(snapshot)) => matches(&selector.qualifier, target, snapshot),
+        Some(PersonOrg::Unknown(_)) | None => false,
+    }
+}
+
+fn in_rule(rule: &StoredApprovalRule, targets: &SelectorTargets, a: &ApproverFacts) -> bool {
+    let who = counts_for(a);
+    (rule.users.is_empty() && rule.groups.is_empty() && rule.selectors.is_empty())
+        || rule.users.contains(&who)
+        || rule.groups.iter().any(|g| groups_of(a).contains(g))
+        || rule
+            .selectors
+            .iter()
+            .any(|s| selector_matches(targets, s, a))
 }
 
 fn owns(owners: &[Owner], resolved: &BTreeMap<Owner, OwnerRef>, a: &ApproverFacts) -> bool {
     owners.iter().any(|o| match resolved.get(o) {
-        Some(OwnerRef::User(u)) => *u == a.approval.approver,
-        Some(OwnerRef::Group(g)) => a.groups.contains(g),
+        Some(OwnerRef::User(u)) => *u == counts_for(a),
+        Some(OwnerRef::Group(g)) => groups_of(a).contains(g),
         None => false,
     })
+}
+
+/// How many distinct people the approvals count for.
+fn people<'a>(approvals: impl Iterator<Item = &'a &'a ApproverFacts>) -> u32 {
+    let distinct: BTreeSet<UserId> = approvals.map(|a| counts_for(a)).collect();
+    u32::try_from(distinct.len()).unwrap_or(u32::MAX)
 }
 
 /// Evaluate `inputs` (module docs).
@@ -253,8 +355,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
             .target_pattern
             .as_ref()
             .is_none_or(|p| p.matches(&inputs.target));
-        let counted = valid.iter().filter(|a| in_rule(rule, a)).count();
-        let counted = u32::try_from(counted).unwrap_or(u32::MAX);
+        let counted = people(valid.iter().filter(|a| in_rule(rule, &inputs.targets, a)));
         let required = u32::try_from(rule.required_approvals).unwrap_or(0);
         if applies && counted < required {
             blocks.push(BlockReason::ApprovalsMissing {
@@ -272,7 +373,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
     }
     // M3 R6: the protected branch's minimum (anyone eligible counts).
     if inputs.minimum > 0 {
-        let counted = u32::try_from(valid.len()).unwrap_or(u32::MAX);
+        let counted = people(valid.iter());
         if counted < inputs.minimum {
             blocks.push(BlockReason::ApprovalsMissing {
                 rule: PROTECTED_BRANCH_RULE.to_owned(),
@@ -367,7 +468,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
                         .rules
                         .iter()
                         .zip(&rules)
-                        .any(|(rule, status)| status.applies && in_rule(rule, a))
+                        .any(|(rule, status)| status.applies && in_rule(rule, &inputs.targets, a))
                     || match &inputs.codeowners {
                         CodeownersFact::Valid { .. } if !inputs.codeowners_enforced => false,
                         CodeownersFact::Valid { file, owners, .. } => codeowners.iter().any(|c| {
@@ -388,6 +489,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
                 counted: reason.is_none(),
                 uncounted_reason: reason,
                 committer_push: push,
+                on_behalf_of: a.delegator.as_ref().map(|d| (d.user, d.username.clone())), // clone: the status owns it
             }
         })
         .collect();

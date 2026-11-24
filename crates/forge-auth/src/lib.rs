@@ -114,7 +114,7 @@ pub use job::authorize_pinned_copy;
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
-    AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject,
+    ApproverGate, AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject,
     CodeownersToggle, CopyMark, Credential, DeploymentView, GroupSight, IntegrationFeedView,
     JobCredential, JobTokenState, MembershipChange, MembershipScope, MergeRequestEdit,
     MergeRequestState, NamespaceView, PersonalDisclosure, PinnedCopy, PortalCredential, Principal,

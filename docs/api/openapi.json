@@ -329,6 +329,14 @@
             "description": "The head and target branch (without `refs/heads/`) it was given for.",
             "type": "string"
           },
+          "on_behalf_of_id": {
+            "description": "ADR-0038 §3.5: the person it was given for.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "target_branch": {
             "type": "string"
           }
@@ -338,7 +346,8 @@
           "approver_id",
           "head_sha",
           "target_branch",
-          "created_at"
+          "created_at",
+          "on_behalf_of_id"
         ],
         "type": "object"
       },
@@ -370,6 +379,13 @@
           "required_approvals": {
             "format": "int32",
             "type": "integer"
+          },
+          "selectors": {
+            "description": "ADR-0038 §3.1: the selectors in their canonical form.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
           },
           "target_pattern": {
             "type": [
@@ -405,6 +421,7 @@
           "group_ids",
           "users",
           "groups",
+          "selectors",
           "updated_at"
         ],
         "type": "object"
@@ -458,6 +475,13 @@
             "description": "The trial merge of the head into the target's tip conflicts now:\nthe merge request cannot merge whatever the approvals say (the\nconflict itself is the mergeability's and the merge's to report).",
             "type": "boolean"
           },
+          "eligible": {
+            "description": "ADR-0038 §3.3: who can approve, for each rule that applies and\nnames approvers (empty: none names any).",
+            "items": {
+              "$ref": "#/components/schemas/RuleEligibilityBody"
+            },
+            "type": "array"
+          },
           "head_sha": {
             "description": "The merge request's head (`null` before its first version: nothing\nto approve, nothing evaluated).",
             "type": [
@@ -489,7 +513,8 @@
           "codeowners",
           "config_change_approved",
           "blocked_by",
-          "conflict"
+          "conflict",
+          "eligible"
         ],
         "type": "object"
       },
@@ -518,6 +543,13 @@
           "counted": {
             "type": "boolean"
           },
+          "on_behalf_of": {
+            "description": "ADR-0038 §3.5: the username of the person it was given for.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "uncounted_reason": {
             "type": [
               "string",
@@ -534,7 +566,8 @@
           "username",
           "counted",
           "uncounted_reason",
-          "committer_push_audit_id"
+          "committer_push_audit_id",
+          "on_behalf_of"
         ],
         "type": "object"
       },
@@ -542,6 +575,13 @@
         "additionalProperties": false,
         "description": "`POST …/approve`.",
         "properties": {
+          "on_behalf_of": {
+            "description": "ADR-0038 §3.5: approve for this person (a username) who delegated\nto the caller for now (FG-REVIEW-0033 otherwise; FG-REVIEW-0034 when\nthe person already holds a live approval).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "sha": {
             "description": "The head commit the approver reviewed (required): another head is\nrefused (FG-REVIEW-0008 stale_view).",
             "type": "string"
@@ -597,6 +637,70 @@
           "id",
           "username",
           "display_name"
+        ],
+        "type": "object"
+      },
+      "ApproversBody": {
+        "additionalProperties": false,
+        "description": "One environment's approvers.",
+        "properties": {
+          "allow_delegation": {
+            "type": "boolean"
+          },
+          "approvals_required": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/DeployApproverGroup"
+            },
+            "type": "array"
+          },
+          "selectors": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "unrestricted": {
+            "description": "No users, groups or selectors: any Maintainer approves (as before).",
+            "type": "boolean"
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/DeployApproverUser"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tier",
+          "unrestricted",
+          "users",
+          "groups",
+          "selectors",
+          "approvals_required",
+          "allow_delegation"
+        ],
+        "type": "object"
+      },
+      "ApproversList": {
+        "additionalProperties": false,
+        "description": "`GET …/deploy/approvers`.",
+        "properties": {
+          "environments": {
+            "items": {
+              "$ref": "#/components/schemas/ApproversBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "environments"
         ],
         "type": "object"
       },
@@ -3384,6 +3488,84 @@
         ],
         "type": "object"
       },
+      "DelegationBody": {
+        "additionalProperties": false,
+        "description": "One delegation.",
+        "properties": {
+          "active": {
+            "description": "The period covers now.",
+            "type": "boolean"
+          },
+          "delegate_display_name": {
+            "type": "string"
+          },
+          "delegate_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "delegate_username": {
+            "type": "string"
+          },
+          "delegator_display_name": {
+            "type": "string"
+          },
+          "delegator_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "delegator_username": {
+            "type": "string"
+          },
+          "ends_at": {
+            "type": "string"
+          },
+          "starts_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "delegator_id",
+          "delegator_username",
+          "delegator_display_name",
+          "delegate_id",
+          "delegate_username",
+          "delegate_display_name",
+          "starts_at",
+          "ends_at",
+          "active"
+        ],
+        "type": "object"
+      },
+      "DelegationState": {
+        "additionalProperties": false,
+        "description": "`GET /api/v1/user/approval-delegation`.",
+        "properties": {
+          "mine": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DelegationBody"
+              }
+            ]
+          },
+          "to_me": {
+            "items": {
+              "$ref": "#/components/schemas/DelegationBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "mine",
+          "to_me"
+        ],
+        "type": "object"
+      },
       "DeletionBody": {
         "additionalProperties": false,
         "description": "`DELETE /api/v1/projects/{id}`: when the grace period began and when\nthe purge may start.",
@@ -3533,6 +3715,52 @@
         ],
         "type": "object"
       },
+      "DeployApproverGroup": {
+        "additionalProperties": false,
+        "description": "A named approver group.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "full_path": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "full_path",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "DeployApproverUser": {
+        "additionalProperties": false,
+        "description": "A named approver user.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
+        ],
+        "type": "object"
+      },
       "DeploymentBody": {
         "additionalProperties": false,
         "description": "A deployment.",
@@ -3542,6 +3770,11 @@
               "string",
               "null"
             ]
+          },
+          "approvals": {
+            "description": "ADR-0038 §3: the approvals given so far.",
+            "format": "int64",
+            "type": "integer"
           },
           "approved_at": {
             "type": [
@@ -3636,7 +3869,8 @@
           "environment",
           "sha",
           "status",
-          "created_at"
+          "created_at",
+          "approvals"
         ],
         "type": "object"
       },
@@ -5223,6 +5457,46 @@
         ],
         "type": "object"
       },
+      "EligiblePersonBody": {
+        "additionalProperties": false,
+        "description": "One person who can approve for a rule now (ADR-0038 §3.3).",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "primary_org": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrgPathBody",
+                "description": "The primary unit, section and department names (`null`: unknown)."
+              }
+            ]
+          },
+          "username": {
+            "type": "string"
+          },
+          "via": {
+            "description": "`user`, `group` or `selector`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "via",
+          "primary_org"
+        ],
+        "type": "object"
+      },
       "EnqueueMergeRequest": {
         "additionalProperties": false,
         "description": "`POST …/merge-queue`.",
@@ -5290,7 +5564,16 @@
         "additionalProperties": false,
         "description": "An environment and its targets.",
         "properties": {
+          "allow_delegation": {
+            "description": "ADR-0038 §3.5: a delegate may approve.",
+            "type": "boolean"
+          },
           "approval_ttl_minutes": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "approvals_required": {
+            "description": "ADR-0038 §3: how many approvals a deployment needs.",
             "format": "int32",
             "type": "integer"
           },
@@ -5337,7 +5620,9 @@
           "freeze_windows",
           "frozen_now",
           "targets",
-          "updated_at"
+          "updated_at",
+          "approvals_required",
+          "allow_delegation"
         ],
         "type": "object"
       },
@@ -9277,7 +9562,7 @@
             ]
           },
           "groups": {
-            "description": "Group full paths whose direct members may approve for the rule\n(no users and no groups: any eligible person).",
+            "description": "Group full paths whose direct members may approve for the rule\n(no users, no groups and no selectors: any eligible person).",
             "items": {
               "type": "string"
             },
@@ -9287,6 +9572,13 @@
             "description": "1..=20.",
             "format": "int32",
             "type": "integer"
+          },
+          "selectors": {
+            "description": "ADR-0038 §3.1: organisation selectors (at most 5), e.g.\n`{\"relation\": \"requester_section\", \"min_rank\": 55}`; keys\n`relation` (`requester_section` | `requester_department` | `unit`),\n`unit`, `include_descendants`, `min_rank` or `positions`,\n`escalate` (`none` | `parent`).",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
           },
           "target_pattern": {
             "description": "A protected-ref pattern (`refs/heads/main`, `refs/heads/release/*`);\nabsent: every target.",
@@ -9306,6 +9598,46 @@
         "required": [
           "required_approvals",
           "expected_updated_at"
+        ],
+        "type": "object"
+      },
+      "PutApprovers": {
+        "additionalProperties": false,
+        "description": "`PUT …/deploy/environments/{tier}/approvers` (ADR-0038 §3.4).",
+        "properties": {
+          "allow_delegation": {
+            "description": "A delegate may approve for a named person (default false).",
+            "type": "boolean"
+          },
+          "approvals_required": {
+            "description": "How many of them must approve (1..=20).",
+            "format": "int32",
+            "type": "integer"
+          },
+          "groups": {
+            "description": "Group full paths (at most 10): their direct members who are\nMaintainer and above.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "selectors": {
+            "description": "Organisation selectors (at most 5, ADR-0038 §3.1): Maintainer and\nabove whom they find for the requester.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "users": {
+            "description": "Usernames (at most 20). Named people approve from Reporter.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "approvals_required"
         ],
         "type": "object"
       },
@@ -9384,6 +9716,30 @@
         },
         "required": [
           "enforced"
+        ],
+        "type": "object"
+      },
+      "PutDelegation": {
+        "additionalProperties": false,
+        "description": "`PUT /api/v1/user/approval-delegation`.",
+        "properties": {
+          "delegate": {
+            "description": "The delegate's username (an active person, not the caller).",
+            "type": "string"
+          },
+          "ends_at": {
+            "description": "After `starts_at` and now, at most 30 days after `starts_at`.",
+            "type": "string"
+          },
+          "starts_at": {
+            "description": "A timestamp with a time zone (RFC 3339).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "delegate",
+          "starts_at",
+          "ends_at"
         ],
         "type": "object"
       },
@@ -10539,6 +10895,44 @@
           "secret",
           "secret_version",
           "previous_secret_valid_until"
+        ],
+        "type": "object"
+      },
+      "RuleEligibilityBody": {
+        "additionalProperties": false,
+        "description": "Who can approve for one rule (ADR-0038 §3.3).",
+        "properties": {
+          "incomplete": {
+            "description": "Some selector's people could not be read (the list may be short).",
+            "type": "boolean"
+          },
+          "more": {
+            "description": "More people than listed.",
+            "type": "boolean"
+          },
+          "people": {
+            "description": "At most 20, by username.",
+            "items": {
+              "$ref": "#/components/schemas/EligiblePersonBody"
+            },
+            "type": "array"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "unresolved": {
+            "items": {
+              "$ref": "#/components/schemas/UnresolvedBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rule",
+          "people",
+          "more",
+          "unresolved",
+          "incomplete"
         ],
         "type": "object"
       },
@@ -12696,6 +13090,28 @@
         "required": [
           "count",
           "capped"
+        ],
+        "type": "object"
+      },
+      "UnresolvedBody": {
+        "additionalProperties": false,
+        "description": "A selector that names no unit for this merge request's author.",
+        "properties": {
+          "detail": {
+            "description": "The ADR-0038 §4 reason behind `requester_org_unknown`\n(`no_snapshot`, `stale_snapshot`, `master_stale`, …).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "`requester_org_unknown`, `requester_no_section`,\n`requester_no_department` or `unit_not_in_master`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "detail"
         ],
         "type": "object"
       },
@@ -18657,6 +19073,47 @@
         "x-forge-action": "ContextRead"
       }
     },
+    "/api/v1/projects/{id}/deploy/approvers": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_deploy_approvers",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproversList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Each deployment environment's approvers: named users, groups, organisation selectors, how many approvals a deployment needs and whether a delegate may approve; unrestricted = any Maintainer (project readers)",
+        "x-forge-action": "DeployRead"
+      }
+    },
     "/api/v1/projects/{id}/deploy/environments": {
       "get": {
         "operationId": "get_api_v1_projects_id_deploy_environments",
@@ -18755,6 +19212,66 @@
         },
         "summary": "Create or change a deployment environment ({\"requires_approval\", \"auto_rollback\", \"approval_ttl_minutes\"?, \"auto_deploy_ref\"?, \"freeze_windows\"?}): 201 created or 200 changed; prod always requires an approval and never rolls back or deploys by itself (400 FG-WEB-0006); audited (people only; Maintainer)",
         "x-forge-action": "DeployEnvironmentManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/deploy/environments/{tier}/approvers": {
+      "put": {
+        "operationId": "put_api_v1_projects_id_deploy_environments_tier_approvers",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutApprovers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproversBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set who may approve an environment's deployments ({\"users\", \"groups\", \"selectors\", \"approvals_required\", \"allow_delegation\"?}): named users approve from Reporter, group members and people a selector finds from Maintainer; nobody else once any is named (403 FG-DEPLOY-0014); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 for an unknown user or group, an invalid selector or too many; audited (people only; Owner)",
+        "x-forge-action": "DeployApproversManage",
         "x-forge-max-body-bytes": 16384
       }
     },
@@ -18940,6 +19457,15 @@
               "minimum": 1,
               "type": "integer"
             }
+          },
+          {
+            "description": "Approve for this person (a username) who delegated to the caller for now, where the environment allows delegation (ADR-0038 §3.5)",
+            "in": "query",
+            "name": "on_behalf_of",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -18964,7 +19490,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
+        "summary": "Approve a deployment waiting for one: 200 queued until approval_expires_at once the environment's approvals_required is reached (pending_approval with approvals until then); 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); 403 FG-DEPLOY-0014 when the environment names approvers and the caller is not one; ?on_behalf_of= for a delegator who holds the role the approval needs (403 FG-AUTH-0003 otherwise; 403 FG-REVIEW-0033 without an active delegation, told only to a Reporter or above); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer, or a named approver)",
         "x-forge-action": "DeployApprove"
       }
     },
@@ -25703,6 +26229,93 @@
         },
         "summary": "The recent events of the projects the caller is involved in (a role on the project, directly or through a group), newest first; only the shown types (project.created, repository.pushed and merge request events) with their allowed fields, only events the caller may read now (people only; a bad parameter is FG-WEB-0006)",
         "x-forge-action": "ActivityRead"
+      }
+    },
+    "/api/v1/user/approval-delegation": {
+      "delete": {
+        "operationId": "delete_api_v1_user_approval_delegation",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove the caller's delegation of approvals (204, also when there was none; web sessions only; audited)",
+        "x-forge-action": "ApprovalDelegationManage"
+      },
+      "get": {
+        "operationId": "get_api_v1_user_approval_delegation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DelegationState"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's delegation of approvals (who approves for them and when; null without one) and the people who delegate to the caller and whose period has not ended",
+        "x-forge-action": "ApprovalDelegationRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_user_approval_delegation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutDelegation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DelegationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set the caller's delegation ({\"delegate\", \"starts_at\", \"ends_at\"}: an active person, not oneself, at most 30 days; replaces any): the delegate may approve merge requests for the caller, and deployments where the environment allows it (web sessions only; audited)",
+        "x-forge-action": "ApprovalDelegationManage",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/user/merge-requests": {

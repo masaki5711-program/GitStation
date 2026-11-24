@@ -104,6 +104,36 @@ M4 C11（計画 14 §4.1・§4.2、ADR-0031）のデプロイが期待どおり�
 - prod の FG-DEPLOY-0006: アプリの担当者と、そのアプリのオンコールへ。
 - 鍵が漏れた疑い: 鍵を作り直し、すべてのターゲットの `authorized_keys` を差し替える（ADR-0013 の回転と同じ）。
 
+## 承認者の指定と代理（ADR-0038 段 C、FG-DEPLOY-0014 / FG-REVIEW-0033）
+
+環境ごとに承認者（名指しの利用者・グループ・組織の selector）と必要な人数（`approvals_required`）を置ける
+（`gstn deploy approvers-set`、画面の 配備の設定 → 承認者。変えられるのは Owner と管理者だけ、監査 `deploy_environment.approvers_set`）。
+
+- 置いていない環境: 今までどおり Maintainer 以上の誰でも 1 人。
+- 置いた環境: **その中に当てはまる人だけ** が承認できる。名指しの人は Reporter 以上でよい。グループ・selector で当てはまる人は
+  Maintainer 以上。どちらも人・web のセッション・要求者でない・SHA の背後にいない、は今までどおり。当てはまらないと
+  `403 FG-DEPLOY-0014`（`reason` = `not_listed` / `selector_unresolved` / `delegation_off`）。
+- `approvals_required` が 2 以上なら、別の人の承認がそろうまで `pending_approval` のまま（`approvals` が数）。そろった承認で `queued`。
+- selector は要求者（`requested_by`）の主所属で組織を決め、承認する人の **今の** 写しで判定する（写しは `deployment_approvals.approver_org` に残る）。
+  要求者・承認者の所属を確かめられないと当てはまらない（`selector_unresolved`）。自動の要求（要求者なし）では selector は誰も選ばない。
+- 代理: `allow_delegation` を有効にした環境だけ、代理の人が `?on_behalf_of=<本人>` で承認できる（既定は使えない。承認のトランザクションの中でも
+  確かめ、使えなければ FG-DEPLOY-0014 `delegation_off`）。代理が無い・期間外・名前が分からないは FG-REVIEW-0033（Reporter 以上にだけ。
+  それ未満は先に FG-AUTH-0003）。本人も、承認者の種類が求めるロール（名指し Reporter・グループ / selector / 指定なし Maintainer）を
+  **今** 持っていること（無ければ FG-AUTH-0003 `reason=delegator_role`）。
+  本人と代理の人が両方承認しても 1 人として数える（2 回目は FG-DEPLOY-0010 `reason=already_approved`）。
+- 承認の途中で承認者の設定が変わったら、その承認は FG-DEPLOY-0010 `reason=approvers_changed`（読み込み直して、もう一度承認する）。
+  設定を保存すると、その環境で `pending_approval` の配備の承認（`deployment_approvals`）は消える（古い設定で決めた承認のため。もう一度承認する）。
+- 承認した人（または代理の本人）が無効になると、その承認は数に入らない（`approvals` も減る）。
+
+読む（読み取りのみ）:
+
+```sql
+SELECT e.tier, e.approvals_required, e.allow_delegation, a.user_id, a.group_id, a.selector
+  FROM forge.deploy_environments e LEFT JOIN forge.deploy_environment_approvers a ON a.environment_id = e.id
+ WHERE e.project_id = <project id>;
+SELECT approver_id, on_behalf_of, approver_org, created_at FROM forge.deployment_approvals WHERE deployment_id = <id>;
+```
+
 ## 知っておくこと
 
 - 実行のときにも凍結期間と承認を確かめる（要求のときに通っても、実行のときに凍結なら `blocked`）。自動化のための抜け道は無い。

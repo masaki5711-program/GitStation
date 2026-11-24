@@ -26,7 +26,7 @@ export function TextField({
   /** Modal: this field gets the focus when the dialog opens. */
   initialFocus?: boolean;
   /** `date`: the browser's date picker (the value stays `YYYY-MM-DD`). */
-  type?: 'text' | 'date';
+  type?: 'text' | 'date' | 'datetime-local';
   /** The bounds of a `date` field (`YYYY-MM-DD`). */
   min?: string;
   max?: string;

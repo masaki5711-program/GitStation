@@ -297,4 +297,10 @@ impl OrgPaths {
     pub(crate) fn path(&mut self, user: UserId) -> Option<OrgPathBody> {
         self.0.remove(&user).map(path_body)
     }
+
+    /// [`Self::path`] for a user shown more than once (ADR-0038 §3.3: a
+    /// person who can approve for several rules).
+    pub(crate) fn path_of(&self, user: UserId) -> Option<OrgPathBody> {
+        self.0.get(&user).cloned().map(path_body) // clone: shown again
+    }
 }

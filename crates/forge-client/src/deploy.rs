@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 
 use crate::app::{emit, EnvFn, Io};
-use crate::cli::{Cli, DeployCommand};
+use crate::cli::{Cli, DelegationCommand, DeployCommand};
 use crate::error::Result;
 use crate::hosting::{call, client, text};
 use crate::http::Method;
@@ -28,6 +28,38 @@ fn deployment_line(d: &Value) -> String {
         match d.get("error_code").and_then(Value::as_str) {
             Some(code) => format!(", {code}"),
             None => String::new(),
+        }
+    )
+}
+
+/// One environment's approvers as a line.
+fn approvers_line(e: &Value) -> String {
+    if e.get("unrestricted") == Some(&Value::Bool(true)) {
+        return format!("{}: any Maintainer", text(e, "tier"));
+    }
+    let names = |key: &str, field: &str| -> Vec<String> {
+        e.get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|v| crate::error::sanitize(v[field].as_str().unwrap_or("")))
+            .collect()
+    };
+    let selectors = e
+        .get("selectors")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    format!(
+        "{}: {} of users [{}] groups [{}] selectors {}{}",
+        text(e, "tier"),
+        text(e, "approvals_required"),
+        names("users", "username").join(", "),
+        names("groups", "full_path").join(", "),
+        selectors,
+        if e.get("allow_delegation") == Some(&Value::Bool(true)) {
+            " (delegation allowed)"
+        } else {
+            ""
         }
     )
 }
@@ -191,6 +223,67 @@ pub fn deploy(cli: &Cli, cmd: &DeployCommand, env: EnvFn<'_>, io: &mut Io<'_>) -
             };
             emit(io, cli, out, &human)
         }
+        DeployCommand::Approvers { project } => {
+            let c = client(cli, env, io)?;
+            let out = call(
+                &c,
+                Method::Get,
+                &format!("{}/deploy/approvers", base(*project)),
+                &[],
+                None,
+            )?;
+            let lines: Vec<String> = out
+                .get("environments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(approvers_line)
+                .collect();
+            let human = if lines.is_empty() {
+                format!("No deployment environment in project {project}.")
+            } else {
+                lines.join("\n")
+            };
+            emit(io, cli, out, &human)
+        }
+        DeployCommand::ApproversSet {
+            project,
+            tier,
+            user,
+            group,
+            selector,
+            required,
+            allow_delegation,
+        } => {
+            let selectors = selector
+                .iter()
+                .map(|s| serde_json::from_str::<Value>(s))
+                .collect::<std::result::Result<Vec<Value>, _>>()
+                .map_err(|_| {
+                    crate::error::ClientError::local(
+                        forge_errors::ErrorCode::CliUsageInvalid,
+                        "reason=selector_not_json",
+                    )
+                })?;
+            let body = json!({
+                "users": user, "groups": group, "selectors": selectors,
+                "approvals_required": required, "allow_delegation": allow_delegation,
+            });
+            let c = client(cli, env, io)?;
+            let out = call(
+                &c,
+                Method::Put,
+                &format!(
+                    "{}/deploy/environments/{}/approvers",
+                    base(*project),
+                    tier.as_str()
+                ),
+                &[],
+                Some(&body),
+            )?;
+            let human = approvers_line(&out);
+            emit(io, cli, out, &human)
+        }
         DeployCommand::Request { project, tier, sha } => {
             let c = client(cli, env, io)?;
             let out = call(
@@ -201,6 +294,56 @@ pub fn deploy(cli: &Cli, cmd: &DeployCommand, env: EnvFn<'_>, io: &mut Io<'_>) -
                 Some(&json!({"environment": tier.as_str(), "sha": sha})),
             )?;
             let human = format!("Requested {}", deployment_line(&out));
+            emit(io, cli, out, &human)
+        }
+    }
+}
+
+/// `gstn delegation show` (ADR-0038 §3.5): your delegation and the people
+/// who delegate to you. Setting one is a browser session's (a token is
+/// refused, FG-AUTH-0002).
+pub fn delegation(
+    cli: &Cli,
+    cmd: &DelegationCommand,
+    env: EnvFn<'_>,
+    io: &mut Io<'_>,
+) -> Result<()> {
+    match cmd {
+        DelegationCommand::Show => {
+            let c = client(cli, env, io)?;
+            let out = call(
+                &c,
+                Method::Get,
+                "/api/v1/user/approval-delegation",
+                &[],
+                None,
+            )?;
+            let line = |d: &Value, who: &str| {
+                format!(
+                    "{} from {} until {}{}",
+                    crate::error::sanitize(d[who].as_str().unwrap_or("")),
+                    text(d, "starts_at"),
+                    text(d, "ends_at"),
+                    if d["active"] == Value::Bool(true) {
+                        " (active)"
+                    } else {
+                        ""
+                    }
+                )
+            };
+            let mut lines = vec![match out.get("mine").filter(|m| !m.is_null()) {
+                Some(m) => format!("You delegate to {}", line(m, "delegate_username")),
+                None => "You delegate to no one.".to_owned(),
+            }];
+            for d in out
+                .get("to_me")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                lines.push(format!("You approve for {}", line(d, "delegator_username")));
+            }
+            let human = lines.join("\n");
             emit(io, cli, out, &human)
         }
     }

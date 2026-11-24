@@ -569,6 +569,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     (p, drafted.iid),
                     alice,
                     None,
+                    &crate::review::ApproveAs::own_unknown(),
                     |_| Ok(()),
                     |_, _, _| (true, None),
                 )

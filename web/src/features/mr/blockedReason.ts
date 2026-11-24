@@ -270,6 +270,8 @@ export function uncountedKey(reason: string | null): string {
       return t('mr.uncounted.notInRule');
     case 'carried':
       return t('mr.uncounted.carried');
+    case 'delegation_ended':
+      return t('mr.uncounted.delegationEnded');
     default:
       return t('mr.uncounted.other');
   }

@@ -21,6 +21,20 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+/// The delegation routes never look a branch up.
+struct NoBranches;
+
+impl forge_review::BranchProbe for NoBranches {
+    fn branch_head<'a>(
+        &'a self,
+        _: forge_core::RepoId,
+        _: &'a forge_core::RefName,
+        _: &'a str,
+    ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::ObjectId> {
+        Box::pin(async { panic!("no branch is looked up") })
+    }
+}
+
 /// Every commit is on `refs/heads/main` (synthetic).
 struct OnMain;
 
@@ -152,6 +166,10 @@ impl World {
             self.t.db.clone(),
             Arc::new(OnMain),
             forge_core::deploy::TargetPolicy::default(),
+        ))
+        .with_review(forge_review::Review::new(
+            self.t.db.clone(),
+            Arc::new(NoBranches),
         ));
         let res = forge_web::app(state, AppConfig::default())
             .expect("router")
@@ -396,5 +414,136 @@ async fn targets_are_administrators_and_environments_are_maintainers() {
         .await;
     assert_eq!(read.status, StatusCode::OK);
     assert_eq!(read.json["environments"].as_array().expect("envs").len(), 2);
+    w.t.drop_now().await;
+}
+
+/// ADR-0038 §3.4–§3.6 (step C): an Owner names the approvers; then only
+/// they approve (a named Reporter-level person included), two approvals
+/// are needed, a delegate approves for a named person only where the
+/// environment allows it.
+#[tokio::test]
+async fn a_person_outside_the_environment_approvers_cannot_approve() {
+    let w = World::new().await;
+    w.setup().await;
+    // A Maintainer may not change the approvers (an Owner's grant).
+    let body = json!({"users": ["bob", "cy"], "approvals_required": 2, "allow_delegation": true});
+    let refused = w
+        .call(
+            "PUT",
+            &w.uri("deploy/environments/prod/approvers"),
+            session(w.maintainer, false),
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.json);
+    let set = w
+        .call(
+            "PUT",
+            &w.uri("deploy/environments/prod/approvers"),
+            session(w.owner, false),
+            Some(body),
+        )
+        .await;
+    assert_eq!(set.status, StatusCode::OK, "{}", set.json);
+    assert_eq!(set.json["approvals_required"], 2);
+    assert_eq!(set.json["users"].as_array().expect("users").len(), 2);
+    // A bad selector is the caller's 400.
+    let bad = w
+        .call(
+            "PUT",
+            &w.uri("deploy/environments/prod/approvers"),
+            session(w.owner, false),
+            Some(json!({"selectors": [{"relation": "boss"}], "approvals_required": 1})),
+        )
+        .await;
+    assert_eq!(
+        (bad.status, bad.code()),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006")
+    );
+    let list = w
+        .call(
+            "GET",
+            &w.uri("deploy/approvers"),
+            session(w.developer, false),
+            None,
+        )
+        .await;
+    assert_eq!(list.status, StatusCode::OK, "{}", list.json);
+    let prod = list.json["environments"]
+        .as_array()
+        .expect("environments")
+        .iter()
+        .find(|e| e["tier"] == "prod")
+        .expect("prod")
+        .clone();
+    assert_eq!(prod["unrestricted"], false);
+    // The owner (a Maintainer and more) is not named: refused.
+    // Dee, a Developer, requests it (never one of the approvers).
+    let dee = users::create(
+        &w.t.db,
+        &ctx("req-user-dee"),
+        &NewUser::human("dee", "dee", "dee@example.test"),
+    )
+    .await
+    .expect("dee")
+    .user_id;
+    projects::add_member(&w.t.db, &ctx("req-member-dee"), w.web, dee, Role::Developer)
+        .await
+        .expect("member");
+    let d = w.request(session(dee, false), "prod", 'a').await;
+    assert_eq!(d.status, StatusCode::CREATED, "{}", d.json);
+    let id = d.json["id"].as_i64().expect("id");
+    let owner = w.approve(session(w.owner, false), id).await;
+    assert_eq!(
+        (owner.status, owner.code()),
+        (StatusCode::FORBIDDEN, "FG-DEPLOY-0014")
+    );
+    // Bob (named) approves: one of two.
+    let first = w.approve(session(w.maintainer, false), id).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.json);
+    assert_eq!(first.json["status"], "pending_approval");
+    assert_eq!(first.json["approvals"], 1);
+    // Cy is a Developer, named: allowed; the deployment is queued.
+    let second = w.approve(session(w.developer, false), id).await;
+    assert_eq!(second.status, StatusCode::OK, "{}", second.json);
+    assert_eq!(second.json["status"], "queued");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_delegation_is_the_persons_own_and_set_in_a_session() {
+    let w = World::new().await;
+    let path = "/api/v1/user/approval-delegation";
+    let empty = w
+        .call("GET", path, session(w.maintainer, false), None)
+        .await;
+    assert_eq!(empty.status, StatusCode::OK, "{}", empty.json);
+    assert!(empty.json["mine"].is_null());
+    let body = json!({
+        "delegate": "cy",
+        "starts_at": "2026-11-20T00:00:00Z",
+        "ends_at": "2026-12-31T00:00:00Z",
+    });
+    // A token never sets one.
+    let token_set = w
+        .call(
+            "PUT",
+            path,
+            token(w.maintainer, &[Scope::Api]),
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(
+        (token_set.status, token_set.code()),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0002")
+    );
+    // Longer than 30 days: the caller's 400.
+    let long = w
+        .call("PUT", path, session(w.maintainer, false), Some(body))
+        .await;
+    assert_eq!(
+        (long.status, long.code()),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006")
+    );
     w.t.drop_now().await;
 }

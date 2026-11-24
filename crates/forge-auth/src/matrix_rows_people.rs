@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 51] = [
+const GROUPS: [[Row; 2]; 53] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -139,6 +139,9 @@ const GROUPS: [[Row; 2]; 51] = [
     both!(A::DeployEnvironmentManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     both!(A::DeployTargetManage, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::PrivateProject),
     both!(A::DeployApprove, ADMIN_SESSION.0, ADMIN_SESSION.1, crate::matrix_rows_deploy::STG),
+    // ADR-0038 §3.4–§3.6: approvers (an Owner's) and one's delegation.
+    both!(A::DeployApproversManage, OWNER.0, OWNER.1, F::PrivateProject),
+    both!(A::ApprovalDelegationManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::OwnToken),
     // M4 C12: a pipeline schedule runs with its owner's (a person's) rights.
     both!(A::PipelineScheduleManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // M4 C12 review: a protected pipeline's manual job is a Maintainer's.

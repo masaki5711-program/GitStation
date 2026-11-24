@@ -58,6 +58,16 @@ export type PutMergeSettingsBody = S['PutMergeSettings'];
 export type DocLintMigration = S['DocLintMigrationBody'];
 export type ApprovalRule = S['ApprovalRuleBody'];
 export type PutApprovalRuleBody = S['PutApprovalRule'];
+// ADR-0038 §3 (step C): approvers by organisation, deploy approvers, delegation.
+export type ApprovalState = S['ApprovalStateBody'];
+export type RuleEligibility = S['RuleEligibilityBody'];
+export type EligiblePerson = S['EligiblePersonBody'];
+export type DeployApprovers = S['ApproversBody'];
+export type DeployApproversList = S['ApproversList'];
+export type PutApprovers = S['PutApprovers'];
+export type DelegationState = S['DelegationState'];
+export type Delegation = S['DelegationBody'];
+export type PutDelegation = S['PutDelegation'];
 export type ProtectedRef = S['ProtectedRefBody'];
 export type MergeRule = S['MergeRuleBody'];
 export type PutMergeRuleBody = S['PutMergeRule'];

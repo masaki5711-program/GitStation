@@ -231,6 +231,15 @@ actions! {
     /// `DELETE /api/v1/user/ssh-keys/{id}`: one's own key (`api`); another
     /// user's is not found, administrators included.
     SshKeyDelete,
+    // --- REST API: delegation of approvals (ADR-0038 §3.5) ---
+    /// `GET /api/v1/user/approval-delegation`: one's own delegation and
+    /// the delegations naming oneself (`read_api`); nobody else's,
+    /// administrators included.
+    ApprovalDelegationRead,
+    /// `PUT|DELETE /api/v1/user/approval-delegation`: set or remove one's
+    /// own delegation. People only, a web session only (a delegation lets
+    /// someone else approve for the person).
+    ApprovalDelegationManage,
     // --- REST API: notification settings (M3 N1, ADR-0016 Amendment N1) ---
     /// `GET /api/v1/user/notification-preferences`: one's own mail
     /// settings (mail on or off, language, muted kinds). Only the person:
@@ -587,6 +596,12 @@ actions! {
     /// agent, a service account (the auto-merge principal included), a
     /// bot, an act-as request, a runner and a job never approve.
     DeployApprove,
+    /// `PUT …/deploy/environments/{tier}/approvers` (ADR-0038 §3.4, §3.6):
+    /// who may approve an environment's deployments (users, groups,
+    /// organisation selectors), how many approvals it needs and whether a
+    /// delegate may approve. Widening who approves is a grant: Owner and
+    /// above, people only; `api`.
+    DeployApproversManage,
     /// `POST /api/v1/projects/{id}/pipeline-schedules`, `PUT|DELETE
     /// …/pipeline-schedules/{schedule_id}` (M4 C12): create, change or
     /// delete a timed pipeline. Whoever saves one becomes its owner and the
@@ -732,6 +747,7 @@ impl Action {
                 | Action::SessionLogout
                 | Action::TokenCreate
                 | Action::SshKeyAdd
+                | Action::ApprovalDelegationManage
                 | Action::SessionList
                 | Action::SessionRevoke
                 | Action::MergeRequestVersionRefsPurge
@@ -828,6 +844,9 @@ impl Action {
                 | Action::DeployEnvironmentManage
                 | Action::DeployTargetManage
                 | Action::DeployApprove
+                // ADR-0038 §3.4–§3.6: approvers and delegations are a person's.
+                | Action::DeployApproversManage
+                | Action::ApprovalDelegationManage
                 // M4 C12: a schedule runs with its owner's rights.
                 | Action::PipelineScheduleManage
                 // M4 C12 review: a protected job gets secrets.
@@ -853,6 +872,7 @@ impl Action {
             | Action::SessionRead
             | Action::TokenCreate
             | Action::SshKeyAdd
+            | Action::ApprovalDelegationManage
             | Action::SessionList
             | Action::SessionRevoke
             | Action::WebLogin
@@ -904,6 +924,7 @@ impl Action {
             | Action::GroupList
             | Action::TokenList
             | Action::SshKeyList
+            | Action::ApprovalDelegationRead
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
             | Action::UserMergeRequestList
@@ -990,6 +1011,7 @@ impl Action {
             | Action::AutofixSettingsManage
             | Action::CiVariableManage
             | Action::DeployEnvironmentManage
+            | Action::DeployApproversManage
             | Action::DeployTargetManage
             | Action::DeployCreate
             | Action::PipelineScheduleManage
@@ -1080,6 +1102,8 @@ impl Action {
             | Action::SshKeyList
             | Action::SshKeyAdd
             | Action::SshKeyDelete
+            | Action::ApprovalDelegationRead
+            | Action::ApprovalDelegationManage
             | Action::UserCreate
             | Action::UserDisable
             | Action::UserSearch
@@ -1154,6 +1178,7 @@ impl Action {
             // M4 C11: nor are deployments (an approval is a person's own).
             | Action::DeployRead
             | Action::DeployEnvironmentManage
+            | Action::DeployApproversManage
             | Action::DeployTargetManage
             | Action::DeployCreate
             | Action::DeployApprove
@@ -1252,6 +1277,8 @@ impl Action {
             | Action::SshKeyList
             | Action::SshKeyAdd
             | Action::SshKeyDelete
+            | Action::ApprovalDelegationRead
+            | Action::ApprovalDelegationManage
             | Action::UserCreate
             | Action::UserDisable
             | Action::UserSearch
@@ -1323,6 +1350,7 @@ impl Action {
             // (ADR-0029 obligation 6: a retried job is no approval).
             | Action::DeployRead
             | Action::DeployEnvironmentManage
+            | Action::DeployApproversManage
             | Action::DeployTargetManage
             | Action::DeployCreate
             | Action::DeployApprove

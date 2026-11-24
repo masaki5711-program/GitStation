@@ -236,6 +236,10 @@ required: 2                             # この中から何人の承認が要�
 
 - 本人が「代理の人」と「期間」（最長 30 日）を自分で登録できる。名指し・selector で選ばれた本人の代わりに、代理の人が承認できる。
 - 代理の人も §3.4 の共通の条件を満たすこと。代理の代理は無い（1 段だけ）。
+- 本人（代理される人）も、承認が求めるロールを **今** 持っていること（MR は Developer 以上、配備は承認者の種類のロール）。
+  本人が代理を外す・別の人に替えると、その代理の承認は終わる（`delegation_ended`）。期間が切れた代理の承認は新しい版に引き継がない。
+  MR の生きている承認は数える人（代理なら本人）ごとに 1 件（部分一意インデックス、FG-REVIEW-0034）。
+  配備の承認者の設定を変えると、待っている配備の承認は消える。無効になった人の承認は数えない（2026-11-23 段 C のレビュー）。
 - 承認の行に「誰の代理か」を残す。本番配備の承認では、代理を使えるかを環境ごとに選ぶ（既定は使えない）。
 
 ### 3.6 管理
@@ -243,6 +247,33 @@ required: 2                             # この中から何人の承認が要�
 - MR の承認規則は今の `ApprovalRuleManage`（Maintainer）。本番配備の `approvers` は Owner と管理者だけが変えられる
   （承認できる人を広げることは権限の付与なので）。変更は監査に残す。
 - 名指しの人は、利用者の検索（部・課の名前付き、§1）で選ぶ。
+
+### 3.7 実装メモ（段 C）
+
+2026-11-21、ブランチ `feat/cross-approver-selectors`（migration `20270102100000`）。文書の承認段階（段 D、ADR-0028）は含まない。
+
+- **形**: selector は `forge_core::approver::ApproverSelector`（§3.1 の鍵だけ。`head_only: true` は PFS が値を入れるまで拒む）。
+  保存は jsonb の正規形。`approval_rule_approvers` は `user_id` / `group_id` / `selector` のちょうど 1 つ（CHECK
+  `num_nonnulls = 1`、形の CHECK は予備で、検証はアプリ）。
+- **人の組織**: `forge_db::org_master::person_orgs`（段 A の `derive` と同じ門。主所属から上の **全部の** 組織の鎖を持つ）。
+  承認の行（`merge_request_approvals` / `deployment_approvals`）の `approver_org` に、承認が数える人（代理なら本人）の
+  写しをコード・階層・ランク・職位・digest だけで残す（名前は残さない、§6）。承認者は主所属だけで判定する（兼務は使わない）。
+- **判定**: `in_rule` は users ∪ groups ∪ selectors。selector の組織は申請者（MR の作成者 / 配備の要求者）の **今の** 主所属から
+  `forge_db::org_master::resolve_selectors` で求める（`escalate: parent` は「承認できる人」が 0 人と分かったときだけ。
+  工場の写しが 2 000 人を超えて分からないときは広げない）。承認者は記録した写しで比べる。除外（古い head、本人、変更者、人でない、
+  ロール）は selector より先。同じ人（代理と本人）は 1 回だけ数える。
+- **MR**: 名指しの人も今までどおり Developer 以上（§3.4 の Reporter は配備だけに使った。MR の承認の Action が Developer 以上のため）。
+- **配備**: `Resource::Deployment` に `approvers`（`ApproverGate`: `Unrestricted` / `Named` / `Matched` / `NotListed(reason)`）と
+  `on_behalf_of` を足した。`authorize()` が `Named` は Reporter 以上、`Matched`（グループ・selector）は Maintainer 以上、
+  `NotListed` は FG-DEPLOY-0014。代理の本人も要求者・SHA の背後なら FG-DEPLOY-0009。§3.2 の「Maintainer 以上 かつ selector」と
+  §3.4 の「名指しは Maintainer でなくてよい」を両立させた形。承認者の設定は新しい Action `DeployApproversManage`（Owner と管理者、人だけ）。
+  `approvals_required`（既定 1）に達したとき `queued`。承認の途中で設定が変わると FG-DEPLOY-0010 `approvers_changed`。
+- **代理**: `approval_delegations`（本人ごとに 1 行、最長 30 日、本人と同じ人は不可）。`GET|PUT|DELETE /api/v1/user/approval-delegation`
+  （`ApprovalDelegationRead` / `ApprovalDelegationManage`、設定は人・web のセッションだけ、監査 `approval_delegation.set` / `.removed`）。
+  代理が有効かは承認のトランザクションの中で確かめる（FG-REVIEW-0033）。配備は環境の `allow_delegation`（既定 false）。
+- **画面・CLI**: MR の承認の答えに `eligible`（規則ごとに承認できる人、0 人の理由）。承認の規則の編集・配備の承認者・個人設定の
+  「代理の承認」。`gstn approval-rule set --selector`、`gstn mr approve --on-behalf-of`、`gstn deploy approvers|approvers-set`、
+  `gstn delegation show`。runbook `merge-blocked`「組織・名指し・代理による承認者」、`deploy`「承認者の指定と代理」。
 
 ## 4. 閉じる条件（fail closed）
 

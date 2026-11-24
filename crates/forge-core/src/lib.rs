@@ -9,6 +9,8 @@ pub mod agent_signing;
 pub mod ai_assets;
 pub mod ai_eval;
 pub mod approval;
+// ADR-0038 §3 (step C): approvers chosen by organisation, named people and delegation.
+pub mod approver;
 pub mod audit_details;
 pub mod authenticator;
 pub mod auto_merge;

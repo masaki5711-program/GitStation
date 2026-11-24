@@ -981,10 +981,11 @@ async fn narrow_approvers(
         return Ok(0);
     }
     let name = want.name.clone(); // clone: moved into the step
-    let rows: Vec<(i64, Option<i64>, Option<i64>)> = tx
+    let rows: Vec<(i64, Option<i64>, Option<i64>, bool)> = tx
         .step(|c| async move {
             sqlx::query_as(
-                "SELECT r.id, a.user_id, a.group_id FROM forge.approval_rules r \
+                "SELECT r.id, a.user_id, a.group_id, a.selector IS NOT NULL \
+                 FROM forge.approval_rules r \
                  LEFT JOIN forge.approval_rule_approvers a ON a.rule_id = r.id \
                  WHERE r.project_id = $1 AND r.name = $2 FOR UPDATE OF r",
             )
@@ -998,10 +999,15 @@ async fn narrow_approvers(
     let Some(rule) = rows.first().map(|r| r.0) else {
         return Ok(0);
     };
+    // ADR-0038 §3: a rule with organisation selectors is never "empty":
+    // it is left as it is (a restore never widens who may approve).
+    if rows.iter().any(|r| r.3) {
+        return Ok(0);
+    }
     let have: BTreeSet<Approver> = rows
         .iter()
-        .filter(|(_, u, g)| u.is_some() || g.is_some())
-        .map(|(_, user, group)| Approver {
+        .filter(|(_, u, g, _)| u.is_some() || g.is_some())
+        .map(|(_, user, group, _)| Approver {
             user: *user,
             group: *group,
         })

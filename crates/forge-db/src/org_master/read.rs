@@ -58,10 +58,10 @@ pub async fn health(db: &Db) -> Result<MasterHealth, ForgeError> {
 }
 
 /// The SQL of the copy's age in seconds (`NULL`: never synced).
-const MASTER_AGE: &str = "(SELECT extract(epoch FROM now() - synced_at)::bigint \
+pub(super) const MASTER_AGE: &str = "(SELECT extract(epoch FROM now() - synced_at)::bigint \
                           FROM forge.org_master_state WHERE id)";
 
-fn older(age: i64, max: std::time::Duration) -> bool {
+pub(super) fn older(age: i64, max: std::time::Duration) -> bool {
     u64::try_from(age).unwrap_or(0) > max.as_secs()
 }
 
@@ -181,7 +181,7 @@ pub async fn primary_paths(
     Ok(out)
 }
 
-fn stored_units(raw: &str) -> Result<Vec<crate::org_profiles::OrgUnit>, ForgeError> {
+pub(super) fn stored_units(raw: &str) -> Result<Vec<crate::org_profiles::OrgUnit>, ForgeError> {
     // The reason only: the parser's text could quote stored values.
     serde_json::from_str(raw).map_err(|_| {
         ForgeError::new(ErrorCode::Internal).with_context("reason", "stored_org_units_invalid")

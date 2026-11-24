@@ -67,6 +67,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // ADR-0038 §3.5 (step C): delegations, audited on the delegator.
+            AuditedTable {
+                name: "approval_delegations".into(),
+                audit_resource: AuditResource::Literal("user".into()),
+                audit_id_column: "delegator_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "approval_rule_approvers".into(),
                 audit_resource: AuditResource::Literal("project".into()),
@@ -131,6 +139,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 audit_resource: AuditResource::Literal("project".into()),
                 audit_id_column: "project_id".into(),
                 unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
+            // ADR-0038 §3.4 (step C): deploy environment approvers.
+            AuditedTable {
+                name: "deploy_environment_approvers".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
             // M4 C11: deployment environments and targets.

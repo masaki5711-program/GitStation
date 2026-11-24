@@ -103,6 +103,10 @@ pub struct StoredEnvironment {
     pub frozen_now: bool,
     pub updated_by: i64,
     pub updated_at: String,
+    /// ADR-0038 §3: how many approvals a deployment needs (default 1).
+    pub approvals_required: i32,
+    /// ADR-0038 §3.5: a delegate may approve (default false).
+    pub allow_delegation: bool,
 }
 
 /// What a Maintainer sets (validated by the caller: tiers, prod rules).
@@ -129,6 +133,8 @@ type EnvRow = (
     bool,
     i64,
     String,
+    i32,
+    bool,
 );
 
 fn env_columns(alias: &str) -> String {
@@ -139,7 +145,8 @@ fn env_columns(alias: &str) -> String {
                to_char(upper(w) AT TIME ZONE 'UTC', '{TS}') \
                FROM unnest({a}.freeze_windows) AS w ORDER BY lower(w)), \
          {a}.freeze_windows @> now(), {a}.updated_by, \
-         to_char({a}.updated_at AT TIME ZONE 'UTC', '{TS}')",
+         to_char({a}.updated_at AT TIME ZONE 'UTC', '{TS}'), {a}.approvals_required, \
+         {a}.allow_delegation",
         a = alias
     )
 }
@@ -157,6 +164,8 @@ fn env_of(r: EnvRow) -> Result<StoredEnvironment, ForgeError> {
         frozen_now: r.8,
         updated_by: r.9,
         updated_at: r.10,
+        approvals_required: r.11,
+        allow_delegation: r.12,
     })
 }
 
@@ -530,12 +539,17 @@ pub async fn put_target_decided(
 
 // ---------------------------------------------------------------- deployments
 
+mod approvers;
 mod deployments;
 mod worker;
 
+pub use approvers::{
+    deployment_approvals, environment_approvers, project_approvers, put_approvers_decided,
+    ApproversInput, DeploymentApproval, EnvironmentApprovers,
+};
 pub use deployments::{
     approve_decided, auto_request, get_deployment, list_deployments, request_decided, CommitInput,
-    StoredDeployment, MAX_LIST,
+    DeployApprovalInput, StoredDeployment, MAX_LIST,
 };
 pub use worker::{
     abandon_stale, block_unapproved, claim_next, finish, heartbeat, stuck_running, Claim, Claimed,
