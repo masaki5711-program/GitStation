@@ -396,7 +396,7 @@ impl Oidc {
         // ADR-0021 amendment 2026-11-24: a role granted or removed at the
         // provider reaches the administrator flag at this check, before the
         // confirmation is stored: a database failure here leaves
-        // `access_role_seen_at` old, so an IdP-granted flag stops counting
+        // `admin_role_seen_at` old, so an IdP-granted flag stops counting
         // for the session within `sessions::ADMIN_CONFIRM_SECS` even before
         // the next check (the failure is this request's, as for the account
         // read above).
