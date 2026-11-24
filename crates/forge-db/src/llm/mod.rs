@@ -289,6 +289,15 @@ pub struct Reader {
     pub can_read_subject: bool,
 }
 
+/// The subject the caller decided the reader may read (its merge request,
+/// deployment, incident). The store answers only for advice of this
+/// subject: a decision on one subject never opens another's advice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Subject<'a> {
+    pub kind: &'a str,
+    pub id: Option<i64>,
+}
+
 /// A stored advice (read pool).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredAdvice {
@@ -339,10 +348,16 @@ fn stored_invalid(column: &'static str) -> ForgeError {
         .with_context("column", column)
 }
 
-/// The advice `id` for `reader` (`None`: none, swept, or the reader may
-/// not read its subject — the same answer, so existence does not leak).
-/// A confidential advice is [`AdviceView::Withheld`] from an agent.
-pub async fn advice(db: &Db, id: i64, reader: Reader) -> Result<Option<AdviceView>, ForgeError> {
+/// The advice `id` of `subject` for `reader` (`None`: none, swept, of
+/// another subject, or the reader may not read the subject — the same
+/// answer, so existence does not leak). A confidential advice is
+/// [`AdviceView::Withheld`] from an agent.
+pub async fn advice(
+    db: &Db,
+    id: i64,
+    subject: Subject<'_>,
+    reader: Reader,
+) -> Result<Option<AdviceView>, ForgeError> {
     const QUERY: &str = "llm.advice";
     if !reader.can_read_subject {
         return Ok(None);
@@ -352,9 +367,12 @@ pub async fn advice(db: &Db, id: i64, reader: Reader) -> Result<Option<AdviceVie
             sqlx::query_as(
                 "SELECT id, llm_request_id, purpose, subject_kind, subject_id, head_sha, summary, \
                    findings, deep_review, degraded, input_class, superseded_by \
-                 FROM forge.llm_advice WHERE id = $1",
+                 FROM forge.llm_advice \
+                 WHERE id = $1 AND subject_kind = $2 AND subject_id IS NOT DISTINCT FROM $3",
             )
             .bind(id)
+            .bind(subject.kind)
+            .bind(subject.id)
             .fetch_optional(db.pool().executor())
             .await
             .map_err(|e| read_query_error(QUERY, e))
@@ -420,6 +438,7 @@ pub enum FeedbackOutcome {
 pub async fn record_feedback(
     db: &Db,
     advice_id: i64,
+    subject: Subject<'_>,
     finding: Option<u8>,
     user: UserId,
     reader: Reader,
@@ -434,13 +453,17 @@ pub async fn record_feedback(
     }
     let index: i16 = finding.map_or(-1, i16::from);
     db.within(QUERY, async {
-        // Inserted (xmax = 0) or updated; no row: the advice or the finding
-        // is not there, or the verdict was already this one.
+        // `RETURNING (xmax = 0)`: PostgreSQL leaves xmax 0 on a row this
+        // statement inserted and sets it (to this transaction) on a row the
+        // ON CONFLICT branch updated — true = Recorded, false = Changed. No
+        // row: the advice (of this subject) or the finding is not there, or
+        // the verdict was already this one (the DO UPDATE's WHERE).
         let written: Option<bool> = sqlx::query_scalar(
             "INSERT INTO forge.llm_advice_feedback (advice_id, purpose, input_class, \
                finding_index, user_id, verdict) \
              SELECT a.id, a.purpose, a.input_class, $2, $3, $4 FROM forge.llm_advice a \
-              WHERE a.id = $1 AND ($2 < 0 OR $2 < jsonb_array_length(a.findings)) \
+              WHERE a.id = $1 AND a.subject_kind = $5 AND a.subject_id IS NOT DISTINCT FROM $6 \
+                AND ($2 < 0 OR $2 < jsonb_array_length(a.findings)) \
              ON CONFLICT (advice_id, finding_index, user_id) WHERE advice_id IS NOT NULL \
              DO UPDATE SET verdict = EXCLUDED.verdict, updated_at = now() \
                WHERE forge.llm_advice_feedback.verdict IS DISTINCT FROM EXCLUDED.verdict \
@@ -450,6 +473,8 @@ pub async fn record_feedback(
         .bind(index)
         .bind(user.get())
         .bind(verdict.as_str())
+        .bind(subject.kind)
+        .bind(subject.id)
         .fetch_optional(db.write_pool())
         .await
         .map_err(|e| query_error(QUERY, e))?;
@@ -458,12 +483,16 @@ pub async fn record_feedback(
             Some(false) => Ok(FeedbackOutcome::Changed),
             None => {
                 let exists: bool = sqlx::query_scalar(
-                    "SELECT EXISTS (SELECT 1 FROM forge.llm_advice_feedback \
-                     WHERE advice_id = $1 AND finding_index = $2 AND user_id = $3)",
+                    "SELECT EXISTS (SELECT 1 FROM forge.llm_advice_feedback f \
+                     JOIN forge.llm_advice a ON a.id = f.advice_id \
+                     WHERE f.advice_id = $1 AND f.finding_index = $2 AND f.user_id = $3 \
+                       AND a.subject_kind = $4 AND a.subject_id IS NOT DISTINCT FROM $5)",
                 )
                 .bind(advice_id)
                 .bind(index)
                 .bind(user.get())
+                .bind(subject.kind)
+                .bind(subject.id)
                 .fetch_one(db.write_pool())
                 .await
                 .map_err(|e| query_error(QUERY, e))?;

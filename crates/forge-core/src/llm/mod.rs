@@ -29,7 +29,8 @@ pub mod provider;
 
 pub use input::{prepare, InputLimits, InputPart, PreparedInput};
 pub use output::{
-    check_output, Advice, DeepReview, Finding, FindingSeverity, OutputPolicy, WITHHELD_SUMMARY,
+    check_output, Advice, DeepReview, Finding, FindingSeverity, OutputPolicy, VERDICT_REMOVED,
+    WITHHELD_SUMMARY,
 };
 pub use provider::{generate_checked, ChatFuture, ChatReply, ChatRequest, Generated, LlmProvider};
 

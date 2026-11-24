@@ -105,8 +105,11 @@ pub struct Advice {
     /// advice never decides, so the summary was replaced by
     /// [`WITHHELD_SUMMARY`].
     pub summary_withheld: bool,
-    /// Less trustworthy than its words suggest: the summary was withheld or
-    /// findings were dropped for their evidence (shown as such).
+    /// Verdict phrases replaced by [`VERDICT_REMOVED`] in finding
+    /// messages, quotes and the deep-review reason.
+    pub verdicts_removed: usize,
+    /// Less trustworthy than its words suggest: a verdict was withheld or
+    /// removed, or findings were dropped for their evidence (shown as such).
     pub degraded: bool,
 }
 
@@ -140,9 +143,97 @@ const VERDICT_PHRASES: &[&str] = &[
     "disetujui",
 ];
 
-fn states_a_verdict(text: &str) -> bool {
+/// A word right before a verdict phrase that negates it ("not approved",
+/// "tidak disetujui"): no verdict.
+const NEGATIONS: &[&str] = &["not", "no", "never", "tidak", "belum", "bukan"];
+
+/// What replaces a verdict phrase inside a message, quote or reason.
+pub const VERDICT_REMOVED: &str = "[verdict removed]";
+
+/// Invisible characters that would split a phrase without showing it:
+/// zero-width, soft hyphen, word joiners, BOM and bidi controls.
+pub(crate) fn is_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// NFKC (full-width and compatibility forms fold to their plain letters)
+/// without invisible characters: the form every advice text is stored and
+/// checked in.
+fn normalized(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    text.nfkc().filter(|c| !is_invisible(*c)).collect()
+}
+
+/// The byte ranges of the verdict phrases in `text` (already
+/// [`normalized`]), on word boundaries for the Latin ones, not after a
+/// negation.
+fn verdict_spans(text: &str) -> Vec<(usize, usize)> {
     let lower = text.to_lowercase();
-    VERDICT_PHRASES.iter().any(|p| lower.contains(p))
+    if lower.len() != text.len() {
+        // A case mapping changed lengths: the ranges would not line up, so
+        // the whole text counts as one (conservative).
+        return if VERDICT_PHRASES.iter().any(|p| lower.contains(p)) {
+            vec![(0, text.len())]
+        } else {
+            Vec::new()
+        };
+    }
+    let mut spans = Vec::new();
+    for phrase in VERDICT_PHRASES {
+        let latin = phrase.starts_with(|c: char| c.is_ascii_alphabetic());
+        let mut from = 0;
+        while let Some(at) = lower.get(from..).and_then(|rest| rest.find(phrase)) {
+            let start = from + at;
+            let end = start + phrase.len();
+            from = end;
+            let before = lower.get(..start).unwrap_or("");
+            let after = lower.get(end..).unwrap_or("");
+            if latin
+                && (before.chars().next_back().is_some_and(char::is_alphanumeric)
+                    || after.chars().next().is_some_and(char::is_alphanumeric))
+            {
+                continue;
+            }
+            let previous_word = before
+                .trim_end_matches(|c: char| !c.is_alphanumeric())
+                .rsplit(|c: char| !c.is_alphanumeric())
+                .next()
+                .unwrap_or("");
+            if NEGATIONS.contains(&previous_word) {
+                continue;
+            }
+            spans.push((start, end));
+        }
+    }
+    spans.sort_unstable();
+    spans
+}
+
+fn states_a_verdict(text: &str) -> bool {
+    !verdict_spans(text).is_empty()
+}
+
+/// `text` with each verdict phrase replaced by [`VERDICT_REMOVED`]; and
+/// whether any was.
+fn without_verdicts(text: &str) -> (String, bool) {
+    let spans = verdict_spans(text);
+    if spans.is_empty() {
+        return (text.to_owned(), false);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (start, end) in spans {
+        if start < at {
+            continue; // overlapping phrases: the first already covered it
+        }
+        out.push_str(text.get(at..start).unwrap_or(""));
+        out.push_str(VERDICT_REMOVED);
+        at = end;
+    }
+    out.push_str(text.get(at..).unwrap_or(""));
+    (out, true)
 }
 
 impl Advice {
@@ -195,6 +286,7 @@ pub fn check_output(
         return Err(invalid("not_object"));
     };
     let mut stripped = 0usize;
+    let mut verdicts_removed = 0usize;
     let summary = match top.get("summary") {
         Some(Value::String(s)) if !s.trim().is_empty() => {
             let (s, n) = clean(s, policy.max_summary_chars);
@@ -226,6 +318,8 @@ pub fn check_output(
             (Some(Value::Bool(true)), Some(Value::String(r))) if !r.trim().is_empty() => {
                 let (reason, n) = clean(r, policy.max_message_chars);
                 stripped += n;
+                let (reason, removed) = without_verdicts(&reason);
+                verdicts_removed += usize::from(removed);
                 Some(DeepReview { reason })
             }
             _ => return Err(invalid("deep_review_type")),
@@ -251,6 +345,8 @@ pub fn check_output(
         }
         let (message, n) = clean(&finding.message, policy.max_message_chars);
         stripped += n;
+        let (message, removed) = without_verdicts(&message);
+        verdicts_removed += usize::from(removed);
         if message.trim().is_empty() {
             dropped_evidence += 1;
             continue;
@@ -259,6 +355,8 @@ pub fn check_output(
         // shown is cleaned like every other text.
         let (quote, n) = clean(&finding.quote, policy.max_quote_chars);
         stripped += n;
+        let (quote, removed) = without_verdicts(&quote);
+        verdicts_removed += usize::from(removed);
         let finding = Finding {
             message,
             quote,
@@ -288,7 +386,8 @@ pub fn check_output(
         dropped_over_cap,
         stripped,
         summary_withheld,
-        degraded: summary_withheld || dropped_evidence > 0,
+        verdicts_removed,
+        degraded: summary_withheld || verdicts_removed > 0 || dropped_evidence > 0,
     })
 }
 
@@ -394,8 +493,15 @@ const CLOSING: &[&str] = &[
 /// `/approve`, `/close`): a slash and letters only (a path has another `/`
 /// or a `.`).
 fn is_slash_command(word: &str) -> bool {
+    let word = word.trim_matches(|c: char| {
+        matches!(
+            c,
+            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '*' | '_' | '~'
+                | ',' | '.' | ':' | ';' | '!' | '?'
+        )
+    });
     word.strip_prefix('/').is_some_and(|rest| {
-        let rest = rest.trim_end_matches([':', ',', '.', ';', '!']);
+        let rest = rest.trim_end_matches([':', ',', '.', ';', '!', '?']);
         !rest.is_empty()
             && rest
                 .chars()
@@ -409,6 +515,9 @@ fn is_slash_command(word: &str) -> bool {
 fn clean(text: &str, max: usize) -> (String, usize) {
     let mut n = 0usize;
     let mut out: Vec<String> = Vec::new();
+    // NFKC without invisible characters first, so a full-width `／ｍｅｒｇｅ`
+    // or a zero-width split `L\u{200B}GTM` is seen as what it shows.
+    let text = normalized(text);
     let words: Vec<&str> = text.split_whitespace().collect();
     let mut i = 0;
     while let Some(&word) = words.get(i) {

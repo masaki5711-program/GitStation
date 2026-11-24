@@ -168,6 +168,14 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = 'XF001',
             MESSAGE = 'an advice on forge.llm_advice never changes but for superseded_by (its input_class is never lowered)';
     END IF;
+    -- llm_request_id and superseded_by become NULL only through their FK's
+    -- ON DELETE SET NULL (an RI trigger: depth > 1), never by a statement.
+    IF ((OLD.llm_request_id IS NOT NULL AND NEW.llm_request_id IS NULL)
+        OR (OLD.superseded_by IS NOT NULL AND NEW.superseded_by IS NULL))
+       AND pg_trigger_depth() <= 1 THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'an advice on forge.llm_advice loses a reference only when the referenced row is deleted';
+    END IF;
     -- superseded_by is set once, to a newer advice of the same subject and
     -- purpose (or cleared by its FK when that advice is deleted).
     IF NEW.superseded_by IS DISTINCT FROM OLD.superseded_by AND NEW.superseded_by IS NOT NULL
@@ -270,6 +278,12 @@ BEGIN
        OR (NEW.advice_id IS DISTINCT FROM OLD.advice_id AND NEW.advice_id IS NOT NULL) THEN
         RAISE EXCEPTION USING ERRCODE = 'XF001',
             MESSAGE = 'a verdict on forge.llm_advice_feedback changes only its verdict';
+    END IF;
+    -- advice_id becomes NULL only through its FK (the sweep deleted the
+    -- advice: an RI trigger, depth > 1), never by a statement.
+    IF OLD.advice_id IS NOT NULL AND NEW.advice_id IS NULL AND pg_trigger_depth() <= 1 THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'a verdict on forge.llm_advice_feedback loses its advice only when the advice is deleted';
     END IF;
     RETURN NEW;
 END

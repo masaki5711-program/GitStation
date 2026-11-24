@@ -128,7 +128,7 @@ fn inert_meta(meta: &str) -> (String, usize) {
         .chars()
         .take(300)
         .map(|c| {
-            if c.is_control() {
+            if c.is_control() || breaks_a_line_or_hides(c) {
                 n += 1;
                 '?'
             } else {
@@ -137,6 +137,17 @@ fn inert_meta(meta: &str) -> (String, usize) {
         })
         .collect();
     (out, n)
+}
+
+/// Line and paragraph separators (U+2028 / U+2029) and format characters
+/// (Cf: zero-width, bidi controls, tags) — a line break or text that reads
+/// differently than it is.
+fn breaks_a_line_or_hides(c: char) -> bool {
+    super::output::is_invisible(c)
+        || matches!(c,
+            '\u{2028}' | '\u{2029}' | '\u{0600}'..='\u{0605}' | '\u{061C}' | '\u{06DD}'
+            | '\u{070F}' | '\u{08E2}' | '\u{110BD}' | '\u{110CD}' | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{1D173}'..='\u{1D17A}' | '\u{E0001}' | '\u{E0020}'..='\u{E007F}')
 }
 
 fn refused(reason: &'static str) -> ForgeError {
@@ -250,7 +261,7 @@ fn redact(text: &str) -> Result<(String, usize), &'static str> {
     let (text, mut n) = redact_pem(text)?;
     let mut out = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
-        let (line, m) = redact_assignment(line);
+        let (line, m) = redact_assignment(line)?;
         n += m;
         let (line, m) = redact_words(&line);
         n += m;
@@ -292,25 +303,37 @@ fn redact_pem(text: &str) -> Result<(String, usize), &'static str> {
 
 /// `name = "value"` / `name: value` with a secret-looking name: the value.
 /// A call or an expression (`password = read()`) is code, not a value.
-fn redact_assignment(line: &str) -> (String, usize) {
+/// `Err("too_many_assignments")`: more than [`MAX_ASSIGNMENT_STEPS`]
+/// secret-looking names on one line — the rest of the line cannot be
+/// shown to be clean, so the input is refused rather than sent unchecked.
+fn redact_assignment(line: &str) -> Result<(String, usize), &'static str> {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     let mut n = 0;
     // Every assignment of the line, left to right (bounded: each step
     // consumes at least one secret name).
-    for _ in 0..256 {
+    for _ in 0..MAX_ASSIGNMENT_STEPS {
         match assignment_step(rest) {
             Some((done, remaining, redacted)) => {
                 out.push_str(&done);
                 n += usize::from(redacted);
                 rest = remaining;
             }
-            None => break,
+            None => {
+                out.push_str(rest);
+                return Ok((out, n));
+            }
         }
     }
+    if assignment_step(rest).is_some() {
+        return Err("too_many_assignments");
+    }
     out.push_str(rest);
-    (out, n)
+    Ok((out, n))
 }
+
+/// Secret-looking names one line may hold.
+const MAX_ASSIGNMENT_STEPS: usize = 256;
 
 /// The first secret-looking name of `seg`: the text up to it (its value
 /// redacted when it is an assigned literal), what follows, and whether a

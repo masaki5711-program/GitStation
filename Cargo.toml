@@ -45,6 +45,9 @@ tempfile = "3"
 # already in the tree through sqlx (stringprep), MIT / Apache-2.0.
 unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 proptest = "1"
+# Plan 19: NFKC of LLM advice text before its checks (already in the tree
+# through sqlx / stringprep). MIT OR Apache-2.0.
+unicode-normalization = "0.1.26"
 # M3 X1: `.forge/repo.yml` (plan 03 §4.4, ADR-0023). Pure Rust, MIT OR
 # Apache-2.0; only its event parser is used (no alias expansion, no type
 # resolution: forge-doc builds its own tree and refuses anchors, aliases

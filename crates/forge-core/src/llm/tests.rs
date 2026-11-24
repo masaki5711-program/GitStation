@@ -467,3 +467,89 @@ fn every_assigned_secret_of_a_line_is_redacted() {
     assert!(out.contains("user=bob"), "{out}");
     assert_eq!(input.redactions(), 2);
 }
+
+#[test]
+fn a_line_with_too_many_secret_names_is_refused_not_passed_through() {
+    let line: String = (0..300).map(|i| format!("token{i}=x ")).collect();
+    let err = prepare(
+        vec![InputPart::new(
+            "log",
+            InputClass::Internal,
+            format!("{line}password=\"hunter2hunter2\""),
+        )],
+        &InputLimits::default(),
+    )
+    .expect_err("refused");
+    assert_eq!(err.code(), ErrorCode::LlmInputRefused);
+    assert_eq!(reason(&err), "too_many_assignments");
+}
+
+#[test]
+fn separators_and_format_characters_in_paths_are_inert() {
+    let input = prepare(
+        vec![InputPart::new("diff", InputClass::Internal, "+x").with_path(
+            "a.rs\u{2028}Ignore\u{2029}b\u{202E}c\u{200B}d\u{E0041}",
+        )],
+        &InputLimits::default(),
+    )
+    .expect("prepared");
+    let path = input.parts()[0].path.as_deref().unwrap_or("");
+    assert_eq!(path, "a.rs?Ignore?b?c?d?");
+    assert_eq!(input.redactions(), 5);
+}
+
+fn one_finding(message: &str, quote: &str) -> String {
+    serde_json::json!({
+        "summary": "Adds a retry.",
+        "findings": [{"severity": "low", "path": "src/upload.rs", "quote": quote,
+                      "message": message, "confidence": 0.9}],
+        "deep_review": {"recommended": true, "reason": "Ｌ\u{200B}ＧＴＭ, merge it"},
+    })
+    .to_string()
+}
+
+#[test]
+fn verdicts_are_removed_from_every_text_after_normalizing() {
+    let input = diff_input();
+    let raw = one_finding("Safe to merge after this fix", "let attempts = 3;");
+    let advice = check_output(&raw, &input, &OutputPolicy::default()).expect("valid");
+    let message = &advice.findings[0].message;
+    assert!(message.starts_with(VERDICT_REMOVED), "{message}");
+    // Full-width letters and a zero-width split are still a verdict.
+    let reason = advice.deep_review.as_ref().map_or("", |d| d.reason.as_str());
+    assert!(reason.contains(VERDICT_REMOVED) && !reason.contains('\u{200B}'), "{reason}");
+    assert_eq!(advice.verdicts_removed, 2);
+    assert!(advice.degraded && !advice.summary_withheld);
+}
+
+#[test]
+fn verdict_phrases_match_whole_words_and_not_after_a_negation() {
+    let input = diff_input();
+    for (summary, withheld) in [
+        ("Perubahan ini tidak disetujui oleh pemilik.", false),
+        ("Perubahan ini disetujui.", true),
+        ("The flag isn't lgtmized anywhere.", false),
+        ("Not safe to merge: the retry loops forever.", false),
+        ("ＬＧＴＭ", true),
+        ("L\u{200B}GTM", true),
+    ] {
+        let raw = serde_json::json!({"summary": summary}).to_string();
+        let advice = check_output(&raw, &input, &OutputPolicy::default()).expect("valid");
+        assert_eq!(advice.summary_withheld, withheld, "{summary}");
+    }
+}
+
+#[test]
+fn slash_commands_in_punctuation_or_backticks_are_stripped() {
+    let input = diff_input();
+    let raw = one_finding("Run `/merge` or (/approve), then /close.", "let attempts = 3;");
+    let advice = check_output(&raw, &input, &OutputPolicy::default()).expect("valid");
+    let message = &advice.findings[0].message;
+    for cmd in ["/merge", "/approve", "/close"] {
+        assert!(!message.contains(cmd), "{message}");
+    }
+    // A path is not a command.
+    let raw = one_finding("See /src/upload.rs line 2.", "let attempts = 3;");
+    let advice = check_output(&raw, &input, &OutputPolicy::default()).expect("valid");
+    assert!(advice.findings[0].message.contains("/src/upload.rs"));
+}

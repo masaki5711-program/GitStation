@@ -94,6 +94,87 @@ const PERSON: Reader = Reader {
     is_agent: false,
     can_read_subject: true,
 };
+const MR7: Subject<'static> = Subject {
+    kind: "merge_request",
+    id: Some(7),
+};
+const MR8: Subject<'static> = Subject {
+    kind: "merge_request",
+    id: Some(8),
+};
+
+/// A decision on one subject never opens another subject's advice: a
+/// reader of merge request 5 asking for advice of (confidential) merge
+/// request 7 gets "none", for the read and for the vote alike.
+#[tokio::test]
+async fn another_subjects_advice_is_not_found() {
+    let w = world().await;
+    let id = insert_advice(&w.t.db, &advice(&w, None, InputClass::Confidential))
+        .await
+        .expect("advice of MR 7");
+    let mr5 = Subject {
+        kind: "merge_request",
+        id: Some(5),
+    };
+    let deployment7 = Subject {
+        kind: "deployment",
+        id: Some(7),
+    };
+    for subject in [mr5, deployment7] {
+        assert_eq!(
+            super::advice(&w.t.db, id, subject, PERSON)
+                .await
+                .expect("read"),
+            None
+        );
+        assert_eq!(
+            record_feedback(&w.t.db, id, subject, Some(0), w.alice, PERSON, Verdict::Wrong)
+                .await
+                .expect("vote"),
+            FeedbackOutcome::NoAdvice
+        );
+    }
+    let rows =
+        w.t.json_rows("SELECT count(*) AS n FROM forge.llm_advice_feedback")
+            .await;
+    assert_eq!(rows[0]["n"], 0, "no vote landed");
+    assert!(super::advice(&w.t.db, id, MR7, PERSON)
+        .await
+        .expect("read")
+        .is_some());
+}
+
+/// Two votes of one person at once: one row, and exactly one of them is
+/// reported as recorded (the xmax test of the single statement).
+#[tokio::test]
+async fn concurrent_votes_record_one_row() {
+    let w = world().await;
+    let id = insert_advice(&w.t.db, &advice(&w, None, InputClass::Internal))
+        .await
+        .expect("advice");
+    let (a, b) = tokio::join!(
+        record_feedback(&w.t.db, id, MR7, Some(0), w.alice, PERSON, Verdict::Useful),
+        record_feedback(&w.t.db, id, MR7, Some(0), w.alice, PERSON, Verdict::Useful),
+    );
+    let outcomes = [a.expect("first"), b.expect("second")];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| **o == FeedbackOutcome::Recorded)
+            .count(),
+        1,
+        "{outcomes:?}"
+    );
+    assert!(outcomes.contains(&FeedbackOutcome::Unchanged), "{outcomes:?}");
+    let rows = w
+        .t
+        .json_rows(&format!(
+            "SELECT count(*) AS n FROM forge.llm_advice_feedback WHERE advice_id = {id}"
+        ))
+        .await;
+    assert_eq!(rows[0]["n"], 1);
+}
+
 const AGENT: Reader = Reader {
     is_agent: true,
     can_read_subject: true,
@@ -227,12 +308,12 @@ async fn advice_keeps_input_class() {
     let id = insert_advice(&w.t.db, &advice(&w, Some(req), InputClass::Confidential))
         .await
         .expect("kept");
-    let stored = shown(super::advice(&w.t.db, id, PERSON).await.expect("read"));
+    let stored = shown(super::advice(&w.t.db, id, MR7, PERSON).await.expect("read"));
     assert_eq!(stored.input_class, InputClass::Confidential);
     // An agent learns only that it exists; a reader of another subject
     // learns nothing; an agent cannot vote.
     assert_eq!(
-        super::advice(&w.t.db, id, AGENT).await.expect("read"),
+        super::advice(&w.t.db, id, MR7, AGENT).await.expect("read"),
         Some(AdviceView::Withheld {
             id,
             input_class: InputClass::Confidential
@@ -243,11 +324,11 @@ async fn advice_keeps_input_class() {
         can_read_subject: false,
     };
     assert_eq!(
-        super::advice(&w.t.db, id, outsider).await.expect("read"),
+        super::advice(&w.t.db, id, MR7, outsider).await.expect("read"),
         None
     );
     assert_eq!(
-        record_feedback(&w.t.db, id, None, w.alice, AGENT, Verdict::Useful)
+        record_feedback(&w.t.db, id, MR7, None, w.alice, AGENT, Verdict::Useful)
             .await
             .expect("refused"),
         FeedbackOutcome::NotAllowed
@@ -263,7 +344,7 @@ async fn advice_keeps_input_class() {
     let newer = insert_advice(&w.t.db, &advice(&w, None, InputClass::Confidential))
         .await
         .expect("newer");
-    let stored = shown(super::advice(&w.t.db, id, PERSON).await.expect("read"));
+    let stored = shown(super::advice(&w.t.db, id, MR7, PERSON).await.expect("read"));
     assert_eq!(stored.superseded_by, Some(newer));
     // Superseded once, by a newer advice of its subject only.
     let mut su = w.t.superuser().await;
@@ -276,6 +357,21 @@ async fn advice_keeps_input_class() {
         again.is_err(),
         "an older advice never supersedes a newer one"
     );
+    // A reference becomes NULL only when the referenced row is deleted.
+    let cleared = sqlx::query("UPDATE forge.llm_advice SET superseded_by = NULL WHERE id = $1")
+        .bind(id)
+        .execute(&mut su)
+        .await;
+    assert!(cleared.is_err(), "superseded_by is not cleared by a statement");
+    record_feedback(&w.t.db, newer, MR7, None, w.alice, PERSON, Verdict::Useful)
+        .await
+        .expect("vote");
+    let detached =
+        sqlx::query("UPDATE forge.llm_advice_feedback SET advice_id = NULL WHERE advice_id = $1")
+            .bind(newer)
+            .execute(&mut su)
+            .await;
+    assert!(detached.is_err(), "advice_id is not cleared by a statement");
 }
 
 #[tokio::test]
@@ -324,19 +420,19 @@ async fn feedback_one_per_user_and_finding() {
         .expect("advice");
     let db = &w.t.db;
     assert_eq!(
-        record_feedback(db, id, Some(0), w.alice, PERSON, Verdict::Useful)
+        record_feedback(db, id, MR7, Some(0), w.alice, PERSON, Verdict::Useful)
             .await
             .expect("first"),
         FeedbackOutcome::Recorded
     );
     assert_eq!(
-        record_feedback(db, id, Some(0), w.alice, PERSON, Verdict::Useful)
+        record_feedback(db, id, MR7, Some(0), w.alice, PERSON, Verdict::Useful)
             .await
             .expect("again"),
         FeedbackOutcome::Unchanged
     );
     assert_eq!(
-        record_feedback(db, id, Some(0), w.alice, PERSON, Verdict::Wrong)
+        record_feedback(db, id, MR7, Some(0), w.alice, PERSON, Verdict::Wrong)
             .await
             .expect("changed"),
         FeedbackOutcome::Changed
@@ -344,7 +440,7 @@ async fn feedback_one_per_user_and_finding() {
     // Another finding, another person, the advice as a whole: their own rows.
     for (finding, user) in [(Some(1), w.alice), (Some(0), w.bob), (None, w.alice)] {
         assert_eq!(
-            record_feedback(db, id, finding, user, PERSON, Verdict::Useful)
+            record_feedback(db, id, MR7, finding, user, PERSON, Verdict::Useful)
                 .await
                 .expect("own row"),
             FeedbackOutcome::Recorded
@@ -352,13 +448,13 @@ async fn feedback_one_per_user_and_finding() {
     }
     // A finding the advice does not have, an advice that does not exist.
     assert_eq!(
-        record_feedback(db, id, Some(2), w.alice, PERSON, Verdict::Useful)
+        record_feedback(db, id, MR7, Some(2), w.alice, PERSON, Verdict::Useful)
             .await
             .expect("none"),
         FeedbackOutcome::NoAdvice
     );
     assert_eq!(
-        record_feedback(db, id + 1000, None, w.alice, PERSON, Verdict::Useful)
+        record_feedback(db, id + 1000, MR7, None, w.alice, PERSON, Verdict::Useful)
             .await
             .expect("none"),
         FeedbackOutcome::NoAdvice
@@ -402,7 +498,7 @@ async fn retention_sweep_keeps_feedback() {
     .fetch_one(&mut w.t.superuser().await)
     .await
     .expect("old advice");
-    record_feedback(&w.t.db, old, Some(0), w.alice, PERSON, Verdict::Wrong)
+    record_feedback(&w.t.db, old, MR7, Some(0), w.alice, PERSON, Verdict::Wrong)
         .await
         .expect("feedback");
     // A fresh request and advice stay.
@@ -420,11 +516,11 @@ async fn retention_sweep_keeps_feedback() {
             requests: 1
         }
     );
-    assert!(super::advice(&w.t.db, old, PERSON)
+    assert!(super::advice(&w.t.db, old, MR7, PERSON)
         .await
         .expect("read")
         .is_none());
-    assert!(super::advice(&w.t.db, fresh, PERSON)
+    assert!(super::advice(&w.t.db, fresh, MR8, PERSON)
         .await
         .expect("read")
         .is_some());
