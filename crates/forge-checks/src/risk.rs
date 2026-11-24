@@ -40,6 +40,7 @@ use std::time::Duration;
 
 use forge_core::auto_merge::{
     deterministic_layer, MergeResultAssessor, MergeResultFuture, MergeResultRange, RiskVerdict,
+    TrainRange, TrainResultFuture,
 };
 use forge_core::checks::CheckRun;
 use forge_core::checks::{
@@ -52,7 +53,7 @@ use forge_core::risk::{
     mass_deletion, path_findings, sort_findings, symlink_findings, ChangeStatus, ChangedFile,
     ContentKind, Finding, RiskLevel, MASS_DELETE_FILES, MASS_DELETE_LINES, MAX_CHANGED_FILES,
 };
-use forge_core::{CheckName, ObjectId, RefName, RepoId, RepositoryState, RequestId};
+use forge_core::{CheckName, ObjectId, ProjectId, RefName, RepoId, RepositoryState, RequestId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::checks::risk::{risk_targets, RiskRequest, RiskTargets};
 use forge_db::checks::{record_forge_check_run, CheckAnnotation, NewCheckRun, Reported};
@@ -535,7 +536,8 @@ impl Risk {
                 return Ok(found);
             }
         };
-        self.target_at(repo, target, &tip, head, ai_assets).await
+        self.target_at(repo, target, &tip, head, ai_assets, None)
+            .await
     }
 
     /// One target branch at `tip`: the diff from the merge base of `tip`
@@ -549,17 +551,24 @@ impl Risk {
         tip: &ObjectId,
         head: &ObjectId,
         ai_assets: bool,
+        // Plan 18 S7: the merge base already known (a train's steps all
+        // descend from its base: found once for the whole train).
+        known_base: Option<&ObjectId>,
     ) -> Result<TargetFindings, ForgeError> {
         let mut found = TargetFindings {
             target: short_name(target),
             files: 0,
             findings: Vec::new(),
         };
-        let Some(base) = self
-            .git
-            .merge_base(&self.storage, repo, tip, head, GIT_TIMEOUT)
-            .await?
-        else {
+        let base = match known_base {
+            Some(base) => Some(base.clone()), // clone: owned like git's answer
+            None => {
+                self.git
+                    .merge_base(&self.storage, repo, tip, head, GIT_TIMEOUT)
+                    .await?
+            }
+        };
+        let Some(base) = base else {
             found.findings.push(rule("no_common_history")?);
             return Ok(found);
         };
@@ -807,29 +816,73 @@ impl Risk {
         &self,
         range: MergeResultRange<'_>,
     ) -> Result<RiskVerdict, ForgeError> {
-        let evaluated = tokio::time::timeout(self.budget, async {
-            let ai_assets = match tokio::time::timeout(
-                LOOKUP_TIMEOUT,
-                forge_db::ai_assets::setting(&self.db, range.project),
-            )
-            .await
-            {
-                Ok(setting) => setting?.enabled,
-                Err(_) => {
-                    return Err(ForgeError::new(ErrorCode::RequestTimeout)
-                        .with_context("operation", "ai_assets_setting")
-                        .with_context("timeout_ms", LOOKUP_TIMEOUT.as_millis()))
-                }
-            };
+        let ai_assets = self.ai_assets_enabled(range.project).await?;
+        self.judge_merge_result(range, ai_assets, None).await
+    }
+
+    /// Every step of a train (plan 18 S7, ADR-0037 (b) 7): the verdicts of
+    /// [`Self::assess_merge_result`] on each step, in order, with the
+    /// project's AI asset setting read once and the merge base found once
+    /// — the train's base, when it is an ancestor of the last step (the
+    /// queue builds every step on the one before it, so then it is the
+    /// merge base of every step); otherwise each step finds its own. Each
+    /// step keeps its own evaluation budget; the caller bounds the whole.
+    pub async fn assess_train(
+        &self,
+        train: TrainRange<'_>,
+    ) -> Result<Vec<RiskVerdict>, ForgeError> {
+        let Some(last) = train.steps.last() else {
+            return Ok(Vec::new());
+        };
+        let ai_assets = self.ai_assets_enabled(train.project).await?;
+        let found = self
+            .git
+            .merge_base(&self.storage, train.repo, train.base, last, GIT_TIMEOUT)
+            .await?;
+        let shared = (found.as_ref() == Some(train.base)).then_some(train.base);
+        let mut verdicts = Vec::with_capacity(train.steps.len());
+        for result in train.steps {
+            verdicts.push(
+                self.judge_merge_result(train.step(result), ai_assets, shared)
+                    .await?,
+            );
+        }
+        Ok(verdicts)
+    }
+
+    /// The project's `ai_assets.enabled`, within [`LOOKUP_TIMEOUT`].
+    async fn ai_assets_enabled(&self, project: ProjectId) -> Result<bool, ForgeError> {
+        match tokio::time::timeout(
+            LOOKUP_TIMEOUT,
+            forge_db::ai_assets::setting(&self.db, project),
+        )
+        .await
+        {
+            Ok(setting) => Ok(setting?.enabled),
+            Err(_) => Err(ForgeError::new(ErrorCode::RequestTimeout)
+                .with_context("operation", "ai_assets_setting")
+                .with_context("timeout_ms", LOOKUP_TIMEOUT.as_millis())),
+        }
+    }
+
+    /// One merge result judged (module docs), within the evaluation budget.
+    async fn judge_merge_result(
+        &self,
+        range: MergeResultRange<'_>,
+        ai_assets: bool,
+        known_base: Option<&ObjectId>,
+    ) -> Result<RiskVerdict, ForgeError> {
+        let evaluated = tokio::time::timeout(
+            self.budget,
             self.target_at(
                 range.repo,
                 range.target,
                 range.base,
                 range.result,
                 ai_assets,
-            )
-            .await
-        })
+                known_base,
+            ),
+        )
         .await;
         let found = match evaluated {
             Ok(found) => found?,
@@ -884,6 +937,10 @@ impl Risk {
 impl MergeResultAssessor for Risk {
     fn assess<'a>(&'a self, range: MergeResultRange<'a>) -> MergeResultFuture<'a> {
         Box::pin(self.assess_merge_result(range))
+    }
+
+    fn assess_train<'a>(&'a self, train: TrainRange<'a>) -> TrainResultFuture<'a> {
+        Box::pin(Risk::assess_train(self, train))
     }
 }
 

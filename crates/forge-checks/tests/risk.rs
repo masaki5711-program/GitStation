@@ -61,6 +61,7 @@ struct World {
     project: ProjectId,
     owner: forge_core::UserId,
     repo: PathBuf,
+    repo_id: forge_core::RepoId,
     risk: Risk,
 }
 
@@ -235,6 +236,7 @@ async fn world() -> World {
         project: web.project_id,
         owner: alice.user_id,
         repo,
+        repo_id: web.repository_id,
         risk,
     }
 }
@@ -1109,5 +1111,133 @@ async fn a_head_assessed_with_the_setting_off_stops_once_it_is_turned_on() {
         "{}",
         on.summary
     );
+    w.t.drop_now().await;
+}
+
+/// A train on `main`'s base: each step is the one before plus `step`'s
+/// files (the merge queue's steps descend from the base, one by one).
+fn train(w: &World, base: &str, steps: &[Vec<(&str, &str)>]) -> Vec<ObjectId> {
+    let mut files = base_files();
+    let mut prev = base.to_owned();
+    let mut out = Vec::new();
+    for step in steps {
+        for (path, content) in step {
+            files.retain(|(p, _)| p != path);
+            files.push((path, content));
+        }
+        prev = w.commit(&files, Some(&prev));
+        out.push(ObjectId::parse(&prev).expect("sha"));
+    }
+    out
+}
+
+/// Plan 18 S7 (ADR-0037 (b) 7): the one call on a whole train answers,
+/// step by step, exactly what the per-step judgement answers — a clear
+/// step, a warning (a new migration), a stop (a dropped table) and the
+/// steps after it, with the AI asset setting on.
+#[tokio::test]
+async fn assess_train_equals_per_step_assess() {
+    use forge_core::auto_merge::{MergeResultAssessor, MergeResultRange, TrainRange};
+    let (w, base) = world_with_main().await;
+    enable_ai_assets(&w, true).await;
+    let steps = train(
+        &w,
+        &base,
+        &[
+            vec![("docs/a.md", "a\n")],
+            vec![("db/migrations/0002_add.sql", "CREATE TABLE u (id int);\n")],
+            vec![("docs/b.md", "b\n")],
+            vec![("db/migrations/0003_drop.sql", "DROP TABLE t;\n")],
+            vec![("src/lib.rs", "pub fn f() {}\n")],
+        ],
+    );
+    let target = RefName::parse("refs/heads/main").expect("main");
+    let base_id = ObjectId::parse(&base).expect("sha");
+    let repo = w.repo_id;
+    let range = TrainRange {
+        project: w.project,
+        repo,
+        target: &target,
+        base: &base_id,
+        steps: &steps,
+    };
+    let together = MergeResultAssessor::assess_train(&w.risk, range)
+        .await
+        .expect("train");
+    let mut one_by_one = Vec::new();
+    for step in &steps {
+        one_by_one.push(
+            w.risk
+                .assess_merge_result(MergeResultRange {
+                    project: w.project,
+                    repo,
+                    target: &target,
+                    base: &base_id,
+                    result: step,
+                })
+                .await
+                .expect("step"),
+        );
+    }
+    assert_eq!(together, one_by_one);
+    assert_eq!(together.len(), 5);
+    // The train is not uniform: the comparison means something.
+    assert_ne!(together[0], together[4], "{together:?}");
+    // An empty train has nothing to judge.
+    let none = MergeResultAssessor::assess_train(
+        &w.risk,
+        TrainRange {
+            steps: &[],
+            ..range
+        },
+    )
+    .await
+    .expect("empty");
+    assert!(none.is_empty());
+    w.t.drop_now().await;
+}
+
+/// Plan 18 S7: a train of 32 members — the document fast path's batch —
+/// is judged in one call well inside the merge queue's 90 s budget for
+/// the whole judgement (`MERGE_RESULT_BUDGET`).
+#[tokio::test]
+async fn a_32_member_judgement_stays_within_the_budget() {
+    use forge_core::auto_merge::{MergeResultAssessor, TrainRange};
+    let (w, base) = world_with_main().await;
+    let names: Vec<(String, String)> = (0..32)
+        .map(|i| (format!("docs/d{i:02}.md"), format!("doc {i}\n")))
+        .collect();
+    let step_files: Vec<Vec<(&str, &str)>> = names
+        .iter()
+        .map(|(p, c)| vec![(p.as_str(), c.as_str())])
+        .collect();
+    let steps = train(&w, &base, &step_files);
+    let target = RefName::parse("refs/heads/main").expect("main");
+    let base_id = ObjectId::parse(&base).expect("sha");
+    let repo = w.repo_id;
+    let started = std::time::Instant::now();
+    let verdicts = MergeResultAssessor::assess_train(
+        &w.risk,
+        TrainRange {
+            project: w.project,
+            repo,
+            target: &target,
+            base: &base_id,
+            steps: &steps,
+        },
+    )
+    .await
+    .expect("train");
+    let took = started.elapsed();
+    assert_eq!(verdicts.len(), 32);
+    assert!(
+        verdicts
+            .iter()
+            .all(|v| matches!(v, forge_core::auto_merge::RiskVerdict::Clear { .. })),
+        "{verdicts:?}"
+    );
+    // A third of the budget: the judgement leaves room for the lint and
+    // the landing in the same tick, on a loaded test machine too.
+    assert!(took < std::time::Duration::from_secs(30), "took {took:?}");
     w.t.drop_now().await;
 }
