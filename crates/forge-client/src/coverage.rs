@@ -1190,6 +1190,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/deployments/{deployment_id}/approve",
         Coverage::BrowserOnly("a deployment is approved in a web session only (every tier): tokens are refused (FG-AUTH-0002 session_required); runbook deploy"),
     ),
+    // M6: knowledge search (one box over wiki, documents, code and issues).
+    (
+        "GET",
+        "/api/v1/search",
+        Coverage::Command("search"),
+    ),
 ];
 
 /// Commands that call no API route, and why: local work only (C-1 counts
@@ -1222,6 +1228,10 @@ pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
     (
         "ai-asset lint",
         "plan 17 P17-3: the AI asset lint on the working tree with forge-doc; nothing is sent",
+    ),
+    (
+        "edge release verify",
+        "plan 21 E1: checks a signed edge release file (manifest, digest, Ed25519 signature) and optionally its blobs with forge-edge and local keys; nothing is sent",
     ),
     (
         "agent verify",

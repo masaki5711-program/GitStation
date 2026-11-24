@@ -352,6 +352,9 @@ fn the_production_registry_starts_the_subscribers_task() {
             // M4 C14: a failed merge result or a conflict queues an
             // autofix attempt.
             forge_db::autofix::AUTOFIX_TRIGGERS_SUBSCRIBER,
+            // Plan 20 K2: project and merge request events refresh their
+            // search entries.
+            forge_db::search::SEARCH_INDEX_SUBSCRIBER,
         ]
     );
     let tasks = crate::worker::tasks(

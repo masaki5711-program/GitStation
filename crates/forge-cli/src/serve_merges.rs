@@ -222,6 +222,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::EvalReportInvalid
         // Plan 17 P17-3: the AI asset lint's (gstn, never a merge's).
         | ErrorCode::AiAssetInvalid
+        // Plan 20 (ADR-0040): search (never a merge's).
+        | ErrorCode::SearchUnavailable
+        | ErrorCode::SearchIndexItemFailed
         // Plan 19 L5-1: the local LLM's (advice only, never a merge's).
         | ErrorCode::LlmOutputInvalid
         | ErrorCode::LlmInputRefused
@@ -399,7 +402,14 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::SigningKeyFileInvalid
         | ErrorCode::PartCapabilityUndeclared
         | ErrorCode::AgentLockMismatch
-        | ErrorCode::McpEndpointNotAllowed => false,
+        | ErrorCode::McpEndpointNotAllowed
+        // Plan 21 E1: edge releases are linted and verified by forge-edge
+        // (gstn, later forge-fleet and the device agent), never by a merge.
+        | ErrorCode::EdgeReleaseDefinitionInvalid
+        | ErrorCode::EdgeManifestInvalid
+        | ErrorCode::EdgeSigningKeyUnavailable
+        | ErrorCode::EdgeSignatureInvalid
+        | ErrorCode::EdgeRolloutPolicyInvalid => false,
     }
 }
 

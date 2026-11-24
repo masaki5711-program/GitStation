@@ -10671,6 +10671,141 @@
         },
         "type": "object"
       },
+      "SearchHighlight": {
+        "additionalProperties": false,
+        "description": "A matched range of a snippet.",
+        "properties": {
+          "end": {
+            "description": "One past the last character.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "description": "First character (Unicode code point) of the match in `text`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "SearchHit": {
+        "additionalProperties": false,
+        "description": "One hit the caller may read.",
+        "properties": {
+          "iid": {
+            "description": "The merge request's number in its project (`null` for a project).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`project` or `merge_request`.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "The project's current full path.",
+            "type": "string"
+          },
+          "snippet": {
+            "$ref": "#/components/schemas/SearchSnippet"
+          },
+          "title": {
+            "type": "string"
+          },
+          "truncated": {
+            "description": "The indexed text was cut (only its first part is searchable).",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "description": "The source's last change, UTC, RFC 3339.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "project_id",
+          "project_path",
+          "title",
+          "iid",
+          "snippet",
+          "updated_at",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "SearchPage": {
+        "additionalProperties": false,
+        "description": "A page of hits. There is no total: it would count what the caller\ncannot read.",
+        "properties": {
+          "has_more": {
+            "description": "More hits may follow (a page can be short, even empty, when its\nscan budget ended first).",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; `null` on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "SearchSnippet": {
+        "additionalProperties": false,
+        "description": "The text around the first match.",
+        "properties": {
+          "cut_after": {
+            "type": "boolean"
+          },
+          "cut_before": {
+            "description": "Text was left out before / after `text`.",
+            "type": "boolean"
+          },
+          "highlights": {
+            "description": "Sorted, not overlapping.",
+            "items": {
+              "$ref": "#/components/schemas/SearchHighlight"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "highlights",
+          "cut_before",
+          "cut_after"
+        ],
+        "type": "object"
+      },
       "ServiceAccountBody": {
         "additionalProperties": false,
         "description": "One service account (no personal data: it has none).",
@@ -10944,6 +11079,10 @@
         "additionalProperties": false,
         "description": "The signed-in user, as the session shows it.",
         "properties": {
+          "admin_from_idp": {
+            "description": "The flag was granted by the identity provider's client role\n(`auth.oidc.admin_role`) and follows it at every sign-in and refresh\ncheck; a personal access token never carries the `admin` scope then.",
+            "type": "boolean"
+          },
           "display_name": {
             "type": "string"
           },
@@ -10964,7 +11103,8 @@
           "id",
           "username",
           "display_name",
-          "is_admin"
+          "is_admin",
+          "admin_from_idp"
         ],
         "type": "object"
       },
@@ -13855,6 +13995,44 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/-/admin": {
+      "get": {
+        "operationId": "get_admin",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the administrator settings (the portal menu's link)",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_admin",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the administrator settings (the portal menu's link)",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/auth/backchannel-logout": {
       "post": {
         "operationId": "post_auth_backchannel_logout",
@@ -14335,6 +14513,44 @@
         },
         "security": [],
         "summary": "SPA shell: the caller's projects",
+        "x-forge-action": "WebShell"
+      }
+    },
+    "/-/search": {
+      "get": {
+        "operationId": "get_search",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: search results",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_search",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: search results",
         "x-forge-action": "WebShell"
       }
     },
@@ -25296,6 +25512,86 @@
         },
         "summary": "Smart HTTP for a CI job (?service=git-upload-pack): the advertisement of refs/pipelines/<pipeline_id>/head only (a live job's token fgj_... of that project and commit; 404 FG-REPO-0005 otherwise, 401 FG-AUTH-0001 once the job ended)",
         "x-forge-action": "RepoRead"
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "operationId": "get_api_v1_search",
+        "parameters": [
+          {
+            "description": "The search words (2..=200 characters; Japanese is matched by 2-grams, other words by word, the last word as a prefix)",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated kinds to search: project, merge_request (default: every kind)",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only hits of this project (its id)",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Hits per page, 1..=50 (default 20); a page can be shorter when its scan budget ends first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; bound to this caller, query and filters)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Search projects and merge requests the caller may read (ranked, no count, opaque cursor)",
+        "x-forge-action": "SearchQuery"
       }
     },
     "/api/v1/session": {

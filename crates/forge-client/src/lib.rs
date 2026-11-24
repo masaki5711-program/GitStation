@@ -9,7 +9,9 @@
 //! `forge/doc-lint` — and on `forge-ci`, the pure `.forge-ci.yml` lint and
 //! plan of `gstn ci` (contract 9, ADR-0020 Amendment M4 C1) — and on
 //! `forge-agent`, the pure agent part checks of `gstn agent verify`
-//! (contract 9, ADR-0032); on no server crate (no `forge-core`, `forge-db`,
+//! (contract 9, ADR-0032) — and on `forge-edge`, the pure edge release
+//! verification of `gstn edge release verify` (contract 9, ADR-0041); on
+//! no server crate (no `forge-core`, `forge-db`,
 //! `forge-auth`, `forge-web`): it talks to the server over HTTP and nothing
 //! else. No server crate may depend on it. `Cargo.toml` of the server crates
 //! is checked by `client_depends_only_on_forge_errors_and_forge_doc` below.
@@ -28,11 +30,13 @@ pub mod app;
 pub mod browse;
 pub mod checks;
 pub mod ci;
+// Plan 21 E1 (ADR-0041): `gstn edge release verify`, local only.
 pub mod cli;
 pub mod config;
 pub mod conflicts;
 pub mod coverage;
 pub mod credential;
+pub mod edge;
 // Plan 13 stage 2: `gstn doc fmt` / `gstn doc lint` (local only).
 pub mod doc;
 pub mod error;
@@ -50,6 +54,7 @@ pub mod mr_work_items;
 pub mod notifications;
 pub mod registry;
 pub mod review;
+pub mod search;
 pub mod specs;
 // M3 X5: the context API and the MCP server; its tools are the agent tools
 // manifest (docs/api/agent-tools.toml).

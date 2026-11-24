@@ -212,6 +212,7 @@ impl MockOp {
             ca_pem: None,
             employee_number_claim: "employee_number".to_owned(),
             access_role: "access".to_owned(),
+            admin_role: None,
             signing_algs: vec![OidcSigningAlg::Rs256, OidcSigningAlg::Es256],
             auto_link: true,
             claims_source: forge_core::config::OidcClaimsSource::IdToken,

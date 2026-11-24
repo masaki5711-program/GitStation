@@ -69,6 +69,10 @@ pub mod request_id;
 pub mod risk;
 pub mod role;
 pub mod scope;
+// Plan 20 K2 (ADR-0040): the search index's kinds, candidates and reader port.
+pub mod search;
+// Plan 20 K1 (ADR-0040): the search tokenizer (NFKC, Japanese 2-grams).
+pub mod search_text;
 pub mod session_token;
 pub mod spec_version;
 // M4 C13: people's SSH public keys (ADR-0033 §2).
@@ -156,7 +160,7 @@ pub use repository::RepositoryState;
 pub use request_id::RequestId;
 pub use role::{GroupSight, Role, Visibility};
 pub use scope::Scope;
-pub use user_kind::UserKind;
+pub use user_kind::{AdminSource, UserKind};
 pub use web_path::{
     log_safe_path, parse_positive_id, parse_web_path, GitRoute, InstanceRoute, ParsedPath,
     RouteWord, TailSegments,

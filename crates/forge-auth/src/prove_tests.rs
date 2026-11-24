@@ -624,6 +624,35 @@ fn reconfirm_uses_the_fresh_admin_flag_and_keeps_the_credential() {
     assert_eq!(err.code(), ErrorCode::Forbidden);
 }
 
+/// ADR-0021 amendment 2026-11-24: a token whose owner's flag the
+/// authenticator did not hand over (an administrator granted by the
+/// identity provider's role) gains no administrator rights from the fresh
+/// row, even with the `admin` scope.
+#[test]
+fn reconfirm_never_grants_an_admin_flag_the_principal_lacked() {
+    let token = Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Token(vec![Scope::Api, Scope::Admin]),
+        crate::AccountKind::Human,
+    );
+    let proof = prove(
+        &token,
+        Action::SubgroupCreate,
+        group_ctx(1, Some(Role::Owner)),
+    )
+    .expect("owner token");
+    let admin_row = crate::AccountFacts {
+        active: true,
+        is_admin: true,
+    };
+    let err = proof
+        .reconfirm(admin_row, group_ctx(1, None))
+        .expect_err("the flag was not the token's");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+}
+
 #[test]
 fn reconfirm_keeps_the_agent_flag() {
     let agent = Principal::authenticated(

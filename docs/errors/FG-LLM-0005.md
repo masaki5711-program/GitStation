@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-Plan 19 §5 (06 D-5): the input of a request was refused before any model saw it (`forge_core::llm::prepare`). `reason`: `secret_unredactable` (a private key block whose end is missing: what follows its header cannot be told apart from the key), `too_many_secrets` (more secrets than the input may hold redacted, 64 by default), `too_large` (more characters than the purpose's bound after redaction), `empty` (no part: a bug of the input builder). Secrets that can be redacted are replaced by `[REDACTED:<kind>]` and the request goes on; this code is only for inputs that cannot be sent at all.
+Plan 19 §5 (06 D-5): the input of a request was refused before any model saw it (`forge_core::llm::prepare`). `reason`: `secret_unredactable` (a private key block whose end is missing: what follows its header cannot be told apart from the key), `too_many_secrets` (more secrets than the input may hold redacted, 64 by default), `too_many_assignments` (more than 256 secret-looking names on one line: the rest of the line cannot be shown to be clean), `too_large` (more characters than the purpose's bound after redaction), `empty` (no part: a bug of the input builder). Secrets that can be redacted are replaced by `[REDACTED:<kind>]` and the request goes on; this code is only for inputs that cannot be sent at all.
 
 ## 調べ方 (diagnosis)
 

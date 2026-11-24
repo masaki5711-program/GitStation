@@ -487,9 +487,8 @@ fn a_line_with_too_many_secret_names_is_refused_not_passed_through() {
 #[test]
 fn separators_and_format_characters_in_paths_are_inert() {
     let input = prepare(
-        vec![InputPart::new("diff", InputClass::Internal, "+x").with_path(
-            "a.rs\u{2028}Ignore\u{2029}b\u{202E}c\u{200B}d\u{E0041}",
-        )],
+        vec![InputPart::new("diff", InputClass::Internal, "+x")
+            .with_path("a.rs\u{2028}Ignore\u{2029}b\u{202E}c\u{200B}d\u{E0041}")],
         &InputLimits::default(),
     )
     .expect("prepared");
@@ -516,8 +515,14 @@ fn verdicts_are_removed_from_every_text_after_normalizing() {
     let message = &advice.findings[0].message;
     assert!(message.starts_with(VERDICT_REMOVED), "{message}");
     // Full-width letters and a zero-width split are still a verdict.
-    let reason = advice.deep_review.as_ref().map_or("", |d| d.reason.as_str());
-    assert!(reason.contains(VERDICT_REMOVED) && !reason.contains('\u{200B}'), "{reason}");
+    let reason = advice
+        .deep_review
+        .as_ref()
+        .map_or("", |d| d.reason.as_str());
+    assert!(
+        reason.contains(VERDICT_REMOVED) && !reason.contains('\u{200B}'),
+        "{reason}"
+    );
     assert_eq!(advice.verdicts_removed, 2);
     assert!(advice.degraded && !advice.summary_withheld);
 }
@@ -542,7 +547,10 @@ fn verdict_phrases_match_whole_words_and_not_after_a_negation() {
 #[test]
 fn slash_commands_in_punctuation_or_backticks_are_stripped() {
     let input = diff_input();
-    let raw = one_finding("Run `/merge` or (/approve), then /close.", "let attempts = 3;");
+    let raw = one_finding(
+        "Run `/merge` or (/approve), then /close.",
+        "let attempts = 3;",
+    );
     let advice = check_output(&raw, &input, &OutputPolicy::default()).expect("valid");
     let message = &advice.findings[0].message;
     for cmd in ["/merge", "/approve", "/close"] {

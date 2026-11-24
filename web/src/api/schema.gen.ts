@@ -40,6 +40,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the administrator settings (the portal menu's link) */
+        get: operations["get_admin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the administrator settings (the portal menu's link) */
+        head: operations["head_admin"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/auth/backchannel-logout": {
         parameters: {
             query?: never;
@@ -247,6 +265,24 @@ export interface paths {
         options?: never;
         /** SPA shell: the caller's projects */
         head: operations["head_projects"];
+        patch?: never;
+        trace?: never;
+    };
+    "/-/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: search results */
+        get: operations["get_search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: search results */
+        head: operations["head_search"];
         patch?: never;
         trace?: never;
     };
@@ -3149,6 +3185,23 @@ export interface paths {
         };
         /** Smart HTTP for a CI job (?service=git-upload-pack): the advertisement of refs/pipelines/<pipeline_id>/head only (a live job's token fgj_... of that project and commit; 404 FG-REPO-0005 otherwise, 401 FG-AUTH-0001 once the job ended) */
         get: operations["get_api_v1_runner_jobs_job_id_repo_git_info_refs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search projects and merge requests the caller may read (ranked, no count, opaque cursor) */
+        get: operations["get_api_v1_search"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7534,6 +7587,62 @@ export interface components {
             enabled?: boolean | null;
             tags?: string[] | null;
         };
+        /** @description A matched range of a snippet. */
+        SearchHighlight: {
+            /**
+             * Format: int32
+             * @description One past the last character.
+             */
+            end: number;
+            /**
+             * Format: int32
+             * @description First character (Unicode code point) of the match in `text`.
+             */
+            start: number;
+        };
+        /** @description One hit the caller may read. */
+        SearchHit: {
+            /**
+             * Format: int64
+             * @description The merge request's number in its project (`null` for a project).
+             */
+            iid: number | null;
+            /** @description `project` or `merge_request`. */
+            kind: string;
+            /** Format: int64 */
+            project_id: number;
+            /** @description The project's current full path. */
+            project_path: string;
+            snippet: components["schemas"]["SearchSnippet"];
+            title: string;
+            /** @description The indexed text was cut (only its first part is searchable). */
+            truncated: boolean;
+            /** @description The source's last change, UTC, RFC 3339. */
+            updated_at: string;
+        };
+        /**
+         * @description A page of hits. There is no total: it would count what the caller
+         *     cannot read.
+         */
+        SearchPage: {
+            /**
+             * @description More hits may follow (a page can be short, even empty, when its
+             *     scan budget ended first).
+             */
+            has_more: boolean;
+            items: components["schemas"]["SearchHit"][];
+            /** @description Pass as `cursor` for the next page; `null` on the last one. */
+            next_cursor: string | null;
+        };
+        /** @description The text around the first match. */
+        SearchSnippet: {
+            cut_after: boolean;
+            /** @description Text was left out before / after `text`. */
+            cut_before: boolean;
+            /** @description Sorted, not overlapping. */
+            highlights: components["schemas"]["SearchHighlight"][];
+            text: string;
+        };
         /** @description One service account (no personal data: it has none). */
         ServiceAccountBody: {
             /**
@@ -7623,6 +7732,12 @@ export interface components {
         };
         /** @description The signed-in user, as the session shows it. */
         SessionUser: {
+            /**
+             * @description The flag was granted by the identity provider's client role
+             *     (`auth.oidc.admin_role`) and follows it at every sign-in and refresh
+             *     check; a personal access token never carries the `admin` scope then.
+             */
+            admin_from_idp: boolean;
             display_name: string;
             /** Format: int64 */
             id: number;
@@ -8766,6 +8881,46 @@ export interface operations {
             };
         };
     };
+    get_admin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_admin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_auth_backchannel_logout: {
         parameters: {
             query?: never;
@@ -9148,6 +9303,46 @@ export interface operations {
         };
     };
     head_projects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_search: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_search: {
         parameters: {
             query?: never;
             header?: never;
@@ -16325,6 +16520,46 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_search: {
+        parameters: {
+            query?: {
+                /** @description The search words (2..=200 characters; Japanese is matched by 2-grams, other words by word, the last word as a prefix) */
+                q?: string;
+                /** @description Comma-separated kinds to search: project, merge_request (default: every kind) */
+                scope?: string;
+                /** @description Only hits of this project (its id) */
+                project?: number;
+                /** @description Hits per page, 1..=50 (default 20); a page can be shorter when its scan budget ends first */
+                limit?: number;
+                /** @description The previous page's next_cursor (opaque; bound to this caller, query and filters) */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchPage"];
+                };
+            };
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {

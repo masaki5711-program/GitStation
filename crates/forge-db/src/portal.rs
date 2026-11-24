@@ -535,6 +535,16 @@ pub struct PortalUser {
     pub user: UserId,
     pub active: bool,
     pub kind: UserKind,
+    /// `users.is_admin` as read now (a linked person only: the employee
+    /// number never finds an administrator, `privileged_account`). The
+    /// portal's menu shows the administrator link by it, decided by
+    /// `authorize()` (ADR-0021 amendment 2026-11-24); never a right of the
+    /// portal's credential.
+    pub is_admin: bool,
+    /// The flag was granted by the identity provider's role
+    /// (`admin_source = 'oidc'`): it counts for the menu only while the
+    /// portal's verified token still holds the role (forge-oidc).
+    pub admin_from_idp: bool,
 }
 
 /// `FG-AUTH-0027 PortalUserNotLinked` with the log `reason`.
@@ -584,17 +594,20 @@ pub async fn portal_user(
     if !fits(issuer) || !fits(subject) {
         return Err(internal("identity_out_of_range"));
     }
-    let to_user = |id: i64, kind: &str, state: &str| -> Result<PortalUser, ForgeError> {
-        Ok(PortalUser {
+    let to_user = |id: i64, kind: &str, state: &str, is_admin: bool, admin_from_idp: bool| {
+        Ok::<_, ForgeError>(PortalUser {
             user: UserId::new(id),
             active: state == "active",
             kind: UserKind::parse(kind).ok_or_else(|| internal("stored_user_kind_invalid"))?,
+            is_admin,
+            admin_from_idp,
         })
     };
-    let linked: Option<(i64, String, String)> = db
+    let linked: Option<(i64, String, String, bool, bool)> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "SELECT u.id, u.kind, u.state FROM forge.user_identities i \
+                "SELECT u.id, u.kind, u.state, u.is_admin, \
+                 u.is_admin AND u.admin_source = 'oidc' FROM forge.user_identities i \
                  JOIN forge.users u ON u.id = i.user_id \
                  WHERE i.issuer = $1 AND i.subject = $2",
             )
@@ -605,8 +618,8 @@ pub async fn portal_user(
             .map_err(|e| query_error(QUERY, e))
         })
         .await?;
-    if let Some((id, kind, state)) = linked {
-        return to_user(id, &kind, &state);
+    if let Some((id, kind, state, is_admin, from_idp)) = linked {
+        return to_user(id, &kind, &state, is_admin, from_idp);
     }
     let sources = match rules {
         LinkRules::EmployeeNumberOnly { auth_sources } => auth_sources,
@@ -653,7 +666,8 @@ pub async fn portal_user(
     if !sources.allows(&auth_source) {
         return Err(not_linked("auth_source_not_linkable"));
     }
-    to_user(id, &kind, &state)
+    // Not an administrator: refused above (`privileged_account`).
+    to_user(id, &kind, &state, false, false)
 }
 
 // ------------------------------------------------------------ widgets

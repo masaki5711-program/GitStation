@@ -19,7 +19,8 @@
     "signedInAs": "Masuk sebagai",
     "logout": "Keluar",
     "account": "Pengaturan akun",
-    "admin": "Administrasi"
+    "admin": "Administrasi",
+    "search": "Cari proyek dan MR"
   },
   "theme": {
     "legend": "Tema",
@@ -1928,5 +1929,29 @@
     "metricsTitle": "Ukuran dibandingkan dengan baseline",
     "seeFindings": "Lihat yang menghentikan merge",
     "unreadableCut": "Isinya panjang, jadi hanya bagian awal yang ditampilkan. Semuanya ada di job evaluasi pada pipeline."
+  },
+  "search": {
+    "title": "Pencarian",
+    "titleFor": "Pencarian “{{q}}”",
+    "explain": "Mencari proyek dan merge request yang boleh Anda lihat.",
+    "label": "Kata pencarian",
+    "submit": "Cari",
+    "kinds": "Saring menurut jenis",
+    "kindAll": "Semua",
+    "kindProject": "Proyek",
+    "kindMergeRequest": "Merge request",
+    "kindOther": "Lainnya",
+    "prompt": "Ketik yang Anda cari. Bahasa Jepang juga bisa.",
+    "tooShort": "Ketik minimal {{n}} karakter.",
+    "shown_one": "Menampilkan {{count}} hasil",
+    "shown_other": "Menampilkan {{count}} hasil",
+    "noResults": "Tidak ada yang cocok dengan “{{q}}”.",
+    "noResultsHint": "Coba kata yang lebih pendek atau berbeda. Hanya yang boleh Anda lihat yang ditampilkan.",
+    "allKinds": "Cari semua jenis",
+    "toProjects": "Lihat daftar proyek",
+    "notYet": "Belum ada yang cocok. Anda bisa mencari lebih jauh.",
+    "more": "Cari lebih jauh",
+    "updated": "Diperbarui {{time}}",
+    "truncated": "Teks panjang: hanya bagian awalnya yang dicari."
   }
 }

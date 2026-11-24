@@ -85,6 +85,7 @@ async fn send_raw(
             username: "olga".to_owned(),
             display_name: "Olga".to_owned(),
             is_admin: true,
+            admin_from_idp: false,
             is_agent: false,
             token_scopes: None,
         });

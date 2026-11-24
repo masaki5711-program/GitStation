@@ -1290,6 +1290,10 @@ fn auth_oidc_is_all_or_nothing_and_validated() {
     assert_eq!(oidc.client_secret.expose(), "synthetic-client-secret");
     assert_eq!(oidc.employee_number_claim, "employee_number");
     assert_eq!(oidc.access_role, "access");
+    assert_eq!(
+        oidc.admin_role, None,
+        "the administrator role is off by default"
+    );
     assert_eq!(oidc.signing_algs, vec![OidcSigningAlg::Rs256]);
     assert!(oidc.auto_link);
     assert!(!format!("{cfg:?}").contains("synthetic-client-secret"));
@@ -1306,6 +1310,31 @@ fn auth_oidc_is_all_or_nothing_and_validated() {
         pairs.extend_from_slice(extra);
         load(None, &env(&pairs))
     };
+    // ADR-0021 amendment 2026-11-24: auth.oidc.admin_role.
+    let admin = with(&[("FORGE_AUTH_OIDC_ADMIN_ROLE", "admin")]).expect("admin role");
+    assert_eq!(
+        admin
+            .auth
+            .oidc
+            .as_ref()
+            .and_then(|o| o.admin_role.as_deref()),
+        Some("admin")
+    );
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_ADMIN_ROLE", "access")]).expect_err("the access role"),
+        "auth.oidc.admin_role",
+        "same_as_access_role",
+    );
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_ADMIN_ROLE", "ad min")]).expect_err("a space"),
+        "auth.oidc.admin_role",
+        "invalid",
+    );
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_ADMIN_ROLE", " ")]).expect_err("empty"),
+        "auth.oidc.admin_role",
+        "empty",
+    );
     for (issuer, reason) in [
         ("http://keycloak.example.invalid/realms/x", "insecure_http"),
         ("ftp://127.0.0.1/realms/x", "scheme"),

@@ -554,7 +554,7 @@ async fn narrow_user(
         let unadmined: u64 = if unadmin {
             tx.step(|c| async move {
                 sqlx::query(
-                    "UPDATE forge.users SET is_admin = false, updated_at = now() \
+                    "UPDATE forge.users SET is_admin = false, admin_source = 'cli', updated_at = now() \
                      WHERE id = $1 AND is_admin",
                 )
                 .bind(user.get())

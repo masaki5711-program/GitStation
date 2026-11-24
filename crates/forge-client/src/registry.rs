@@ -1347,6 +1347,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &[],
         output: r#"{"type":"object","required":["problems"],"properties":{"lock":{"type":["string","null"]},"parts":{"type":"integer"},"files":{"type":"integer"},"keys":{"enum":["local"]},"revocation_checked":{"type":"boolean"},"part":{"type":"string"},"slug":{"type":["string","null"]},"kind":{"type":["string","null"]},"version":{"type":["string","null"]},"capabilities":{"type":["array","null"],"items":{"type":"string"}},"digest":{"type":["string","null"]},"problems":{"type":"array","items":{"type":"object","required":["error_code","reason","subject"],"properties":{"error_code":{"type":"string"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}}}}"#,
     },
+    // Plan 21 E1 (ADR-0041): an edge release's checks, local only.
+    CommandSpec {
+        name: "edge release verify",
+        summary: "Check a signed edge release file on this computer, as the device agent does before installing: the manifest's form (FG-EDGE-0002), its digest and its Ed25519 signature in the edge domain with the local edge public keys (FG-EDGE-0004; a missing or stale key list is FG-EDGE-0003). With --blobs, every blob's size and SHA-256 against the verified manifest (FG-EDGE-0004 blob_mismatch / blob_missing). Exit 1 with the most serious problem's code. Local only: revocation is not checked against the server.",
+        args: &[
+            arg("--release", "option", true, "The release file ({manifest, digest, key_id, signature})."),
+            arg("--keys", "option", false, "The edge public key list (default: edge-keys.json in the gstn configuration directory)."),
+            arg("--blobs", "option", false, "A directory holding the release's blobs at their manifest paths."),
+        ],
+        examples: &["gstn edge release verify --release release.json", "gstn edge release verify --release release.json --blobs ./blobs --json"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["release","verified","problems"],"properties":{"release":{"type":"string"},"release_id":{"type":["string","null"]},"project":{"type":["string","null"]},"version":{"type":["string","null"]},"sequence":{"type":["integer","null"]},"arch":{"type":["string","null"]},"os":{"type":["string","null"]},"payloads":{"type":["array","null"],"items":{"type":"string"}},"blobs":{"type":"integer"},"blobs_checked":{"type":"integer"},"digest":{"type":["string","null"]},"key_id":{"type":["string","null"]},"verified":{"type":"boolean"},"keys":{"enum":["local"]},"revocation_checked":{"type":"boolean"},"problems":{"type":"array","items":{"type":"object","required":["error_code","reason","subject"],"properties":{"error_code":{"type":"string"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}}}}"#,
+    },
     // Plan 17 P17-3 (ADR-0035): the AI asset lint, local only.
     CommandSpec {
         name: "ai-asset lint",
@@ -1679,6 +1693,22 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["read_api"],
         routes: &["GET /api/v1/user/activity"],
         output: r#"{"type":"object","required":["events","next_before","truncated"],"properties":{"events":{"type":"array","items":{"type":"object","required":["seq","type","occurred_at","project_id","project_path","actor","merge_request","ref_count"]}},"next_before":{"type":["integer","null"]},"truncated":{"type":"boolean"}}}"#,
+    },
+    // ── plan 20 K3: knowledge search ──
+    CommandSpec {
+        name: "search",
+        summary: "Search projects and merge requests you may read: only what you may read is shown, never a total; a page can be short (even empty) while has_more is true, and next_cursor continues it.",
+        args: &[
+            arg("WORDS", "positional", true, "The words to search for (2..=200 characters)."),
+            arg("--scope", "option", false, "Only these kinds: project, merge_request (comma-separated)."),
+            arg("--project", "option", false, "Only hits of this project (its id)."),
+            arg("--limit", "option", false, "Hits per page, 1..=50 (default 20)."),
+            arg("--cursor", "option", false, "Continue from a previous page's next_cursor."),
+        ],
+        examples: &["gstn search 設備 仕様 --json", "gstn search login --scope merge_request --project 7"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/search"],
+        output: r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["kind","project_id","project_path","title","iid","snippet","updated_at","truncated"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#,
     },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {

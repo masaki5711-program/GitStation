@@ -129,8 +129,9 @@ M2 で Web の画面を入れる（計画 10）。ブラウザの利用者を認
 - **社員番号の claim は必須にする**（計画 10 にない決定）: claim がないまま作ると、mapper の設定の誤りだけで、既存の全員に
   重複した利用者ができる。作った利用者は後から結び直す手段が CLI だけなので、誤りを最初のログインで止める。
 - 結び付けた利用者が無効・人間でないときは、§3 の入場の判定が拒否する（結び付けの行は書かない）。
-- **`is_admin` は Keycloak から同期しない**（計画 10 §7 の Q2）。管理者は今のとおり `bootstrap-admin` と承認制の手順で決める。
-  最後の管理者のガードとロックの順（ADR-0019 §10・§11）を、外からの同期で壊さないため。
+- ~~**`is_admin` は Keycloak から同期しない**（計画 10 §7 の Q2）。~~ **2026-11-24 の Amendment で改めた**:
+  `auth.oidc.admin_role` を設定すると、ロールで付けた管理者をロールで付け外しする（CLI の管理者は残す。ロックの順は
+  `users.admin_set` → 利用者の行で ADR-0019 §11 のまま）。設定しなければ今までどおり `bootstrap-admin` と承認制の手順だけ。
 - **利用者の一括の同期はしない**。作るのは最初のログインのときだけ（計画 10 §7 の Q3）。
 
 ### 5. セッションの Cookie と `forge.web_sessions`
@@ -703,3 +704,107 @@ SameSite、セッションの寿命は変わらない。**本番では使わな�
 ホスト名を与えるか（別のホスト名のクッキーは共有されない）、TLS にして `web.allow_insecure_http` を外すこと。
 試験は `forge-core` の `web_allow_insecure_http_admits_a_plain_http_base_url_only_when_set`、forge-web の
 `plain_http_cookies` の単体テストと `plain_http_cookies_are_translated_only_when_enabled`。
+
+## Amendment（accepted、2026-11-24）— 管理者を Keycloak のクライアントロールで付け外しする（§4 と計画 10 §7 Q2 を改める）
+
+**背景。** これまで `forge.users.is_admin` は CLI（`forge admin bootstrap-admin` と承認制の手順）だけで決め、§4 は
+「`is_admin` は Keycloak から同期しない」（計画 10 §7 の Q2）としていた。利用者の要望（2026-11-24）は、IoT プラットフォーム
+（PFS）のポータルの権限管理で**アプリごとに管理者を付け**、GitStation が Keycloak 経由でそれを読んで管理者の権限と
+メニューを出すこと。PFS のポータルはアプリ（Keycloak のクライアント）ごとのクライアントロールを付け外しする（PFS 側の作業）。
+
+**決定。**
+
+1. **設定。** 新しい `auth.oidc.admin_role`（既定は無し = この機能は切。今までどおり CLI だけ）。値はクライアントロールの名前で、
+   アクセスのロール（`access_role`）と同じ場所（`claims_source`。PFS では アクセストークンの
+   `resource_access.<client_id>.roles`）から読む。`access_role` と同じ名前は FG-SYS-0002（`same_as_access_role`）で拒否する
+   （全員が管理者になる誤設定を起動で止める）。試験サーバー（`ops/gitlab-trial/forge.toml`）は `admin_role = "admin"`。
+2. **だれが旗を持つか（`users.admin_source`）。** マイグレーション `20270109100000`: `admin_source text NOT NULL DEFAULT 'cli'`
+   （`'cli'` / `'oidc'`）、CHECK `admin_source = 'cli' OR is_admin`（`oidc` は管理者のときだけ）、監査の対象（監査の
+   トリガーの `UPDATE OF` に足した）。既存の行はすべて `cli`（今の管理者はみな CLI で作った）。
+3. **規則（`forge_db::users::sync_idp_admin`）。** サインイン（コールバック）と確かめたリフレッシュ（§7、5 分ごと）のたびに、
+   **確かめたトークン**の claim で:
+   - ロールあり・管理者でない → 付ける（`is_admin = true`、`admin_source = 'oidc'`）;
+   - ロールなし・`admin_source = 'oidc'` の管理者 → 外す（`is_admin = false`、`admin_source = 'cli'`）;
+   - それ以外は何もしない（書かない）。**CLI の管理者（`cli`）はロールが無くても外さない**（非常口。break-glass）。
+     人間で有効な利用者だけ。bot とサービスアカウントはロールがあっても管理者にならない（DB の CHECK
+     `users_service_account_not_admin` も止める）。無効の利用者は触らない。
+   - 変わるときは 1 つのトランザクション（`users.admin_set` の勧告ロック → 利用者の行 `FOR UPDATE`。`admin.rs` の順）で
+     旗と監査 `user.admin_changed`（`{"from","to","source":"oidc_role"}`、actor は system、要求の `request_id`）を書く。
+     ログは info の `forge.auth.admin_role_applied`（`user_id`・`change`・`source`）。
+   - サインインではセッションを作る**前**に当てる（最初の画面から管理者のメニューが出る / 出ない）。当てられない（DB の失敗）
+     ときはサインインを失敗にする（fail closed）。リフレッシュでは、その要求を DB の失敗にする（§7 の利用者の読み直しと同じ）。
+   - ID トークンのモードで ID トークンの無いリフレッシュはロールを読めないので、旗はそのまま（§7 の 32 行目と同じ考え）。
+   - 最後の管理者を外すことは拒否しない（決めるのは IdP）。`forge doctor` の `users.administration` が FG-AUTH-0010
+     `no_admin` を出し、`forge admin bootstrap-admin` で戻す。
+4. **非常口と切り替え。** CLI の管理者は IdP の外にいる。`forge admin user admin-source <user> --source oidc|cli`（新しい
+   運用の CLI。監査 `user.admin_source_changed`）で、管理者の旗を IdP のロールに任せる（`oidc`）/ CLI に戻す（`cli`）。
+   管理者でない利用者は FG-AUTH-0009 `not_admin`。HTTP からは呼べない（`operator_only` のソースの検査）。
+5. **反映の遅れ。** IdP でロールを外してから GitStation の旗が外れるまで: 使っているセッションでは次のリフレッシュの確認
+   まで（**最長 5 分**。Keycloak はリフレッシュのたびに今のロールでアクセストークンを作る）。IdP に届かない間は §7 の
+   30 分の上限（`MAX_UNCONFIRMED_SECS`）でセッションが終わる。旗は利用者に付くので、同じ人のほかのセッションも同時に変わる。
+   バックチャネルのログアウト（§8）のトークンにはロールが無いので旗は変えない（セッションは終わり、次のサインインで当てる）。
+   サインインしない人の旗は次のサインインまで残る → 下の 6。
+6. **トークン（PAT）は IdP の管理者の権利を持たない。** IdP の旗はサインインとリフレッシュでしか確かめないので:
+   - `tokens::authenticate` は `is_admin AND admin_source = 'cli'` だけを旗として渡す（`oidc` の管理者のトークンは
+     `admin` スコープがあっても管理者の権利なし）;
+   - `admin` スコープのトークンの発行は `admin_source = 'oidc'` の持ち主には FG-AUTH-0008
+     `admin_scope_requires_cli_admin`（画面は `admin_from_idp` のとき `admin` スコープを出さない）;
+   - `Authorized::reconfirm` は新しく読んだ旗で**権利を増やさない**（`account.is_admin && 認証のときの旗`）。
+7. **自動の結び付けの守り（§4、FG-AUTH-0014 `privileged_account`）は変えない。** 自動の結び付けは既存の管理者には
+   決してつながない。IdP のロールで管理者になるのは、もう結び付いた（またはサインインで新しく作った）人だけ。
+8. **画面とメニュー。** 画面の管理者のメニュー（ユーザーメニューの「管理」、設定の管理者のタブ、サイドバーの
+   「グループを追加」）は今までどおり `GET /api/v1/session` の `is_admin` で出す。セッションは要求ごとに利用者の行を読むので、
+   付け外しは次の要求から効く。`SessionUser` に `admin_from_idp`（表示だけ。権限の入力ではない）。PFS のポータルの `menu`
+   ウィジェットは、管理者には最後に「管理者の設定」（`/-/admin`、SPA が本人の `/{username}/-/settings?tab=admin` へ送る）を
+   足す。決めるのは `forge_auth::portal_admin_menu`: ウィジェットの証明（`PortalWidgetRead`）から、その人をアカウントの
+   旗を持つセッションとして `authorize(UserAdminList, Instance)`。旗は DB の `users.is_admin`（ポータルのトークンの
+   claim ではない）。ポータルの資格そのものは今までどおり管理者の権利を持たない。
+9. **運用。** `forge doctor` の新しい行 `auth.oidc.admin_role`: on/off、IdP の管理者の数と CLI の管理者の数。off なのに
+   `oidc` の管理者が残っていれば warn（もう外れないため）。runbook `oidc-login` の「管理者の付け外し（Keycloak のロール）」。
+
+**検討した案。** (a) 今のまま CLI だけ（要望を満たさない）。(b) ロールで常に同期（CLI の管理者もロールが無ければ外す）:
+IdP の誤設定や障害で全員の管理者が消え、GitStation に入れる管理者がいなくなる。(c) **採用**: ロールで付けたものだけ
+ロールで外す + CLI の非常口。
+
+**結果。** 確かめ方: forge-db `users::tests::idp_admin`（規則、付け外しの監査 1 行ずつ、同じ答えは書かない、CLI の管理者・
+bot・無効の利用者、切り替え、CHECK）、`tokens::tests::request::an_idp_granted_admin_gets_no_admin_token`、forge-auth
+`reconfirm_never_grants_an_admin_flag_the_principal_lacked` と `the_admin_menu_follows_the_account_flag_and_grants_nothing`、
+forge-oidc `tests/pfs.rs` の `the_admin_role_grants_at_sign_in_and_a_refresh_without_it_revokes` と
+`a_cli_admin_keeps_the_flag_and_the_role_is_ignored_when_off`、forge-web `portal_widget_routes` のメニュー、
+forge-core の設定のテスト。新しいエラーコードは無い（FG-AUTH-0008・0009 の理由を足した）。
+
+**レビューで変えた点（2026-11-24、BLOCK: HIGH 1・MEDIUM 4・LOW 2）。**
+
+| # | 重さ | 指摘 | 変えたこと |
+|---|---|---|---|
+| 1 | HIGH | セッションの外の立場（webhook の持ち主、通知の受け手、取り消しの下書きの作者、ランナーの登録者）が生の `users.is_admin` を読み、IdP を確かめないので、サインインしない元管理者が管理者のまま残る | **セッションの外の管理者の旗は CLI の旗だけ**: `AdminSource::standing_admin`（SQL では `is_admin AND admin_source = 'cli'`）。`tokens::authenticate`・`webhooks::material_on`・`notify::recipient`・`reverts::account_facts`・`users::is_active_human_admin` がこれで読む。さらに、IdP がセッションを終えた（`IdpRevoked`: `invalid_grant`、ロールが無い、確かめられない時間が 30 分を超えた ほか）ときは、そのロールで付けた旗も外す（CLI の旗は残す。外せなかったときはログに 1 回、セッションは終わる） |
+| 2 | MEDIUM | ID トークンの無いリフレッシュと IdP に届かない間の猶予で、確かめていない管理者の権利が続く | **セッションが IdP の旗で管理者の権利を持つのは、ロールを確かめてから `ADMIN_CONFIRM_SECS`（330 秒 = 5 分の確認の間隔 + 30 秒）の間だけ**（`web_sessions.access_role_seen_at`）。過ぎたら旗はそのままで、そのセッションは管理者の権利なし（画面の管理者のメニューも出ない）。確認で確かめられれば同じ要求から戻る（`RefreshingSessions` が確認のあとに読み直す）。リフレッシュトークンの無いセッションは確かめられないので IdP の管理者の権利を持たない |
+| 3 | MEDIUM | 復元の再付与（`regrant_admin`）が `admin_source = 'cli'` にして、IdP の管理者を非常口の管理者に変える | 旗を外すときに元の出どころを監査の行に残し（`oidc_user_ids`、利用者ごとの `admin_source`）、再付与は同じ出どころで戻す |
+| 4 | MEDIUM | `refresh_checked_at` を進めてからロールを当てるので、DB の失敗で外すのが 300 秒遅れる | ロールを当ててから確認を保存する。当てられなければ `access_role_seen_at` が古いままなので、上の 2 で 330 秒以内に権利が落ちる |
+| 5 | MEDIUM | 権限の表に行が無い | `TokenAdminScopeCli`（許可）/ `TokenAdminScopeIdp`（拒否）を `standing_admin` で作り `UserAdminList` の行に、ポータルの `Case::Admin` / `Case::Ok` の `PortalWidgetRead`・`UserAdminList` の行と、メニューのリンクの判定の試験。`Credential::Token` の主体を forge-web の認証の外で作るとソースの検査（`only_forge_web_builds_token_principals_from_the_authenticator`）が落ちる |
+| 6 | LOW | 書き込みの中の再確認でトークンが旗を読み直す | `reconfirm` は旗を増やさない（`account.is_admin && 認証のときの旗`）ので、トークンの主体は CLI の旗より強くならない（変更なし、試験あり） |
+| 7 | LOW | 古いコールバックがロールを外したあとで付け直す | 変えない: コールバックはその場でコードをトークンに替える（そのときの今のロール）。競合はミリ秒の幅で、次の確認（5 分）で正される |
+
+**残る幅。** IdP でロールを外してから: 使っているセッションでは次の確認まで最長 5 分（確認できなければ 330 秒で権利が落ちる）。サインインしない人の旗は残るが、セッションの外ではどこでも数えない。
+
+**再レビューで変えた点（2026-11-24、BLOCK: HIGH 1・MEDIUM 2・LOW 2）。**
+
+- HIGH: 予定のパイプライン（`forge-pipelines` `owner_decision`）は持ち主の CLI の旗だけで決める。`forge_db::access::Account`
+  に `standing_admin`（`is_admin AND admin_source = 'cli'`）を足した（`lock_account` が読む）。
+- MEDIUM: マージとマージの列のジョブ（`job_principal`）も `standing_admin` で主体を作る（要求のセッションはもう無い）。
+- MEDIUM: 最後の管理者のガード（`users::disable`）、`bootstrap-admin` の「管理者がいる」、復元の `active_admins` は
+  **CLI の管理者（非常口）だけ**を数える。IdP の管理者だけが残る forge では `bootstrap-admin` で非常口を作れ、
+  IdP の管理者を `Promote` すると `cli` になる。`forge doctor` の `auth.oidc.admin_role` は CLI の管理者が 0 なら warn。
+- LOW: 墓標の解放（`forge-hosting` `moves`）は新しい旗を主体の管理者の権利と AND する。ポータルのメニューの管理者の
+  リンクは、IdP の旗ならポータルの確かめたトークンにまだロールがあるときだけ（`menu_admin`）。
+- 生の `users.is_admin` を読む残りは、要求の中で `reconfirm` に渡すもの（権利を増やさない）、自動の結び付けの
+  `privileged_account`（どの管理者も止める、より厳しい側）、表示（管理者の一覧、doctor の件数）、旗を書く処理だけ。
+
+**三度目のレビューで変えた点（2026-11-24、MEDIUM 1・LOW 2）。**
+
+- MEDIUM: セッションが IdP の旗で管理者の権利を持つ確認は、アクセスのロールの `access_role_seen_at` ではなく、新しい
+  `web_sessions.admin_role_seen_at`（マイグレーション `20270109100100`、監査しない列）で数える。サインインと確認で、
+  `auth.oidc.admin_role` が設定され、確かめたトークンがそのロールを持つときだけ進む。設定を外すと進まないので、
+  `oidc` の旗はどのセッションでも（新しいサインインではすぐ、既存のセッションでは 330 秒以内に）権利にならない。
+- LOW: `forge admin user admin-source --source oidc` は、CLI の管理者が 0 人になるなら FG-AUTH-0009 `last_admin`。
+- LOW: `forge doctor` の `users.administration`（FG-AUTH-0010 `no_admin`）は CLI の管理者だけを数える。

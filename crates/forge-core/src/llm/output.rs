@@ -191,7 +191,10 @@ fn verdict_spans(text: &str) -> Vec<(usize, usize)> {
             let before = lower.get(..start).unwrap_or("");
             let after = lower.get(end..).unwrap_or("");
             if latin
-                && (before.chars().next_back().is_some_and(char::is_alphanumeric)
+                && (before
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_alphanumeric)
                     || after.chars().next().is_some_and(char::is_alphanumeric))
             {
                 continue;
@@ -496,8 +499,25 @@ fn is_slash_command(word: &str) -> bool {
     let word = word.trim_matches(|c: char| {
         matches!(
             c,
-            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '*' | '_' | '~'
-                | ',' | '.' | ':' | ';' | '!' | '?'
+            '`' | '"'
+                | '\''
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | '*'
+                | '_'
+                | '~'
+                | ','
+                | '.'
+                | ':'
+                | ';'
+                | '!'
+                | '?'
         )
     });
     word.strip_prefix('/').is_some_and(|rest| {

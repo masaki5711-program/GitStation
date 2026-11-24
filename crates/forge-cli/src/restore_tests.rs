@@ -632,14 +632,20 @@ async fn without_a_state_copy_every_admin_flag_is_removed_and_listed() {
     let f = fixture(false).await;
     world(&f, "oli").await;
     let (a, b) = (human(&f.t, "pam").await, human(&f.t, "quy").await);
+    // ADR-0021 amendment 2026-11-24: quy's flag is the identity provider's.
     audited(
         &f.t,
         &[("user", a.get()), ("user", b.get())],
-        &[format!(
-            "UPDATE forge.users SET is_admin = true WHERE id IN ({}, {})",
-            a.get(),
-            b.get()
-        )],
+        &[
+            format!(
+                "UPDATE forge.users SET is_admin = true WHERE id = {}",
+                a.get()
+            ),
+            format!(
+                "UPDATE forge.users SET is_admin = true, admin_source = 'oidc' WHERE id = {}",
+                b.get()
+            ),
+        ],
     )
     .await;
     let done = f
@@ -671,6 +677,20 @@ async fn without_a_state_copy_every_admin_flag_is_removed_and_listed() {
         .await,
         true
     );
+    // Each flag comes back as it was managed: the CLI's stays break-glass,
+    // the role's stays the role's (never turned into break-glass).
+    regrant_admin_with(&f.t.db, "quy", &rid("req-regrant-q"))
+        .await
+        .expect("regrant quy");
+    let sources =
+        f.t.json_rows(&format!(
+            "SELECT id, admin_source FROM forge.users WHERE id IN ({}, {}) ORDER BY id",
+            a.get(),
+            b.get()
+        ))
+        .await;
+    assert_eq!(sources[0]["admin_source"], "cli");
+    assert_eq!(sources[1]["admin_source"], "oidc");
     human(&f.t, "ray").await;
     let err = regrant_admin_with(&f.t.db, "ray", &rid("req-regrant-2"))
         .await

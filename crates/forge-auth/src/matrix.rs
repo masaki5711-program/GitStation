@@ -66,6 +66,12 @@ pub(crate) enum Actor {
     AdminTokenApi,
     /// Administrator with an `api` + `admin` token.
     AdminTokenAdmin,
+    /// ADR-0021 amendment 2026-11-24: an `api` + `admin` token whose owner's
+    /// flag the CLI manages, and one whose flag the identity provider's role
+    /// granted — each principal's flag built as `tokens::authenticate` builds
+    /// it (`AdminSource::standing_admin`).
+    TokenAdminScopeCli,
+    TokenAdminScopeIdp,
     /// Developer with an `api` token on a service account (M3 R3,
     /// ADR-0024 §8.4: `users.kind = service_account`).
     ServiceAccountTokenApi,
@@ -547,6 +553,14 @@ impl Actor {
             Actor::AgentTokenReadApi => token(false, &[Scope::ReadApi]).as_agent(true),
             Actor::AdminTokenApi => token(true, &[Scope::Api]),
             Actor::AdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]),
+            Actor::TokenAdminScopeCli => token(
+                forge_core::AdminSource::standing_admin(true, forge_core::AdminSource::Cli),
+                &[Scope::Api, Scope::Admin],
+            ),
+            Actor::TokenAdminScopeIdp => token(
+                forge_core::AdminSource::standing_admin(true, forge_core::AdminSource::Oidc),
+                &[Scope::Api, Scope::Admin],
+            ),
             Actor::AgentAdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]).as_agent(true),
             Actor::AgentMaintainerTokenApi => token(false, &[Scope::Api]).as_agent(true),
             Actor::MaintainerTokenApi => token(false, &[Scope::Api]),
@@ -720,6 +734,8 @@ impl Actor {
             | Actor::Admin
             | Actor::AdminTokenApi
             | Actor::AdminTokenAdmin
+            | Actor::TokenAdminScopeCli
+            | Actor::TokenAdminScopeIdp
             | Actor::AgentAdminTokenAdmin
             | Actor::ServiceAccountAdminTokenAdmin
             | Actor::ServiceAccountAdminSession
@@ -784,6 +800,8 @@ impl Actor {
             | Actor::GuestTokenReadApi
             | Actor::AdminTokenApi
             | Actor::AdminTokenAdmin
+            | Actor::TokenAdminScopeCli
+            | Actor::TokenAdminScopeIdp
             | Actor::OwnerTokenApi
             | Actor::DevTokenMergeExecute
             | Actor::AgentTokenMergeExecute
@@ -1404,6 +1422,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_mirror::MIRROR_ROWS.as_slice(),
         crate::matrix_rows_doc_lint::DOC_LINT_ROWS,
         crate::matrix_rows_doc_revisions::DOC_REVISION_ROWS.as_slice(),
+        crate::matrix_rows_search::SEARCH_QUERY_ROWS,
         crate::matrix_rows_pipelines::PIPELINE_ROWS.as_slice(),
         crate::matrix_rows_merge_queue::MERGE_QUEUE_ROWS.as_slice(),
         crate::matrix_rows_revert::REVERT_ROWS,

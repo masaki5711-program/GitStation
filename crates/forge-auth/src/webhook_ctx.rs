@@ -114,7 +114,10 @@ pub fn prove_webhook_delivery(
     material: &WebhookMaterial,
 ) -> Result<WebhookDeliverySet, ForgeError> {
     // The owner's standing, not a request's credential: a session's rights
-    // (a person's administrator rights count, as when they created it).
+    // (a person's administrator rights count, as when they created it —
+    // the standing flag only: `owner_admin` is `AdminSource::standing_admin`,
+    // never a flag the identity provider's role granted, ADR-0021 amendment
+    // 2026-11-24).
     let principal = Principal::authenticated(
         material.owner,
         material.owner_admin,

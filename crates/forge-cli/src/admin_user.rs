@@ -8,9 +8,9 @@
 //! events carry user ids and flags, never names.
 
 use forge_core::config::DatabaseConfig;
-use forge_core::RequestId;
+use forge_core::{AdminSource, RequestId};
 use forge_db::identities::OperatorLink;
-use forge_db::users::{self, Bootstrap, DisableOutcome, Guard, NewUser};
+use forge_db::users::{self, AdminSourceSet, Bootstrap, DisableOutcome, Guard, NewUser};
 use forge_db::Db;
 use forge_errors::ForgeError;
 
@@ -206,6 +206,59 @@ pub(crate) async fn link_identity_with(
         OperatorLink::Linked => format!("user {username}: identity of {issuer} linked\n"),
         OperatorLink::AlreadyLinked => {
             format!("user {username}: identity of {issuer} already linked (nothing changed)\n")
+        }
+    })
+}
+
+/// `forge admin user admin-source <username> --source cli|oidc`
+/// (ADR-0021 amendment 2026-11-24).
+pub fn admin_source(
+    cfg: &DatabaseConfig,
+    request_id: &RequestId,
+    username: &str,
+    source: &str,
+) -> Result<String, ForgeError> {
+    with_db(cfg, async |db| {
+        admin_source_with(db, request_id, username, source).await
+    })
+}
+
+pub(crate) async fn admin_source_with(
+    db: &Db,
+    request_id: &RequestId,
+    username: &str,
+    source: &str,
+) -> Result<String, ForgeError> {
+    // clap allows only these two; anything else is a broken invariant.
+    let to = AdminSource::parse(source).ok_or_else(|| {
+        ForgeError::new(forge_errors::ErrorCode::Internal)
+            .with_context("reason", "unknown_admin_source")
+    })?;
+    let user = users::id_by_username(db, username).await?;
+    let done = users::set_admin_source(db, &context(request_id), user, to).await?;
+    let from = match done {
+        AdminSourceSet::Changed { from } => from.as_str(),
+        AdminSourceSet::Unchanged => to.as_str(),
+    };
+    tracing::info!(
+        target: "forge_cli",
+        event = "forge.admin.user.admin_source_changed",
+        request_id = %request_id,
+        user_id = user.get(),
+        from,
+        to = to.as_str(),
+        changed = done != AdminSourceSet::Unchanged,
+        "administrator source set by the operator"
+    );
+    let to = to.as_str();
+    Ok(match done {
+        AdminSourceSet::Changed { .. } => {
+            format!("user {username}: administrator flag managed by {to} (was {from})\n")
+        }
+        AdminSourceSet::Unchanged => {
+            format!(
+                "user {username}: administrator flag already managed by {to} (nothing changed)\n"
+            )
         }
     })
 }

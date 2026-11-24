@@ -21,6 +21,8 @@ use crate::{query_error, Db};
 pub(crate) mod admin;
 // M2 MR6: the user search and the administration list.
 mod directory;
+// ADR-0021 amendment 2026-11-24: the administrator flag from the IdP role.
+mod idp_admin;
 mod rename;
 
 pub(crate) use admin::lock_admin_set;
@@ -28,6 +30,10 @@ pub use admin::{administration, bootstrap_admin, Administration, Bootstrap, Boot
 pub use directory::{
     admin_page, search, AdminUserRow, StateFilter, UserMatch, MAX_ADMIN_PAGE, MAX_SEARCH_CHARS,
     MAX_SEARCH_RESULTS, MIN_SEARCH_CHARS,
+};
+pub use idp_admin::{
+    admin_sources, idp_admin_change, set_admin_source, sync_idp_admin, AdminFacts, AdminSourceSet,
+    AdminSources, IdpAdmin,
 };
 pub use rename::{rename_decided, UserRenameFacts};
 
@@ -338,7 +344,11 @@ pub async fn disable_with(
         let row: Option<(String, String, bool)> = tx
             .step(|c| async move {
                 sqlx::query_as(
-                    "SELECT kind, state, is_admin FROM forge.users WHERE id = $1 FOR UPDATE",
+                    // The break-glass flag (`admin_source = 'cli'`): only it
+                    // keeps forge administrable without the identity
+                    // provider (ADR-0021 amendment 2026-11-24).
+                    "SELECT kind, state, is_admin AND admin_source = 'cli' FROM forge.users \
+                     WHERE id = $1 FOR UPDATE",
                 )
                 .bind(user.get())
                 .fetch_optional(c)
@@ -464,7 +474,8 @@ pub async fn id_by_username(db: &Db, username: &str) -> Result<UserId, ForgeErro
 /// Whether `user` is an active human administrator (the operator CLI's
 /// `forge admin runner register --admin <name>` records the runner as
 /// registered by such a person, M4 C4). Reads on the read pool; a missing
-/// user is `false`.
+/// user is `false`. The standing flag only (`AdminSource::standing_admin`,
+/// ADR-0021 amendment 2026-11-24).
 pub async fn is_active_human_admin(db: &Db, user: UserId) -> Result<bool, ForgeError> {
     const QUERY: &str = "users.is_active_human_admin";
     let found: Option<bool> = db
@@ -472,7 +483,7 @@ pub async fn is_active_human_admin(db: &Db, user: UserId) -> Result<bool, ForgeE
             let mut conn = db.acquire().await?;
             sqlx::query_scalar(
                 "SELECT kind = 'human' AND state = 'active' AND is_admin \
-                 FROM forge.users WHERE id = $1",
+                 AND admin_source = 'cli' FROM forge.users WHERE id = $1",
             )
             .bind(user.get())
             .fetch_optional(&mut *conn)

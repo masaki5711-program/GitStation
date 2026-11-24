@@ -436,6 +436,10 @@ pub struct CallerProfile {
     /// The account's administrator flag (rights also need a session or the
     /// token's `admin` scope: `Principal::admin_rights`).
     pub is_admin: bool,
+    /// The flag was granted by the identity provider's role (sessions
+    /// only; a token's owner flag is the CLI's alone, so `false` there).
+    /// Never an authorization input.
+    pub admin_from_idp: bool,
     /// The token was issued for an AI agent (ADR-0017 §4.0).
     pub is_agent: bool,
     /// The token's scopes (`None` for a session).
@@ -572,6 +576,7 @@ pub(crate) async fn authenticate_request(
                 username: identity.username,
                 display_name: identity.display_name,
                 is_admin: identity.is_admin,
+                admin_from_idp: false,
                 is_agent: identity.is_agent,
                 token_scopes: Some(identity.scopes.clone()), // clone: the principal holds them too
             });
@@ -700,6 +705,7 @@ async fn authenticate_portal<'g>(
                     portal_party: identity.portal_party,
                     access_role: identity.access_role,
                 },
+                identity.is_admin,
             ));
             // The credential has done its job: no handler can echo or log it.
             req.headers_mut().remove(AUTHORIZATION);
@@ -863,6 +869,7 @@ async fn authenticate_session(
         username: identity.username,
         display_name: identity.display_name,
         is_admin: identity.is_admin,
+        admin_from_idp: identity.admin_from_idp,
         is_agent: false,
         token_scopes: None,
     });

@@ -770,9 +770,9 @@ severity = "info"
 user_message_ja = "トークンの発行リクエストが正しくありません。入力を確認してください。"
 user_message_en = "The token request is not valid. Check the input."
 user_message_id = "Permintaan token tidak valid. Periksa input."
-cause = "A personal access token could not be issued because the request breaks a rule of forge_db::tokens::issue (ADR-0019): the expiry is under 1 day or over 365 days, no scope or an unknown scope, a name that is empty, over 100 characters or holds NUL or another control character, the admin scope for a non-admin owner, a bot owner, a disabled owner, or the owner already holds 50 active tokens."
-diagnosis = "The log event carries `reason` (expires_out_of_range, expires_malformed (a `--expires-in` that is not `<days>d`), scopes_empty, scope_unknown, name_length, nul_character, control_character, admin_scope_requires_admin, owner_bot, owner_disabled, active_limit or owner_not_service_account — the service account issue route named a user who is no service account, M3 S0) and, when forge_db::tokens::issue refused it, `user` (the owner id; `scope_unknown` and `expires_malformed` are refused by the CLI before the owner is looked up, so they carry no `user`); never the name or any token. For active_limit read the owner's tokens with `forge admin token list --user <name>`."
-fix = "Correct the request. For active_limit revoke tokens that are no longer used. For owner_bot / owner_disabled / admin_scope_requires_admin the owner or the scope is the wrong choice; nothing was written."
+cause = "A personal access token could not be issued because the request breaks a rule of forge_db::tokens::issue (ADR-0019): the expiry is under 1 day or over 365 days, no scope or an unknown scope, a name that is empty, over 100 characters or holds NUL or another control character, the admin scope for a non-admin owner or for an administrator granted by the identity provider's role (`users.admin_source = 'oidc'`, ADR-0021 amendment 2026-11-24: that flag is re-checked only at sign-ins and refresh checks, which a token never passes), a bot owner, a disabled owner, or the owner already holds 50 active tokens."
+diagnosis = "The log event carries `reason` (expires_out_of_range, expires_malformed (a `--expires-in` that is not `<days>d`), scopes_empty, scope_unknown, name_length, nul_character, control_character, admin_scope_requires_admin, admin_scope_requires_cli_admin (the owner is an administrator through `auth.oidc.admin_role`; `SELECT is_admin, admin_source FROM forge.users WHERE id = <user>`), owner_bot, owner_disabled, active_limit or owner_not_service_account — the service account issue route named a user who is no service account, M3 S0) and, when forge_db::tokens::issue refused it, `user` (the owner id; `scope_unknown` and `expires_malformed` are refused by the CLI before the owner is looked up, so they carry no `user`); never the name or any token. For active_limit read the owner's tokens with `forge admin token list --user <name>`."
+fix = "Correct the request. For active_limit revoke tokens that are no longer used. For owner_bot / owner_disabled / admin_scope_requires_admin the owner or the scope is the wrong choice; nothing was written. For admin_scope_requires_cli_admin issue the token without the admin scope, or (an approved operator step) keep that administrator with the CLI: `forge admin user admin-source <username> --source cli` (runbook oidc-login)."
 test = "expiry_over_365_or_under_1_day_is_token_request_invalid"
 
 [[error]]
@@ -783,8 +783,8 @@ severity = "info"
 user_message_ja = "管理者またはグループの Owner がいなくなるため、この操作は拒否されました。問い合わせ番号を添えて管理者に連絡してください。"
 user_message_en = "This was refused because it would leave no administrator or group Owner. Contact the administrator with the request ID."
 user_message_id = "Tindakan ini ditolak karena akan membuat tidak ada administrator atau Owner grup. Hubungi administrator dengan menyertakan ID permintaan."
-cause = "An administration command was refused to keep forge manageable (ADR-0019 §10, Amendment D3 MR2). forge_db::users::disable refuses to disable the last active human administrator (bots, service accounts and disabled users do not count) or the last direct active Owner of a top-level group (subgroups inherit their ancestors' Owners and are not checked), or the only active Owner of a project, direct or inherited (D4 MR4; projects pending deletion are not checked); a refused disable writes nothing and revokes no token. forge_db::users::bootstrap_admin (forge admin bootstrap-admin) is refused while an active human administrator exists, and for a user that is not a human or is disabled."
-diagnosis = "The log event carries `reason`: self_disable (M2 MR6: an administrator asked `POST /api/v1/admin/users/{id}/disable` for their own account; over HTTP nobody disables themself — the operator CLI `forge admin user disable` is the path, with the same guard), last_admin (with `user`, the user id being disabled), last_owner (with `user`, `group_id` — the first top-level group that would be left without a direct active Owner — or, when no group is affected, `project_id` — the first project that would be left without an active Owner — and `ownerless_groups` and `ownerless_projects`, how many), admin_exists (with `active_human_admins`), not_human or user_disabled (with `user` when promoting an existing user; `bootstrap-admin --create` refuses before any user exists, so it carries no `user`). Ids only, never names. List the group's direct owners with a privileged query on forge.group_members joined to forge.users (role = 'owner' AND state = 'active'); list the administrators with SELECT id, kind, state FROM forge.users WHERE is_admin."
+cause = "An administration command was refused to keep forge manageable (ADR-0019 §10, Amendment D3 MR2). forge_db::users::disable refuses to disable the last active human administrator (bots, service accounts and disabled users do not count) or the last direct active Owner of a top-level group (subgroups inherit their ancestors' Owners and are not checked), or the only active Owner of a project, direct or inherited (D4 MR4; projects pending deletion are not checked); a refused disable writes nothing and revokes no token. forge_db::users::bootstrap_admin (forge admin bootstrap-admin) is refused while an active human administrator exists, and for a user that is not a human or is disabled. forge_db::users::set_admin_source (`forge admin user admin-source`, ADR-0021 amendment 2026-11-24) is refused for a user who is not an active human administrator."
+diagnosis = "The log event carries `reason`: self_disable (M2 MR6: an administrator asked `POST /api/v1/admin/users/{id}/disable` for their own account; over HTTP nobody disables themself — the operator CLI `forge admin user disable` is the path, with the same guard), last_admin (with `user`, the user id being disabled), last_owner (with `user`, `group_id` — the first top-level group that would be left without a direct active Owner — or, when no group is affected, `project_id` — the first project that would be left without an active Owner — and `ownerless_groups` and `ownerless_projects`, how many), admin_exists (with `active_human_admins`), not_admin (`admin-source` named a user who is not an administrator, with `user`), last_admin also from `admin-source --source oidc` (it would leave no active human administrator the CLI manages; ADR-0021 amendment 2026-11-24), not_human or user_disabled (with `user` when promoting an existing user or changing the admin source; `bootstrap-admin --create` refuses before any user exists, so it carries no `user`). Ids only, never names. List the group's direct owners with a privileged query on forge.group_members joined to forge.users (role = 'owner' AND state = 'active'); list the administrators with SELECT id, kind, state FROM forge.users WHERE is_admin."
 fix = "There is no command yet to grant administrator rights or change group members (D3), so the guard cannot be satisfied by adding a successor first. For last_admin / last_owner follow runbook user-offboarding: with approval naming the successor, disable with `forge admin user disable <username> --force`, then at once restore an administrator with `forge admin bootstrap-admin --user <successor>` (or `--create`); top-level groups left without an Owner stay reported by forge doctor (FG-AUTH-0010) until a member-change route exists. For admin_exists: bootstrap-admin is only for a forge without an active human administrator. For not_human / user_disabled: name an active human, or use --create."
 runbook = "user-offboarding"
 test = "disabling_the_last_active_human_admin_is_administration_conflict"
@@ -1787,7 +1787,7 @@ user_message_ja = "認証情報を読み取れませんでした。問い合わ�
 user_message_en = "The credential data could not be read. Contact the administrator with the request ID."
 user_message_id = "Data kredensial tidak dapat dibaca. Hubungi administrator dengan menyertakan ID permintaan."
 cause = "Authenticating a personal access token (forge_db::tokens) found a tokens row that the schema and the forge-db commands never write: a scope name this build does not know, or a secret_sha256 that is not 32 bytes. The data was changed outside forge-db (a manual change, a restored dump, a disabled constraint) or by a newer build. The token is not accepted: the request is refused rather than decided on partial scopes."
-diagnosis = "The log event carries `reason` (unknown_scope or bad_hash), `token_id` and `public_id` (never a secret or hash) and, for unknown_scope, `raw` (the stored scope). Read read-only on the write role: SELECT id, user_id, public_id, scopes FROM forge.tokens WHERE id = <token_id>; then check pg_constraint for tokens_scopes_known and forge_audit.ddl_audit for who changed the constraint, and forge.audit_log token.* rows for the history."
+diagnosis = "The log event carries `reason` (unknown_scope, bad_hash, or unknown_admin_source — the token owner's `users.admin_source` is neither cli nor oidc, with `user`; the CHECK users_admin_source makes it impossible, ADR-0021 amendment 2026-11-24), `token_id` and `public_id` (never a secret or hash) and, for unknown_scope, `raw` (the stored scope). Read read-only on the write role: SELECT id, user_id, public_id, scopes FROM forge.tokens WHERE id = <token_id>; then check pg_constraint for tokens_scopes_known and forge_audit.ddl_audit for who changed the constraint, and forge.audit_log token.* rows for the history."
 fix = "Revoke the token through an approved runbook step (forge admin token revoke) and issue a new one; restore a dropped constraint from the migration. Never edit the row by hand without approval."
 runbook = "credential-data"
 test = "an_unknown_stored_scope_is_credential_data_invalid"
@@ -3799,6 +3799,102 @@ fix = "Fix the cause of the failing syncs (runbook oidc-login, 「組織の台�
 runbook = "oidc-login"
 test = "a_stale_master_is_org_master_stale"
 
+# ── Plan 20 K2/K3 (ADR-0040): search, the wiki and personal notes ──
+[[error]]
+code = "FG-KNOW-0001"
+name = "SearchUnavailable"
+http_status = 503
+severity = "warn"
+user_message_ja = "いま検索できません。しばらくしてから再度お試しください。"
+user_message_en = "Search is unavailable right now. Try again later."
+user_message_id = "Pencarian tidak tersedia saat ini. Coba lagi nanti."
+cause = "Plan 20 K3 (ADR-0040): `GET /api/v1/search` could not read its candidates: the search statement over forge.search_entries (`tokens @@ query`, ranked) hit its statement timeout, or the database failed (the cause is chained: FG-DB-0001 / FG-DB-0002 / FG-DB-0009), or the read was not answered within the route's lookup timeout. The readable projects are decided first from the project list's access facts (`operation=search_projects`, read by the same rule); more than 20 000 projects to decide is `reason=project_scan_limit` (the search refuses rather than answer from an incomplete set). Not a refusal: nothing about any hit was shown."
+diagnosis = "The log event carries `operation` (`search_candidates`: the ranked read; `search_projects`: the readable projects decided before it; with `reason=project_scan_limit` and `limit` the instance outgrew the per-search decision: ADR-0040 Amendment K3-R), `timeout_ms` when the route's own bound fired, the chained FG-DB code otherwise, `query_chars` and `query_terms` (the query's length and term count — never the words, which may be personal or confidential) and the request_id. Many timeouts with short queries: a very common 2-gram matches most rows (look at the table size: `SELECT count(*) FROM forge.search_entries`); timeouts on every query: the GIN index `search_entries_tokens` is missing or bloated, or the database is slow (runbook db-unavailable)."
+fix = "Check the database first (runbook db-unavailable). For a slow search: `REINDEX INDEX CONCURRENTLY forge.search_entries_tokens` in a quiet window, or rebuild the index (`forge search reindex`, runbook search-index). The client retries later; the request_id finds the event."
+runbook = "search-index"
+test = "search_store_failure_is_search_unavailable"
+
+[[error]]
+code = "FG-KNOW-0002"
+name = "SearchIndexItemFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "検索の索引を更新できませんでした。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The search index could not be updated. Give the request ID to your administrator."
+user_message_id = "Indeks pencarian tidak dapat diperbarui. Berikan ID permintaan kepada administrator Anda."
+cause = "Plan 20 K2 (ADR-0040): one entry, or one project's entries, of the search index could not be written as asked, or not completely: `reason=truncated` (an entry's body is over 256 KB or its vector over 50 000 terms: the rest is not searchable, the row says `truncated`), `reason=subtree_too_large` (a group move or user rename touched more projects than one subscriber step refreshes: the rest keep their old path in the index until the rebuild and are recorded `failed` with this code in forge.search_index_state), `reason=write_failed` (the rebuild could not write one project's entries; the cause is chained). The index is derived: nothing a person wrote is lost."
+diagnosis = "The log event (`forge.search.index_item`) carries `reason`, `source_kind`, `project_id`, `source_key` (a project: empty; a merge request: its iid), `limit` and the source event's `request_id` / `seq` (subscriber) or the rebuild's request_id. forge.search_index_state holds the project's last `state` and `last_error_code` and `attempts`. A failed subscriber step itself is FG-DB-0008 (subscriber `search-index`, runbook subscriber-lag)."
+fix = "`truncated`: nothing to repair (the entry stays searchable by its title and first 256 KB); shorten the source if it matters. `subtree_too_large`: run `forge search reindex` (runbook search-index). `write_failed`: fix the chained cause, then `forge search reindex --project <id>`."
+runbook = "search-index"
+test = "oversized_description_is_truncated_and_logged"
+
+# ── Plan 21 E1 (ADR-0041): edge distribution, the pure forge-edge ──
+[[error]]
+code = "FG-EDGE-0001"
+name = "EdgeReleaseDefinitionInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "edge-release.toml の内容が正しくありません（形、対象の機器、配るもの、シークレットらしいファイル）。直してからもう一度リリースしてください。"
+user_message_en = "edge-release.toml is not valid (its form, target devices, payloads or a secret-like file). Fix it and release again."
+user_message_id = "edge-release.toml tidak valid (bentuk, perangkat sasaran, muatan, atau berkas yang tampak rahasia). Perbaiki lalu rilis lagi."
+cause = "Plan 21 §5.2 (ADR-0041 §4): forge-edge's lint refused a repository's `edge-release.toml`. `reason`: `toml_syntax` (TOML error or an unknown key — nothing is ignored), `not_utf8`, `too_large` (> 64 KiB), `schema_version` (only 1), `arch` (only `amd64` / `arm64`), `os` (lower-case letters, digits, `.` and `-`, 1..=32 characters, e.g. `ubuntu-24.04`), `max_install_seconds` (1..=7200), `health_soak_seconds` (0..=86400), `no_payloads`, `payload_kind` (only `files` / `oci-image` / `agent`), `duplicate_kind` (one payload per kind), `agent_not_alone` (an `agent` payload is a release of its own), `no_artifacts`, `too_many_artifacts` (> 256 per payload), `artifact_path` (empty, absolute, a drive letter, `..` / `.` / empty segments, a backslash, `:`, `<`, `>`, `\"`, `|`, `?`, `*`, control or non-ASCII characters, a segment ending in a dot or space, a Windows device name such as `CON`, `NUL`, `COM1`, `LPT1` with or without an extension, > 255 bytes), `duplicate_artifact` (also two paths that differ only by letter case), `artifact_path_conflict` (one path is a directory of another, e.g. `dist/a` and `dist/a/b`), `secret_like_path` (a file name that looks like a secret: `.env`, `*.env`, `.env.*`, `*.pem`, `*.key`, `*.p12` / `*.pfx` / `*.jks` / `*.keystore` / `*.ppk` / `*.kdbx`, `id_rsa*` / `id_dsa*` / `id_ecdsa*` / `id_ed25519*`, `.netrc`, `.pgpass`, `.npmrc`, `.htpasswd`, `credentials*`, `.git-credentials`, or a path under `.ssh/`, `.gnupg/`, `.aws/`, `.docker/`). Every problem is listed. Nothing was released."
+diagnosis = "The lint's problems list `reason` and `subject` (the field, payload kind or artifact path — never file content). The repository's `edge-release.toml` is the only input. From E4 the release builder records the problems on the release candidate."
+fix = "Fix `edge-release.toml`: one payload per kind, relative artifact paths, a supported `arch` and `os`. Never put secrets in a release: per-device secrets belong to the device's own provisioning (plan 21 §5.2)."
+test = "release_definition_refuses_secret_like_file"
+
+[[error]]
+code = "FG-EDGE-0002"
+name = "EdgeManifestInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "エッジのリリースのマニフェストの形が正しくありません。"
+user_message_en = "The edge release manifest is not well-formed."
+user_message_id = "Manifes rilis edge tidak berbentuk benar."
+cause = "Plan 21 §5.2 (ADR-0041 §2): a signed release file (`{manifest, digest, key_id, signature}`) or its manifest did not parse or broke a rule, so its digest could not be computed. `reason`: `too_large` (> 4 MiB), `json_syntax` (with `line <n>`; an unknown or duplicate key is refused, nothing ignored), `schema_version` (only 1), `release_id` / `project` / `version` / `os` (empty, too long or characters outside the allowed set), `source_sha` (40 or 64 lower-case hex), `sequence` (0), `created_at` (not an RFC 3339 instant), `arch`, `max_install_seconds` (1..=7200), `health_soak_seconds` (0..=86400), `ci_pipeline_id` (0), `no_payloads`, `payload_kind` (only `files` / `oci-image` / `agent`), `duplicate_kind`, `agent_not_alone`, `agent_blob_count` (an `agent` payload is exactly one blob), `no_blobs`, `too_many_blobs` (> 4096 per payload), `blob_sha256` (not 64 lower-case hex), `blob_size` (0 or > 8 GiB), `blob_path` (the artifact path rules of FG-EDGE-0001), `duplicate_blob_path` (also two paths that differ only by letter case), `blob_path_conflict` (one path is a directory of another), `secret_like_path`, `digest_syntax` (the envelope's digest is not `sha256:<64 hex>`), `key_id` (empty or over 64 characters). The server builds manifests from linted definitions (E4), so on a device or in gstn this means the file is not one the server signed — treat it like FG-EDGE-0004."
+diagnosis = "`gstn edge release verify --release <file> --json` lists the problem with `reason` and `subject` (the field or blob path). Compare the file with the one the server serves for the release (E5: `GET /api/v1/edge/desired`)."
+fix = "Use the release file exactly as the server served it. A hand-edited or truncated file never verifies; fetch it again."
+test = "manifest_rejects_unsafe_blob_path"
+
+[[error]]
+code = "FG-EDGE-0003"
+name = "EdgeSigningKeyUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "エッジのリリースを確かめる鍵がありません。鍵を更新してからもう一度確かめてください。"
+user_message_en = "The key to verify the edge release is not available. Update the keys and verify again."
+user_message_id = "Kunci untuk memverifikasi rilis edge tidak tersedia. Perbarui kunci lalu verifikasi lagi."
+cause = "Plan 21 §5.2 (ADR-0041 §3): the edge public key list needed to verify a release signature is missing, unreadable or does not name the release's key. `reason`: `keys_missing` (gstn: no `edge-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable` (`subject`: the io error kind or `too_large`, over 1 MiB), `keys_invalid` (not the JSON key list `{\"keys\":[{\"kid\",\"public_key\",…}]}`, a duplicate or empty kid, a public key that is not 32 bytes of base64, more than 64 keys), `unknown_key` (the release names a `key_id` the list does not hold: the list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The edge keys are separate from the agent part keys (plan 21 §11 Q7)."
+diagnosis = "`gstn edge release verify --json`: `reason` and `subject` (the kid). Look at the key list (`--keys`, or `edge-keys.json` in the gstn configuration directory): which kids it holds and whether it parses. Runbook edge-signing-key."
+fix = "Get the current edge public keys from the administrator (from E4: `GET /api/v1/edge/keys`) into `edge-keys.json`, then verify again. A kid nobody issued is a tampering sign: runbook edge-agent."
+runbook = "edge-signing-key"
+test = "unknown_edge_key_is_signing_key_unavailable"
+
+[[error]]
+code = "FG-EDGE-0004"
+name = "EdgeSignatureInvalid"
+http_status = 422
+severity = "alert"
+user_message_ja = "エッジのリリースの署名か要約が合いません。改ざんの疑いがあります。このリリースを入れず、管理者に連絡してください。"
+user_message_en = "The edge release's signature or digest does not match. It may have been tampered with. Do not install it and contact the administrator."
+user_message_id = "Tanda tangan atau digest rilis edge tidak cocok. Mungkin telah dirusak. Jangan pasang dan hubungi administrator."
+cause = "Plan 21 §5.2 (ADR-0041 §2–§3): a release's Ed25519 signature in the edge manifest domain (`forge-edge-manifest-signature-v1` NUL ‖ digest) did not verify, or its content did not match what was signed. `reason`: `digest_mismatch` (the digest recomputed from the manifest differs from the envelope's: the manifest was edited), `bad_signature` (the signature is not this key's over this digest in the edge domain — also a signature made for an agent part or any other domain with the same key), `signature_malformed`, `key_revoked`, `blob_mismatch` (a blob's SHA-256 or size differs from the manifest), `blob_missing` (a blob named by the manifest is not in the directory checked), `blob_not_a_regular_file` (a symlink or a directory where the blob should be, or a path that resolves outside the directory checked through a symlinked directory). Signed releases never change, so every case means the bytes are not what the server signed."
+diagnosis = "`gstn edge release verify --release <file> [--blobs <dir>] --json` names the release (`release_id`, `version`) and, in `subject`, the kid or the blob path. From E6 the device agent logs this code with `device_id`, `rollout_id` and `release_digest` and reports it. Compare the file with the server's copy; for a blob, its SHA-256 with the manifest. Runbook edge-agent."
+fix = "Do not install the release. Follow runbook edge-agent: fetch the release and blobs again from the server; if they still do not verify, treat it as tampering (who could write the file or the blob store; a revoked key means re-signed releases must be rolled out)."
+runbook = "edge-agent"
+test = "agent_part_signature_does_not_verify_as_edge_manifest"
+
+[[error]]
+code = "FG-EDGE-0005"
+name = "EdgeRolloutPolicyInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "展開の波・停止の規則・保守の時間帯の設定が正しくありません。値を直してください。"
+user_message_en = "The rollout's waves, halt rules or maintenance windows are not valid. Fix the values."
+user_message_id = "Gelombang, aturan penghentian, atau jendela pemeliharaan rollout tidak valid. Perbaiki nilainya."
+cause = "Plan 21 §5.3–§5.6 (ADR-0041 §5–§7): forge-edge refused a wave plan, a halt policy or a maintenance schedule. `reason`: wave plan — `no_waves`, `too_many_waves` (> 10), `canary_not_first`, `percent_range` (a percentage outside 0.01..=100 %, in basis points 1..=10000), `percent_not_increasing` (each wave must reach more devices than the one before, so membership is monotonic), `last_wave_not_100`; halt policy — `min_sample` (1..=1000), `failure_rate` (1..=10000 basis points), `min_failures` (1..=1000), `unresponsive_rate` (1..=10000 basis points), `done_ratio` (100..=10000 basis points), `soak` (canary or percent soak over 30 days), `stall_after` (1 hour..=90 days); schedule — `time_zone` (not an IANA zone name in the compiled-in tz database; `subject` names it), `window_start` (not HH:MM), `window_duration` (1..=1440 minutes), `too_many_windows` (> 64), `blackout_order` (a blackout that does not end after it starts), `too_many_blackouts` (> 256)."
+diagnosis = "The problem's `reason` and `subject` (the field, wave index, zone name or window) say which value. Nothing was stored."
+fix = "Correct the value: waves strictly increasing to 100 % (a canary wave only first), thresholds in range, IANA zone names such as `Asia/Jakarta`, windows as weekday + HH:MM + minutes."
+test = "wave_plan_must_end_at_100_percent"
 # ── Plan 19 L5-1 (ADR-0039): the local LLM gateway's contract ──
 
 [[error]]

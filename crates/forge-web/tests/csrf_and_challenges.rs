@@ -137,6 +137,7 @@ impl SessionAuthenticator for Sessions {
                     username: "bob".to_owned(),
                     display_name: "Bob".to_owned(),
                     is_admin: false,
+                    admin_from_idp: false,
                     idle_expires_at: "2026-11-01T16:00:00Z".to_owned(),
                     absolute_expires_at: "2026-11-02T00:00:00Z".to_owned(),
                     refresh_due: false,

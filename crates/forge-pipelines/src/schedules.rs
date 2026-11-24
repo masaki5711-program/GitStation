@@ -119,7 +119,9 @@ impl ScheduleDraft {
 pub fn owner_decision(owner: UserId, facts: &ProjectUpdateFacts) -> Result<(), ForgeError> {
     let principal = Principal::authenticated(
         owner,
-        facts.account.is_admin,
+        // No live session backs a scheduled run: the standing flag only
+        // (ADR-0021 amendment 2026-11-24).
+        facts.account.standing_admin,
         facts.account.active,
         Credential::Session,
         AccountKind::Human,

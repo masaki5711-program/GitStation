@@ -935,3 +935,30 @@ fn webhook_details_name_the_origin_only_and_disable_is_the_event() {
         }
     }
 }
+
+/// ADR-0021 amendment 2026-11-24: the administrator flag moved by the
+/// identity provider's role, and the CLI's change of who manages it, are
+/// audit-only rows on the user (no domain event).
+#[test]
+fn admin_role_details_are_audit_only() {
+    use crate::AdminSource;
+    let granted = AuditDetails::UserAdminChanged { to: true };
+    assert_eq!(granted.action(), "user.admin_changed");
+    assert_eq!(granted.event_type(), None);
+    assert_eq!(
+        granted.to_value(),
+        serde_json::json!({"from": false, "to": true, "source": "oidc_role"})
+    );
+    let revoked = AuditDetails::UserAdminChanged { to: false };
+    assert_eq!(revoked.to_value()["from"], true);
+    let switched = AuditDetails::UserAdminSourceChanged {
+        from: AdminSource::Cli,
+        to: AdminSource::Oidc,
+    };
+    assert_eq!(switched.action(), "user.admin_source_changed");
+    assert_eq!(switched.event_type(), None);
+    assert_eq!(
+        switched.to_value(),
+        serde_json::json!({"from": "cli", "to": "oidc"})
+    );
+}

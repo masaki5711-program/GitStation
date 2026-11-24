@@ -429,6 +429,13 @@ impl Principal {
         }
     }
 
+    /// The account's administrator flag as the authenticator read it (for
+    /// a token, only a flag the CLI manages: ADR-0021 amendment
+    /// 2026-11-24). Not rights by itself: [`Self::admin_rights`].
+    pub(crate) fn admin_flag(&self) -> bool {
+        self.is_admin
+    }
+
     /// Administrator rights in effect: an administrator in a session, or with
     /// a token that carries the `admin` scope; never when acting for a
     /// person (ADR-0025 §3).
@@ -468,16 +475,20 @@ impl Principal {
     /// authentication builds it on the widget routes only, from a token
     /// forge-oidc verified and a user the sign-in's link rules found (test
     /// `only_forge_web_builds_portal_principals`). Never administrator
-    /// rights, never an agent's credential.
+    /// rights (`admin_rights` is false for the portal's credential), never
+    /// an agent's credential. `is_admin` is the account's flag as read with
+    /// the user: only `portal::portal_admin_menu` reads it (ADR-0021
+    /// amendment 2026-11-24).
     pub fn portal(
         user: UserId,
         active: bool,
         kind: AccountKind,
         credential: PortalCredential,
+        is_admin: bool,
     ) -> Self {
         Self {
             user: Some(user),
-            is_admin: false,
+            is_admin,
             active,
             credential: Credential::Portal(credential),
             agent: false,

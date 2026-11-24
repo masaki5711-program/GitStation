@@ -144,7 +144,7 @@ kind = "audited"
 # Not email, employee_number or external_id (personal data).
 ro_columns = [
     "id", "kind", "username", "display_name", "auth_source", "state", "is_admin", "created_at",
-    "updated_at",
+    "updated_at", "admin_source",
 ]
 audit_resource = "user"
 audit_id_column = "id"
@@ -274,6 +274,7 @@ ro_columns = [
     "id", "public_id", "user_id", "created_at", "last_seen_at", "idle_expires_at",
     "absolute_expires_at", "revoked_at", "revoked_reason", "oidc_issuer", "oidc_sid",
     "refresh_checked_at", "access_role_seen_at", "refresh_without_id_token",
+    "admin_role_seen_at",
 ]
 # session.created / session.revoked (and user.disabled) are audited on the user.
 audit_resource = "user"
@@ -284,6 +285,8 @@ unaudited_columns = [
     "refresh_checked_at", "access_role_seen_at",
     # M2 MR5: refreshes in a row without an ID token (ADR-0021 §7).
     "refresh_without_id_token",
+    # ADR-0021 amendment 2026-11-24: the admin role last seen (20270109100100).
+    "admin_role_seen_at",
 ]
 txn_audited_columns = []
 
@@ -1045,6 +1048,18 @@ kind = "derived"
 ro_columns = ["*"]
 
 [tables.agent_lesson_injections]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# ── Plan 20 K2 (20270107100000, ADR-0040): the search index — derived,
+# rebuilt from the source tables at any time (`forge search reindex`) ──
+[tables.search_entries]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.search_index_state]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]

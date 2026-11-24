@@ -574,6 +574,10 @@ reason = "Resolving a discussion changes a merge condition (ADR-0024 #2): people
 gstn = "activity"
 reason = "A person's own activity feed (plan 15 MR 8): the server refuses an agent token (ActivityRead is people_only)."
 
+[[deferred]]
+gstn = "search"
+reason = "The knowledge search tool (plan 20 K3) waits for the wiki and document sources of the M6 W track, so an agent gets one search over all of them; an agent token can call GET /api/v1/search meanwhile (confidential rows are left out for it)."
+
 [[excluded]]
 action = "DeployApprove"
 reason = "Approving a production deployment is human-only (M4 C11, CLAUDE.md contract 7)."
@@ -931,6 +935,10 @@ reason = "Local only: lints the AI assets in the working tree (plan 17 P17-3)."
 [[deferred]]
 gstn = "ai-asset status"
 reason = "A read tool for an agent waits for the asset releases (plan 17 P17-7); gstn and the settings screen show it meanwhile."
+
+[[not_api]]
+gstn = "edge release verify"
+reason = "Local only: verifies a signed edge release file (and its blobs) with local edge keys (plan 21 E1)."
 
 [[not_api]]
 gstn = "agent verify"

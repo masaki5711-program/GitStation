@@ -128,9 +128,17 @@ async fn another_subjects_advice_is_not_found() {
             None
         );
         assert_eq!(
-            record_feedback(&w.t.db, id, subject, Some(0), w.alice, PERSON, Verdict::Wrong)
-                .await
-                .expect("vote"),
+            record_feedback(
+                &w.t.db,
+                id,
+                subject,
+                Some(0),
+                w.alice,
+                PERSON,
+                Verdict::Wrong
+            )
+            .await
+            .expect("vote"),
             FeedbackOutcome::NoAdvice
         );
     }
@@ -165,10 +173,12 @@ async fn concurrent_votes_record_one_row() {
         1,
         "{outcomes:?}"
     );
-    assert!(outcomes.contains(&FeedbackOutcome::Unchanged), "{outcomes:?}");
-    let rows = w
-        .t
-        .json_rows(&format!(
+    assert!(
+        outcomes.contains(&FeedbackOutcome::Unchanged),
+        "{outcomes:?}"
+    );
+    let rows =
+        w.t.json_rows(&format!(
             "SELECT count(*) AS n FROM forge.llm_advice_feedback WHERE advice_id = {id}"
         ))
         .await;
@@ -324,7 +334,9 @@ async fn advice_keeps_input_class() {
         can_read_subject: false,
     };
     assert_eq!(
-        super::advice(&w.t.db, id, MR7, outsider).await.expect("read"),
+        super::advice(&w.t.db, id, MR7, outsider)
+            .await
+            .expect("read"),
         None
     );
     assert_eq!(
@@ -362,7 +374,10 @@ async fn advice_keeps_input_class() {
         .bind(id)
         .execute(&mut su)
         .await;
-    assert!(cleared.is_err(), "superseded_by is not cleared by a statement");
+    assert!(
+        cleared.is_err(),
+        "superseded_by is not cleared by a statement"
+    );
     record_feedback(&w.t.db, newer, MR7, None, w.alice, PERSON, Verdict::Useful)
         .await
         .expect("vote");

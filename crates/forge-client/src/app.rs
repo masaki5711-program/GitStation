@@ -226,6 +226,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Doc { command } => crate::doc::doc(cli, command, env, io),
         Command::Ci { command } => crate::ci::ci(cli, command, env, io),
         Command::Agent { command } => crate::agent::agent(cli, command, env, io),
+        Command::Edge { command } => crate::edge::edge(cli, command, env, io),
         Command::AiAsset { command } => crate::ai_asset::ai_asset(cli, command, env, io),
         Command::Deploy { command } => crate::deploy::deploy(cli, command, env, io),
         Command::Context { command } => crate::context::context(cli, command, env, io),
@@ -240,6 +241,24 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Activity { before, limit } => {
             crate::activity::activity(cli, *before, *limit, env, io)
         }
+        Command::Search {
+            words,
+            scope,
+            project,
+            limit,
+            cursor,
+        } => crate::search::search(
+            cli,
+            &crate::search::SearchArgs {
+                words,
+                scope,
+                project: *project,
+                limit: *limit,
+                cursor: cursor.as_deref(),
+            },
+            env,
+            io,
+        ),
         Command::Admin { command } => crate::admin::admin(cli, command, env, io),
         Command::Browse { command } => crate::browse::browse(cli, command, env, io),
         Command::Api(a) => api(cli, a, env, io),

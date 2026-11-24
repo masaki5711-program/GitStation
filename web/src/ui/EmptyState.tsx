@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
 
 import styles from './EmptyState.module.css';
 
-export type EmptyIcon = 'folder' | 'group' | 'inbox' | 'activity' | 'mergeRequest';
+export type EmptyIcon = 'folder' | 'group' | 'inbox' | 'activity' | 'mergeRequest' | 'search';
 
 const PATHS: Record<EmptyIcon, ReactNode> = {
   folder: <path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z" />,
@@ -30,6 +30,12 @@ const PATHS: Record<EmptyIcon, ReactNode> = {
       <circle cx="6" cy="18" r="2" />
       <circle cx="18" cy="18" r="2" />
       <path d="M6 8v8M18 16V9a2 2 0 0 0-2-2h-4M14 5l-2 2 2 2" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6" />
+      <path d="m20 20-4.5-4.5" />
     </>
   ),
 };

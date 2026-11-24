@@ -418,6 +418,34 @@ describe('access tokens', () => {
     expect(server.to('DELETE', '/api/v1/user/tokens/4')[0]?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
   });
 
+  it('an administrator granted by the identity provider is not offered the admin scope', async () => {
+    const idpAdmin = { ...SESSION, user: { ...SESSION.user, is_admin: true, admin_from_idp: true } };
+    const server = mockServer(
+      user({
+        'GET /api/v1/session': () => json(200, idpAdmin),
+        'GET /api/v1/user/tokens': () => json(200, { items: [] }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/taro/-/settings', lang: 'en' });
+    await screen.findByText('You have no tokens.');
+    expect(screen.queryByLabelText('admin')).toBeNull();
+    // The administrator screens themselves are there.
+    expect(screen.getAllByRole('link', { name: 'Administration' }).length).toBeGreaterThan(0);
+  });
+
+  it('/-/admin sends an administrator on to the administrator settings', async () => {
+    const server = mockServer(
+      user({
+        'GET /api/v1/session': () => json(200, { ...SESSION, user: { ...SESSION.user, is_admin: true } }),
+        'GET /api/v1/admin/users': () => json(200, { items: [], next_cursor: null, has_more: false }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/-/admin', lang: 'en' });
+    await waitFor(() => {
+      expect(server.to('GET', '/api/v1/admin/users').length).toBeGreaterThan(0);
+    });
+  });
+
   it('only an administrator is offered the admin scope', async () => {
     const server = mockServer(user({ 'GET /api/v1/user/tokens': () => json(200, { items: [] }) }));
     await renderApp({ fetch: server.fetch, path: '/taro/-/settings', lang: 'en' });

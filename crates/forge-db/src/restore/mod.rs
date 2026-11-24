@@ -23,7 +23,7 @@
 use std::collections::BTreeSet;
 
 use forge_core::ids::{ProjectId, RepoId, UserId};
-use forge_core::SessionRevokeReason;
+use forge_core::{AdminSource, SessionRevokeReason};
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, Settle};
@@ -540,11 +540,18 @@ pub async fn remove_all_admin_flags(
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         tx.step(crate::users::admin::lock_admin_set).await?;
-        let rows: Vec<(i64, String)> = tx
+        // ADR-0021 amendment 2026-11-24: who managed each flag is kept in
+        // the audit rows (`admin_source`) so a regrant gives it back as it
+        // was (an IdP-granted administrator never comes back as break-glass).
+        let rows: Vec<(i64, String, String)> = tx
             .step(|c| async move {
                 sqlx::query_as(
-                    "UPDATE forge.users SET is_admin = false, updated_at = now() \
-                     WHERE is_admin RETURNING id, username",
+                    "WITH old AS (SELECT id, admin_source FROM forge.users \
+                       WHERE is_admin FOR UPDATE) \
+                     UPDATE forge.users u SET is_admin = false, admin_source = 'cli', \
+                       updated_at = now() \
+                     FROM old WHERE u.id = old.id \
+                     RETURNING u.id, u.username, old.admin_source",
                 )
                 .fetch_all(c)
                 .await
@@ -554,26 +561,32 @@ pub async fn remove_all_admin_flags(
         if rows.is_empty() {
             return Ok(Settle::Discard(Vec::new()));
         }
-        let ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+        let oidc_ids: Vec<i64> = rows
+            .iter()
+            .filter(|(_, _, source)| source.as_str() == AdminSource::Oidc.as_str())
+            .map(|(id, _, _)| *id)
+            .collect();
         let mut rec = record(audit(
             ACTION_ADMIN_FLAGS_REMOVED,
             RESOURCE_RESTORE,
             None,
             None,
-            serde_json::json!({"user_ids": ids, "reason": reason, "begin": begin}),
+            serde_json::json!({"user_ids": ids, "oidc_user_ids": oidc_ids, "reason": reason,
+                "begin": begin}),
         ));
-        for id in &ids {
+        for (id, _, source) in &rows {
             rec.affected.push(audit(
                 ACTION_ADMIN_FLAGS_REMOVED,
                 "user",
                 Some(*id),
                 None,
-                serde_json::json!({"reason": reason}),
+                serde_json::json!({"reason": reason, "admin_source": source}),
             ));
         }
         let removed = rows
             .into_iter()
-            .map(|(id, username)| AdminRemoved {
+            .map(|(id, username, _)| AdminRemoved {
                 user: UserId::new(id),
                 username,
             })
@@ -639,9 +652,12 @@ pub async fn regrant_admin(
         // Listed by the newest finished restore (its `begin`), and nothing
         // changed the user since outside that restore (a regrant, a disable,
         // a rename: the operator's check is then out of date).
-        let listed: bool = tx
+        let (listed, from_idp): (bool, bool) = tx
             .step(|c| async move {
-                sqlx::query_scalar(
+                // The second column: the flag was the identity provider's
+                // role's (`oidc_user_ids`, ADR-0021 amendment 2026-11-24;
+                // a row written before it has none: `cli`).
+                sqlx::query_as(
                     "WITH f AS (SELECT details->>'begin' AS begin FROM forge.audit_log \
                        WHERE action = $2 AND resource_type = $4 ORDER BY id DESC LIMIT 1), \
                      r AS (SELECT a.id, a.details FROM forge.audit_log a, f \
@@ -651,6 +667,8 @@ pub async fn regrant_admin(
                        AND NOT EXISTS (SELECT 1 FROM forge.audit_log l \
                          WHERE l.resource_type = 'user' AND l.resource_id = $1 \
                            AND l.id > r.id AND l.action NOT LIKE 'restore.%') \
+                     FROM r), false), \
+                     COALESCE((SELECT r.details->'oidc_user_ids' @> to_jsonb(ARRAY[$1::bigint]) \
                      FROM r), false)",
                 )
                 .bind(id)
@@ -665,12 +683,21 @@ pub async fn regrant_admin(
         if !listed {
             return Err(refused("not_removed_by_restore"));
         }
+        let source = if from_idp {
+            AdminSource::Oidc
+        } else {
+            AdminSource::Cli
+        };
         tx.step(|c| async move {
-            sqlx::query("UPDATE forge.users SET is_admin = true, updated_at = now() WHERE id = $1")
-                .bind(id)
-                .execute(c)
-                .await
-                .map_err(|e| query_error("restore.regrant.update", e))
+            sqlx::query(
+                "UPDATE forge.users SET is_admin = true, admin_source = $2, updated_at = now() \
+                 WHERE id = $1",
+            )
+            .bind(id)
+            .bind(source.as_str())
+            .execute(c)
+            .await
+            .map_err(|e| query_error("restore.regrant.update", e))
         })
         .await?;
         let entry = audit(
@@ -678,7 +705,7 @@ pub async fn regrant_admin(
             "user",
             Some(id),
             None,
-            serde_json::json!({}),
+            serde_json::json!({"admin_source": source.as_str()}),
         );
         Ok(Settle::Commit(record(entry), Regranted::Granted(user)))
     }
@@ -728,15 +755,17 @@ pub async fn earlier_run(db: &Db, begin: &str) -> Result<(bool, Vec<AdminRemoved
     .await
 }
 
-/// The number of active human administrators (a restore that leaves none
-/// says so; `forge admin bootstrap-admin` is then the way back).
+/// The number of active human administrators the CLI manages (a restore
+/// that leaves none says so; `forge admin bootstrap-admin` is then the way
+/// back; IdP-granted administrators do not count, ADR-0021 amendment
+/// 2026-11-24).
 pub async fn active_admins(db: &Db) -> Result<i64, ForgeError> {
     const QUERY: &str = "restore.active_admins";
     let pool = db.pool().executor();
     db.within(QUERY, async {
         sqlx::query_scalar(
             "SELECT count(*) FROM forge.users WHERE is_admin AND state = 'active' \
-             AND kind = 'human'",
+             AND kind = 'human' AND admin_source = 'cli'",
         )
         .fetch_one(pool)
         .await

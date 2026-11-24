@@ -178,6 +178,9 @@ pub struct Lists {
     /// How long a cursor stays valid (`api.cursor_max_age_s`).
     pub cursor_max_age: Duration,
     slots: ListSlots,
+    /// The search reads (plan 20 K3, `GET /api/v1/search`); `None`: the
+    /// route answers `FG-SYS-0001 reason=search_unconfigured`.
+    pub search: Option<Arc<dyn forge_core::search::SearchReader>>,
 }
 
 impl Lists {
@@ -196,6 +199,7 @@ impl Lists {
                 ApiConfig::DEFAULT_LIST_MAX_CONCURRENT,
                 ApiConfig::DEFAULT_LIST_MAX_CONCURRENT_PER_PRINCIPAL,
             ),
+            search: None,
         }
     }
 
@@ -223,6 +227,20 @@ impl Lists {
     pub fn with_cursor_max_age(mut self, age: Duration) -> Self {
         self.cursor_max_age = age;
         self
+    }
+
+    /// The search reads (plan 20 K3). The search shares the list
+    /// concurrency caps: a search scans like a list.
+    #[must_use]
+    pub fn with_search(mut self, search: Arc<dyn forge_core::search::SearchReader>) -> Self {
+        self.search = Some(search);
+        self
+    }
+
+    /// A concurrency slot for `user` (lists and the search, see the
+    /// module docs): `FG-WEB-0008 reason=list_concurrency` at once.
+    pub(crate) fn acquire_slot(&self, user: UserId) -> Result<ListSlot, ForgeError> {
+        self.slots.acquire(user)
     }
 
     /// Scan `budget` rows per page instead (1 ..= [`SCAN_BUDGET`]; tests).

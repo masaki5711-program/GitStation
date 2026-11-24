@@ -191,6 +191,13 @@ pub enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Edge distribution (plan 21): verify a signed edge release file and
+    /// its blobs on this computer.
+    #[command(disable_help_subcommand = true)]
+    Edge {
+        #[command(subcommand)]
+        command: EdgeCommand,
+    },
     /// AI assets (plan 17): lint skills, playbooks, agents, models and
     /// evaluation cases on your working tree (never the server).
     #[command(name = "ai-asset", disable_help_subcommand = true)]
@@ -256,6 +263,24 @@ pub enum Command {
         /// Events read per page, 1..=100 (server default 30).
         #[arg(long, value_parser = parse_limit, value_name = "N")]
         limit: Option<u32>,
+    },
+    /// Search projects and merge requests you may read (plan 20 K3).
+    Search {
+        /// The words to search for (2..=200 characters in all).
+        #[arg(required = true, value_parser = parse_text, value_name = "WORDS")]
+        words: Vec<String>,
+        /// Only these kinds (default: every kind).
+        #[arg(long, value_delimiter = ',', value_parser = ["project", "merge_request"], value_name = "A,B")]
+        scope: Vec<String>,
+        /// Only hits of this project (its id).
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: Option<i64>,
+        /// Hits per page, 1..=50 (server default 20).
+        #[arg(long, value_parser = parse_search_limit, value_name = "N")]
+        limit: Option<u32>,
+        /// Continue from a previous page's `next_cursor`.
+        #[arg(long, value_parser = parse_text, value_name = "CURSOR")]
+        cursor: Option<String>,
     },
     /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
@@ -326,6 +351,13 @@ fn parse_limit(raw: &str) -> Result<u32, String> {
     match raw.parse::<u32>() {
         Ok(n) if (1..=100).contains(&n) => Ok(n),
         _ => Err("--limit is a whole number from 1 to 100".to_string()),
+    }
+}
+
+fn parse_search_limit(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(n) if (1..=50).contains(&n) => Ok(n),
+        _ => Err("--limit is a whole number from 1 to 50".to_string()),
     }
 }
 
@@ -2334,6 +2366,37 @@ pub enum CiCommand {
     Variable {
         #[command(subcommand)]
         command: CiVariableCommand,
+    },
+}
+
+/// `gstn edge` (plan 21 E1, ADR-0041): edge distribution.
+#[derive(Subcommand, Debug)]
+pub enum EdgeCommand {
+    /// Edge releases (signed manifests and their blobs).
+    #[command(disable_help_subcommand = true)]
+    Release {
+        #[command(subcommand)]
+        command: EdgeReleaseCommand,
+    },
+}
+
+/// `gstn edge release` (plan 21 E1). Local only: nothing is sent.
+#[derive(Subcommand, Debug)]
+pub enum EdgeReleaseCommand {
+    /// Check a signed edge release file: the manifest's form, its digest
+    /// and its Ed25519 signature with the local edge public keys; with
+    /// --blobs, every blob's size and SHA-256.
+    Verify {
+        /// The release file ({manifest, digest, key_id, signature}).
+        #[arg(long, value_name = "FILE")]
+        release: PathBuf,
+        /// The edge public key list (default: edge-keys.json in the gstn
+        /// configuration directory).
+        #[arg(long, value_name = "FILE")]
+        keys: Option<PathBuf>,
+        /// A directory holding the release's blobs at their manifest paths.
+        #[arg(long, value_name = "DIR")]
+        blobs: Option<PathBuf>,
     },
 }
 

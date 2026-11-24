@@ -233,7 +233,7 @@ async fn an_owner_demoted_while_a_visibility_change_waits_denies_it() {
 }
 
 /// The caller's account row, locked `FOR SHARE` by `access::lock_account`.
-const ACCOUNT_LOCK: &str = "is_admin FROM forge.users WHERE id = $1 FOR SHARE";
+const ACCOUNT_LOCK: &str = "admin_source = 'cli' FROM forge.users WHERE id = $1 FOR SHARE";
 
 #[tokio::test]
 async fn a_disable_committed_while_a_project_update_waits_denies_it() {

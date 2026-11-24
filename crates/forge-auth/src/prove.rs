@@ -195,9 +195,13 @@ impl<R: ResourceCtx> Authorized<R> {
             return prove(&self.principal, self.action, fresh);
         }
         let principal = match self.principal.user() {
+            // The fresh flag can only take administrator rights away: a
+            // principal authenticated without the flag (a token of an
+            // administrator granted by the identity provider's role, ADR-0021
+            // amendment 2026-11-24) never gains it here.
             Some(user) => Principal::authenticated(
                 user,
-                account.is_admin,
+                account.is_admin && self.principal.admin_flag(),
                 account.active,
                 self.principal.credential().clone(), // clone: the new proof owns its principal
                 // The kind of an account never changes (users.kind).

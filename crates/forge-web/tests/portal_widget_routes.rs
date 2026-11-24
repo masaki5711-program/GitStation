@@ -114,6 +114,7 @@ fn identity(user: UserId) -> PortalIdentity {
         kind: UserKind::Human,
         portal_party: true,
         access_role: true,
+        is_admin: false,
     }
 }
 
@@ -254,6 +255,14 @@ impl World {
             "t-disabled",
             Stand::Is(PortalIdentity {
                 active: false,
+                ..identity(dave)
+            }),
+        );
+        // ADR-0021 amendment 2026-11-24: dave's account as an administrator.
+        tokens.insert(
+            "t-admin",
+            Stand::Is(PortalIdentity {
+                is_admin: true,
                 ..identity(dave)
             }),
         );
@@ -730,6 +739,22 @@ async fn the_menu_links_the_purpose_and_a_readable_project_only() {
         "links",
     );
     assert!(hrefs(&manager).contains(&"/-/activity".to_owned()));
+    assert!(!hrefs(&manager).contains(&"/-/admin".to_owned()));
+    // ADR-0021 amendment 2026-11-24: an administrator's account gets the
+    // administrator link last, in every purpose (authorize() on the
+    // account's flag; the portal's token carries no such claim here).
+    for purpose in ["developer", "manager"] {
+        let admin = data(
+            &w.as_token(&format!("{MENU}?purpose={purpose}"), "t-admin")
+                .await,
+            "links",
+        );
+        assert_eq!(
+            hrefs(&admin).last().map(String::as_str),
+            Some("/-/admin"),
+            "{admin}"
+        );
+    }
     // The options: dave's project only.
     for uri in [MENU_OPTIONS, ATTENTION_OPTIONS] {
         let a = w.as_token(uri, "t-dave").await;

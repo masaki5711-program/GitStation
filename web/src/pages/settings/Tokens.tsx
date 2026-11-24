@@ -303,7 +303,12 @@ function CreateToken({ onCreated }: { onCreated: (c: Created) => void }) {
       },
     });
   };
-  const all = session.user.is_admin ? [...PERSONAL_SCOPES, 'admin'] : [...PERSONAL_SCOPES];
+  // An administrator granted by the identity provider's role (Keycloak)
+  // never puts the admin scope on a token: the server refuses it.
+  const all =
+    session.user.is_admin && !session.user.admin_from_idp
+      ? [...PERSONAL_SCOPES, 'admin']
+      : [...PERSONAL_SCOPES];
   return (
     <form onSubmit={submit} noValidate className={styles.narrow}>
       <ErrorSummary errors={errors} attempt={attempt} />
