@@ -31,11 +31,13 @@ pub mod groups;
 pub mod health;
 pub mod history;
 pub mod lists;
+// Plan 20 K3 (ADR-0040): the cross search.
 pub mod members;
 pub mod merge_queue;
 pub mod merge_requests;
 pub mod moves;
 pub mod repo_copy;
+pub mod search;
 // M3 N1: the caller's notification settings.
 pub mod in_app_notifications;
 pub mod namespaces;

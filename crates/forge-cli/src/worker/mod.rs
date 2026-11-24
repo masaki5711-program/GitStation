@@ -533,7 +533,11 @@ fn registry_with(
         // M4 C14 (`independent`): a merge request's failed merge-result
         // pipeline or a new conflict records a queued autofix attempt (for
         // projects that turned autofix on; `forge serve` runs it).
-        .with(Arc::new(forge_db::autofix::AutofixTriggers))?;
+        .with(Arc::new(forge_db::autofix::AutofixTriggers))?
+        // Plan 20 K2 (`ordered`): project and merge request events refresh
+        // their search entries (`forge search reindex` fills what came
+        // before the subscriber).
+        .with(Arc::new(forge_db::search::SearchIndex))?;
     // M3 I2: deliveries are recorded only when the lane can send them.
     let registry = if webhooks {
         registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?

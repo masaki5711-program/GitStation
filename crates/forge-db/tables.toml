@@ -1043,6 +1043,18 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 
+# ── Plan 20 K2 (20270107100000, ADR-0040): the search index — derived,
+# rebuilt from the source tables at any time (`forge search reindex`) ──
+[tables.search_entries]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.search_index_state]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
 # ── ADR-0038 §3 (20270102100000, step C): approvers of a deploy environment
 # (users, groups, organisation selectors), set by an Owner or an
 # administrator (`deploy_environment.approvers_set`, on the project); the
