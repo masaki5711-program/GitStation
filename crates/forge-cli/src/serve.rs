@@ -213,6 +213,18 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 )
                 .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
             ),
+            // Plan 17 P17-6: the nightly baseline candidate writes a branch too.
+            Arc::new(crate::serve_ai_baseline::BaselineCandidateHandler::new(
+                db.clone(), // clone: the pool handle is shared
+                forge_pipelines::artifacts::ArtifactStore::new(smart_http.storage.path()),
+                smart_http.browse.clone(), // clone: shares the ref cache
+                forge_review::BaselineProposer::new(
+                    db.clone(),                 // clone: the pool handle is shared
+                    smart_http.git.clone(),     // clone: Arc handles
+                    smart_http.storage.clone(), // clone: the root path
+                )
+                .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
+            )?),
         )?;
         // M4 C14 (ADR-0017 Amendment C14): the deterministic autofix lands
         // the bot's commit on source branches: here, next to the browse
