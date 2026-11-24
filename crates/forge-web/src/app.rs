@@ -79,6 +79,11 @@ pub struct AppState {
     /// checks by [`AppState::with_checks`]; without it those routes answer
     /// `FG-SYS-0001 reason=checks_unconfigured`).
     pub doc_lint_migrations: Option<Arc<forge_checks::DocLintMigrations>>,
+    /// Document revisions and edit claims (plan 13 stage 4 part A; set
+    /// with the checks by [`AppState::with_checks`]; without it those
+    /// routes answer `FG-SYS-0001 reason=checks_unconfigured`, and opening
+    /// a merge request skips the one-revision rule).
+    pub doc_revisions: Option<Arc<forge_checks::DocRevisions>>,
     /// CI pipelines (M4 C2; `forge serve` always sets them; without them
     /// those routes answer `FG-SYS-0001 reason=pipelines_unconfigured`).
     pub pipelines: Option<Arc<forge_pipelines::Pipelines>>,
@@ -206,6 +211,7 @@ impl AppState {
             review: None,
             checks: None,
             doc_lint_migrations: None,
+            doc_revisions: None,
             pipelines: None,
             deploy: None,
             feed: None,
@@ -322,6 +328,7 @@ impl AppState {
     #[must_use]
     pub fn with_checks(mut self, checks: forge_checks::Checks) -> Self {
         self.doc_lint_migrations = Some(Arc::new(checks.doc_lint_migrations()));
+        self.doc_revisions = Some(Arc::new(checks.doc_revisions()));
         self.checks = Some(Arc::new(checks));
         self
     }
@@ -2267,6 +2274,63 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
             routes::documents::BLOCK,
             routes::documents::BLOCK_QUERY,
         )
+        // Plan 13 stage 4 part A (§7.5, ADR-0027): a document's open
+        // revisions, edit claim and versions.
+        .route_with(
+            Verb::Get,
+            routes::document_revisions::STATUS,
+            Action::RepoBrowse,
+            "A document's open revisions (the merge requests revising it; the earliest per language holds it) and its live edit claim",
+            routes::document_revisions::DocumentRevisionOf,
+            routes::document_revisions::status,
+        )
+        .responds::<routes::document_revisions::DocumentStatusBody>(
+            Verb::Get,
+            routes::document_revisions::STATUS,
+        )
+        .route_with(
+            Verb::Get,
+            routes::document_revisions::VERSIONS,
+            Action::RepoBrowse,
+            "A document's versions on the default branch: each applied merge that changed its blob (derived from git and the merges)",
+            routes::document_revisions::DocumentRevisionOf,
+            routes::document_revisions::versions,
+        )
+        .responds::<routes::document_revisions::DocumentVersionsBody>(
+            Verb::Get,
+            routes::document_revisions::VERSIONS,
+        )
+        .route_with_body(
+            Verb::Put,
+            routes::document_revisions::CLAIM,
+            Action::DocumentEditClaim,
+            "Take or extend the caller's edit claim on a document for 30 minutes (409 FG-DOC-0007 while another person's is live; people only; Developer)",
+            routes::document_revisions::MAX_BODY,
+            routes::document_revisions::DocumentRevisionOf,
+            routes::document_revisions::take,
+        )
+        .responds::<routes::document_revisions::EditClaimTakenBody>(
+            Verb::Put,
+            routes::document_revisions::CLAIM,
+        )
+        .route_with(
+            Verb::Delete,
+            routes::document_revisions::CLAIM,
+            Action::DocumentEditClaim,
+            "Release the caller's own edit claim on a document (409 FG-DOC-0007 for another person's; 404 without a live claim; people only; Developer)",
+            routes::document_revisions::DocumentRevisionOf,
+            routes::document_revisions::release,
+        )
+        .responds_no_content(Verb::Delete, routes::document_revisions::CLAIM)
+        .route_with(
+            Verb::Post,
+            routes::document_revisions::REVOKE,
+            Action::DocumentEditClaimRevoke,
+            "Revoke the live edit claim on a document, whoever holds it (audited; 404 without a live claim; people only; Maintainer)",
+            routes::document_revisions::DocumentRevisionOf,
+            routes::document_revisions::revoke,
+        )
+        .responds_no_content(Verb::Post, routes::document_revisions::REVOKE)
         // M3 X1: `.forge/repo.yml` and its spec references; every referenced
         // project decided again with the reader's own principal.
         .route_with(

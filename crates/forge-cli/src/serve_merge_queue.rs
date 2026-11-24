@@ -70,11 +70,14 @@ impl QueueTasks {
     }
 }
 
-/// The queue's limits with `merge_queue.*`'s safety nets.
+/// The queue's limits with `merge_queue.*`'s safety nets and batch
+/// bounds (plan 18 S7).
 fn limits_of(base: QueueLimits, cfg: &MergeQueueConfig) -> QueueLimits {
     QueueLimits {
         idle: cfg.safety_poll(),
         poll: cfg.waiting_safety_poll(),
+        doc_batch_max: usize::try_from(cfg.doc_batch_max).unwrap_or(base.doc_batch_max),
+        ci_batch_max: usize::try_from(cfg.ci_batch_max).unwrap_or(base.ci_batch_max),
         ..base
     }
 }
@@ -95,6 +98,8 @@ pub(crate) fn spawn(queue: MergeQueue, cfg: &MergeQueueConfig) -> QueueTasks {
         train_lint,
         train_lint_budget_ms,
         workers,
+        doc_batch_max = limits.doc_batch_max,
+        ci_batch_max = limits.ci_batch_max,
         safety_poll_ms = limits.idle.as_millis(),
         waiting_safety_poll_ms = limits.poll.as_millis(),
         "forge.serve.merge_queue_started"
@@ -234,15 +239,21 @@ mod tests {
         let cfg = MergeQueueConfig {
             safety_poll_ms: 12_000,
             waiting_safety_poll_ms: 45_000,
+            doc_batch_max: 16,
+            ci_batch_max: 2,
             ..MergeQueueConfig::default()
         };
         let limits = limits_of(base, &cfg);
         assert_eq!(limits.idle, Duration::from_secs(12));
         assert_eq!(limits.poll, Duration::from_secs(45));
+        // Plan 18 S7: the batch bounds are the keys'.
+        assert_eq!((limits.doc_batch_max, limits.ci_batch_max), (16, 2));
         assert_eq!(
             QueueLimits {
                 idle: base.idle,
                 poll: base.poll,
+                doc_batch_max: base.doc_batch_max,
+                ci_batch_max: base.ci_batch_max,
                 ..limits
             },
             base,

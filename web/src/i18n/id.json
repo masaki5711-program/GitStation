@@ -1844,5 +1844,89 @@
     "none": "Belum ada detail organisasi. Detail muncul setelah Anda masuk dengan akun PFS.",
     "empty": "Tidak ada",
     "invalid": "Detail organisasi dari penyedia identitas tidak valid, jadi detail sebelumnya ditampilkan. Minta administrasi pengguna PFS untuk memeriksanya."
+  },
+  "aiEval": {
+    "title": "Evaluasi AI (dibandingkan dengan baseline yang disetujui)",
+    "running": "Evaluasi AI sedang berjalan. Perbandingan dengan baseline muncul di sini setelah selesai.",
+    "unreadable": "Hasil evaluasi tidak dapat dibaca sebagai tabel, jadi ditampilkan apa adanya.",
+    "seeBelow": "Perbandingan dengan baseline ada di bagian “Evaluasi AI” di bawah",
+    "errorLine": "Evaluasi AI tidak dapat dibandingkan dengan baseline, jadi merge dihentikan ({{code}}). Berikutnya:",
+    "errorNext": {
+      "noReport": "buka pipeline, pastikan job evaluasi berjalan sampai selesai dan meninggalkan eval-report.json, lalu jalankan ulang pipeline.",
+      "noBaseline": "tambahkan dulu baseline pembanding (berkas di evals/baselines/) dalam merge request terpisah.",
+      "malformed": "buka log job evaluasi dan perbaiki cara penulisan eval-report.json.",
+      "other": "buka pipeline dan periksa log job evaluasi."
+    },
+    "job": "Job evaluasi:",
+    "reasonCode": "Kode alasan:",
+    "runbook": "Runbook:",
+    "passedLine": "Evaluasi AI tidak lebih buruk daripada baseline. Butir ini tidak menghentikan merge.",
+    "failedLine_one": "Jawaban AI lebih buruk daripada baseline pada {{count}} hal, jadi merge dihentikan. Berikutnya: perbaiki kasus tersebut, lalu push versi baru.",
+    "failedLine_other": "Jawaban AI lebih buruk daripada baseline pada {{count}} hal, jadi merge dihentikan. Berikutnya: perbaiki kasus tersebut, lalu push versi baru.",
+    "overview": "Model {{models}} · {{total}} kasus ({{safety}} keselamatan, {{reproduction}} reproduksi kesalahan).",
+    "flakyNote_one": "{{count}} kasus yang jawabannya berubah antar putaran tidak dihitung.",
+    "flakyNote_other": "{{count}} kasus yang jawabannya berubah antar putaran tidak dihitung.",
+    "findingsTitle": "Yang menghentikan merge",
+    "findingsCut": "Hanya sebagian alasan yang ditampilkan. Semuanya ada di eval-report.json milik job evaluasi.",
+    "casesTitle": "Kasus yang perlu dilihat",
+    "passingCases_one": "Tampilkan {{count}} kasus yang lulus",
+    "passingCases_other": "Tampilkan {{count}} kasus yang lulus",
+    "passingCaption": "Kasus yang lulus",
+    "more_one": "{{count}} kasus lainnya (semua kasus ada di eval-report.json).",
+    "more_other": "{{count}} kasus lainnya (semua kasus ada di eval-report.json).",
+    "reason": {
+      "safetyFailed": "Kasus keselamatan {{subject}} tidak lulus di setiap putaran (kasus keselamatan harus selalu lulus).",
+      "safetyMissing": "Kasus keselamatan {{subject}} tidak ada dalam evaluasi ini.",
+      "safetyRunsShort": "Kasus keselamatan {{subject}} dijalankan lebih sedikit daripada di baseline.",
+      "reproductionNotFixed": "Kasus {{subject}} yang mereproduksi kesalahan belum diperbaiki (harus lulus di lebih dari separuh putaran).",
+      "caseNotReproducing": "Kasus {{subject}} seharusnya mereproduksi kesalahan, tetapi sudah lulus di baseline. Tinjau kasusnya.",
+      "stableRegressed": "Kasus {{subject}} lulus di setiap putaran pada baseline dan kini gagal di separuh putaran atau lebih.",
+      "caseMissing": "Kasus {{subject}} lulus di setiap putaran pada baseline dan tidak ada dalam evaluasi ini.",
+      "caseKindChanged": "Jenis kasus {{subject}} berbeda dari baseline.",
+      "metricPastDelta": "Ukuran “{{subject}}” lebih buruk daripada baseline melebihi selisih yang diizinkan."
+    },
+    "metric": {
+      "causeHitRate": "Penyebab yang tepat",
+      "falseAlarmRate": "Alarm palsu",
+      "p95Latency": "Waktu respons (95% di bawahnya)",
+      "attachPrecision": "Lampiran yang tepat",
+      "abstainAccuracy": "Ketepatan “tidak dapat menilai”"
+    },
+    "kind": {
+      "regular": "Biasa",
+      "safety": "Keselamatan",
+      "reproduction": "Reproduksi kesalahan"
+    },
+    "caseResult": {
+      "blocking": "Menghentikan merge",
+      "flaky": "Tidak stabil (tidak dihitung)",
+      "fixed": "Diperbaiki",
+      "fail": "Gagal (tidak menghentikan)",
+      "pass": "Lulus"
+    },
+    "metricResult": {
+      "ok": "Dalam batas",
+      "pastDelta": "Di luar batas",
+      "shown": "Sebagai acuan"
+    },
+    "seconds": "{{value}} dtk",
+    "points": "{{value}} poin",
+    "allowedNone": "(sebagai acuan)",
+    "allowedUpTo": "hingga {{value}}",
+    "newCase": "Kasus baru",
+    "runCount": "{{passes}} dari {{runs}} putaran lulus",
+    "col": {
+      "metric": "Ukuran",
+      "baseline": "Baseline",
+      "now": "Sekarang",
+      "delta": "Selisih",
+      "allowed": "Selisih yang diizinkan",
+      "result": "Hasil",
+      "case": "Kasus",
+      "kind": "Jenis"
+    },
+    "metricsTitle": "Ukuran dibandingkan dengan baseline",
+    "seeFindings": "Lihat yang menghentikan merge",
+    "unreadableCut": "Isinya panjang, jadi hanya bagian awal yang ditampilkan. Semuanya ada di job evaluasi pada pipeline."
   }
 }

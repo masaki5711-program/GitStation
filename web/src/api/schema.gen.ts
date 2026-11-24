@@ -1535,6 +1535,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/documents/{doc_id}/edit-claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Take or extend the caller's edit claim on a document for 30 minutes (409 FG-DOC-0007 while another person's is live; people only; Developer) */
+        put: operations["put_api_v1_projects_id_documents_doc_id_edit_claim"];
+        post?: never;
+        /** Release the caller's own edit claim on a document (409 FG-DOC-0007 for another person's; 404 without a live claim; people only; Developer) */
+        delete: operations["delete_api_v1_projects_id_documents_doc_id_edit_claim"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/documents/{doc_id}/edit-claim/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke the live edit claim on a document, whoever holds it (audited; 404 without a live claim; people only; Maintainer) */
+        post: operations["post_api_v1_projects_id_documents_doc_id_edit_claim_revoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/documents/{doc_id}/referenced-by": {
         parameters: {
             query?: never;
@@ -1544,6 +1579,40 @@ export interface paths {
         };
         /** The documents that refer to one document (or one of its blocks), by id, paged (a more confidential referrer: its id only; an agent's answer leaves confidential ones out uncounted) */
         get: operations["get_api_v1_projects_id_documents_doc_id_referenced_by"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/documents/{doc_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A document's open revisions (the merge requests revising it; the earliest per language holds it) and its live edit claim */
+        get: operations["get_api_v1_projects_id_documents_doc_id_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/documents/{doc_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A document's versions on the default branch: each applied merge that changed its blob (derived from git and the merges) */
+        get: operations["get_api_v1_projects_id_documents_doc_id_versions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5229,12 +5298,49 @@ export interface components {
             /** @description `found` only. */
             title: string | null;
         };
+        /** @description An open merge request revising the document. */
+        DocumentRevisionBody: {
+            /** Format: int64 */
+            author_id: number;
+            /** @description The head its documents were derived from. */
+            head_sha: string;
+            /**
+             * @description The earliest open merge request of this language holds the
+             *     revision; `false` marks a second revision (ADR-0027 §1).
+             */
+            holds: boolean;
+            /** @description The translation's language (`null`: the original). */
+            lang: string | null;
+            /** Format: int64 */
+            merge_request_iid: number;
+            /** @description When it first revised the document (UTC, RFC 3339). */
+            since: string;
+            title: string;
+        };
         /** @description A level-2 section. */
         DocumentSectionBody: {
             /** @description `null`: the text before the first heading. */
             heading: string | null;
             line: number;
             pieces: components["schemas"]["DocumentPieceBody"][];
+        };
+        /** @description `GET …/documents/{doc_id}/status`. */
+        DocumentStatusBody: {
+            doc_id: string;
+            edit_claim: null | components["schemas"]["EditClaimBody"];
+            /** @description By language, the earliest first. */
+            revisions: components["schemas"]["DocumentRevisionBody"][];
+            viewer: components["schemas"]["DocumentStatusViewer"];
+        };
+        /**
+         * @description What the caller could do now: trial `authorize()` decisions (hints for
+         *     the screen; the routes decide again).
+         */
+        DocumentStatusViewer: {
+            /** @description `PUT|DELETE …/edit-claim`. */
+            can_claim: boolean;
+            /** @description `POST …/edit-claim/revoke`. */
+            can_revoke: boolean;
         };
         /** @description One document of the list. */
         DocumentSummaryBody: {
@@ -5250,6 +5356,66 @@ export interface components {
             title: string | null;
             /** @description The languages of its translations, sorted. */
             translations: string[];
+        };
+        /** @description One version of a document. */
+        DocumentVersionBody: {
+            /** @description The document's blob after the merge (`null`: the merge removed it). */
+            blob: string | null;
+            /** @description The branch's tip after the merge. */
+            commit: string;
+            /** Format: int64 */
+            merge_request_iid: number;
+            /** @description UTC, RFC 3339. */
+            merged_at: string;
+            /**
+             * Format: int64
+             * @description 1, 2, …
+             */
+            revision: number;
+            title: string;
+        };
+        /** @description `GET …/documents/{doc_id}/versions`. */
+        DocumentVersionsBody: {
+            /**
+             * Format: int64
+             * @description The latest version (`null`: no merge changed it yet).
+             */
+            current_revision: number | null;
+            doc_id: string;
+            incomplete: null | components["schemas"]["DocIncompleteBody"];
+            /** @description The document's path there. */
+            path: string;
+            /** @description The default branch's tip the document was found at. */
+            rev: components["schemas"]["RevBody"];
+            /** @description Oldest first. */
+            versions: components["schemas"]["DocumentVersionBody"][];
+        };
+        /** @description A live edit claim. */
+        EditClaimBody: {
+            /** @description When it was taken (UTC, RFC 3339). */
+            claimed_at: string;
+            doc_id: string;
+            /**
+             * @description When it lapses unless extended (UTC, RFC 3339; 30 minutes after
+             *     it was taken or last extended).
+             */
+            expires_at: string;
+            /**
+             * Format: int64
+             * @description The merge request the editing is for, if named.
+             */
+            merge_request_iid: number | null;
+            /**
+             * Format: int64
+             * @description The person editing.
+             */
+            user_id: number;
+        };
+        /** @description The answer of `PUT …/edit-claim`. */
+        EditClaimTakenBody: {
+            claim: components["schemas"]["EditClaimBody"];
+            /** @description The caller's own live claim was extended (else it was taken). */
+            extended: boolean;
         };
         /** @description `POST …/merge-queue`. */
         EnqueueMergeRequest: {
@@ -6893,6 +7059,15 @@ export interface components {
              *     date).
              */
             warn_until: string;
+        };
+        /** @description `PUT …/edit-claim`. */
+        PutEditClaim: {
+            /**
+             * Format: int64
+             * @description The open merge request the editing is for (optional; kept when an
+             *     extension names none).
+             */
+            merge_request_iid?: number | null;
         };
         /** @description `PUT …/deploy/environments/{tier}`. */
         PutEnvironment: {
@@ -12305,6 +12480,102 @@ export interface operations {
             };
         };
     };
+    put_api_v1_projects_id_documents_doc_id_edit_claim: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                doc_id: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutEditClaim"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditClaimTakenBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_documents_doc_id_edit_claim: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                doc_id: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_documents_doc_id_edit_claim_revoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                doc_id: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_documents_doc_id_referenced_by: {
         parameters: {
             query?: {
@@ -12333,6 +12604,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReferrersBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_documents_doc_id_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                doc_id: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentStatusBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_documents_doc_id_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                doc_id: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentVersionsBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

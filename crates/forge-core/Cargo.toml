@@ -12,6 +12,9 @@ forge-errors.workspace = true
 # Plan 13 stage 2 MR1 (ADR-0026 §8): the strict YAML tree and the spec
 # documents' parser, shared with the `gstn` client.
 forge-doc.workspace = true
+# Plan 16 A3: the agent part signing keys (Ed25519 public key from a seed,
+# signing a digest; ADR-0032). Pure, below forge-core (contract 9).
+forge-agent.workspace = true
 toml.workspace = true
 url.workspace = true
 percent-encoding.workspace = true

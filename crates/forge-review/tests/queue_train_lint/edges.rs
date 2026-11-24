@@ -147,8 +147,7 @@ async fn a_tree_past_a_bound_leaves_with_the_bound_named() {
     {
         let _guard = logs.install();
         for round in 1..=3 {
-            let built = worker.tick().await.expect("tick").expect("due");
-            assert_eq!(built.outcome, "built", "round {round}");
+            // Plan 18 S7: linted in the tick that built the batch.
             let ended = worker.tick().await.expect("tick").expect("due");
             assert_eq!(ended.outcome, "reaped", "round {round}");
         }

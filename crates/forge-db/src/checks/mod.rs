@@ -1142,6 +1142,8 @@ async fn hand_over_job(db: &crate::Db, job: &crate::jobs::NewJob) -> Result<Hand
 }
 
 pub mod doc_lint_migration;
+// Plan 13 stage 4 part A: document revisions and edit claims.
+pub mod doc_revisions;
 pub mod risk;
 pub mod spec_drift;
 pub mod spec_index;

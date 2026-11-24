@@ -5,8 +5,12 @@
 //! It answers for the tree the queue is about to land — the train's last
 //! step — with the reading and the lint of the head's `forge/doc-lint`
 //! ([`crate::doc_lint`]: `forge_doc::lint::lint`, the function of
-//! `gstn doc lint`, on the same bytes). No cache yet: every `.md` of a
-//! tree is read each time (plan 18 S7 makes it incremental).
+//! `gstn doc lint`, on the same bytes). With a document index
+//! ([`TrainLint::with_doc_index`], plan 18 S7) only the documents whose
+//! blob it does not hold are read and parsed, and only the documents whose
+//! inputs changed are checked again ([`DocIndex`]); the answer is the
+//! whole lint's (`forge_doc`'s property test `incremental_lint_equals_full_lint`).
+//! Without one, every `.md` of a tree is read each time (S1).
 //!
 //! 1. **Strict?** `.forge/repo.yml` at the base
 //!    (`merge_queue.doc_lint_strict`). Absent: not strict. A valid base
@@ -62,11 +66,14 @@ use forge_git::review_inputs::ChangedPaths;
 use forge_git::{Git, StorageRoot};
 
 use crate::doc_lint::{
-    assess_doc_lint_reports, is_document_file, lint_tree, lowered, read_tree, DocLimits, DocTree,
+    assess_doc_lint_reports, is_document_file, lint_tree, lowered, read_tree, DocLimits, TreeShape,
 };
 use crate::spec_checks::{LOOKUP_TIMEOUT, WRITE_TIMEOUT};
 
+mod index;
 mod strict;
+
+pub use index::DocIndex;
 
 use strict::{strictness, Strictness};
 
@@ -174,9 +181,9 @@ fn listed(mut problems: Vec<TrainLintProblem>) -> Vec<TrainLintProblem> {
     problems
 }
 
-/// One commit's tree, read whole and linted.
+/// One commit's tree, read and linted.
 struct Linted {
-    tree: DocTree,
+    shape: TreeShape,
     reports: Vec<FileReport>,
 }
 
@@ -207,7 +214,10 @@ async fn lint_at(browse: &Browser, repo: RepoId, commit: &ObjectId) -> Result<Li
     }
     let linted = tokio::task::spawn_blocking(move || {
         let reports = lint_tree(&tree);
-        Linted { tree, reports }
+        Linted {
+            shape: tree.shape(),
+            reports,
+        }
     })
     .await;
     linted.map_err(|e| {
@@ -219,6 +229,44 @@ async fn lint_at(browse: &Browser, repo: RepoId, commit: &ObjectId) -> Result<Li
     })
 }
 
+/// `commit`'s documents through `index` (module docs), or read whole
+/// without one. A bound hit is an error, as in [`lint_at`].
+async fn lint_through(
+    index: Option<&std::sync::Arc<DocIndex>>,
+    browse: &Browser,
+    repo: RepoId,
+    commit: &ObjectId,
+) -> Result<Linted, ForgeError> {
+    let Some(index) = index else {
+        return lint_at(browse, repo, commit).await;
+    };
+    let indexed = index
+        .lint(browse, repo, commit, &TRAIN_DOC_LIMITS)
+        .await
+        .map_err(read_failed)?;
+    if let Some(bound) = indexed.shape.incomplete {
+        return Err(unavailable(REASON_READ_FAILED)
+            .with_context("bound", bound)
+            .with_context("commit", commit.as_str().to_owned()));
+    }
+    tracing::debug!(
+        target: "forge_checks",
+        event = "forge.train_lint.indexed",
+        repo_id = repo.get(),
+        commit = commit.as_str(),
+        documents = indexed.shape.markdown,
+        read = indexed.read,
+        parsed = indexed.stats.parsed,
+        checked = indexed.stats.checked,
+        reused = indexed.stats.reused,
+        evicted = indexed.stats.evicted,
+    );
+    Ok(Linted {
+        shape: indexed.shape,
+        reports: indexed.reports,
+    })
+}
+
 /// The train lint on the server's repositories and database (module docs).
 #[derive(Clone)]
 pub struct TrainLint {
@@ -226,6 +274,9 @@ pub struct TrainLint {
     git: Git,
     storage: StorageRoot,
     browse: Browser,
+    /// Plan 18 S7: the content-addressed document index (`None`: every
+    /// tree is read whole, `merge_queue.doc_index_bytes = 0`).
+    index: Option<std::sync::Arc<DocIndex>>,
 }
 
 impl std::fmt::Debug for TrainLint {
@@ -241,7 +292,20 @@ impl TrainLint {
             git,
             storage,
             browse,
+            index: None,
         }
+    }
+
+    /// Lint through a document index of about `max_bytes` (plan 18 S7,
+    /// `merge_queue.doc_index_bytes`).
+    #[must_use]
+    pub fn with_doc_index(mut self, max_bytes: usize) -> Self {
+        self.index = Some(DocIndex::new(max_bytes));
+        self
+    }
+
+    async fn lint_tree_of(&self, repo: RepoId, commit: &ObjectId) -> Result<Linted, ForgeError> {
+        lint_through(self.index.as_ref(), &self.browse, repo, commit).await
     }
 
     /// Step 2 of the module docs for a repository that is not strict.
@@ -284,7 +348,7 @@ impl TrainLint {
              have (the queue's verdict; the list below is every problem of this tree).",
             input.base.as_str()
         );
-        let run = assess_doc_lint_reports(&linted.tree, &linted.reports, migration, Some(preface))
+        let run = assess_doc_lint_reports(linted.shape, &linted.reports, migration, Some(preface))
             .map_err(read_failed)?;
         let ctx = ChangeContext::new(Actor::System, input.request_id.clone()); // clone: the change owns its id
         within(
@@ -322,13 +386,13 @@ impl TrainLint {
         .await
         .map_err(read_failed)?;
         let migration = migration.as_deref();
-        let last = lint_at(&self.browse, input.repo, tip).await?;
+        let last = self.lint_tree_of(input.repo, tip).await?;
         let at_tip = problems_of(&last.reports, migration);
         // A clean last step needs no base: nothing can be new.
         let at_base = if at_tip.is_empty() {
             Problems::new()
         } else {
-            let base = lint_at(&self.browse, input.repo, input.base).await?;
+            let base = self.lint_tree_of(input.repo, input.base).await?;
             problems_of(&base.reports, migration)
         };
         let mut new = new_against(&at_tip, &at_base);
@@ -359,7 +423,7 @@ impl TrainLint {
                 break;
             };
             let at_step = problems_of(
-                &lint_at(&self.browse, input.repo, step).await?.reports,
+                &self.lint_tree_of(input.repo, step).await?.reports,
                 migration,
             );
             let new_at_step = new_against(&at_step, &at_base);

@@ -39,6 +39,8 @@ pub mod ci_lint;
 pub mod confidential;
 pub mod doc_lint;
 pub mod doc_migration;
+// Plan 13 stage 4 part A: document revisions and edit claims.
+pub mod doc_revision;
 pub mod risk;
 pub mod spec_checks;
 pub mod spec_drift;
@@ -48,9 +50,11 @@ pub mod train_lint;
 pub mod validate;
 
 pub use doc_migration::DocLintMigrations;
+pub use doc_revision::{DocRevisions, DocumentStatus};
 pub use forge_db::checks::doc_lint_migration::{
     DocLintMigration, MigrationRead, SetOutcome as MigrationSetOutcome,
 };
+pub use forge_db::checks::doc_revisions::{AppliedMerge, ClaimOutcome, EditClaim, OpenRevision};
 pub use forge_db::checks::{
     CheckAnnotation, Grant, GrantOutcome, NewCheckRun, Reported, StoredCheckRun,
 };
@@ -183,6 +187,12 @@ impl Checks {
     /// 13 Q13).
     pub fn doc_lint_migrations(&self) -> DocLintMigrations {
         DocLintMigrations::new(self.db.clone()) // clone: pool handles
+    }
+
+    /// The document revisions and edit claims on the same database (plan
+    /// 13 stage 4 part A).
+    pub fn doc_revisions(&self) -> DocRevisions {
+        DocRevisions::new(self.db.clone()) // clone: pool handles
     }
 
     /// Whether `user` holds a grant of `namespace` on `project` now (the

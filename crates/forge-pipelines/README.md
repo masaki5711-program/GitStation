@@ -15,6 +15,7 @@ M4 C7: MR のパイプラインは head ではなく **マージ結果**（`refs
 | `cancel`（`PipelineCancel`）、`retry`（`PipelineRetry`）、`run_manual`（`PipelineCreate`） | `ChangeRequest`（`request_id` と資格情報の id）とルートの proof を受け、**変更のトランザクションの中で判定をやり直し**（ロックした事実で `authorize()`）、監査の行を同じトランザクションで書く。変更の後のパイプラインを返す（無ければ FG-REPO-0005 `resource=pipeline`） |
 | `MarkMeter` | コミットの機密の印を測る（呼ぶ側が実装する。forge-cli は `forge_checks::confidential` で、FG-AUTH-0022 と同じ規則） |
 | `ai_eval::report_ai_eval_checks(db, store, baselines, request_id)` | 計画 17 P17-2（ADR-0034）: 成果物 `eval-report.json` を宣言したパイプライン（`ci_pipelines.ai_eval_job`）のチェック `forge/ai-eval` を書く worker の 1 回（タスク `ci_ai_eval`）。報告は保存先から（sha256 を確かめる）、基準 `evals/baselines/<models>.json` は `BaselineSource`（browse API）でパイプラインのコミットから。判定は `forge_core::ai_eval`。報告・基準が無い・壊れているときは `error`（FG-AIASSET-0002 / 0003 / 0007）で、成功にしない。読みの一時の失敗は書かずに次の回へ |
+| `ai_eval::baseline_candidate(db, store, baselines, pipeline) -> Candidate` | 計画 17 P17-6: 定期（C12）のパイプラインが既定のブランチで `forge/ai-eval` を通った（または基準が無い）とき、チェックと同じトランザクションで積まれたジョブ `ai_eval.baseline_candidate` が読む基準の候補（報告と基準を読み直し、`forge_core::ai_eval::baseline_candidate` と `render`）。`Skip(reason)` は何もしない。MR は forge-review の `BaselineProposer` |
 | `branch_patterns(&ProtectionRules)` | 保護ブランチのパターン（`forge/ci-lint` と同じ写像。機能クレートどうしは依存しないので重複している） |
 
 ## 計画の手順（`plan_and_record`）

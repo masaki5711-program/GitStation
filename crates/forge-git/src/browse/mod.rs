@@ -93,7 +93,7 @@ pub use history::{CommitDetail, CommitInfo, CommitPage, Comparison, LogCursor};
 pub use path::RepoPath;
 pub use reach::ReachRoots;
 pub use refs::{RefEntry, RefKind, RefList, RefLookup, ResolvedRev, ResolvedSpec, Target};
-pub use scan::{BlobListing, GrepHit, GrepHits, ListedBlob};
+pub use scan::{BlobListing, GrepHit, GrepHits, ListedBlob, MAX_BLOB_ID_LOOKUPS};
 pub use tree::{EntryKind, Tree, TreeEntry};
 
 /// The browse limits (plan 10 §5).

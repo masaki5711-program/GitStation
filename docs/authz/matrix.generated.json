@@ -91,6 +91,8 @@
   { "action": "PushMirrorRead", "allow": 4, "deny": 26, "public": false, "git_operation": false },
   { "action": "PushMirrorManage", "allow": 3, "deny": 27, "public": false, "git_operation": false },
   { "action": "DocLintMigrationManage", "allow": 4, "deny": 22, "public": false, "git_operation": false },
+  { "action": "DocumentEditClaim", "allow": 5, "deny": 20, "public": false, "git_operation": false },
+  { "action": "DocumentEditClaimRevoke", "allow": 4, "deny": 22, "public": false, "git_operation": false },
   { "action": "PipelineRead", "allow": 7, "deny": 16, "public": false, "git_operation": false },
   { "action": "CiLogRead", "allow": 17, "deny": 37, "public": false, "git_operation": false },
   { "action": "PipelineDiagnosisRead", "allow": 17, "deny": 37, "public": false, "git_operation": false },

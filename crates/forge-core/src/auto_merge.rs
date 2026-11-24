@@ -780,6 +780,37 @@ pub struct MergeResultRange<'a> {
 pub type MergeResultFuture<'a> =
     Pin<Box<dyn Future<Output = Result<RiskVerdict, ForgeError>> + Send + 'a>>;
 
+/// Every step of a train at once ([`MergeResultAssessor::assess_train`],
+/// plan 18 S7): `steps[k]` is the train's commit of entries `0..=k`, each
+/// built on the one before it from `base` (so `base` is an ancestor of
+/// every step — the merge queue builds them so).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainRange<'a> {
+    pub project: ProjectId,
+    pub repo: RepoId,
+    pub target: &'a RefName,
+    pub base: &'a ObjectId,
+    pub steps: &'a [ObjectId],
+}
+
+impl<'a> TrainRange<'a> {
+    /// The merge result of step `result` (one of [`Self::steps`]).
+    pub fn step(&self, result: &'a ObjectId) -> MergeResultRange<'a> {
+        MergeResultRange {
+            project: self.project,
+            repo: self.repo,
+            target: self.target,
+            base: self.base,
+            result,
+        }
+    }
+}
+
+/// The answer of [`MergeResultAssessor::assess_train`]: one verdict per
+/// step, in order.
+pub type TrainResultFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<RiskVerdict>, ForgeError>> + Send + 'a>>;
+
 /// `forge/risk`'s deterministic rules on a merge result (M4 close): the
 /// same rules, the same run and the same [`deterministic_layer`] as on a
 /// head, applied to a [`MergeResultRange`] (forge-checks implements it; the
@@ -787,6 +818,22 @@ pub type MergeResultFuture<'a> =
 /// The implementation bounds its own work and fails with its code.
 pub trait MergeResultAssessor: Send + Sync {
     fn assess<'a>(&'a self, range: MergeResultRange<'a>) -> MergeResultFuture<'a>;
+
+    /// Every step of a train in one call (plan 18 S7, ADR-0037 (b) 7): the
+    /// verdicts are exactly [`Self::assess`]'s on each step, in order
+    /// (`assess_train_equals_per_step_assess`). This default asks
+    /// [`Self::assess`] step by step; an implementation shares what the
+    /// steps have in common (forge-checks: the setting read once, the
+    /// merge base found once). The first failure is the answer.
+    fn assess_train<'a>(&'a self, train: TrainRange<'a>) -> TrainResultFuture<'a> {
+        Box::pin(async move {
+            let mut verdicts = Vec::with_capacity(train.steps.len());
+            for result in train.steps {
+                verdicts.push(self.assess(train.step(result)).await?);
+            }
+            Ok(verdicts)
+        })
+    }
 }
 
 /// One step of a train as the merge result's decision reads it: whether

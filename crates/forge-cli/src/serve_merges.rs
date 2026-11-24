@@ -138,6 +138,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DocFormatWouldChange
         // Plan 13 Q13: an answer of the migration setting's route.
         | ErrorCode::DocLintMigrationUntilInvalid
+        | ErrorCode::DocRevisionOpen
+        | ErrorCode::DocEditClaimHeld
         // M3 X5: answers of the context API (never a merge's).
         | ErrorCode::RequirementNotFound
         | ErrorCode::VisibilityAboveParent
@@ -390,6 +392,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PartManifestInvalid
         | ErrorCode::PartSignatureInvalid
         | ErrorCode::SigningKeyUnavailable
+        | ErrorCode::SigningKeyFileInvalid
         | ErrorCode::PartCapabilityUndeclared
         | ErrorCode::AgentLockMismatch
         | ErrorCode::McpEndpointNotAllowed => false,

@@ -4,7 +4,10 @@
 //! A step, from the queue's live batch (at most one):
 //!
 //! - **none** (and not paused): build a batch — the queued entries in
-//!   order, at most the queue's `batch_limit`; an entry that must run alone
+//!   order, at most the queue's bound (plan 18 S7: `doc_batch_max`, 32,
+//!   when neither the base nor the train has a `.forge-ci.yml`;
+//!   `ci_batch_max`, 4, otherwise; never past the queue's `batch_limit`,
+//!   lowered by a bisection or a cut); an entry that must run alone
 //!   (a migration, a `forge/risk` stop, a fast-forward) ends the batch
 //!   before it, or is the batch when it is first. Each entry is merged on
 //!   the previous step of the train exactly like a merge (merge commit or
@@ -13,7 +16,11 @@
 //!   `refs/merge-queue/<queue_id>/train` and its pipeline (`source =
 //!   merge_queue`) is enqueued with the batch — unless the train has no
 //!   `.forge-ci.yml`: then no job, and the verdict is "no pipeline" at once
-//!   (the job would write nothing; ADR-0030 §5).
+//!   (the job would write nothing; ADR-0030 §5). Such a batch's verdict
+//!   is in process (plan 18 S7, ADR-0037 (b) 6): the same tick goes on to
+//!   the testing step below — the document lint, the merge result's
+//!   judgement and the landing — so a document batch lands in the tick
+//!   that built it (its states are still `testing → landing → landed`).
 //! - **testing**: an entry that left (dequeued, a new head, closed) or a
 //!   target that moved throws the batch away (the entries go back in
 //!   order); a pipeline still running waits, past the deadline the batch is
@@ -43,7 +50,7 @@ use std::time::{Duration, Instant};
 use forge_auth::Action;
 use forge_core::auto_merge::{
     merge_result_decision, merge_result_reason, MergeResultAssessor, MergeResultDecision,
-    MergeResultRange, ResultStep, MERGE_RESULT_UNAVAILABLE,
+    ResultStep, TrainRange, MERGE_RESULT_UNAVAILABLE,
 };
 
 /// The CI definition at a commit's root (forge-pipelines' `CI_FILE`; the
@@ -62,7 +69,10 @@ pub const MERGE_RESULT_MAX_FAILURES: u32 = 3;
 /// Tests only: run right after a landing's fence, before the auto-merge
 /// settings are read again (the toggle race's test).
 pub type AfterFence = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
-use forge_core::merge_queue::{bisected_limit, BatchState, EntryState, Isolation, MAX_REAPS};
+use forge_core::merge_queue::{
+    batch_bound, bisected_limit, BatchState, EntryState, Isolation, DEFAULT_CI_BATCH,
+    DEFAULT_DOC_BATCH, MAX_REAPS,
+};
 use forge_core::train_lint::TrainDocLint;
 use forge_core::{
     telemetry, CheckConclusion, CheckName, CheckRun, MergeMethod, MergeRequestState, MergeState,
@@ -120,6 +130,13 @@ pub struct QueueLimits {
     /// `merge_queue.train_lint_budget_ms`); used when a lint is injected
     /// ([`MergeQueue::with_train_lint`]).
     pub train_lint_budget: Duration,
+    /// The most entries of a batch whose verdict is in process — no
+    /// `.forge-ci.yml` at the base or the train (plan 18 S7,
+    /// `merge_queue.doc_batch_max`).
+    pub doc_batch_max: usize,
+    /// The most entries of a batch with a pipeline (plan 18 S7,
+    /// `merge_queue.ci_batch_max`).
+    pub ci_batch_max: usize,
 }
 
 impl Default for QueueLimits {
@@ -131,6 +148,8 @@ impl Default for QueueLimits {
             idle: Duration::from_secs(30),
             max_paths: 5000,
             train_lint_budget: Duration::from_secs(10),
+            doc_batch_max: DEFAULT_DOC_BATCH,
+            ci_batch_max: DEFAULT_CI_BATCH,
         }
     }
 }
@@ -460,11 +479,26 @@ impl MergeQueue {
             }
             return Ok(report("removed", None));
         };
+        // Plan 18 S7: a base without a CI definition may start a document
+        // batch (checked again at the train's tip below). A read that fails
+        // counts as a definition: the smaller bound.
+        let request_id = RequestId::generate();
+        let base_defined = self.train_has_definition(repo, &base, &request_id).await;
+        let limit = batch_bound(
+            queue.batch_limit,
+            !base_defined,
+            self.limits.doc_batch_max,
+            self.limits.ci_batch_max,
+        );
         let mut members: Vec<(StoredEntry, ObjectId, Option<Isolation>)> = Vec::new();
         let mut prev = base.clone(); // clone: the train grows from the base
         let mut removed = false;
+        // Entries a step refused, with the train's length they were tried
+        // on: removed only when that prefix stays in the batch (a document
+        // batch cut back to the CI bound below keeps the others queued).
+        let mut refused: Vec<(usize, &StoredEntry, &'static str, ErrorCode)> = Vec::new();
         for entry in &queued {
-            if members.len() >= queue.batch_limit {
+            if members.len() >= limit {
                 break;
             }
             let Some(target) =
@@ -533,13 +567,29 @@ impl MergeQueue {
                     members.push((entry.clone(), commit, isolate)); // clone: the batch owns its view
                 }
                 Err(StepRefused::Remove(reason, code)) => {
-                    self.drop_queued(entry, reason, code).await?;
-                    removed = true;
+                    refused.push((members.len(), entry, reason, code));
                     continue;
                 }
             }
             if isolate.is_some() {
                 break;
+            }
+        }
+        let mut definition = self.train_has_definition(repo, &prev, &request_id).await;
+        // Plan 18 S7: a train that brings a `.forge-ci.yml` in has a
+        // pipeline after all — the CI bound applies (its first members).
+        let ci_bound = self.limits.ci_batch_max.max(1);
+        if definition && members.len() > ci_bound {
+            members.truncate(ci_bound);
+            if let Some((_, tip, _)) = members.last() {
+                prev = tip.clone(); // clone: the shorter train's tip
+            }
+            definition = self.train_has_definition(repo, &prev, &request_id).await;
+        }
+        for (tried_on, entry, reason, code) in refused {
+            if tried_on <= members.len() {
+                self.drop_queued(entry, reason, code).await?;
+                removed = true;
             }
         }
         if members.is_empty() {
@@ -570,14 +620,12 @@ impl MergeQueue {
                 )
                 .await?;
         }
-        let request_id = RequestId::generate();
         // Merge load test 2026-11-17 (doc fast path): a train with no
         // `.forge-ci.yml` gets no pipeline job — the job would find no
         // definition and write nothing, and the verdict would read
         // `TrainPipeline::None` once it ran (ADR-0030 §5). Without the job
         // the verdict reads `None` at once; the landing's decision is the
         // same (a required `ci/pipeline` is missing either way).
-        let definition = self.train_has_definition(repo, &prev, &request_id).await;
         let pipeline = create_job(
             &PipelineRequest {
                 project: queue.project_id,
@@ -625,11 +673,37 @@ impl MergeQueue {
             entries = %ids.join(","),
             isolate = members.first().and_then(|(_, _, i)| i.map(Isolation::as_str)),
             pipeline_job = definition,
+            batch_bound = limit,
             // From the queued entries' read to the batch's row.
             build_ms = millis(started.elapsed()),
             git_spawns = forge_git::scoped_git_spawns().saturating_sub(spawns_before),
         );
-        Ok(report("built", Some(batch)))
+        if definition {
+            return Ok(report("built", Some(batch)));
+        }
+        // Plan 18 S7 (ADR-0037 (b) 6): no pipeline to wait for — the
+        // verdict is in process, so this tick goes on to it (the testing
+        // step: entries and target read again, the lint, the merge result,
+        // the landing). The build is reported (`batch_built` above) whatever
+        // follows: a failure of this testing step is logged here with its
+        // code and the batch's request id, and the tick answers `retry` —
+        // the batch stays `testing` (or `landing`, after the swap) and the
+        // queue is looked at again within [`RETRY`], as after a failed step.
+        let Some(built) = db::batch(&self.merger.db, batch).await? else {
+            return Ok(report("built", Some(batch)));
+        };
+        match self.poll(claimed, &built).await {
+            Ok(outcome) => Ok(report(outcome, Some(batch))),
+            Err(e) => {
+                telemetry::log_failure(
+                    &e.with_context("operation", "merge_queue_same_tick")
+                        .with_context("queue_id", queue.id)
+                        .with_context("queue_batch_id", batch),
+                    &request_id,
+                );
+                Ok(report("retry", Some(batch)))
+            }
+        }
     }
 
     /// Whether the train's commit has a root entry `.forge-ci.yml` (any
@@ -1014,28 +1088,40 @@ impl MergeQueue {
         repo: RepoId,
         target: &RefName,
     ) -> Result<MergeResultDecision, ForgeError> {
-        let mut steps = Vec::with_capacity(testing.len());
+        let mut results = Vec::with_capacity(testing.len());
         for entry in testing {
             let Some(result) = entry.train_sha.as_ref() else {
                 return Err(ForgeError::new(ErrorCode::Internal)
                     .with_context("reason", "merge_queue_entry_without_train")
                     .with_context("entry_id", entry.id));
             };
-            let risk = self
-                .risk
-                .assess(MergeResultRange {
-                    project: batch.project_id,
-                    repo,
-                    target,
-                    base: &batch.base_sha,
-                    result,
-                })
-                .await?;
-            steps.push(ResultStep {
+            results.push(result.clone()); // clone: the train's steps, in order
+        }
+        // Plan 18 S7 (ADR-0037 (b) 7): one call for the whole train.
+        let verdicts = self
+            .risk
+            .assess_train(TrainRange {
+                project: batch.project_id,
+                repo,
+                target,
+                base: &batch.base_sha,
+                steps: &results,
+            })
+            .await?;
+        if verdicts.len() != testing.len() {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "merge_result_verdicts_mismatch")
+                .with_context("steps", testing.len())
+                .with_context("verdicts", verdicts.len()));
+        }
+        let steps: Vec<ResultStep> = testing
+            .iter()
+            .zip(verdicts)
+            .map(|(entry, risk)| ResultStep {
                 auto: entry.credential.is_auto_merge(),
                 risk,
-            });
-        }
+            })
+            .collect();
         let decision = merge_result_decision(&steps);
         tracing::info!(
             target: "forge_review",

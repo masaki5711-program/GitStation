@@ -1143,9 +1143,54 @@
     "word": "fixed"
   },
   {
+    "action": "DocumentEditClaim",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/documents/{doc_id}/edit-claim",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DocumentEditClaim",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/documents/{doc_id}/edit-claim",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DocumentEditClaimRevoke",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/documents/{doc_id}/edit-claim/revoke",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/documents/{doc_id}/referenced-by",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/documents/{doc_id}/status",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/documents/{doc_id}/versions",
     "people_only": false,
     "public": false,
     "scope": "fixed",
