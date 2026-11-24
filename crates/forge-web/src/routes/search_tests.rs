@@ -680,32 +680,11 @@ async fn a_read_api_token_gets_its_owners_readable_set() {
     );
 }
 
-#[tokio::test]
-async fn acting_for_a_person_is_refused_before_any_read() {
-    let fake = fake();
-    let acting = Principal::act_as(
-        UserId::new(5),
-        true,
-        AccountKind::Human,
-        forge_auth::ActAsCredential {
-            via: UserId::new(9),
-            via_kind: AccountKind::ServiceAccount,
-            via_token: 77,
-            via_scopes: vec![Scope::ReadApi, Scope::ActAs],
-            via_agent: false,
-            integration: forge_core::IntegrationId::new(5),
-            integration_enabled: true,
-            assertion: None,
-            claimed_mac: "00".repeat(32),
-            claimed_key_id: 1,
-        },
-    );
-    let (status, body) = get(&fake, URI, Some(acting)).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(body["error_code"], "FG-AUTH-0003");
-    assert_eq!(fake.pages.load(Ordering::SeqCst), 0);
-    assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
-}
+// Acting for a person: `SearchQuery` is `ActAsRule::Denied`, refused by the
+// registry before any read (`FG-AUTH-0003 reason=act_as_not_allowed`); the
+// generated act-as deny rows of the permission matrix prove it (only
+// forge-web's authentication may build an act-as principal, so this file
+// does not).
 
 #[test]
 fn too_many_terms_is_a_request_error() {
