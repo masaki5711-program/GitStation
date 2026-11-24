@@ -159,6 +159,8 @@ const SHELL_PATHS: &[&str] = &[
     "/-/activity",
     // The portal menu's administrator link (ADR-0021 amendment 2026-11-24).
     "/-/admin",
+    // The search results (plan 20 K5).
+    "/-/search",
 ];
 
 #[tokio::test]
@@ -366,6 +368,7 @@ fn the_shell_route_gate_reads_the_spa_route_tables() {
         "/-/groups",
         "/-/merge-requests",
         "/-/activity",
+        "/-/search",
         "/-/notifications",
         "/-/projects/1",
         "/-/confirm/projects/1/merge-requests/1",

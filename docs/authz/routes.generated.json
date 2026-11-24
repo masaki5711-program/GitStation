@@ -252,6 +252,24 @@
     "word": "project_permalink"
   },
   {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/-/search",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/search",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "PortalWidgetRead",
     "method": "GET",
     "path": "/api/portal-widgets/v1/attention-count",

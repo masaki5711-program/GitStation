@@ -1,0 +1,139 @@
+/* /-/search (plan 20 K5). Tokens only; the head is ui/PageHeader. */
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin-bottom: var(--gs-space-3);
+}
+
+.input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  min-height: var(--gs-tap-target);
+}
+
+/* The kind filter: a row of pills; the current one is filled. */
+.kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin-bottom: var(--gs-space-4);
+}
+
+.kindLink {
+  composes: interactive from '../../components/controls.module.css';
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--gs-tap-target-sm);
+  padding: 0 var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-pill);
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text);
+  font-size: var(--gs-font-size-sm);
+  text-decoration: none;
+}
+
+.kindLink:hover {
+  background: var(--gs-color-hover-surface);
+}
+
+.kindLink[aria-current='page'] {
+  border-color: var(--gs-color-action);
+  background: var(--gs-color-action);
+  color: var(--gs-color-on-action);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.status {
+  margin: 0 0 var(--gs-space-2);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.list {
+  composes: card from '../../ui/surfaces.module.css';
+  margin: 0 0 var(--gs-space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border-bottom: 1px solid var(--gs-color-border-subtle);
+}
+
+.item:last-child {
+  border-bottom: none;
+}
+
+.titleLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gs-space-2);
+  margin: 0 0 var(--gs-space-1);
+}
+
+.kind {
+  composes: badge from '../../components/controls.module.css';
+  font-size: var(--gs-font-size-xs);
+}
+
+.title {
+  font-size: var(--gs-font-size-md);
+  font-weight: var(--gs-font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.path {
+  font-family: var(--gs-font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* The snippet with its matches; a cut end shows an ellipsis. */
+.snippet {
+  margin: var(--gs-space-2) 0 0;
+  padding-left: var(--gs-space-3);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-accent);
+  color: var(--gs-color-text);
+  font-size: var(--gs-font-size-sm);
+  line-height: var(--gs-line-height);
+  overflow-wrap: anywhere;
+}
+
+.cutBefore::before,
+.cutAfter::after {
+  content: '…';
+  color: var(--gs-color-text-muted);
+}
+
+.mark {
+  padding: 0 1px;
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.note {
+  margin: var(--gs-space-1) 0 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-xs);
+}
+
+.more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--gs-space-2);
+}

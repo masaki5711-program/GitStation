@@ -27,6 +27,8 @@ const loaders = {
   adminRedirect: () => import('./AdminRedirect'),
   blame: () => import('./repo/BlameScreen'),
   compare: () => import('./repo/CompareScreen'),
+  search: () => import('./search/SearchScreen'),
+  activity: () => import('./Activity'),
 };
 
 /** A lazy component with a skeleton while its chunk loads. React.lazy
@@ -96,6 +98,10 @@ export function loadAllScreens(): Promise<unknown[]> {
 }
 export const BlameScreen = screen(() => loaders.blame().then((m) => m.BlameScreen));
 export const CompareScreen = screen(() => loaders.compare().then((m) => m.CompareScreen));
+export const SearchScreen = screen(() => loaders.search().then((m) => m.SearchScreen));
+// The full activity list is opened from Home's "see all" now and then;
+// split out to keep the first load within its budget (plan 20 K5).
+export const Activity = screen(() => loaders.activity().then((m) => m.Activity));
 
 // The MR screen's AI evaluation section (plan 17 P17-9) is its own chunk:
 // most merge requests have no `forge/ai-eval` run, so the chunk loads only

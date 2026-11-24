@@ -3434,6 +3434,15 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: the administrator settings (the portal menu's link)",
                 shell,
             )
+            // The search results (plan 20 K5): a shared or reloaded result
+            // link needs the shell too.
+            .route(
+                verb,
+                SEARCH_PAGE,
+                Action::WebShell,
+                "SPA shell: search results",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -3679,3 +3688,5 @@ pub const MY_ACTIVITY_PAGE: &str = "/-/activity";
 /// The portal menu's administrator link (ADR-0021 amendment 2026-11-24):
 /// the SPA sends the person on to their own administrator settings.
 pub const ADMIN_PAGE: &str = "/-/admin";
+/// The search results page (plan 20 K5; the API is `GET /api/v1/search`).
+pub const SEARCH_PAGE: &str = "/-/search";

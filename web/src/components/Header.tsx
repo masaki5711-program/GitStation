@@ -4,11 +4,13 @@
 // shows the dark logo (docs/brand/README.md: never the light version on a
 // dark background); its own navy rectangle matches the header. M3 U4: the
 // notification bell sits beside the user menu. Plan 15: on narrow screens a
-// menu button opens the "My work" sidebar (Layout owns its state).
+// menu button opens the "My work" sidebar (Layout owns its state). Plan 20
+// K5: signed in, the search box (`/` moves to it) opens /-/search (a lazy
+// screen); kept tiny, it is in every page's first load.
 import { useQueryClient } from '@tanstack/react-query';
-import type { RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 
 import logo from '../assets/brand/gitstation-v1-logo-dark.svg';
 import { LANGUAGES, switchLanguage, type Language } from '../i18n';
@@ -23,6 +25,49 @@ export interface NavToggle {
   controls: string;
   buttonRef: RefObject<HTMLButtonElement | null>;
   onToggle: () => void;
+}
+
+/** `/` outside a text field, a dialog or an open menu moves to the box.
+ * An empty search opens /-/search, which says what to type. */
+function SearchBox() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target;
+      if (e.key !== '/' || e.repeat || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (document.querySelector('dialog[open],[aria-modal="true"],[role="menu"]') !== null) return;
+      e.preventDefault();
+      input.current?.focus();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+    };
+  }, []);
+  return (
+    <form
+      role="search"
+      className={styles.search}
+      onSubmit={(e) => {
+        e.preventDefault();
+        const q = input.current?.value.trim() ?? '';
+        void navigate(q === '' ? '/-/search' : `/-/search?${new URLSearchParams({ q }).toString()}`);
+      }}
+    >
+      <input
+        ref={input}
+        type="search"
+        name="q"
+        className={styles.searchInput}
+        aria-label={t('header.search')}
+        placeholder={t('header.search')}
+        aria-keyshortcuts="/"
+      />
+    </form>
+  );
 }
 
 export function Header({ nav }: { nav?: NavToggle }) {
@@ -61,6 +106,7 @@ export function Header({ nav }: { nav?: NavToggle }) {
       <Link to="/" className={styles.home}>
         <img src={logo} alt={t('app.logoAlt')} className={styles.logo} width={115} height={40} />
       </Link>
+      {state.status === 'authed' && <SearchBox />}
       <div className={styles.spacer} />
       <label className={styles.language}>
         <span className={styles.srOnly}>{t('header.language')}</span>

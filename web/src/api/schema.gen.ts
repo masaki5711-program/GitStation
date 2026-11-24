@@ -268,6 +268,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: search results */
+        get: operations["get_search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: search results */
+        head: operations["head_search"];
+        patch?: never;
+        trace?: never;
+    };
     "/api/portal-widgets/v1/attention-count": {
         parameters: {
             query?: never;
@@ -9285,6 +9303,46 @@ export interface operations {
         };
     };
     head_projects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_search: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_search: {
         parameters: {
             query?: never;
             header?: never;
