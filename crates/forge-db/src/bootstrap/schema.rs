@@ -70,12 +70,21 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.integration_bindings_resolving_alone()",
     // ── M4 C11: a deployment only moves forward; its approval is set once (20261214100000) ──
     "forge.deployments_guard()",
+    // ── Plan 19 L5-2: an advice keeps its class; only superseded_by changes (20270108100000) ──
+    "forge.llm_advice_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
 /// each must exist with this exact definition, enabled ALWAYS. Unlike
 /// `GUARDED_TRIGGERS`, the table may have other triggers.
 const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
+    // ── Plan 19 L5-2: an advice keeps its class (20270108100000) ──
+    (
+        "llm_advice",
+        "llm_advice_guarded",
+        "CREATE TRIGGER llm_advice_guarded BEFORE INSERT OR UPDATE ON forge.llm_advice \
+         FOR EACH ROW EXECUTE FUNCTION forge.llm_advice_guard()",
+    ),
     // ── M4 C11: a deployment only moves forward (20261214100000) ──
     (
         "deployments",
