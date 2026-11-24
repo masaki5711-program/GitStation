@@ -1,7 +1,7 @@
 # forge-core
 
 **Responsibility**: domain primitives and runtime foundations shared by every
-server-side crate. Depends only on `forge-errors`.
+server-side crate. Depends on `forge-errors` and the pure crates below it (`forge-agent`, `forge-doc`; contract 9).
 
 **Public API**: `RequestId` (`generate`, `parse` — log-safe validation,
 `as_str`), `telemetry::init(LogFormat, default_filter)`,

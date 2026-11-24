@@ -104,6 +104,10 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "act_as_assertions_guard",
             "integration_bindings_resolving_alone",
             "deployments_guard",
+            "agent_signing_keys_guard",
+            "agent_parts_guard",
+            "agent_part_versions_guard",
+            "agent_part_files_guard",
         ]
     );
 }

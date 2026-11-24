@@ -688,6 +688,11 @@ async fn one_queue_is_never_stepped_by_two_turns_at_once() {
         "one turn stepped the queue: {stepped:?}"
     );
 
+    // Plan 18 S7: `a` landed in that very tick (a document queue), so `b`
+    // and `c` are checked again against the new `main` before they enqueue.
+    w.checked(b.id).await;
+    w.checked(c.id).await;
+
     // Then both run, as `merge_queue.workers = 2` does.
     let tasks = vec![run(first), run(second)];
     w.enqueue(&b).await.expect("enqueue");

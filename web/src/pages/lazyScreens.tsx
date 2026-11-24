@@ -5,7 +5,9 @@
 // (features/prefetch.ts) also starts loading its chunk (`preloadScreen`).
 import { lazy, Suspense, useState, type ComponentProps, type ComponentType } from 'react';
 
+import { useCheckRuns } from '../api/checks';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { AI_EVAL_CHECK } from '../features/mr/aiEval';
 import { SkeletonList } from '../components/Skeleton';
 
 const loaders = {
@@ -23,6 +25,8 @@ const loaders = {
   actAs: () => import('./confirm/ActAsConfirm'),
   actAsBinding: () => import('./confirm/ActAsBindingConfirm'),
   adminRedirect: () => import('./AdminRedirect'),
+  blame: () => import('./repo/BlameScreen'),
+  compare: () => import('./repo/CompareScreen'),
 };
 
 /** A lazy component with a skeleton while its chunk loads. React.lazy
@@ -89,4 +93,25 @@ export function preloadScreen(word: string): void {
 /** Every lazy chunk (tests load them up front, as setup.ts does Markdown). */
 export function loadAllScreens(): Promise<unknown[]> {
   return Promise.all(Object.values(loaders).map((l) => l()));
+}
+export const BlameScreen = screen(() => loaders.blame().then((m) => m.BlameScreen));
+export const CompareScreen = screen(() => loaders.compare().then((m) => m.CompareScreen));
+
+// The MR screen's AI evaluation section (plan 17 P17-9) is its own chunk:
+// most merge requests have no `forge/ai-eval` run, so the chunk loads only
+// when the head's check runs (the same query as the check list) carry one.
+const AiEvalSectionLazy = lazy(() =>
+  import('../features/mr/AiEvalReport').then((m) => ({ default: m.AiEvalSection })),
+);
+export function AiEvalSection(props: ComponentProps<typeof AiEvalSectionLazy>) {
+  const runs = useCheckRuns(props.projectId, props.iid, props.head);
+  const has = runs.data?.check_runs.some((r) => r.name === AI_EVAL_CHECK) ?? false;
+  if (!has) return null;
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={null}>
+        <AiEvalSectionLazy {...props} />
+      </Suspense>
+    </ErrorBoundary>
+  );
 }

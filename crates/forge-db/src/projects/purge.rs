@@ -686,6 +686,21 @@ async fn finish_steps(
     ] {
         delete_rows(tx, sql, project.get(), query).await?;
     }
+    // Plan 16 A3: the builder's records of the project (derived; they
+    // reference its merge requests, deleted below). Published agent parts
+    // are not the project's: they outlive it.
+    for (sql, query) in [
+        (
+            "DELETE FROM forge.agent_builds WHERE project_id = $1",
+            "projects.purge.finish.agent_builds",
+        ),
+        (
+            "DELETE FROM forge.agent_lesson_injections WHERE project_id = $1",
+            "projects.purge.finish.agent_lesson_injections",
+        ),
+    ] {
+        delete_rows(tx, sql, project.get(), query).await?;
+    }
     // 2026-11-12: the history import allowance references the repository.
     delete_rows(
         tx,

@@ -2252,6 +2252,88 @@ fn merge_queue_and_auto_merge_waits_have_defaults_and_ranges() {
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
 
+/// Plan 18 S7 (ADR-0037 (b)): the batch bounds of a document queue (32)
+/// and a CI queue (4), 1..=64 each (the schema's CHECK), and the train
+/// lint's document index (64 MiB; 0 turns it off; 1 MiB..=1 GiB).
+#[test]
+fn merge_queue_batch_bounds_and_doc_index_have_defaults_and_ranges() {
+    use super::MergeQueueConfig;
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.merge_queue.doc_batch_max, 32);
+    assert_eq!(cfg.merge_queue.ci_batch_max, 4);
+    assert_eq!(cfg.merge_queue.doc_index_bytes(), Some(64 * 1024 * 1024));
+    let back = load(
+        None,
+        &env(&[
+            ("FORGE_MERGE_QUEUE_DOC_BATCH_MAX", "4"),
+            ("FORGE_MERGE_QUEUE_CI_BATCH_MAX", "64"),
+            ("FORGE_MERGE_QUEUE_DOC_INDEX_BYTES", "0"),
+        ]),
+    )
+    .expect("the way back");
+    assert_eq!(back.merge_queue.doc_batch_max, 4);
+    assert_eq!(
+        back.merge_queue.ci_batch_max,
+        MergeQueueConfig::MAX_BATCH_MAX
+    );
+    assert_eq!(back.merge_queue.doc_index_bytes(), None);
+    let from_file = file(
+        "[merge_queue]
+doc_batch_max = 1
+doc_index_bytes = 1048576
+",
+    );
+    let cfg = load(Some(from_file.path()), &env(&[])).expect("file");
+    assert_eq!(cfg.merge_queue.doc_batch_max, 1);
+    assert_eq!(cfg.merge_queue.doc_index_bytes(), Some(1024 * 1024));
+    for (env_key, key, value, reason) in [
+        (
+            "FORGE_MERGE_QUEUE_DOC_BATCH_MAX",
+            "merge_queue.doc_batch_max",
+            "0",
+            "below_min",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_DOC_BATCH_MAX",
+            "merge_queue.doc_batch_max",
+            "65",
+            "above_max",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_CI_BATCH_MAX",
+            "merge_queue.ci_batch_max",
+            "0",
+            "below_min",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_CI_BATCH_MAX",
+            "merge_queue.ci_batch_max",
+            "65",
+            "above_max",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_DOC_INDEX_BYTES",
+            "merge_queue.doc_index_bytes",
+            "1048575",
+            "below_min",
+        ),
+        (
+            "FORGE_MERGE_QUEUE_DOC_INDEX_BYTES",
+            "merge_queue.doc_index_bytes",
+            "1073741825",
+            "above_max",
+        ),
+    ] {
+        let err = load(None, &env(&[(env_key, value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{key}={value}");
+        let text = err.to_string();
+        assert!(
+            text.contains(key) && text.contains(reason),
+            "{key}={value}: {text}"
+        );
+    }
+}
+
 /// `jobs.safety_poll_ms` (plan 18 S2, ADR-0037 (a)): default 10000,
 /// 100..=60000 (FG-SYS-0002 naming the key). 1000 is the poll period
 /// before plan 18 — the way back.
