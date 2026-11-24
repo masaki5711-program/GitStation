@@ -322,7 +322,8 @@ fn a_document_without_bytes_that_is_not_held_is_refused() {
 fn the_estimate_covers_a_dense_front_matter() {
     let mut dense =
         String::from("---\ndoctype: qms.procedure\nid: QP-07-001\ntitle: T\nowner: qa\n");
-    for i in 0..150 {
+    // The YAML reader takes 64 keys at most: 4 + 56.
+    for i in 0..56 {
         dense.push_str(&format!("k{i}: v\n"));
     }
     dense.push_str("---\n\n## 目的\n");
@@ -337,6 +338,7 @@ fn the_estimate_covers_a_dense_front_matter() {
     }
     for text in [&dense, &blocks] {
         let doc = crate::document::parse_document(text.as_bytes());
+        assert!(doc.meta.is_some(), "the fixture's front matter parses");
         let parsed = format!("{doc:?}").len();
         let estimate = parsed_cost(text.len(), &doc);
         assert!(estimate >= parsed, "estimate {estimate} < parsed {parsed}");
