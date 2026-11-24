@@ -38,6 +38,8 @@ hmac.workspace = true
 hkdf.workspace = true
 # M1 phase 9 MR2: the forge.git.push_applied log line (one serde type, logged and replayed).
 serde.workspace = true
+# Plan 20 K1 (ADR-0040): NFKC of the search tokenizer.
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -38,7 +38,9 @@ mod oidc;
 // ADR-0036: the PFS portal's widgets and news.
 mod portal;
 mod restore;
+// Plan 20 K2: `forge search reindex`.
 mod runtime;
+mod search;
 mod serve;
 mod serve_auto_merge;
 // M4 C14: the deterministic autofix worker.
@@ -126,6 +128,24 @@ enum Command {
     Restore {
         #[command(subcommand)]
         command: RestoreCommand,
+    },
+    /// The derived search index (plan 20, runbook search-index): `reindex`
+    /// rebuilds it from the source tables (derived data only).
+    Search {
+        #[command(subcommand)]
+        command: SearchCommand,
+    },
+}
+
+// Plan 20 K2 (ADR-0040).
+#[derive(Subcommand)]
+enum SearchCommand {
+    /// Rebuild the search index: one project, or every project (rows of
+    /// projects that no longer exist are removed). Idempotent.
+    Reindex {
+        /// Only this project (its id).
+        #[arg(long)]
+        project: Option<i64>,
     },
 }
 
@@ -615,6 +635,7 @@ fn main() -> ExitCode {
                 },
         }
         // M3 O1: backup and the mutating restore steps.
+        | Command::Search { .. }
         | Command::Backup
         | Command::Restore {
             command:
@@ -922,6 +943,9 @@ fn main() -> ExitCode {
         Command::Worker => config().and_then(|cfg| worker::worker(&cfg)),
         // ── M3 O1 ──
         Command::Backup => config().and_then(|cfg| backup::backup(&cfg, &request_id)),
+        Command::Search {
+            command: SearchCommand::Reindex { project },
+        } => config().and_then(|cfg| search::reindex(&cfg.database, &request_id, project)),
         Command::Restore { command } => config().and_then(|cfg| match command {
             RestoreCommand::Begin => restore::begin(cfg.storage_root()?, &request_id),
             RestoreCommand::Repositories {

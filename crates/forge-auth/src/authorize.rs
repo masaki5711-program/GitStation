@@ -881,6 +881,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // checked above); what a list shows is decided row by row with
         // `ProjectRead` / `GroupRead` (M1 phase 8b MR7b, never in SQL).
         (Action::ProjectList | Action::GroupList, Resource::Instance) => Ok(()),
+        // Plan 20 K3 (ADR-0040): searching is open like listing; every hit
+        // is decided again with `ProjectRead` / `MergeRequestList`.
+        (Action::SearchQuery, Resource::Instance) => Ok(()),
 
         // --- merge requests (M3 R1a, ADR-0024 §12) ---
         // Listing and reading as the repository browse API.
@@ -1636,6 +1639,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::ContextRead
             | Action::ProjectRead
             | Action::ProjectList
+            | Action::SearchQuery
             | Action::ProjectCreate
             | Action::ProjectUpdate
             | Action::ProjectVisibilityChange

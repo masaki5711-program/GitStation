@@ -1125,6 +1125,15 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         // ── Plan 13 stage 4 part A: document revisions (20270105100000) ──
         ("forge.merge_request_documents", operational()),
         ("forge.document_edit_claims", operational()),
+        // ── Plan 20 K2: the search index (20270107100000) ──
+        (
+            "forge.search_entries",
+            [dml("forge_app"), ro("search_entries")?].concat(),
+        ),
+        (
+            "forge.search_index_state",
+            [dml("forge_app"), ro("search_index_state")?].concat(),
+        ),
     ])
 }
 
@@ -1370,6 +1379,9 @@ const LATER_TABLES: &[&str] = &[
     // ── Plan 13 stage 4 part A: document revisions (20270105100000) ──
     "merge_request_documents",
     "document_edit_claims",
+    // ── Plan 20 K2: the search index (20270107100000) ──
+    "search_entries",
+    "search_index_state",
 ];
 
 /// Every table the first migration creates.
