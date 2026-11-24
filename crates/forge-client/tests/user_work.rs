@@ -155,3 +155,84 @@ fn activity_reads_one_page_of_the_own_feed() {
     assert_eq!(j.json()["events"][0]["seq"], 9);
     assert_eq!(srv.seen()[1].target, "/api/v1/user/activity");
 }
+
+#[test]
+fn search_reads_one_page_with_encoded_words_and_filters() {
+    let body = json!({
+        "items": [
+            {
+                "kind": "merge_request", "project_id": 7, "project_path": "acme/web",
+                "title": "Add the login form", "iid": 3,
+                "snippet": {"text": "the login form", "highlights": [{"start": 4, "end": 9}],
+                            "cut_before": false, "cut_after": false},
+                "updated_at": "2026-11-01T00:00:00Z", "truncated": false
+            },
+            {
+                "kind": "project", "project_id": 7, "project_path": "acme/web",
+                "title": "web", "iid": null,
+                "snippet": {"text": "login service", "highlights": [],
+                            "cut_before": false, "cut_after": true},
+                "updated_at": "2026-10-01T00:00:00Z", "truncated": false
+            }
+        ],
+        "next_cursor": "c1",
+        "has_more": true
+    })
+    .to_string();
+    let srv = Mock::start(move |_| Resp::json(200, &body));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "search",
+            "設備",
+            "login",
+            "--scope",
+            "merge_request,project",
+            "--project",
+            "7",
+            "--limit",
+            "2",
+            "--cursor",
+            "c0",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let seen = srv.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].method, "GET");
+    assert_eq!(
+        seen[0].target,
+        "/api/v1/search?q=%E8%A8%AD%E5%82%99%20login&scope=merge_request%2Cproject&project=7&limit=2&cursor=c0"
+    );
+    assert!(
+        o.stdout
+            .contains("merge_request  acme/web!3  Add the login form")
+            && o.stdout.contains("project  acme/web  web")
+            && o.stdout.contains("    the login form")
+            && o.stdout.contains("more: --cursor c1"),
+        "{}",
+        o.stdout
+    );
+    let j = gstn(&sb, &srv, &["search", "login", "--json"]);
+    assert_eq!(j.code, 0, "{}", j.stderr);
+    assert_eq!(j.json()["items"][0]["iid"], 3);
+    assert_eq!(srv.seen()[1].target, "/api/v1/search?q=login");
+}
+
+#[test]
+fn search_refuses_bad_arguments_before_any_request() {
+    let srv = Mock::start(|_| Resp::json(200, "{}"));
+    let sb = Sandbox::new();
+    for args in [
+        &["search"][..],
+        &["search", "x", "--limit", "51"],
+        &["search", "x", "--scope", "wiki"],
+        &["search", "x", "--project", "0"],
+    ] {
+        let o = gstn(&sb, &srv, args);
+        assert_eq!(o.code, 2, "{args:?}: {}", o.stderr);
+    }
+    assert!(srv.seen().is_empty());
+}

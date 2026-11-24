@@ -1190,6 +1190,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/deployments/{deployment_id}/approve",
         Coverage::BrowserOnly("a deployment is approved in a web session only (every tier): tokens are refused (FG-AUTH-0002 session_required); runbook deploy"),
     ),
+    // M6: knowledge search (one box over wiki, documents, code and issues).
+    (
+        "GET",
+        "/api/v1/search",
+        Coverage::Command("search"),
+    ),
 ];
 
 /// Commands that call no API route, and why: local work only (C-1 counts
