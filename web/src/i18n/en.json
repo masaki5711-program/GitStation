@@ -1861,8 +1861,8 @@
     "reasonCode": "Reason code:",
     "runbook": "Runbook:",
     "passedLine": "The AI evaluation is not worse than the baseline. This item does not stop the merge.",
-    "failedLine_one": "The AI’s answers are worse than the baseline in {{count}} point, so the merge is stopped. Next: fix it under “What stops the merge” below and push again.",
-    "failedLine_other": "The AI’s answers are worse than the baseline in {{count}} points, so the merge is stopped. Next: fix them under “What stops the merge” below and push again.",
+    "failedLine_one": "The AI’s answers are worse than the baseline in {{count}} point, so the merge is stopped. Next: fix that case and push a new version.",
+    "failedLine_other": "The AI’s answers are worse than the baseline in {{count}} points, so the merge is stopped. Next: fix those cases and push a new version.",
     "overview": "Model {{models}} · {{total}} cases ({{safety}} safety, {{reproduction}} reproducing a miss).",
     "flakyNote_one": "{{count}} case whose answer changed from run to run is not counted.",
     "flakyNote_other": "{{count}} cases whose answers changed from run to run are not counted.",
@@ -1925,6 +1925,8 @@
       "case": "Case",
       "kind": "Kind"
     },
-    "metricsTitle": "Measures compared with the baseline"
+    "metricsTitle": "Measures compared with the baseline",
+    "seeFindings": "See what stops the merge",
+    "unreadableCut": "It is long, so only the beginning is shown. All of it is in the pipeline’s evaluation job."
   }
 }

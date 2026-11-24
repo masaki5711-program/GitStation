@@ -6,10 +6,13 @@
 // the measures and the cases. Every result is a word (with a mark for the
 // eye), never a colour alone. Shown only when the head has the check.
 import type { TFunction } from 'i18next';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { isRunning, useCheckRuns, type CheckRun } from '../../api/checks';
+import { pipelineIdOfCheck } from '../../api/pipelines';
+import { QueryError } from '../../components/QueryError';
 import { pipelineUrl } from '../repoUrls';
 import {
   AI_EVAL_CHECK,
@@ -27,6 +30,13 @@ import {
 import styles from './Mr.module.css';
 
 export const AI_EVAL_TITLE_ID = 'mr-ai-eval-title';
+const FINDINGS_ID = 'mr-ai-eval-findings';
+
+/** A summary that does not read is shown as written, up to this many characters. */
+export const UNREADABLE_SHOWN_MAX = 4096;
+
+/** Marks for the eye only (aria-hidden); the words beside them carry the meaning. */
+const GLYPHS = { ok: '\u2713', stop: '\u2715', note: '\u2022' } as const;
 
 /** The `forge/ai-eval` run of the head, if the head has one. */
 export function aiEvalRun(runs: readonly CheckRun[]): CheckRun | undefined {
@@ -47,33 +57,51 @@ export function AiEvalSection({
   const { t } = useTranslation();
   // The same query as the check list above: one read for both.
   const runs = useCheckRuns(projectId, iid, head);
-  const run = runs.isSuccess ? aiEvalRun(runs.data.check_runs) : undefined;
-  if (run === undefined) return null;
+  // Whether this section exists at all depends on that read: before its
+  // first answer (loading, or refused) nothing here is known, and the
+  // "Check results" section above already shows the loading line and the
+  // refusal with its request_id for the very same query, so it is not
+  // shown twice. A refused re-read while the last answer is still on
+  // screen is said here, in one line, under the (older) comparison.
+  const all = runs.data?.check_runs;
+  const run = all === undefined ? undefined : aiEvalRun(all);
+  if (all === undefined || run === undefined) return null;
+  const pipeline = all.map(pipelineIdOfCheck).find((id) => id !== null) ?? null;
   return (
     <section aria-labelledby={AI_EVAL_TITLE_ID} className={styles.detailSection}>
       <h2 id={AI_EVAL_TITLE_ID} className={styles.detailTitle}>
         {t('aiEval.title')}
       </h2>
-      <AiEvalBody run={run} project={project} />
+      {runs.isError && (
+        <QueryError
+          error={runs.error}
+          onRetry={() => {
+            void runs.refetch();
+          }}
+        />
+      )}
+      <AiEvalBody run={run} project={project} pipeline={pipeline} />
     </section>
   );
 }
 
-function AiEvalBody({ run, project }: { run: CheckRun; project: string }) {
+function AiEvalBody({ run, project, pipeline }: { run: CheckRun; project: string; pipeline: number | null }) {
   const { t } = useTranslation();
   if (isRunning(run)) return <p className={styles.nextHint}>{t('aiEval.running')}</p>;
   const report = parseAiEvalSummary(run.summary);
   if (report === null) {
-    // Never an empty table: the summary as written, and why.
+    // Never an empty table: the summary as written (bounded), and why.
+    const cut = run.summary.length > UNREADABLE_SHOWN_MAX;
     return (
       <>
         <p className={styles.nextHint}>{t('aiEval.unreadable')}</p>
-        <p className={styles.runSummary}>{run.summary}</p>
+        <p className={styles.runSummary}>{cut ? run.summary.slice(0, UNREADABLE_SHOWN_MAX) : run.summary}</p>
+        {cut && <p className={styles.nextHint}>{t('aiEval.unreadableCut')}</p>}
       </>
     );
   }
   if (report.kind === 'error') return <ErrorReport report={report} project={project} />;
-  return <Evaluated report={report} />;
+  return <Evaluated report={report} project={project} pipeline={pipeline} />;
 }
 
 function ErrorReport({ report, project }: { report: AiEvalError; project: string }) {
@@ -124,7 +152,15 @@ function errorNext(t: TFunction, code: string): string {
   }
 }
 
-function Evaluated({ report }: { report: AiEvalEvaluated }) {
+function Evaluated({
+  report,
+  project,
+  pipeline,
+}: {
+  report: AiEvalEvaluated;
+  project: string;
+  pipeline: number | null;
+}) {
   const { t } = useTranslation();
   const blocking = report.findings.length;
   const open = report.cases.filter((c) => c.result !== 'pass');
@@ -132,12 +168,19 @@ function Evaluated({ report }: { report: AiEvalEvaluated }) {
   return (
     <>
       {report.passed ? (
-        <p className={styles.statusOk} data-testid="ai-eval-line">
+        <p className={styles.statusReady} data-testid="ai-eval-line">
           <Mark kind="ok" /> {t('aiEval.passedLine')}
         </p>
       ) : (
         <p className={styles.warning} data-testid="ai-eval-line">
-          <Mark kind="stop" /> {t('aiEval.failedLine', { count: blocking })}
+          <Mark kind="stop" /> {t('aiEval.failedLine', { count: blocking })}{' '}
+          {blocking > 0 && <a href={`#${FINDINGS_ID}`}>{t('aiEval.seeFindings')}</a>}
+          {pipeline !== null && (
+            <>
+              {' '}
+              <Link to={pipelineUrl(project, pipeline)}>{t('mrChecks.openPipeline', { id: pipeline })}</Link>
+            </>
+          )}
         </p>
       )}
       <p className={styles.nextHint}>
@@ -146,12 +189,14 @@ function Evaluated({ report }: { report: AiEvalEvaluated }) {
           total: report.total,
           safety: report.safety,
           reproduction: report.reproduction,
-        })}{' '}
-        {report.flaky > 0 && t('aiEval.flakyNote', { count: report.flaky })}
+        })}
       </p>
+      {report.flaky > 0 && <p className={styles.evalNote}>{t('aiEval.flakyNote', { count: report.flaky })}</p>}
       {report.findings.length > 0 && (
         <>
-          <h3 className={styles.subTitle}>{t('aiEval.findingsTitle')}</h3>
+          <h3 id={FINDINGS_ID} className={styles.subTitle}>
+            {t('aiEval.findingsTitle')}
+          </h3>
           <ul className={styles.reasonList}>
             {report.findings.map((f, i) => (
               <li key={`${String(i)}-${f.reason}-${f.subject ?? ''}`}>
@@ -212,12 +257,21 @@ function FindingLine({ f }: { f: AiEvalFinding }) {
 }
 
 /** A mark for the eye; the words beside it carry the meaning. */
-function Mark({ kind }: { kind: 'ok' | 'stop' | 'note' }) {
-  const glyph = kind === 'ok' ? '✓' : kind === 'stop' ? '✕' : '•';
+function Mark({ kind }: { kind: keyof typeof GLYPHS }) {
   return (
     <span aria-hidden="true" className={styles.mark}>
-      {glyph}
+      {GLYPHS[kind]}
     </span>
+  );
+}
+
+/** A table that scrolls sideways on a narrow screen instead of the page. */
+function Scroll({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    // Focusable so a keyboard can scroll it (WCAG 2.1.1); named by its table.
+    <div className={styles.evalScroll} role="region" aria-label={label} tabIndex={0}>
+      {children}
+    </div>
   );
 }
 
@@ -283,6 +337,7 @@ function MetricTable({ metrics }: { metrics: AiEvalMetric[] }) {
     return t('aiEval.allowedUpTo', { value: v });
   };
   return (
+    <Scroll label={t('aiEval.metricsTitle')}>
     <table className={styles.evalTable}>
       <caption className={styles.evalCaption}>{t('aiEval.metricsTitle')}</caption>
       <thead>
@@ -326,6 +381,7 @@ function MetricTable({ metrics }: { metrics: AiEvalMetric[] }) {
         ))}
       </tbody>
     </table>
+    </Scroll>
   );
 }
 
@@ -336,6 +392,7 @@ function runCount(t: TFunction, c: RunCount | null): string {
 function CaseTable({ cases, caption }: { cases: AiEvalCase[]; caption: string }) {
   const { t } = useTranslation();
   return (
+    <Scroll label={caption}>
     <table className={styles.evalTable}>
       <caption className={styles.evalCaption}>{caption}</caption>
       <thead>
@@ -351,11 +408,11 @@ function CaseTable({ cases, caption }: { cases: AiEvalCase[]; caption: string })
         {cases.map((c) => (
           <tr key={c.id}>
             <th scope="row">
-              <code>{c.id}</code>
+              <code title={c.id}>{c.id}</code>
             </th>
             <td>{kindLabel(t, c.kind)}</td>
-            <td>{runCount(t, c.baseline)}</td>
-            <td>{runCount(t, c.now)}</td>
+            <td className={styles.tabular}>{runCount(t, c.baseline)}</td>
+            <td className={styles.tabular}>{runCount(t, c.now)}</td>
             <td>
               <CaseResultLabel result={c.result} />
             </td>
@@ -363,6 +420,7 @@ function CaseTable({ cases, caption }: { cases: AiEvalCase[]; caption: string })
         ))}
       </tbody>
     </table>
+    </Scroll>
   );
 }
 

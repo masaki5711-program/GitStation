@@ -83,11 +83,17 @@ const ERROR_HEAD = /^\*\*forge\/ai-eval error\*\* \[(FG-[A-Z]+-\d{4})\] ([a-z0-9
 const RUNBOOK = / Runbook: ([A-Za-z0-9_-]+)\.\s*$/;
 const FINDING = /^- \[(FG-[A-Z]+-\d{4})\] ([a-z0-9_]+)(?: `([^`]+)`)?/;
 const MORE = /^… (\d+) more cases/;
+/** The decimals forge_core writes (`{:.3}`); nothing else is a number here. */
+const DECIMAL = /^-?\d+(\.\d+)?$/;
+
+/** Larger than any summary the server stores (64 KiB): not a summary. */
+export const SUMMARY_READ_MAX = 256 * 1024;
 
 function num(s: string | undefined): number | null {
-  if (s === undefined) return null;
-  const n = Number(s.trim());
-  return Number.isFinite(n) && s.trim() !== '' ? n : null;
+  const v = (s ?? '').trim();
+  if (!DECIMAL.test(v)) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 function count(s: string | undefined): RunCount | null {
@@ -124,6 +130,7 @@ function parseError(summary: string): AiEvalError | null {
 
 /** The report in the summary of a `forge/ai-eval` run; null if it does not read. */
 export function parseAiEvalSummary(summary: string): AiEvalReport | null {
+  if (summary.length > SUMMARY_READ_MAX) return null;
   const text = summary.replace(/\r\n/g, '\n');
   if (text.startsWith('**forge/ai-eval error**')) return parseError(text);
   const lines = text.split('\n');
@@ -144,6 +151,9 @@ export function parseAiEvalSummary(summary: string): AiEvalReport | null {
     findingsCut: false,
   };
   let table: 'metric' | 'case' | null = null;
+  // Names and ids are unique in what forge_core writes (and are React keys).
+  const seenMetrics = new Set<string>();
+  const seenCases = new Set<string>();
   for (const line of lines.slice(1)) {
     const row = cells(line);
     if (row !== null) {
@@ -152,11 +162,13 @@ export function parseAiEvalSummary(summary: string): AiEvalReport | null {
       else if (row.every((c) => /^-+$/.test(c))) continue;
       else if (table === 'metric') {
         const metric = parseMetric(row);
-        if (metric === null) return null;
+        if (metric === null || seenMetrics.has(metric.name)) return null;
+        seenMetrics.add(metric.name);
         report.metrics.push(metric);
       } else if (table === 'case') {
         const c = parseCase(row);
-        if (c === null) return null;
+        if (c === null || seenCases.has(c.id)) return null;
+        seenCases.add(c.id);
         report.cases.push(c);
       } else return null;
       continue;

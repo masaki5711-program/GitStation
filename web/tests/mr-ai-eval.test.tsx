@@ -12,7 +12,8 @@ import axe from 'axe-core';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { parseAiEvalSummary, type AiEvalEvaluated } from '../src/features/mr/aiEval';
+import { UNREADABLE_SHOWN_MAX } from '../src/features/mr/AiEvalReport';
+import { parseAiEvalSummary, SUMMARY_READ_MAX, type AiEvalEvaluated } from '../src/features/mr/aiEval';
 import { mockServer } from './mock';
 import { CHECKS_API, MR_SCREENS, checkRun, checkRuns, mrRoutes } from './mr-fixtures';
 import { json, renderApp } from './render';
@@ -34,6 +35,8 @@ const PASSED_SUMMARY = `**forge/ai-eval passed** — models \`qwen3-14b\`, 1 cas
 |---|---|---|---|---|
 | \`spindle/a-001\` | regular | 5/5 | 5/5 | pass |
 `;
+
+const PIPELINE_RUN = checkRun(8, 'ci/pipeline', { summary: 'Pipeline #31 failed: 1 of 2 jobs did not succeed.' });
 
 const aiEval = (over: Record<string, unknown>) => checkRun(9, 'forge/ai-eval', { reported_by: null, ...over });
 
@@ -97,6 +100,31 @@ describe('ai-eval summary parser', () => {
     expect(r.findingsCut).toBe(true);
   });
 
+  it('reads CRLF line ends and a metric with an allowed difference', () => {
+    const r = parseAiEvalSummary(GOLDEN.replace(/\n/g, '\r\n')) as AiEvalEvaluated;
+    expect(r.cases).toHaveLength(6);
+    expect(r.metrics.find((m) => m.name === 'p95_latency_ms')?.allowed).toBe(8000);
+  });
+
+  it('an error summary without a runbook or a pipeline id still reads', () => {
+    const r = parseAiEvalSummary(
+      '**forge/ai-eval error** [FG-AIASSET-0003] baseline_missing — pipeline #0, job ``. No baseline.',
+    );
+    expect(r).toEqual({ kind: 'error', code: 'FG-AIASSET-0003', reason: 'baseline_missing', pipelineId: null, job: null, runbook: null });
+  });
+
+  it('refuses a column-count mismatch, a row before its header, duplicates, odd numbers and a huge input', () => {
+    expect(parseAiEvalSummary(GOLDEN.replace('| `new/n-001` | regular | — | 0/5 | fail |', '| `new/n-001` | regular | 0/5 | fail |'))).toBeNull();
+    const head = GOLDEN.split('\n')[0] ?? '';
+    expect(parseAiEvalSummary(`${head}\n| cause_hit_rate | 0.800 | 0.750 | 0.020 | ok |\n`)).toBeNull();
+    expect(parseAiEvalSummary(GOLDEN.replace('| `spindle/a-002` |', '| `spindle/a-001` |'))).toBeNull();
+    expect(parseAiEvalSummary(GOLDEN.replace('| false_alarm_rate |', '| cause_hit_rate |'))).toBeNull();
+    for (const odd of ['0x10', '1e3', 'Infinity', ' ', '.5']) {
+      expect(parseAiEvalSummary(GOLDEN.replace('| 0.750 |', `| ${odd} |`))).toBeNull();
+    }
+    expect(parseAiEvalSummary(GOLDEN + 'x'.repeat(SUMMARY_READ_MAX))).toBeNull();
+  });
+
   it('anything that does not read is null, never an empty comparison', () => {
     expect(parseAiEvalSummary('')).toBeNull();
     expect(parseAiEvalSummary('Pipeline #3 passed')).toBeNull();
@@ -111,11 +139,20 @@ describe('ai-eval summary parser', () => {
 
 describe('merge request AI evaluation', () => {
   it('a failed evaluation: one line with why and what next, the reasons, the measures and the cases in words', async () => {
-    await open([aiEval({ conclusion: 'failure', summary: GOLDEN })]);
+    await open([aiEval({ conclusion: 'failure', summary: GOLDEN }), PIPELINE_RUN]);
     const box = await section('AI evaluation (compared with the approved baseline)');
-    expect(within(box).getByTestId('ai-eval-line').textContent).toContain(
-      'worse than the baseline in 3 points, so the merge is stopped. Next: fix them under “What stops the merge” below and push again.',
+    const line = within(box).getByTestId('ai-eval-line');
+    expect(line.textContent).toContain(
+      'worse than the baseline in 3 points, so the merge is stopped. Next: fix those cases and push a new version.',
     );
+    // The line names where to act: the reasons, and the pipeline of the head.
+    expect(within(line).getByRole('link', { name: 'See what stops the merge' }).getAttribute('href')).toBe(
+      '#mr-ai-eval-findings',
+    );
+    expect(within(line).getByRole('link', { name: 'Open pipeline #31' }).getAttribute('href')).toMatch(/pipelines\/31$/);
+    // Wide tables scroll inside a focusable, named region (375 px).
+    const region = within(box).getByRole('region', { name: 'Cases to look at' });
+    expect(region.getAttribute('tabindex')).toBe('0');
     expect(within(box).getByText(/Model qwen3-14b · 6 cases \(1 safety, 1 reproducing a miss\)/)).toBeTruthy();
     expect(within(box).getByText(/3 cases whose answers changed from run to run are not counted/)).toBeTruthy();
     // The reasons, in plain words, with their code.
@@ -193,6 +230,27 @@ describe('merge request AI evaluation', () => {
     const box = await section(/AI evaluation/);
     expect(within(box).getByText(/could not be read as a table/)).toBeTruthy();
     expect(within(box).getByText('something the screen does not know')).toBeTruthy();
+  });
+
+  it('a reason the screen does not know reads as written, with its code', async () => {
+    await open([
+      aiEval({
+        conclusion: 'failure',
+        summary: GOLDEN.replace(
+          '- [FG-AIASSET-0004] safety_case_failed `safety/s-001`: 4/5 passed',
+          '- [FG-AIASSET-0004] brand_new_reason `safety/s-001`: something new',
+        ),
+      }),
+    ]);
+    const box = await section(/AI evaluation/);
+    expect(within(box).getByText(/\[FG-AIASSET-0004\] brand_new_reason `safety\/s-001`: something new/)).toBeTruthy();
+  });
+
+  it('a long summary that does not read is cut, and says so', async () => {
+    await open([aiEval({ conclusion: 'failure', summary: 'y'.repeat(UNREADABLE_SHOWN_MAX + 10) })]);
+    const box = await section(/AI evaluation/);
+    expect(within(box).getByText('y'.repeat(UNREADABLE_SHOWN_MAX))).toBeTruthy();
+    expect(within(box).getByText(/only the beginning is shown/)).toBeTruthy();
   });
 
   it('a head without the check has no AI evaluation section', async () => {

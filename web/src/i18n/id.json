@@ -1861,8 +1861,8 @@
     "reasonCode": "Kode alasan:",
     "runbook": "Runbook:",
     "passedLine": "Evaluasi AI tidak lebih buruk daripada baseline. Butir ini tidak menghentikan merge.",
-    "failedLine_one": "Jawaban AI lebih buruk daripada baseline pada {{count}} hal, jadi merge dihentikan. Berikutnya: perbaiki di “Yang menghentikan merge” di bawah, lalu push lagi.",
-    "failedLine_other": "Jawaban AI lebih buruk daripada baseline pada {{count}} hal, jadi merge dihentikan. Berikutnya: perbaiki di “Yang menghentikan merge” di bawah, lalu push lagi.",
+    "failedLine_one": "Jawaban AI lebih buruk daripada baseline pada {{count}} hal, jadi merge dihentikan. Berikutnya: perbaiki kasus tersebut, lalu push versi baru.",
+    "failedLine_other": "Jawaban AI lebih buruk daripada baseline pada {{count}} hal, jadi merge dihentikan. Berikutnya: perbaiki kasus tersebut, lalu push versi baru.",
     "overview": "Model {{models}} · {{total}} kasus ({{safety}} keselamatan, {{reproduction}} reproduksi kesalahan).",
     "flakyNote_one": "{{count}} kasus yang jawabannya berubah antar putaran tidak dihitung.",
     "flakyNote_other": "{{count}} kasus yang jawabannya berubah antar putaran tidak dihitung.",
@@ -1925,6 +1925,8 @@
       "case": "Kasus",
       "kind": "Jenis"
     },
-    "metricsTitle": "Ukuran dibandingkan dengan baseline"
+    "metricsTitle": "Ukuran dibandingkan dengan baseline",
+    "seeFindings": "Lihat yang menghentikan merge",
+    "unreadableCut": "Isinya panjang, jadi hanya bagian awal yang ditampilkan. Semuanya ada di job evaluasi pada pipeline."
   }
 }

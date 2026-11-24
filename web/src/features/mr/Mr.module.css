@@ -393,14 +393,24 @@
 
 /* The AI evaluation (AiEvalReport.tsx): the comparison of the bench with its
  * baseline. A result is a word with a mark; the colour only repeats it. */
-.statusOk {
-  margin: var(--gs-space-2) 0;
-  padding: var(--gs-space-2) var(--gs-space-3);
-  border: 1px solid var(--gs-color-border);
-  border-left: 4px solid var(--gs-color-accent-strong);
-  border-radius: var(--gs-radius-sm);
-  background: var(--gs-color-success-surface);
-  color: var(--gs-color-success-text);
+.evalNote {
+  margin: var(--gs-space-1) 0 0;
+}
+
+/* A wide table scrolls inside itself on a phone, never the page. */
+.evalScroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.evalScroll:focus-visible {
+  outline: 2px solid var(--gs-color-focus);
+  outline-offset: 2px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .mark {
@@ -417,6 +427,7 @@
 
 .evalTable {
   width: 100%;
+  min-width: 32rem;
   margin: var(--gs-space-3) 0;
   border-collapse: collapse;
   background: var(--gs-color-surface);
