@@ -564,7 +564,7 @@ fn only_forge_web_builds_token_principals_from_the_authenticator() {
         for file in files {
             let rel = file
                 .strip_prefix(&dir)
-                .map(|p| p.to_string_lossy().replace('\', "/"))
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
             let test_file = rel.ends_with("tests.rs")
                 || rel.ends_with("_tests.rs")

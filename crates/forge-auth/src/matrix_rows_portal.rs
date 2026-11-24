@@ -159,11 +159,19 @@ pub(crate) fn generated_denies() -> Vec<Row> {
 fn the_menu_admin_link_follows_the_matrix_portal_actors() {
     use crate::portal::{portal_admin_menu, PortalWidgetCtx};
     use crate::prove::prove;
-    for (case, link) in [(Case::Admin, true), (Case::Ok, false), (Case::Reporter, false)] {
+    for (case, link) in [
+        (Case::Admin, true),
+        (Case::Ok, false),
+        (Case::Reporter, false),
+    ] {
         let principal = W::Portal(case).principal();
         assert!(!principal.admin_rights(), "{case:?}");
-        let proof = prove(&principal, A::PortalWidgetRead, PortalWidgetCtx::new(crate::matrix::ME))
-            .unwrap_or_else(|e| panic!("{case:?}: {e}"));
+        let proof = prove(
+            &principal,
+            A::PortalWidgetRead,
+            PortalWidgetCtx::new(crate::matrix::ME),
+        )
+        .unwrap_or_else(|e| panic!("{case:?}: {e}"));
         assert_eq!(portal_admin_menu(&proof), link, "{case:?}");
     }
 }

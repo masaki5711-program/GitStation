@@ -181,10 +181,10 @@ pub async fn account_facts(
                 "SELECT kind, state = 'active', is_admin AND admin_source = 'cli' \
                  FROM forge.users WHERE id = $1",
             )
-                .bind(user.get())
-                .fetch_optional(db.write_pool())
-                .await
-                .map_err(|e| query_error(QUERY, e))
+            .bind(user.get())
+            .fetch_optional(db.write_pool())
+            .await
+            .map_err(|e| query_error(QUERY, e))
         })
         .await?;
     row.map(|(kind, active, is_admin)| {

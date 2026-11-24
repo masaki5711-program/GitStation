@@ -401,7 +401,8 @@ impl Oidc {
         // the next check (the failure is this request's, as for the account
         // read above).
         if let Some(claims) = role_source.as_ref() {
-            self.apply_admin_role(request_id, claim.user, claims).await?;
+            self.apply_admin_role(request_id, claim.user, claims)
+                .await?;
         }
         let sealed_refresh = new_refresh
             .as_deref()

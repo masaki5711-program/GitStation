@@ -637,7 +637,10 @@ async fn without_a_state_copy_every_admin_flag_is_removed_and_listed() {
         &f.t,
         &[("user", a.get()), ("user", b.get())],
         &[
-            format!("UPDATE forge.users SET is_admin = true WHERE id = {}", a.get()),
+            format!(
+                "UPDATE forge.users SET is_admin = true WHERE id = {}",
+                a.get()
+            ),
             format!(
                 "UPDATE forge.users SET is_admin = true, admin_source = 'oidc' WHERE id = {}",
                 b.get()
@@ -679,9 +682,8 @@ async fn without_a_state_copy_every_admin_flag_is_removed_and_listed() {
     regrant_admin_with(&f.t.db, "quy", &rid("req-regrant-q"))
         .await
         .expect("regrant quy");
-    let sources = f
-        .t
-        .json_rows(&format!(
+    let sources =
+        f.t.json_rows(&format!(
             "SELECT id, admin_source FROM forge.users WHERE id IN ({}, {}) ORDER BY id",
             a.get(),
             b.get()
