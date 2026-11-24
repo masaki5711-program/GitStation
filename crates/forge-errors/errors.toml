@@ -3827,3 +3827,71 @@ diagnosis = "The log event (`forge.search.index_item`) carries `reason`, `source
 fix = "`truncated`: nothing to repair (the entry stays searchable by its title and first 256 KB); shorten the source if it matters. `subtree_too_large`: run `forge search reindex` (runbook search-index). `write_failed`: fix the chained cause, then `forge search reindex --project <id>`."
 runbook = "search-index"
 test = "oversized_description_is_truncated_and_logged"
+
+# ── Plan 21 E1 (ADR-0041): edge distribution, the pure forge-edge ──
+[[error]]
+code = "FG-EDGE-0001"
+name = "EdgeReleaseDefinitionInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "edge-release.toml の内容が正しくありません（形、対象の機器、配るもの、シークレットらしいファイル）。直してからもう一度リリースしてください。"
+user_message_en = "edge-release.toml is not valid (its form, target devices, payloads or a secret-like file). Fix it and release again."
+user_message_id = "edge-release.toml tidak valid (bentuk, perangkat sasaran, muatan, atau berkas yang tampak rahasia). Perbaiki lalu rilis lagi."
+cause = "Plan 21 §5.2 (ADR-0041 §4): forge-edge's lint refused a repository's `edge-release.toml`. `reason`: `toml_syntax` (TOML error or an unknown key — nothing is ignored), `not_utf8`, `too_large` (> 64 KiB), `schema_version` (only 1), `arch` (only `amd64` / `arm64`), `os` (lower-case letters, digits, `.` and `-`, 1..=32 characters, e.g. `ubuntu-24.04`), `max_install_seconds` (1..=7200), `health_soak_seconds` (0..=86400), `no_payloads`, `payload_kind` (only `files` / `oci-image` / `agent`), `duplicate_kind` (one payload per kind), `agent_not_alone` (an `agent` payload is a release of its own), `no_artifacts`, `too_many_artifacts` (> 256 per payload), `artifact_path` (empty, absolute, a drive letter, `..` / `.` / empty segments, a backslash, `:`, `<`, `>`, `\"`, `|`, `?`, `*`, control or non-ASCII characters, a segment ending in a dot or space, a Windows device name such as `CON`, `NUL`, `COM1`, `LPT1` with or without an extension, > 255 bytes), `duplicate_artifact` (also two paths that differ only by letter case), `artifact_path_conflict` (one path is a directory of another, e.g. `dist/a` and `dist/a/b`), `secret_like_path` (a file name that looks like a secret: `.env`, `*.env`, `.env.*`, `*.pem`, `*.key`, `*.p12` / `*.pfx` / `*.jks` / `*.keystore` / `*.ppk` / `*.kdbx`, `id_rsa*` / `id_dsa*` / `id_ecdsa*` / `id_ed25519*`, `.netrc`, `.pgpass`, `.npmrc`, `.htpasswd`, `credentials*`, `.git-credentials`, or a path under `.ssh/`, `.gnupg/`, `.aws/`, `.docker/`). Every problem is listed. Nothing was released."
+diagnosis = "The lint's problems list `reason` and `subject` (the field, payload kind or artifact path — never file content). The repository's `edge-release.toml` is the only input. From E4 the release builder records the problems on the release candidate."
+fix = "Fix `edge-release.toml`: one payload per kind, relative artifact paths, a supported `arch` and `os`. Never put secrets in a release: per-device secrets belong to the device's own provisioning (plan 21 §5.2)."
+test = "release_definition_refuses_secret_like_file"
+
+[[error]]
+code = "FG-EDGE-0002"
+name = "EdgeManifestInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "エッジのリリースのマニフェストの形が正しくありません。"
+user_message_en = "The edge release manifest is not well-formed."
+user_message_id = "Manifes rilis edge tidak berbentuk benar."
+cause = "Plan 21 §5.2 (ADR-0041 §2): a signed release file (`{manifest, digest, key_id, signature}`) or its manifest did not parse or broke a rule, so its digest could not be computed. `reason`: `too_large` (> 4 MiB), `json_syntax` (with `line <n>`; an unknown or duplicate key is refused, nothing ignored), `schema_version` (only 1), `release_id` / `project` / `version` / `os` (empty, too long or characters outside the allowed set), `source_sha` (40 or 64 lower-case hex), `sequence` (0), `created_at` (not an RFC 3339 instant), `arch`, `max_install_seconds` (1..=7200), `health_soak_seconds` (0..=86400), `ci_pipeline_id` (0), `no_payloads`, `payload_kind` (only `files` / `oci-image` / `agent`), `duplicate_kind`, `agent_not_alone`, `agent_blob_count` (an `agent` payload is exactly one blob), `no_blobs`, `too_many_blobs` (> 4096 per payload), `blob_sha256` (not 64 lower-case hex), `blob_size` (0 or > 8 GiB), `blob_path` (the artifact path rules of FG-EDGE-0001), `duplicate_blob_path` (also two paths that differ only by letter case), `blob_path_conflict` (one path is a directory of another), `secret_like_path`, `digest_syntax` (the envelope's digest is not `sha256:<64 hex>`), `key_id` (empty or over 64 characters). The server builds manifests from linted definitions (E4), so on a device or in gstn this means the file is not one the server signed — treat it like FG-EDGE-0004."
+diagnosis = "`gstn edge release verify --release <file> --json` lists the problem with `reason` and `subject` (the field or blob path). Compare the file with the one the server serves for the release (E5: `GET /api/v1/edge/desired`)."
+fix = "Use the release file exactly as the server served it. A hand-edited or truncated file never verifies; fetch it again."
+test = "manifest_rejects_unsafe_blob_path"
+
+[[error]]
+code = "FG-EDGE-0003"
+name = "EdgeSigningKeyUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "エッジのリリースを確かめる鍵がありません。鍵を更新してからもう一度確かめてください。"
+user_message_en = "The key to verify the edge release is not available. Update the keys and verify again."
+user_message_id = "Kunci untuk memverifikasi rilis edge tidak tersedia. Perbarui kunci lalu verifikasi lagi."
+cause = "Plan 21 §5.2 (ADR-0041 §3): the edge public key list needed to verify a release signature is missing, unreadable or does not name the release's key. `reason`: `keys_missing` (gstn: no `edge-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable` (`subject`: the io error kind or `too_large`, over 1 MiB), `keys_invalid` (not the JSON key list `{\"keys\":[{\"kid\",\"public_key\",…}]}`, a duplicate or empty kid, a public key that is not 32 bytes of base64, more than 64 keys), `unknown_key` (the release names a `key_id` the list does not hold: the list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The edge keys are separate from the agent part keys (plan 21 §11 Q7)."
+diagnosis = "`gstn edge release verify --json`: `reason` and `subject` (the kid). Look at the key list (`--keys`, or `edge-keys.json` in the gstn configuration directory): which kids it holds and whether it parses. Runbook edge-signing-key."
+fix = "Get the current edge public keys from the administrator (from E4: `GET /api/v1/edge/keys`) into `edge-keys.json`, then verify again. A kid nobody issued is a tampering sign: runbook edge-agent."
+runbook = "edge-signing-key"
+test = "unknown_edge_key_is_signing_key_unavailable"
+
+[[error]]
+code = "FG-EDGE-0004"
+name = "EdgeSignatureInvalid"
+http_status = 422
+severity = "alert"
+user_message_ja = "エッジのリリースの署名か要約が合いません。改ざんの疑いがあります。このリリースを入れず、管理者に連絡してください。"
+user_message_en = "The edge release's signature or digest does not match. It may have been tampered with. Do not install it and contact the administrator."
+user_message_id = "Tanda tangan atau digest rilis edge tidak cocok. Mungkin telah dirusak. Jangan pasang dan hubungi administrator."
+cause = "Plan 21 §5.2 (ADR-0041 §2–§3): a release's Ed25519 signature in the edge manifest domain (`forge-edge-manifest-signature-v1` NUL ‖ digest) did not verify, or its content did not match what was signed. `reason`: `digest_mismatch` (the digest recomputed from the manifest differs from the envelope's: the manifest was edited), `bad_signature` (the signature is not this key's over this digest in the edge domain — also a signature made for an agent part or any other domain with the same key), `signature_malformed`, `key_revoked`, `blob_mismatch` (a blob's SHA-256 or size differs from the manifest), `blob_missing` (a blob named by the manifest is not in the directory checked), `blob_not_a_regular_file` (a symlink or a directory where the blob should be, or a path that resolves outside the directory checked through a symlinked directory). Signed releases never change, so every case means the bytes are not what the server signed."
+diagnosis = "`gstn edge release verify --release <file> [--blobs <dir>] --json` names the release (`release_id`, `version`) and, in `subject`, the kid or the blob path. From E6 the device agent logs this code with `device_id`, `rollout_id` and `release_digest` and reports it. Compare the file with the server's copy; for a blob, its SHA-256 with the manifest. Runbook edge-agent."
+fix = "Do not install the release. Follow runbook edge-agent: fetch the release and blobs again from the server; if they still do not verify, treat it as tampering (who could write the file or the blob store; a revoked key means re-signed releases must be rolled out)."
+runbook = "edge-agent"
+test = "agent_part_signature_does_not_verify_as_edge_manifest"
+
+[[error]]
+code = "FG-EDGE-0005"
+name = "EdgeRolloutPolicyInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "展開の波・停止の規則・保守の時間帯の設定が正しくありません。値を直してください。"
+user_message_en = "The rollout's waves, halt rules or maintenance windows are not valid. Fix the values."
+user_message_id = "Gelombang, aturan penghentian, atau jendela pemeliharaan rollout tidak valid. Perbaiki nilainya."
+cause = "Plan 21 §5.3–§5.6 (ADR-0041 §5–§7): forge-edge refused a wave plan, a halt policy or a maintenance schedule. `reason`: wave plan — `no_waves`, `too_many_waves` (> 10), `canary_not_first`, `percent_range` (a percentage outside 0.01..=100 %, in basis points 1..=10000), `percent_not_increasing` (each wave must reach more devices than the one before, so membership is monotonic), `last_wave_not_100`; halt policy — `min_sample` (1..=1000), `failure_rate` (1..=10000 basis points), `min_failures` (1..=1000), `unresponsive_rate` (1..=10000 basis points), `done_ratio` (100..=10000 basis points), `soak` (canary or percent soak over 30 days), `stall_after` (1 hour..=90 days); schedule — `time_zone` (not an IANA zone name in the compiled-in tz database; `subject` names it), `window_start` (not HH:MM), `window_duration` (1..=1440 minutes), `too_many_windows` (> 64), `blackout_order` (a blackout that does not end after it starts), `too_many_blackouts` (> 256)."
+diagnosis = "The problem's `reason` and `subject` (the field, wave index, zone name or window) say which value. Nothing was stored."
+fix = "Correct the value: waves strictly increasing to 100 % (a canary wave only first), thresholds in range, IANA zone names such as `Asia/Jakarta`, windows as weekday + HH:MM + minutes."
+test = "wave_plan_must_end_at_100_percent"

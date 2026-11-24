@@ -1,0 +1,32 @@
+[package]
+name = "forge-edge"
+description = "forge edge distribution, pure: release manifest and its order-independent digest, Ed25519 verification in the edge domain, edge-release.toml lint, wave assignment, the halt / advance decision and install windows. No I/O; time is an argument."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Pure (plan 21 E1, ADR-0041, CLAUDE.md contract 9: forge-core → forge-edge →
+# forge-agent): it reads bytes and values and returns values — no file,
+# network, clock, DB or async runtime. The dependencies allowed are checked
+# by tests/purity.rs. Used by gstn (`gstn edge release verify`) and, from
+# E4/E5, by forge-fleet and forge-edge-agent.
+[dependencies]
+forge-errors.workspace = true
+# The signature (Ed25519 with a signing domain), the key list and Digest.
+forge-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+sha2.workspace = true
+# Install windows: IANA zones with DST, tz database compiled in (no I/O).
+jiff.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+ring.workspace = true
+base64.workspace = true
+
+[lints]
+workspace = true

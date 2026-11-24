@@ -1230,6 +1230,10 @@ pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
         "plan 17 P17-3: the AI asset lint on the working tree with forge-doc; nothing is sent",
     ),
     (
+        "edge release verify",
+        "plan 21 E1: checks a signed edge release file (manifest, digest, Ed25519 signature) and optionally its blobs with forge-edge and local keys; nothing is sent",
+    ),
+    (
         "agent verify",
         "plan 16 A1: checks the working tree's agent configuration against agent.lock.json and the part signatures with forge-agent and local keys; nothing is sent",
     ),

@@ -74,7 +74,7 @@ fn input(reason: &str) -> ClientError {
 
 /// Up to `max` bytes of `path` (`None`: it does not exist; more than `max`:
 /// `too_large`).
-fn read_small(path: &Path, max: usize, what: &str) -> Result<Option<Vec<u8>>> {
+pub(crate) fn read_small(path: &Path, max: usize, what: &str) -> Result<Option<Vec<u8>>> {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),

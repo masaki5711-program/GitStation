@@ -1,7 +1,7 @@
 # 21 M4E の計画 — 工場のエッジ機器への署名付き・段階的な配布（pull 型、自動停止、稼働中は更新しない）
 
 - 作成: 2026-11-23（`planner` 相当。GitStation は `main` 1bb6a535 を読み取りだけで確かめた。PFS のリポジトリは読んでいない）
-- 状態: **ドラフト（利用者の承認待ち）**。§3 の推奨と §11 の問いの既定で進めてよいかを聞く。§11 の 1〜6 は 01 §8「2026-10-28 追加」の 6 つの問いの答えを兼ねる。
+- 状態: **ドラフト（利用者の承認待ち）**。ADR の番号は E1 で **0041**（0039 は計画 19 L5-1、0040 は計画 20 が使用。2026-11-24）。§3 の推奨と §11 の問いの既定で進めてよいかを聞く。§11 の 1〜6 は 01 §8「2026-10-28 追加」の 6 つの問いの答えを兼ねる。
 - 参照: 01 §3.4・§3.10・§8（M4E）・§8 の 2026-10-28 の問い、04（承認付きデプロイ、stg / prod）、05（Q5: 機器の行為者の記録は M4E の ADR へ）、07 W13（Kanflow からのデプロイ、保守の時間帯）、09（PFS のポータルと Keycloak）、14（C11 の SSH デプロイ、環境・承認・凍結・ロールバック）、16（A1 の Ed25519）、17 §0.3（AI ノードは C11 を使い M4E は使わない）、18（負荷試験の型）、ADR-0010・0013・0018・0029・0031・0032。
 
 ## 0. 前提の点検
@@ -52,7 +52,7 @@ CI が作った不変のリリースに GitStation が署名し、工場の数�
 ## 2. 依存の順
 
 ```
-E0 [root] ─▶ E1（forge-edge: マニフェスト・署名・波・停止の判定。ADR-0039）
+E0 [root] ─▶ E1（forge-edge: マニフェスト・署名・波・停止の判定。ADR-0041）
              ├▶ E2（機器の主体・登録・トークン）─▶ E3（台帳・グループ）
              └▶ E4（リリース・blob・署名の worker）
 E3 + E4 ─▶ E5（展開の状態機械・望ましい状態・報告・評価の worker）─▶ E6（forge-edge-agent）─▶ E9（負荷試験・パイロット）═▶ M4E の完了
@@ -268,7 +268,7 @@ offered … (期限まで報告なし) → unresponsive
 | MR | ブランチ | 中身 | 先に書く試験（例） | 評価役 | 前提 |
 |---|---|---|---|---|---|
 | **E0 [root]** | `chore/harness-m4e-edge-area` | 領域 `EDGE`（`validate-error-registry.js` の AREAS、`forge-error-contract.md`）、契約 9 に `forge-edge`・`forge-fleet`・`forge-edge-agent`、`deploy-safety-reviewer` にエッジの観点（機器のトークンの範囲、署名の領域、時間帯と `can-update` の失敗で入れない、停止の判定、戻しの承認）と eval | eval `edge-install-when-can-update-errors`、`device-token-reads-other-group-blob` | `harness-optimizer` | なし（今すぐ） |
-| **E1** | `feat/core-edge-manifest` | `forge-edge`（純粋）: マニフェスト・要約・`edge-release.toml` の lint・波の割り当て・`decide`・時間帯。`forge-agent::sign` を領域つきに一般化（既存の関数は今の領域のまま）。`gstn edge release verify`。ADR-0039 | `digest_is_independent_of_blob_order`、`agent_part_signature_does_not_verify_as_edge_manifest`、`wave_membership_is_monotonic`、`canary_single_failure_halts`、`below_min_sample_waits`、`failure_rate_boundary_2_percent`、`window_across_dst_and_midnight`、`purity` | `rust-reviewer`、`security-reviewer` | E0 |
+| **E1** | `feat/core-edge-manifest` | `forge-edge`（純粋）: マニフェスト・要約・`edge-release.toml` の lint・波の割り当て・`decide`・時間帯。`forge-agent::sign` を領域つきに一般化（既存の関数は今の領域のまま）。`gstn edge release verify`。ADR-0041 | `digest_is_independent_of_blob_order`、`agent_part_signature_does_not_verify_as_edge_manifest`、`wave_membership_is_monotonic`、`canary_single_failure_halts`、`below_min_sample_waits`、`failure_rate_boundary_2_percent`、`window_across_dst_and_midnight`、`purity` | `rust-reviewer`、`security-reviewer` | E0 |
 | **E2** | `feat/auth-edge-device-principal` | `Credential::Device`、`device.rs`、登録・トークン・入れ替え・失効、TLS の必須、監査の行為者 `device`、§5.10 の機器の行と登録の行 | `device_cannot_read_repository`、`revoked_device_denied_next_request`、`old_token_valid_until_new_used_or_24h`、`enrollment_token_single_use_race`、`duplicate_machine_id_refused`、`plain_http_refused_when_require_tls`、`a_device_is_not_a_user_kind`（維持） | `security-reviewer`、`authz-matrix-auditor` | E1 |
 | **E3** | `feat/deploy-edge-inventory` | `forge-fleet` の台帳・ラベル・グループ・所属の作り直し・プロジェクトへの結び付け・時間帯、管理の API、`gstn edge device|group`、doctor `edge.devices`（最後の接続の古さの分布） | `label_change_rebuilds_membership_once`、`group_overlap_refused`、`unbound_project_sees_404`、`last_seen_update_is_throttled` | `database-reviewer`、`authz-matrix-auditor` | E2 |
 | **E4** | `feat/deploy-edge-releases` | 保護されたタグの push → 候補 → `edge_release_builder`（パイプラインの成功を待つ）→ blob → マニフェスト → 署名（`edge.signing_keys_file`、`forge admin edge-key`）、blob の API（`Range`・429・ハッシュの確かめ直し）、保持の worker、doctor `edge.signing_key`、runbook `edge-signing-key` | `release_only_from_protected_reachable_tag`、`moved_tag_has_no_effect`、`release_rows_are_append_only`、`blob_corruption_is_not_served`、`range_resume_matches_sha256`、`secret_like_file_refused`、`job_token_cannot_create_release` | `deploy-safety-reviewer`、`security-reviewer` | E1、E3、M4 C6b |
@@ -318,7 +318,7 @@ offered … (期限まで報告なし) → unresponsive
 2. 失敗するように作ったリリースで、失敗した機器が自分で前の版に戻り、展開が自動で `halted` になり、alert と runbook で原因が追える。
 3. prod の展開はエージェント・サービスアカウント・作った人が承認できない（権限の表の行）。
 4. 偽の 10 000 台の負荷試験で §8 の目標を満たす。
-5. 新しいルート・Action はすべて権限の表にあり、カタログ・runbook・ADR-0039 がそろい、Windows でも全体の試験が緑。
+5. 新しいルート・Action はすべて権限の表にあり、カタログ・runbook・ADR-0041 がそろい、Windows でも全体の試験が緑。
 
 **確かめのコマンド**: 計画 11 §9 と同じ（fmt・clippy `-D warnings`・nextest・`gen-catalog` / `gen-authz` の差分なし・`node scripts/self-heal.js --check`）。
 

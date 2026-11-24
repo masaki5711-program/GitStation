@@ -12,6 +12,7 @@ Ed25519 の署名の確かめ、フック・設定・MCP の静的な検査。I/
 | `digest(&Manifest, &[(path, sha256)]) -> Digest` | 要約（`sha256:<hex>`）。ファイルの並びによらない。形は `src/digest.rs` の docs |
 | `verify_signature(&KeyRing, kid, &Digest, sig)` | Ed25519（`ring`）。知らない kid は FG-AGENT-0003、失効した鍵・合わない署名は FG-AGENT-0002 |
 | `sign_digest(&seed, &Digest)` / `public_key_from_seed` | 公開（A5）と試験のための署名。種は呼び出し側から出ない |
+| `SignatureDomain` / `verify_signature_in` / `sign_digest_in` | 署名する文の前置き（領域）つきの確かめと署名（計画 21 E1、ADR-0041 §4）。`verify_signature` / `sign_digest` は `SignatureDomain::AGENT_PART`（A1 と同じ文）。他の領域の署名は部品として通らない。`sign_digest_in` は種類ごとの包み（`sign_digest`・`forge_edge::sign_manifest`）だけが呼ぶ（`clippy.toml`） |
 | `KeyRing::parse(bytes)` | 公開鍵の一覧 `{"keys":[{"kid","public_key","created_at","retired_at","revoked_at"}]}` |
 | `scan(&Part, &ScanPolicy) -> Vec<Problem>` | 静的な検査（ADR-0032 Amendment 2026-11-14）。宣言していない `exec`・`network`・`permissions`・`fs-write`、settings.json の許可の一覧に無い鍵、`node <部品のスクリプト>` の形でないフックのコマンド、見通せないコード（`dynamic_code`、宣言しても断る）は FG-AGENT-0005、許可の一覧に無い MCP のホストは FG-AGENT-0013 |
 | `Lock::parse(bytes)` / `verify_lock(&Lock, &KeyRing, &tree)` | lock と作業ツリー（管理するファイルの path → バイト）。ファイルの SHA-256 → 要約 → 署名の鎖。不一致は FG-AGENT-0007 |
