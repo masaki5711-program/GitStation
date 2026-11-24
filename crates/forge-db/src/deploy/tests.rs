@@ -219,6 +219,8 @@ impl World {
             on_behalf_of,
             org: forge_core::approver::PersonOrg::Unknown("no_snapshot".to_owned()),
             version: env.version,
+            // A named approver's gate (the tests' delegators are named).
+            delegator_required: on_behalf_of.map(|_| forge_core::Role::Reporter),
         };
         approve_decided(
             &self.t.db,

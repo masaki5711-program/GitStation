@@ -492,7 +492,7 @@ impl ApprovalOf {
                             .await?
                             .fact
                     }
-                    None => forge_deploy::ApproverFact::unknown_delegator(),
+                    None => service.unknown_delegator(id, &stored).await?,
                 },
                 None => service.approver_gate(id, &stored, caller, None).await?.fact,
             },

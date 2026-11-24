@@ -240,6 +240,10 @@ fn classify(inputs: &ApprovalInputs, a: &ApproverFacts) -> (Option<UncountedReas
         .is_some_and(|d| d.kind != UserKind::Human)
     {
         Some(UncountedReason::NotHuman)
+    } else if a.delegator.as_ref().is_some_and(|d| !d.delegation_holds) {
+        // Removed, or given to another person: it no longer counts, even
+        // before the clean-up ends it.
+        Some(UncountedReason::DelegationEnded)
     } else if a
         .delegator
         .as_ref()

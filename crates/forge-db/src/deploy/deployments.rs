@@ -5,7 +5,7 @@
 
 use forge_core::approver::PersonOrg;
 use forge_core::deploy::{DeployChange, DeployTier, DeploymentStatus};
-use forge_core::{ProjectId, UserId};
+use forge_core::{ProjectId, Role, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 
 use super::{caller_of, internal, invalid, record, status_of, tier_of, TS};
@@ -124,19 +124,77 @@ pub(crate) fn deployment_columns(a: &str, authors: bool) -> String {
     )
 }
 
-/// How many approvals of deployment `deployment` (an SQL expression) count
-/// now: the approver, and the person approved for, still active (review of
-/// ADR-0038 step C: a disabled approver's earlier approval no longer
-/// counts). Rows of another approvers version are deleted when the
-/// approvers change (`put_approvers_decided`).
-pub(crate) fn live_approvals_count(deployment: &str) -> String {
+/// The approvals of deployment `deployment` (an SQL expression) that may
+/// count now: the approver, and the person approved for, still active, and
+/// an approval for someone else only while that person's delegation to the
+/// approver is active now (review of ADR-0038 step C). Rows of another
+/// approvers version are deleted when the approvers change
+/// (`put_approvers_decided`). The delegator's role is checked by
+/// [`counted_approvals_on`] (the decision); this count, shown with a
+/// deployment, does not read roles.
+fn live_approvals_where(deployment: &str) -> String {
     format!(
-        "(SELECT count(*) FROM forge.deployment_approvals x \
+        "FROM forge.deployment_approvals x \
           JOIN forge.users xu ON xu.id = x.approver_id AND xu.state = 'active' \
           LEFT JOIN forge.users xb ON xb.id = x.on_behalf_of \
           WHERE x.deployment_id = {deployment} \
-            AND (x.on_behalf_of IS NULL OR xb.state = 'active'))"
+            AND (x.on_behalf_of IS NULL OR (xb.state = 'active' AND EXISTS ( \
+              SELECT 1 FROM forge.approval_delegations xd \
+              WHERE xd.delegator_id = x.on_behalf_of AND xd.delegate_id = x.approver_id \
+                AND xd.starts_at <= now() AND now() < xd.ends_at)))"
     )
+}
+
+/// [`live_approvals_where`] as a count (the deployment's `approvals`).
+pub(crate) fn live_approvals_count(deployment: &str) -> String {
+    format!("(SELECT count(*) {})", live_approvals_where(deployment))
+}
+
+/// The approvals of deployment `id` that count now, on `conn` (the approval
+/// decision, under the deployment's lock): [`live_approvals_where`], and an
+/// approval for someone else only while that person still holds the role
+/// its gate asked for (`delegator_required_role`, review of ADR-0038 step
+/// C).
+async fn counted_approvals_on(
+    conn: &mut sqlx::PgConnection,
+    project: ProjectId,
+    id: i64,
+) -> Result<i64, ForgeError> {
+    const QUERY: &str = "deploy.approvals_counted";
+    let rows: Vec<(Option<i64>, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT x.on_behalf_of, x.delegator_required_role {}",
+        live_approvals_where("$1")
+    ))
+    .bind(id)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| query_error(QUERY, e))?;
+    let delegators: Vec<UserId> = rows
+        .iter()
+        .filter_map(|(d, _)| d.map(UserId::new))
+        .collect();
+    let roles = crate::roles::project_roles_on(&mut *conn, project, &delegators).await?;
+    let mut counted = 0i64;
+    for (delegator, required) in rows {
+        let ok = match delegator {
+            None => true,
+            Some(d) => {
+                let required = required
+                    .as_deref()
+                    .and_then(Role::parse)
+                    .ok_or_else(|| internal("stored_delegator_required_role_invalid"))?;
+                roles
+                    .get(&UserId::new(d))
+                    .copied()
+                    .flatten()
+                    .is_some_and(|r| r >= required)
+            }
+        };
+        if ok {
+            counted += 1;
+        }
+    }
+    Ok(counted)
 }
 
 fn deployment_of(r: DeploymentRow) -> Result<StoredDeployment, ForgeError> {
@@ -512,6 +570,10 @@ pub struct DeployApprovalInput {
     /// (`EnvironmentApprovers::version`): another one under the lock is
     /// `FG-DEPLOY-0010 reason=approvers_changed`.
     pub version: String,
+    /// The role the gate asked of the caller, which the delegator must hold
+    /// too (read again under the lock, and whenever the approvals are
+    /// counted); `None` without a delegator.
+    pub delegator_required: Option<Role>,
 }
 
 /// A person's approval of deployment `id` of `project`, under the row's
@@ -626,21 +688,43 @@ pub async fn approve_decided(
                     me,
                 ));
             }
+            // Review of ADR-0038 step C: the delegator's role, read again
+            // under the lock (the route decided on an earlier read).
+            let required = input
+                .delegator_required
+                .ok_or_else(|| internal("delegator_required_role_missing"))?;
+            let roles =
+                tx.step(|c| async move {
+                    crate::roles::project_roles_on(c, project, &[delegator]).await
+                })
+                .await?;
+            let role = roles.get(&delegator).copied().flatten();
+            if !role.is_some_and(|r| r >= required) {
+                return Err(ForgeError::new(ErrorCode::Forbidden)
+                    .with_context("reason", "delegator_role")
+                    .with_context("required_role", required.as_str())
+                    .with_context("actual_role", role.map_or("none", Role::as_str)));
+            }
         }
         let org = input.org.to_value().to_string();
+        let required_role = input
+            .on_behalf_of
+            .and(input.delegator_required)
+            .map(Role::as_str);
         let on_behalf_of = input.on_behalf_of.map(UserId::get);
         let inserted: u64 = tx
             .step(|c| async move {
                 sqlx::query(
                     "INSERT INTO forge.deployment_approvals (deployment_id, project_id, \
-                     approver_id, on_behalf_of, approver_org) VALUES ($1, $2, $3, $4, $5::jsonb) \
-                     ON CONFLICT DO NOTHING",
+                     approver_id, on_behalf_of, approver_org, delegator_required_role) \
+                     VALUES ($1, $2, $3, $4, $5::jsonb, $6) ON CONFLICT DO NOTHING",
                 )
                 .bind(id)
                 .bind(project.get())
                 .bind(user)
                 .bind(on_behalf_of)
                 .bind(org)
+                .bind(required_role)
                 .execute(c)
                 .await
                 .map(|r| r.rows_affected())
@@ -652,15 +736,8 @@ pub async fn approve_decided(
             // already approved this deployment.
             return Err(conflict("already_approved"));
         }
-        let count_sql = format!("SELECT {}", live_approvals_count("$1"));
         let approvals: i64 = tx
-            .step(|c| async move {
-                sqlx::query_scalar(&count_sql)
-                    .bind(id)
-                    .fetch_one(c)
-                    .await
-                    .map_err(|e| query_error(QUERY, e))
-            })
+            .step(|c| async move { counted_approvals_on(c, project, id).await })
             .await?;
         if approvals < i64::from(required) {
             let change = DeployChange::Approved {

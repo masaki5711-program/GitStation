@@ -120,6 +120,13 @@ CREATE TABLE forge.deployment_approvals (
     approver_org   jsonb CONSTRAINT deployment_approvals_approver_org
         CHECK (jsonb_typeof(approver_org) = 'object' AND octet_length(approver_org::text) <= 4096),
     created_at     timestamptz NOT NULL DEFAULT now(),
+    -- The role the approval's gate asked for (named: reporter; group,
+    -- selector or no list: maintainer), which the delegator must still hold
+    -- for the approval to count (review of step C). Only with on_behalf_of.
+    delegator_required_role text CONSTRAINT deployment_approvals_delegator_role
+        CHECK (delegator_required_role IN ('guest', 'reporter', 'developer', 'maintainer', 'owner')),
+    CONSTRAINT deployment_approvals_delegator_role_pair
+        CHECK ((on_behalf_of IS NULL) = (delegator_required_role IS NULL)),
     CONSTRAINT deployment_approvals_not_self CHECK (on_behalf_of IS DISTINCT FROM approver_id),
     CONSTRAINT deployment_approvals_one_per_approver UNIQUE (deployment_id, approver_id)
 );

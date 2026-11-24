@@ -34,6 +34,8 @@ mod eligible;
 pub(crate) use delegations::active_on as delegation_active_on;
 mod rules;
 
+#[cfg(test)]
+pub(crate) use commands::DELEGATED_BATCH;
 pub use commands::{approve_mr_decided, unapprove_mr_decided, ApproveAs, ApproveOutcome, Classify};
 pub(crate) use commands::{carry_some_on, revoke_on};
 pub use delegations::{
@@ -81,6 +83,11 @@ pub struct DelegatorFacts {
     /// approval counts for them only while they could approve themself
     /// (review of ADR-0038 step C: Developer or above).
     pub role: Option<Role>,
+    /// The delegator's delegation still names the approver (whatever its
+    /// period): `false` once it was removed or given to someone else — the
+    /// approval no longer counts (`delegation_ended`, review of ADR-0038
+    /// step C).
+    pub delegation_holds: bool,
     /// The groups the delegator is a direct member of now.
     pub groups: BTreeSet<GroupId>,
 }
@@ -448,6 +455,22 @@ async fn approvers_on(
             .fetch_all(&mut *conn)
             .await
             .map_err(|e| query_error("review.approver_groups", e))?;
+    let delegators: Vec<i64> = live
+        .iter()
+        .filter_map(|a| a.on_behalf_of.map(UserId::get))
+        .collect();
+    let delegations: Vec<(i64, i64)> = if delegators.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            "SELECT delegator_id, delegate_id FROM forge.approval_delegations \
+             WHERE delegator_id = ANY($1)",
+        )
+        .bind(&delegators)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error("review.approver_delegations", e))?
+    };
     let mut out = Vec::with_capacity(live.len());
     for approval in live {
         let user = approval.approver;
@@ -488,6 +511,9 @@ async fn approvers_on(
                             .with_context("user_id", d.get())
                     })?,
                     role: role_of(d),
+                    delegation_holds: delegations
+                        .iter()
+                        .any(|(from, to)| *from == d.get() && *to == user.get()),
                     groups: groups_of(d),
                 })
             }

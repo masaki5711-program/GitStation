@@ -973,6 +973,7 @@
       "committersUnknown": "siapa yang mem-push commit tidak dapat dipastikan",
       "notInRule": "tidak ada aturan yang meminta pemberi persetujuan ini",
       "carried": "dibawa dari versi sebelumnya",
+      "delegationEnded": "orang yang diwakili telah mencabut delegasi atau memberikannya kepada orang lain",
       "other": "saat ini tidak dihitung"
     },
     "actions": {

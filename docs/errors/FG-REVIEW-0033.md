@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-ADR-0038 §3.5 (step C): an approval (`POST …/merge-requests/{iid}/approve` with `on_behalf_of`, or `POST …/deployments/{deployment_id}/approve?on_behalf_of=`) named a person who has no delegation to the caller active now (`reason=no_delegation`: none, another delegate, not started yet or ended — `forge.approval_delegations` is read under the transaction's lock), or named an unknown or disabled person (`reason=unknown_delegator`). For a deployment the loader records this as a fact and authorize() refuses with this code only once the caller may approve at all (Reporter and above; others get FG-AUTH-0003 first, no username or delegation oracle). A delegate never approves for a delegate's delegator (one level only). Nothing was written.
+ADR-0038 §3.5 (step C): an approval (`POST …/merge-requests/{iid}/approve` with `on_behalf_of`, or `POST …/deployments/{deployment_id}/approve?on_behalf_of=`) named a person who has no delegation to the caller active now (`reason=no_delegation`: none, another delegate, not started yet or ended — `forge.approval_delegations` is read under the transaction's lock), or named an unknown or disabled person (`reason=unknown_delegator`). For a deployment the loader records this as a fact and authorize() refuses with this code only once the caller may approve at all (Reporter and above; others get FG-AUTH-0003 first), and a name that does not resolve is answered exactly as a person without a delegation (`reason=no_delegation`, or FG-DEPLOY-0014 `delegation_off` where the environment allows none): no username or delegation oracle. A delegate never approves for a delegate's delegator (one level only). Nothing was written.
 
 ## 調べ方 (diagnosis)
 

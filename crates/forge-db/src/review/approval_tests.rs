@@ -943,3 +943,81 @@ async fn a_carry_ends_an_approval_whose_delegation_no_longer_holds() {
     );
     w.t.drop_now().await;
 }
+
+/// Re-review of ADR-0038 step C (HIGH): a delegate who approved more merge
+/// requests than one change may end is still revocable — the delegation
+/// row goes at once and the approvals end in batches of their own.
+#[tokio::test]
+async fn a_delegation_with_more_approvals_than_one_change_holds_is_still_removed() {
+    let w = world().await;
+    let carol = carol(&w).await;
+    w.delegate(w.bob, "carol", "req-delegate").await;
+    let many = usize::try_from(super::approvals::DELEGATED_BATCH).expect("batch") + 11;
+    for n in 0..many {
+        let (mr, ()) = open_mr_decided(
+            &w.t.db,
+            &as_user(w.alice, &format!("req-open-{n}")),
+            w.web.project_id,
+            w.alice,
+            &NewMergeRequest {
+                title: format!("Change {n}"),
+                description: String::new(),
+                source_branch: RefName::parse(&format!("refs/heads/f{n}")).expect("branch"),
+                target_branch: RefName::parse("refs/heads/main").expect("branch"),
+                draft: false,
+            },
+            |_| Ok(()),
+        )
+        .await
+        .expect("open");
+        record_mr_version(
+            &w.t.db,
+            &system(&format!("req-v-{n}")),
+            mr.id,
+            &oid('a'),
+            Some(w.alice),
+        )
+        .await
+        .expect("version");
+        let _ = approve_mr_decided(
+            &w.t.db,
+            &as_user(carol, &format!("req-for-bob-{n}")),
+            (w.web.project_id, mr.iid),
+            carol,
+            None,
+            &crate::review::ApproveAs {
+                on_behalf_of: Some(w.bob),
+                org: forge_core::approver::PersonOrg::Unknown("not_read".to_owned()),
+            },
+            |_| Ok(()),
+            |_, _, _| (true, None),
+        )
+        .await
+        .expect("approve for bob");
+    }
+    let live = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM forge.merge_request_approvals \
+             WHERE on_behalf_of = $1 AND revoked_at IS NULL",
+        )
+        .bind(w.bob.get())
+        .fetch_one(&mut w.t.superuser().await)
+        .await
+        .expect("count")
+    };
+    assert_eq!(live().await, i64::try_from(many).expect("many"));
+    let removed = remove_delegation_decided(&w.t.db, &as_user(w.bob, "req-undelegate"), w.bob)
+        .await
+        .expect("removed, however many approvals");
+    assert_eq!(removed, DelegationOutcome::Removed);
+    assert_eq!(live().await, 0);
+    let ended: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM forge.events WHERE event_type = 'merge_request.unapproved' \
+         AND payload ->> 'reason' = 'delegation_ended'",
+    )
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("events");
+    assert_eq!(ended, i64::try_from(many).expect("many"));
+    w.t.drop_now().await;
+}

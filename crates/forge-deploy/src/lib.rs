@@ -436,6 +436,7 @@ impl Deploy {
             on_behalf_of,
             org: gate.org.clone(), // clone: the gate stays for the decision
             version: gate.version.clone(),
+            delegator_required: on_behalf_of.and(gate.fact.gate.required_role()),
         };
         let ctx = change_context(request, proof.principal(), user);
         let stored = forge_db::deploy::approve_decided(

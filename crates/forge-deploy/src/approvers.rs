@@ -56,14 +56,6 @@ impl ApproverFact {
             delegation_refused: None,
         }
     }
-
-    /// A named delegator that did not resolve.
-    pub fn unknown_delegator() -> Self {
-        Self {
-            delegation_refused: Some("unknown_delegator"),
-            ..Self::own(ApproverGate::NotListed("unknown_delegator"))
-        }
-    }
 }
 
 /// What the approval's decision was taken on (recorded with it).
@@ -173,7 +165,7 @@ impl Deploy {
 
     /// The delegator `name` of a deployment approval by `caller`: an
     /// active user, `None` when the name does not resolve (a fact for
-    /// `authorize()`: [`ApproverFact::unknown_delegator`]). Naming oneself
+    /// `authorize()`: [`Deploy::unknown_delegator`]). Naming oneself
     /// is `FG-WEB-0006`.
     pub async fn delegator(
         &self,
@@ -190,6 +182,31 @@ impl Deploy {
             return Err(param("on_behalf_of", "self"));
         }
         Ok(id)
+    }
+
+    /// The fact of a named delegator that did not resolve: answered exactly
+    /// as a known person without a delegation to the caller (re-review of
+    /// ADR-0038 step C: no username oracle) — `delegation_off` where the
+    /// environment allows no delegation, else `no_delegation`.
+    pub async fn unknown_delegator(
+        &self,
+        project: ProjectId,
+        deployment: &StoredDeployment,
+    ) -> Result<ApproverFact, ForgeError> {
+        let Some(env) =
+            forge_db::deploy::environment_approvers(&self.db, project, deployment.tier).await?
+        else {
+            return Err(ForgeError::new(ErrorCode::NotFound)
+                .with_context("resource", "deploy_environment")
+                .with_context("environment", deployment.tier.as_str()));
+        };
+        if env.unrestricted() || !env.allow_delegation {
+            return Ok(ApproverFact::own(ApproverGate::NotListed("delegation_off")));
+        }
+        Ok(ApproverFact {
+            delegation_refused: Some("no_delegation"),
+            ..ApproverFact::own(ApproverGate::NotListed("no_delegation"))
+        })
     }
 
     /// Whether `caller` (approving for `on_behalf_of`, when given) matches

@@ -70,6 +70,7 @@ fn for_delegator(mut a: ApproverFacts, delegator: UserId, o: PersonOrg) -> Appro
         active: true,
         kind: UserKind::Human,
         role: Some(Role::Developer),
+        delegation_holds: true,
         groups: BTreeSet::new(),
     });
     a
@@ -303,6 +304,15 @@ fn a_delegators_exclusions_apply_too() {
     }
     let r = evaluate(&inputs(vec![gone], rules.clone()));
     assert_eq!(reason_of(&r, DAVE), Some(UncountedReason::Inactive));
+    // The delegation was removed or given to someone else: not counted,
+    // even before the clean-up ends the approval.
+    let mut removed = for_delegator(approver(DAVE, Role::Developer), CAROL, org("S1", 15));
+    if let Some(d) = removed.delegator.as_mut() {
+        d.delegation_holds = false;
+    }
+    let r = evaluate(&inputs(vec![removed], vec![rule("carol", 1, vec![CAROL])]));
+    assert_eq!(reason_of(&r, DAVE), Some(UncountedReason::DelegationEnded));
+    assert_eq!(r.blocks.len(), 1);
     // The delegator holds no role on the project (or lost it), or only
     // Reporter: the delegate does not count for them, even when the rule
     // names the delegator (review of ADR-0038 step C).

@@ -1103,6 +1103,18 @@ pub struct DeploymentView {
     pub delegation_refused: Option<&'static str>,
 }
 
+impl ApproverGate {
+    /// The role `authorize()` asks of the caller (and of the delegator they
+    /// approve for) on this gate; `None`: not an approver.
+    pub fn required_role(self) -> Option<Role> {
+        match self {
+            Self::Unrestricted | Self::Matched => Some(Role::Maintainer),
+            Self::Named => Some(Role::Reporter),
+            Self::NotListed(_) => None,
+        }
+    }
+}
+
 /// Whether a person matches a deploy environment's approvers (ADR-0038
 /// §3.4), decided by the loader on the environment's list, the people's
 /// groups and the organisation snapshots — a fact `authorize()` reads.

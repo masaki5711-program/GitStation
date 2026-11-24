@@ -1580,16 +1580,14 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
                     .with_context("reason", reason)
                     .with_context("environment", d.tier.as_str()));
             }
-            let required = match d.approvers {
-                crate::model::ApproverGate::Unrestricted => Role::Maintainer,
-                crate::model::ApproverGate::Named => Role::Reporter,
-                crate::model::ApproverGate::Matched => Role::Maintainer,
-                crate::model::ApproverGate::NotListed(reason) => {
-                    need(Role::Reporter, d.project.role)?;
-                    return Err(deny(ErrorCode::DeployApproverNotListed)
-                        .with_context("reason", reason)
-                        .with_context("environment", d.tier.as_str()));
-                }
+            let Some(required) = d.approvers.required_role() else {
+                let crate::model::ApproverGate::NotListed(reason) = d.approvers else {
+                    return Err(deny(ErrorCode::Internal).with_context("reason", "gate_role"));
+                };
+                need(Role::Reporter, d.project.role)?;
+                return Err(deny(ErrorCode::DeployApproverNotListed)
+                    .with_context("reason", reason)
+                    .with_context("environment", d.tier.as_str()));
             };
             need(required, d.project.role)?;
             // Review of ADR-0038 step C: the person the approval counts for

@@ -973,6 +973,7 @@
       "committersUnknown": "コミットを push した人を確かめられません",
       "notInRule": "この人を求めるルールがありません",
       "carried": "前の版から引き継いだ承認です",
+      "delegationEnded": "代理を頼んだ本人が代理を外した（または別の人に替えた）承認です",
       "other": "今は数えません"
     },
     "actions": {

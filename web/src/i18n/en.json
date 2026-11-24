@@ -973,6 +973,7 @@
       "committersUnknown": "who pushed the commits cannot be confirmed",
       "notInRule": "no rule asks for this approver",
       "carried": "it was carried over from an earlier version",
+      "delegationEnded": "the person it was given for removed the delegation or gave it to someone else",
       "other": "it does not count now"
     },
     "actions": {

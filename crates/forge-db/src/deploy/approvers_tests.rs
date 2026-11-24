@@ -32,6 +32,37 @@ async fn put(
     .await
 }
 
+impl World {
+    /// `who` becomes a Reporter of the project (a delegator holds the role
+    /// a named approver's gate asks for).
+    async fn reporter(&self, who: UserId) {
+        projects::add_member(
+            &self.t.db,
+            &ctx(Actor::System, "req-reporter"),
+            self.project(),
+            who,
+            forge_core::Role::Reporter,
+        )
+        .await
+        .expect("reporter");
+    }
+
+    /// Bob delegates to `cy` around now.
+    async fn bob_delegates_to_cy(&self, request: &str) {
+        let (s, e) = self.period().await;
+        let _ = set_delegation_decided(
+            &self.t.db,
+            &ctx(Actor::User(self.bob), request),
+            self.bob,
+            "cy",
+            &s,
+            &e,
+        )
+        .await
+        .expect("delegation");
+    }
+}
+
 async fn prod_request(w: &World, c: char) -> StoredDeployment {
     w.request(w.alice, DeployTier::Prod, &sha(c))
         .await
@@ -110,6 +141,7 @@ async fn a_changed_approver_list_is_a_conflict() {
         on_behalf_of: None,
         org: forge_core::approver::PersonOrg::Unknown("no_snapshot".to_owned()),
         version: "2000-01-01T00:00:00.000000Z".to_owned(),
+        delegator_required: None,
     };
     let e = approve_decided(
         &w.t.db,
@@ -128,6 +160,7 @@ async fn a_changed_approver_list_is_a_conflict() {
 #[tokio::test]
 async fn an_approval_for_someone_without_a_delegation_is_refused() {
     let w = world().await;
+    w.reporter(w.bob).await;
     let carol = w.person("cy").await;
     w.env(DeployTier::Prod, Vec::new()).await;
     w.target(DeployTier::Prod, "web-1").await.expect("target");
@@ -176,6 +209,7 @@ async fn an_approval_for_someone_without_a_delegation_is_refused() {
 #[tokio::test]
 async fn a_delegate_and_the_delegator_count_once() {
     let w = world().await;
+    w.reporter(w.bob).await;
     let carol = w.person("cy").await;
     let dave = w.person("dave").await;
     w.env(DeployTier::Prod, Vec::new()).await;
@@ -334,6 +368,73 @@ async fn an_approval_for_someone_is_refused_where_the_environment_does_not_allow
         .expect_err("delegation off");
     assert_eq!(e.code(), ErrorCode::DeployApproverNotListed);
     assert!(deployment_approvals(&w.t.db, w.project(), d.id)
+        .await
+        .expect("rows")
+        .is_empty());
+    w.t.drop_now().await;
+}
+
+/// Re-review of ADR-0038 step C: an approval given for someone counts only
+/// while their delegation is active and they hold the role its gate asked
+/// for — at every count, and read again under the approval's lock.
+#[tokio::test]
+async fn a_delegated_deploy_approval_counts_only_while_the_delegation_and_the_role_hold() {
+    let w = world().await;
+    let cy = w.person("cy").await;
+    let dave = w.person("dave").await;
+    let erin = w.person("erin").await;
+    w.reporter(w.bob).await;
+    w.env(DeployTier::Prod, Vec::new()).await;
+    w.target(DeployTier::Prod, "web-1").await.expect("target");
+    put(
+        &w,
+        DeployTier::Prod,
+        &input(vec![w.bob, dave, erin], 2, true),
+    )
+    .await
+    .expect("approvers");
+    // The delegation ends after Cy approved for Bob: no longer counted.
+    w.bob_delegates_to_cy("req-delegate-1").await;
+    let d1 = prod_request(&w, 'a').await;
+    let first = w.approve_as(cy, d1.id, Some(w.bob)).await.expect("for bob");
+    assert_eq!(first.approvals, 1);
+    w.end_delegation(w.bob).await;
+    let shown = get_deployment(&w.t.db, w.project(), d1.id)
+        .await
+        .expect("read")
+        .expect("deployment");
+    assert_eq!(shown.approvals, 0);
+    let after = w.approve(dave, d1.id).await.expect("dave");
+    assert_eq!(
+        (after.status, after.approvals),
+        (DeploymentStatus::PendingApproval, 1)
+    );
+    // Bob loses his role after Cy approved for him: no longer counted.
+    w.bob_delegates_to_cy("req-delegate-2").await;
+    let d2 = prod_request(&w, 'b').await;
+    w.approve_as(cy, d2.id, Some(w.bob)).await.expect("for bob");
+    projects::remove_member(
+        &w.t.db,
+        &ctx(Actor::System, "req-unmember"),
+        w.project(),
+        w.bob,
+        forge_core::Role::Reporter,
+    )
+    .await
+    .expect("remove bob");
+    let after = w.approve(dave, d2.id).await.expect("dave");
+    assert_eq!(
+        (after.status, after.approvals),
+        (DeploymentStatus::PendingApproval, 1)
+    );
+    // Without the role, approving for Bob is refused under the lock.
+    let d3 = prod_request(&w, 'c').await;
+    let refused = w
+        .approve_as(cy, d3.id, Some(w.bob))
+        .await
+        .expect_err("no role");
+    assert_eq!(refused.code(), ErrorCode::Forbidden);
+    assert!(deployment_approvals(&w.t.db, w.project(), d3.id)
         .await
         .expect("rows")
         .is_empty());

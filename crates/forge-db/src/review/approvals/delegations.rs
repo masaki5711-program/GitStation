@@ -318,23 +318,21 @@ pub async fn set_delegation_decided(
             })
             .await?;
         let stored = of(row);
-        // A new delegate replaces the old one: what the old one approved for
-        // the person ends (review of ADR-0038 step C).
-        let (affected, events) =
-            super::commands::end_delegated_on(&mut tx, delegator, Some(delegate)).await?;
         let details = AuditDetails::ApprovalDelegationSet {
             delegator,
             delegate,
             starts_at: stored.starts_at.clone(), // clone: the answer keeps it
             ends_at: stored.ends_at.clone(),
         };
-        let mut record = ChangeRecord::audit_only(&details, RESOURCE, delegator.get());
-        record.affected = affected;
-        record.events = events;
+        let record = ChangeRecord::audit_only(&details, RESOURCE, delegator.get());
         Ok(Settle::Commit(record, (DelegationOutcome::Set, stored)))
     }
     .await;
-    tx.settle("approval_delegation.set", outcome).await
+    let answer = tx.settle("approval_delegation.set", outcome).await?;
+    // A new delegate replaces the old one: what the old one approved for
+    // the person ends (review of ADR-0038 step C), in changes of their own.
+    super::commands::end_orphaned_delegated(db, ctx, delegator).await?;
+    Ok(answer)
 }
 
 /// Remove `delegator`'s delegation (none: [`DelegationOutcome::Absent`]).
@@ -361,19 +359,18 @@ pub async fn remove_delegation_decided(
         let Some(delegate) = removed else {
             return Ok(Settle::Discard(DelegationOutcome::Absent));
         };
-        // Review of ADR-0038 step C: what the delegate approved for the
-        // person ends with the delegation.
-        let (affected, events) =
-            super::commands::end_delegated_on(&mut tx, delegator, None).await?;
         let details = AuditDetails::ApprovalDelegationRemoved {
             delegator,
             delegate: UserId::new(delegate),
         };
-        let mut record = ChangeRecord::audit_only(&details, RESOURCE, delegator.get());
-        record.affected = affected;
-        record.events = events;
+        let record = ChangeRecord::audit_only(&details, RESOURCE, delegator.get());
         Ok(Settle::Commit(record, DelegationOutcome::Removed))
     }
     .await;
-    tx.settle("approval_delegation.removed", outcome).await
+    let answer = tx.settle("approval_delegation.removed", outcome).await?;
+    // Review of ADR-0038 step C: what the delegate approved for the person
+    // ends with the delegation, in changes of their own (also after
+    // `Absent`: a retry finishes what a failed run left).
+    super::commands::end_orphaned_delegated(db, ctx, delegator).await?;
+    Ok(answer)
 }

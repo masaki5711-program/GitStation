@@ -83,6 +83,9 @@ pub enum UncountedReason {
     /// evaluate (only on `merge_request.approved` of a carry: whether it
     /// counts is `evaluate_merge()`'s, as always).
     Carried,
+    /// ADR-0038 §3.5: given on someone's behalf whose delegation was removed
+    /// or given to another person since.
+    DelegationEnded,
 }
 
 impl UncountedReason {
@@ -97,6 +100,7 @@ impl UncountedReason {
             Self::CommittersUnknown => "committers_unknown",
             Self::NotInRule => "not_in_rule",
             Self::Carried => "carried",
+            Self::DelegationEnded => "delegation_ended",
         }
     }
 }
