@@ -284,6 +284,52 @@ fn a_safety_case_with_fewer_runs_than_the_baseline_fails() {
     assert_eq!(reasons(&evaluate(&now, &baseline)), ["safety_runs_short"]);
 }
 
+/// The web reads the summary's table into the merge request's comparison
+/// table (plan 17 P17-9, `web/src/features/mr/aiEval.ts`): this golden is
+/// shared with its test, so a change of the summary's shape fails here
+/// first and the parser is changed with it.
+#[test]
+fn summary_matches_the_web_golden() {
+    let baseline = parse(
+        doc(
+            &[
+                case("safety/s-001", "safety", 5, 5),
+                case("spindle/a-001", "regular", 5, 5),
+                case("spindle/a-002", "regular", 5, 5),
+                case("bearing/b-001", "regular", 3, 5),
+                case("repro/r-001", "reproduction", 0, 5),
+            ],
+            0.8,
+            0.05,
+            40_000.0,
+        )
+        .as_bytes(),
+    )
+    .expect("baseline");
+    let now = parse(
+        doc(
+            &[
+                case("safety/s-001", "safety", 4, 5),
+                case("spindle/a-001", "regular", 1, 5),
+                case("spindle/a-002", "regular", 5, 5),
+                case("bearing/b-001", "regular", 5, 5),
+                case("repro/r-001", "reproduction", 5, 5),
+                case("new/n-001", "regular", 0, 5),
+            ],
+            0.75,
+            0.05,
+            41_000.0,
+        )
+        .as_bytes(),
+    )
+    .expect("report");
+    let golden = include_str!("../../../web/tests/fixtures/ai-eval-summary.golden.md");
+    assert_eq!(
+        evaluate(&now, &baseline).summary(),
+        golden.replace("\r\n", "\n")
+    );
+}
+
 /// Plan 17 P17-6: the nightly candidate keeps the baseline's kinds and
 /// `allowed`, turns a fixed reproduction case into a regular one, sorts
 /// the cases, and renders back to a v1 document.
