@@ -3157,6 +3157,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search projects and merge requests the caller may read (ranked, no count, opaque cursor) */
+        get: operations["get_api_v1_search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session": {
         parameters: {
             query?: never;
@@ -7533,6 +7550,62 @@ export interface components {
             description?: string | null;
             enabled?: boolean | null;
             tags?: string[] | null;
+        };
+        /** @description A matched range of a snippet. */
+        SearchHighlight: {
+            /**
+             * Format: int32
+             * @description One past the last character.
+             */
+            end: number;
+            /**
+             * Format: int32
+             * @description First character (Unicode code point) of the match in `text`.
+             */
+            start: number;
+        };
+        /** @description One hit the caller may read. */
+        SearchHit: {
+            /**
+             * Format: int64
+             * @description The merge request's number in its project (`null` for a project).
+             */
+            iid: number | null;
+            /** @description `project` or `merge_request`. */
+            kind: string;
+            /** Format: int64 */
+            project_id: number;
+            /** @description The project's current full path. */
+            project_path: string;
+            snippet: components["schemas"]["SearchSnippet"];
+            title: string;
+            /** @description The indexed text was cut (only its first part is searchable). */
+            truncated: boolean;
+            /** @description The source's last change, UTC, RFC 3339. */
+            updated_at: string;
+        };
+        /**
+         * @description A page of hits. There is no total: it would count what the caller
+         *     cannot read.
+         */
+        SearchPage: {
+            /**
+             * @description More hits may follow (a page can be short, even empty, when its
+             *     scan budget ended first).
+             */
+            has_more: boolean;
+            items: components["schemas"]["SearchHit"][];
+            /** @description Pass as `cursor` for the next page; `null` on the last one. */
+            next_cursor: string | null;
+        };
+        /** @description The text around the first match. */
+        SearchSnippet: {
+            cut_after: boolean;
+            /** @description Text was left out before / after `text`. */
+            cut_before: boolean;
+            /** @description Sorted, not overlapping. */
+            highlights: components["schemas"]["SearchHighlight"][];
+            text: string;
         };
         /** @description One service account (no personal data: it has none). */
         ServiceAccountBody: {
@@ -16325,6 +16398,46 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_search: {
+        parameters: {
+            query?: {
+                /** @description The search words (2..=200 characters; Japanese is matched by 2-grams, other words by word, the last word as a prefix) */
+                q?: string;
+                /** @description Comma-separated kinds to search: project, merge_request (default: every kind) */
+                scope?: string;
+                /** @description Only hits of this project (its id) */
+                project?: number;
+                /** @description Hits per page, 1..=50 (default 20); a page can be shorter when its scan budget ends first */
+                limit?: number;
+                /** @description The previous page's next_cursor (opaque; bound to this caller, query and filters) */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchPage"];
+                };
+            };
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {

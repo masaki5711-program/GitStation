@@ -2205,6 +2205,15 @@
     "word": "fixed"
   },
   {
+    "action": "SearchQuery",
+    "method": "GET",
+    "path": "/api/v1/search",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "SessionRead",
     "method": "GET",
     "path": "/api/v1/session",

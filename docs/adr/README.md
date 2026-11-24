@@ -42,3 +42,4 @@
 | [0036](0036-pfs-portal-widgets-and-news.md) | PFS ポータルのホームのウィジェットと新着 — ポータルの資格情報 `PortalWidgetRead`、ニュースの outbox | proposed（accepted は `feat/web-portal-widgets` のレビューの後） | 2026-11-17 |
 | [0037](0037-merge-path-throughput.md) | マージ経路のスループット — イベントで起こす待ち、プロセス内の文書の列車、変更パスを見た再計算 | proposed（accepted は計画 18 の S1〜S4 のレビューと負荷試験の後） | 2026-11-17 |
 | [0038](0038-org-based-access-and-approval.md) | 部・課・職位によるアクセス制限と承認 — 組織の台帳の写し、組織による所属（上限 Developer）、承認者の指定、確かめられないときは閉じる | proposed（PFS 側の前提と利用者の確認の後に accepted） | 2026-11-20 |
+| [0040](0040-knowledge-wiki-notes-search.md) | ナレッジ — Wiki は結び付けた普通のプロジェクト、ノートは自分の非公開プロジェクト、検索はアプリ側の 2-gram と `tsvector` | proposed（accepted は K1〜K3 のレビューの後） | 2026-11-23 |

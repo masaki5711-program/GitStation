@@ -1042,3 +1042,15 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── Plan 20 K2 (20270107100000, ADR-0040): the search index — derived,
+# rebuilt from the source tables at any time (`forge search reindex`) ──
+[tables.search_entries]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.search_index_state]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]

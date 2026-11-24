@@ -133,6 +133,8 @@ pub mod resolve;
 // ── M1 phase 8b MR7b: list page scans ──
 pub mod lists;
 // ── end M1 phase 8b MR7b ──
+// Plan 20 K2 (ADR-0040): the search index, its subscriber and reader.
+pub mod search;
 // ── M1 phase 8b MR8: direct member lists ──
 pub mod members;
 // ── end M1 phase 8b MR8 ──
