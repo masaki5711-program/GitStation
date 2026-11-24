@@ -49,6 +49,7 @@ pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, UserNa
 pub mod activity;
 mod after_version;
 mod ai_assets_settings;
+pub mod ai_baseline;
 pub mod approvals;
 mod auto_merge_settings;
 // M4 C14: the deterministic autofix worker and its settings.
@@ -78,6 +79,7 @@ pub use activity::{
     ActivityActor, ActivityItem, ActivityMergeRequest, ActivityPage, ActivityQuery,
     MAX_INVOLVED_PROJECTS, SHOWN_TYPES,
 };
+pub use ai_baseline::{BaselineAsk, BaselineProposer, BaselineReport};
 pub use autofix::{AutofixLimits, Autofixer, BundleFile, TickReport as AutofixTickReport};
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
 pub use forge_db::ai_assets::AiAssetsSetting;

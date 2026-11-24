@@ -823,6 +823,14 @@ gstn = "doc migration clear"
 reason = "Changes a project's lint policy: people_only."
 
 [[excluded]]
+gstn = "doc claim"
+reason = "The edit claim is a person's (plan 13 §7.5): people_only; an agent follows claims, it does not take them."
+
+[[excluded]]
+gstn = "doc release"
+reason = "Releasing or revoking an edit claim is a person's: people_only."
+
+[[excluded]]
 gstn = "user list"
 reason = "User administration (administrators)."
 
@@ -1068,6 +1076,14 @@ reason = "Read; not asked for yet."
 
 [[deferred]]
 gstn = "doc migration show"
+reason = "Read; not asked for yet."
+
+[[deferred]]
+gstn = "doc status"
+reason = "Read; the AI's document edits (plan 13 §8.3) will read it first — not built yet."
+
+[[deferred]]
+gstn = "doc versions"
 reason = "Read; not asked for yet."
 
 [[deferred]]

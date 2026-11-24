@@ -78,6 +78,8 @@ pub mod autofix;
 pub mod pipelines;
 // Plan 13 Q13: the document lint migration setting.
 pub mod doc_migration;
+// Plan 13 stage 4 part A: document revisions and edit claims.
+pub mod doc_revision;
 pub mod doc_view;
 
 #[cfg(test)]

@@ -32,6 +32,10 @@ fn only_forge_checks_calls_the_check_commands() {
         // Plan 13 Q13: the document lint's migration setting.
         "set_doc_lint_migration",
         "clear_doc_lint_migration",
+        // Plan 13 stage 4 part A: the document edit claims.
+        "take_edit_claim",
+        "release_edit_claim",
+        "revoke_edit_claim",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))
@@ -90,6 +94,10 @@ fn the_check_command_names_avoid_the_hosting_needles() {
         "change_check_namespace_grant",
         "set_doc_lint_migration",
         "clear_doc_lint_migration",
+        // Plan 13 stage 4 part A: the document edit claims.
+        "take_edit_claim",
+        "release_edit_claim",
+        "revoke_edit_claim",
     ] {
         let call = format!("{name}_decided(");
         for needle in hosting {

@@ -20,7 +20,6 @@ use forge_db::repositories;
 use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::{Git, GitConfig, StorageRoot};
 use forge_review::{Mergeability, Merger, Review, VersionRefs};
 use forge_web::SessionCredential;
@@ -236,9 +235,11 @@ async fn world() -> World {
         ],
     );
     plumb(&path, &["update-ref", "refs/heads/second", &second], None);
-    // One browse cache for the routes and the merge job, as in `forge serve`.
-    let browser = Browser::new(git.clone(), storage.clone(), BrowseLimits::default());
+    // One browse cache for the routes and the merge job, as in `forge serve`
+    // (the routes read `smart.browse`: plan 13 stage 4's create route reads
+    // the refs before the merge, so a second cache would answer stale).
     let smart = SmartHttp::new(git.clone(), storage.clone(), GitHttpLimits::default());
+    let browser = smart.browse.clone();
     let refs = VersionRefs::new(git.clone(), storage.clone());
     let state = AppState::new(
         "test",

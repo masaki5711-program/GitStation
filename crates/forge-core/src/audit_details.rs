@@ -7,6 +7,7 @@ use crate::auto_merge::AutoMergeChange;
 use crate::autofix::AutofixChange;
 use crate::checks::CheckRunChange;
 use crate::doc_lint_migration::DocLintMigrationChange;
+use crate::doc_revision::DocEditClaimChange;
 use crate::event_type::EventType;
 use crate::history_import::HistoryImportChange;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
@@ -435,6 +436,10 @@ pub enum AuditDetails {
     /// (resource the project, no event). Shapes:
     /// [`DocLintMigrationChange::to_value`].
     DocLintMigration(DocLintMigrationChange),
+    /// Plan 13 §7.5 (stage 4 part A): a Maintainer revoked another
+    /// person's edit claim on a document (resource the project, no event).
+    /// Shapes: [`DocEditClaimChange::to_value`].
+    DocEditClaim(DocEditClaimChange),
     /// M4 C2: a person cancelled, retried or ran a CI pipeline (resource
     /// the project, no event). Shapes: [`PipelineChange::to_value`].
     Pipeline(PipelineChange),
@@ -639,6 +644,7 @@ impl AuditDetails {
             Self::PushMirror(change) => change.action(),
             Self::HistoryImport(change) => change.action(),
             Self::DocLintMigration(change) => change.action(),
+            Self::DocEditClaim(change) => change.action(),
             Self::Pipeline(change) => change.action(),
             Self::Runner(change) => change.action(),
             Self::MergeQueue(change) => change.action(),
@@ -710,6 +716,7 @@ impl AuditDetails {
             | Self::PushMirror(_)
             | Self::HistoryImport(_)
             | Self::DocLintMigration(_)
+            | Self::DocEditClaim(_)
             | Self::Runner(_)
             | Self::MergeQueue(_)
             | Self::AutoMerge(_)
@@ -1176,6 +1183,7 @@ impl AuditDetails {
             Self::PushMirror(change) => change.to_value(),
             Self::HistoryImport(change) => change.to_value(),
             Self::DocLintMigration(change) => change.to_value(),
+            Self::DocEditClaim(change) => change.to_value(),
             Self::Pipeline(change) => change.to_value(),
             Self::Runner(change) => change.to_value(),
             Self::MergeQueue(change) => change.to_value(),
@@ -1284,6 +1292,7 @@ impl AuditDetails {
             | Self::PushMirror(_)
             | Self::HistoryImport(_)
             | Self::DocLintMigration(_)
+            | Self::DocEditClaim(_)
             | Self::Pipeline(_)
             | Self::Runner(_)
             | Self::MergeQueue(_)

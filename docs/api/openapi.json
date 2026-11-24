@@ -4893,6 +4893,54 @@
         ],
         "type": "object"
       },
+      "DocumentRevisionBody": {
+        "additionalProperties": false,
+        "description": "An open merge request revising the document.",
+        "properties": {
+          "author_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "head_sha": {
+            "description": "The head its documents were derived from.",
+            "type": "string"
+          },
+          "holds": {
+            "description": "The earliest open merge request of this language holds the\nrevision; `false` marks a second revision (ADR-0027 §1).",
+            "type": "boolean"
+          },
+          "lang": {
+            "description": "The translation's language (`null`: the original).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merge_request_iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "since": {
+            "description": "When it first revised the document (UTC, RFC 3339).",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lang",
+          "merge_request_iid",
+          "title",
+          "author_id",
+          "since",
+          "head_sha",
+          "holds"
+        ],
+        "type": "object"
+      },
       "DocumentSectionBody": {
         "additionalProperties": false,
         "description": "A level-2 section.",
@@ -4919,6 +4967,62 @@
           "heading",
           "line",
           "pieces"
+        ],
+        "type": "object"
+      },
+      "DocumentStatusBody": {
+        "additionalProperties": false,
+        "description": "`GET …/documents/{doc_id}/status`.",
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "edit_claim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EditClaimBody",
+                "description": "The live claim (`null`: nobody is editing)."
+              }
+            ]
+          },
+          "revisions": {
+            "description": "By language, the earliest first.",
+            "items": {
+              "$ref": "#/components/schemas/DocumentRevisionBody"
+            },
+            "type": "array"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/DocumentStatusViewer"
+          }
+        },
+        "required": [
+          "doc_id",
+          "revisions",
+          "edit_claim",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "DocumentStatusViewer": {
+        "additionalProperties": false,
+        "description": "What the caller could do now: trial `authorize()` decisions (hints for\nthe screen; the routes decide again).",
+        "properties": {
+          "can_claim": {
+            "description": "`PUT|DELETE …/edit-claim`.",
+            "type": "boolean"
+          },
+          "can_revoke": {
+            "description": "`POST …/edit-claim/revoke`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_claim",
+          "can_revoke"
         ],
         "type": "object"
       },
@@ -4961,6 +5065,161 @@
           "path",
           "classification",
           "translations"
+        ],
+        "type": "object"
+      },
+      "DocumentVersionBody": {
+        "additionalProperties": false,
+        "description": "One version of a document.",
+        "properties": {
+          "blob": {
+            "description": "The document's blob after the merge (`null`: the merge removed it).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "description": "The branch's tip after the merge.",
+            "type": "string"
+          },
+          "merge_request_iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "merged_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "revision": {
+            "description": "1, 2, …",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "merge_request_iid",
+          "title",
+          "merged_at",
+          "commit",
+          "blob"
+        ],
+        "type": "object"
+      },
+      "DocumentVersionsBody": {
+        "additionalProperties": false,
+        "description": "`GET …/documents/{doc_id}/versions`.",
+        "properties": {
+          "current_revision": {
+            "description": "The latest version (`null`: no merge changed it yet).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "doc_id": {
+            "type": "string"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocIncompleteBody",
+                "description": "A bound was hit (`doc_versions`: more merges than were read; or the\ndocument index's bounds)."
+              }
+            ]
+          },
+          "path": {
+            "description": "The document's path there.",
+            "type": "string"
+          },
+          "rev": {
+            "$ref": "#/components/schemas/RevBody",
+            "description": "The default branch's tip the document was found at."
+          },
+          "versions": {
+            "description": "Oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/DocumentVersionBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "doc_id",
+          "rev",
+          "path",
+          "current_revision",
+          "versions",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "EditClaimBody": {
+        "additionalProperties": false,
+        "description": "A live edit claim.",
+        "properties": {
+          "claimed_at": {
+            "description": "When it was taken (UTC, RFC 3339).",
+            "type": "string"
+          },
+          "doc_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When it lapses unless extended (UTC, RFC 3339; 30 minutes after\nit was taken or last extended).",
+            "type": "string"
+          },
+          "merge_request_iid": {
+            "description": "The merge request the editing is for, if named.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "user_id": {
+            "description": "The person editing.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "doc_id",
+          "user_id",
+          "merge_request_iid",
+          "claimed_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "EditClaimTakenBody": {
+        "additionalProperties": false,
+        "description": "The answer of `PUT …/edit-claim`.",
+        "properties": {
+          "claim": {
+            "$ref": "#/components/schemas/EditClaimBody"
+          },
+          "extended": {
+            "description": "The caller's own live claim was extended (else it was taken).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "claim",
+          "extended"
         ],
         "type": "object"
       },
@@ -9140,6 +9399,22 @@
         "required": [
           "warn_until"
         ],
+        "type": "object"
+      },
+      "PutEditClaim": {
+        "additionalProperties": false,
+        "description": "`PUT …/edit-claim`.",
+        "properties": {
+          "merge_request_iid": {
+            "description": "The open merge request the editing is for (optional; kept when an\nextension names none).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "PutEnvironment": {
@@ -18825,6 +19100,151 @@
         "x-forge-action": "RepoBrowse"
       }
     },
+    "/api/v1/projects/{id}/documents/{doc_id}/edit-claim": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_documents_doc_id_edit_claim",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Release the caller's own edit claim on a document (409 FG-DOC-0007 for another person's; 404 without a live claim; people only; Developer)",
+        "x-forge-action": "DocumentEditClaim"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_documents_doc_id_edit_claim",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutEditClaim"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditClaimTakenBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Take or extend the caller's edit claim on a document for 30 minutes (409 FG-DOC-0007 while another person's is live; people only; Developer)",
+        "x-forge-action": "DocumentEditClaim",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/documents/{doc_id}/edit-claim/revoke": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_documents_doc_id_edit_claim_revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Revoke the live edit claim on a document, whoever holds it (audited; 404 without a live claim; people only; Maintainer)",
+        "x-forge-action": "DocumentEditClaimRevoke"
+      }
+    },
     "/api/v1/projects/{id}/documents/{doc_id}/referenced-by": {
       "get": {
         "operationId": "get_api_v1_projects_id_documents_doc_id_referenced_by",
@@ -18910,6 +19330,106 @@
           }
         },
         "summary": "The documents that refer to one document (or one of its blocks), by id, paged (a more confidential referrer: its id only; an agent's answer leaves confidential ones out uncounted)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/documents/{doc_id}/status": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_documents_doc_id_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentStatusBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A document's open revisions (the merge requests revising it; the earliest per language holds it) and its live edit claim",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/documents/{doc_id}/versions": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_documents_doc_id_versions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentVersionsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A document's versions on the default branch: each applied merge that changed its blob (derived from git and the merges)",
         "x-forge-action": "RepoBrowse"
       }
     },

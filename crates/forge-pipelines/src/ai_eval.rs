@@ -29,6 +29,17 @@
 //! - otherwise the gates: `success`, or `failure` (FG-AIASSET-0004 / 0006)
 //!   with the comparison table in the summary for the merge request.
 //!
+//! **The nightly baseline candidate** (plan 17 P17-6): a scheduled
+//! pipeline (C12) compared against the default branch whose check is
+//! `success` — or `error` only because the baseline is absent — and whose
+//! report differs from that baseline (`forge_core::ai_eval::
+//! baseline_candidate`) queues ONE `ai_eval.baseline_candidate` job in the
+//! check's transaction. `forge serve` runs it: [`baseline_candidate`]
+//! reads the report and baseline again, and forge-review keeps one draft
+//! merge request per models up to date (a person approves:
+//! `evals/baselines/` is a protected path). A merge request's or a push's
+//! pipeline never proposes.
+//!
 //! **A read that keeps failing ends as `error`** (review HIGH 4): a
 //! failure to read the report or the baseline (storage, git, a repository
 //! not ready) is counted and backed off (`forge_db::ci_ai_eval::
@@ -40,9 +51,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use forge_core::ai_eval::{self, baseline_path, evaluate, MAX_REPORT_BYTES};
+use forge_core::ai_eval::{
+    self, baseline_candidate as candidate_of, baseline_path, evaluate, EvalReport, MAX_REPORT_BYTES,
+};
 use forge_core::checks::{CheckConclusion, CheckStatus, AI_EVAL_CHECK};
-use forge_core::{CheckName, ObjectId, RefName, RepoId, RequestId};
+use forge_core::{CheckName, ObjectId, ProjectId, RefName, RepoId, RequestId, UserId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::checks::NewCheckRun;
 use forge_db::ci_ai_eval::{self as db, AiEvalCheck, AiEvalTarget};
@@ -69,6 +82,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// What [`BaselineSource::baseline`] returns.
 pub type BaselineFuture<'a> =
     Pin<Box<dyn Future<Output = Result<SmallFile, ForgeError>> + Send + 'a>>;
+/// What [`BaselineSource::default_branch`] returns.
+pub type DefaultBranchFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<RefName>, ForgeError>> + Send + 'a>>;
 /// What [`BaselineSource::base`] returns.
 pub type BaseFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<ObjectId>, ForgeError>> + Send + 'a>>;
@@ -93,6 +109,18 @@ pub trait BaselineSource: Send + Sync {
         commit: &'a ObjectId,
         path: &'a str,
     ) -> BaselineFuture<'a>;
+
+    /// The repository's default branch (`None`: it has none).
+    fn default_branch(&self, repo: RepoId) -> DefaultBranchFuture<'_>;
+}
+
+/// `refs/heads/<default>` of `repo` as the browse API reads it.
+async fn default_branch_of(browser: &Browser, repo: RepoId) -> Result<Option<RefName>, ForgeError> {
+    let refs = browser.refs(repo).await?;
+    Ok(refs
+        .default_branch
+        .as_deref()
+        .and_then(|d| RefName::parse(&format!("refs/heads/{d}")).ok()))
 }
 
 fn internal(reason: &'static str) -> ForgeError {
@@ -109,16 +137,10 @@ impl BaselineSource for Browser {
         Box::pin(async move {
             let name = match branch {
                 Some(b) => b.clone(), // clone: the lookup owns its name
-                None => {
-                    let refs = self.refs(repo).await?;
-                    let Some(default) = refs.default_branch.as_deref() else {
-                        return Ok(None);
-                    };
-                    let Ok(name) = RefName::parse(&format!("refs/heads/{default}")) else {
-                        return Ok(None);
-                    };
-                    name
-                }
+                None => match default_branch_of(self, repo).await? {
+                    Some(name) => name,
+                    None => return Ok(None),
+                },
             };
             let tip = match self.find_ref(repo, &name).await? {
                 RefLookup::Commit(rev) => {
@@ -143,6 +165,10 @@ impl BaselineSource for Browser {
             self.small_file(repo, commit.as_str(), &path, max).await
         })
     }
+
+    fn default_branch(&self, repo: RepoId) -> DefaultBranchFuture<'_> {
+        Box::pin(default_branch_of(self, repo))
+    }
 }
 
 /// The run [`build`] made and why (for the log).
@@ -157,6 +183,29 @@ pub struct Built {
     /// a cause's code): never the report's text.
     pub detail: Option<String>,
     pub findings: usize,
+    /// Queue the nightly baseline candidate with the run (module docs).
+    pub propose: bool,
+}
+
+/// A scheduled run on the default branch (`on_default`, [`on_default`])
+/// whose report is not the baseline already (module docs).
+fn proposes(on_default: bool, report: &EvalReport, baseline: Option<&EvalReport>) -> bool {
+    on_default && candidate_of(report, baseline).is_some()
+}
+
+/// `t` is a scheduled run on the repository's default branch (a schedule
+/// on another branch compares with the default branch too, but never
+/// proposes its baseline). Reads the default branch only for a scheduled
+/// run.
+async fn on_default(
+    t: &AiEvalTarget,
+    baselines: &dyn BaselineSource,
+    repo: RepoId,
+) -> Result<bool, ForgeError> {
+    if t.scheduled_by.is_none() || t.base_branch.is_some() {
+        return Ok(false);
+    }
+    Ok(baselines.default_branch(repo).await?.as_ref() == Some(&t.git_ref))
 }
 
 fn name() -> Result<CheckName, ForgeError> {
@@ -177,6 +226,7 @@ fn pending(status: CheckStatus, summary: String) -> Result<Built, ForgeError> {
         reason: None,
         detail: None,
         findings: 0,
+        propose: false,
     })
 }
 
@@ -213,6 +263,7 @@ fn error(
         reason: Some(reason.to_owned()),
         detail,
         findings: 0,
+        propose: false,
     })
 }
 
@@ -338,6 +389,7 @@ pub async fn build(
             .with_context("project_id", t.project.get())
             .with_context("operation", "ai_eval_baseline")
     })?;
+    let on_default = on_default(t, baselines, repo).await?;
     let path = baseline_path(&report.models);
     let branch = t
         .base_branch
@@ -361,7 +413,11 @@ pub async fn build(
         error(t, ErrorCode::BaselineMissing, reason, detail)
     };
     let baseline = match baselines.baseline(repo, &base, &path).await? {
-        SmallFile::Absent => return missing("baseline_absent", None),
+        SmallFile::Absent => {
+            let mut built = missing("baseline_absent", None)?;
+            built.propose = proposes(on_default, &report, None);
+            return Ok(built);
+        }
         SmallFile::NotAFile => return missing("baseline_not_a_file", None),
         SmallFile::TooLarge => return missing("baseline_too_large", None),
         SmallFile::Found(bytes) => match ai_eval::parse(&bytes) {
@@ -378,6 +434,7 @@ pub async fn build(
         return missing("baseline_models_mismatch", None);
     }
     let evaluation = evaluate(&report, &baseline);
+    let propose = evaluation.passed() && proposes(on_default, &report, Some(&baseline));
     let conclusion = if evaluation.passed() {
         CheckConclusion::Success
     } else {
@@ -396,6 +453,7 @@ pub async fn build(
         reason: evaluation.findings.first().map(|f| f.reason().to_owned()),
         detail: Some(format!("baseline {path} at {}", base.as_str())),
         findings: evaluation.findings.len(),
+        propose,
     })
 }
 
@@ -527,13 +585,24 @@ async fn one(
             error(&t, ErrorCode::BenchUnavailable, "read_failed", Some(detail))?
         }
     };
-    Ok(match db::record(db_handle, ctx, &t, &built.run).await? {
-        AiEvalCheck::Written(reported) => {
-            Done::Written(Box::new(t), Box::new(built), reported.completed_event)
-        }
-        AiEvalCheck::Superseded => Done::Superseded,
-        AiEvalCheck::Skipped => Done::Skipped,
-    })
+    let then = if built.propose {
+        Some(db::baseline_candidate_job(
+            t.project,
+            t.pipeline_id,
+            request_id.clone(), // clone: the job keeps its origin request
+        )?)
+    } else {
+        None
+    };
+    Ok(
+        match db::record_then(db_handle, ctx, &t, &built.run, then.as_ref()).await? {
+            AiEvalCheck::Written(reported) => {
+                Done::Written(Box::new(t), Box::new(built), reported.completed_event)
+            }
+            AiEvalCheck::Superseded => Done::Superseded,
+            AiEvalCheck::Skipped => Done::Skipped,
+        },
+    )
 }
 
 fn log_written(request_id: &RequestId, t: &AiEvalTarget, built: &Built, completed_event: bool) {
@@ -573,8 +642,119 @@ fn log_written(request_id: &RequestId, t: &AiEvalTarget, built: &Built, complete
         detail,
         findings = built.findings,
         completed_event,
+        baseline_candidate = built.propose,
         "the forge/ai-eval check follows its pipeline"
     );
+}
+
+/// The baseline a nightly run proposes ([`baseline_candidate`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Proposal {
+    pub project: ProjectId,
+    pub repo: RepoId,
+    pub pipeline_id: i64,
+    /// The schedule's owner: the merge request is theirs, decided as theirs.
+    pub owner: UserId,
+    /// The default branch the run was on (the merge request's target).
+    pub target: RefName,
+    /// The commit the bench ran on (the baseline file there must still be
+    /// the one at the default branch's tip).
+    pub start: ObjectId,
+    pub models: String,
+    /// The baseline file (`forge_core::ai_eval::render`).
+    pub content: Vec<u8>,
+}
+
+/// What [`baseline_candidate`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Candidate {
+    Propose(Box<Proposal>),
+    /// Nothing to propose, and why: `pipeline_gone`, `not_scheduled`, `superseded`,
+    /// `not_default_branch`, `no_report`, `report_unusable`,
+    /// `base_unresolved`, `baseline_unusable`, `not_passing`, `unchanged`.
+    Skip(&'static str),
+}
+
+/// The baseline candidate of `pipeline` (plan 17 P17-6, module docs),
+/// read again for the `ai_eval.baseline_candidate` job: the report of the
+/// declaring job, the baseline at the merge base with the default branch,
+/// the same rules as the check. Errors (the job retries): `FG-REPO-0016`,
+/// git and storage failures, `FG-DB-*`.
+pub async fn baseline_candidate(
+    db_handle: &Db,
+    store: &ArtifactStore,
+    baselines: &dyn BaselineSource,
+    pipeline: i64,
+) -> Result<Candidate, ForgeError> {
+    let Some(t) = db::target(db_handle, pipeline).await? else {
+        return Ok(Candidate::Skip("pipeline_gone"));
+    };
+    let Some(owner) = t.scheduled_by else {
+        return Ok(Candidate::Skip("not_scheduled"));
+    };
+    // Only the latest nightly run of the branch proposes (a delayed retry
+    // of an older one never overwrites a newer candidate).
+    if db::newer_scheduled(db_handle, pipeline).await? {
+        return Ok(Candidate::Skip("superseded"));
+    }
+    if t.base_branch.is_some() {
+        return Ok(Candidate::Skip("not_default_branch"));
+    }
+    let (Some(JobStatus::Succeeded), Some(artifact)) = (t.job_status, &t.report) else {
+        return Ok(Candidate::Skip("no_report"));
+    };
+    let report = match read_report(store, &t, artifact).await? {
+        Ok(bytes) => match ai_eval::parse(&bytes) {
+            Ok(report) => report,
+            Err(_) => return Ok(Candidate::Skip("report_unusable")),
+        },
+        Err(_) => return Ok(Candidate::Skip("report_unusable")),
+    };
+    let repo = t.repo.ok_or_else(|| {
+        ForgeError::new(ErrorCode::RepositoryNotReady)
+            .with_context("project_id", t.project.get())
+            .with_context("operation", "ai_eval_baseline_candidate")
+    })?;
+    if baselines.default_branch(repo).await?.as_ref() != Some(&t.git_ref) {
+        return Ok(Candidate::Skip("not_default_branch"));
+    }
+    let Some(base) = baselines.base(repo, &t.sha, None).await? else {
+        return Ok(Candidate::Skip("base_unresolved"));
+    };
+    let baseline = match baselines
+        .baseline(repo, &base, &baseline_path(&report.models))
+        .await?
+    {
+        SmallFile::Absent => None,
+        SmallFile::NotAFile | SmallFile::TooLarge => {
+            return Ok(Candidate::Skip("baseline_unusable"))
+        }
+        SmallFile::Found(bytes) => match ai_eval::parse(&bytes) {
+            Ok(b) if b.models == report.models => Some(b),
+            Ok(_) | Err(_) => return Ok(Candidate::Skip("baseline_unusable")),
+        },
+    };
+    if baseline
+        .as_ref()
+        .is_some_and(|b| !evaluate(&report, b).passed())
+    {
+        return Ok(Candidate::Skip("not_passing"));
+    }
+    let Some(candidate) = candidate_of(&report, baseline.as_ref()) else {
+        return Ok(Candidate::Skip("unchanged"));
+    };
+    let content = ai_eval::render(&candidate)
+        .map_err(|p| internal("baseline_render_failed").with_context("problem", p.reason))?;
+    Ok(Candidate::Propose(Box::new(Proposal {
+        project: t.project,
+        repo,
+        pipeline_id: t.pipeline_id,
+        owner,
+        target: t.git_ref,
+        start: t.sha,
+        models: candidate.models,
+        content,
+    })))
 }
 
 #[cfg(test)]
