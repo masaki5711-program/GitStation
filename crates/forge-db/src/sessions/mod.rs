@@ -40,7 +40,10 @@ mod list;
 mod oidc;
 mod purge;
 
-pub use auth::{authenticate, authenticate_with, touch_session, SessionStore, TouchPolicy};
+pub use auth::{
+    authenticate, authenticate_with, session_admin, touch_session, SessionStore, TouchPolicy,
+    ADMIN_CONFIRM_SECS,
+};
 pub use list::{is_public_id, list, owner, SessionInfo, SessionList, MAX_LISTED};
 pub use oidc::{
     account_of, backchannel_targets, claim_refresh, logout_view, store_refreshed,

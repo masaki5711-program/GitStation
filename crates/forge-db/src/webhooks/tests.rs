@@ -1098,3 +1098,39 @@ async fn the_read_pool_never_reads_the_full_url() {
     drop(su);
     w.t.drop_now().await;
 }
+
+/// ADR-0021 amendment 2026-11-24 (review HIGH): a delivery is decided on
+/// the owner's standing administrator flag — a flag the identity
+/// provider's role granted does not count (no live session backs it); the
+/// CLI's does.
+#[tokio::test]
+async fn a_webhook_owner_counts_only_a_cli_admin_flag() {
+    let w = world().await;
+    let hook = w.create("req-hook-admin").await;
+    let owner_admin = |w: &World| {
+        let db = w.t.db.clone();
+        async move {
+            let mut conn = db.write_pool().acquire().await.expect("conn");
+            super::dispatch::material_on(&mut conn, hook)
+                .await
+                .expect("material")
+                .expect("the webhook")
+                .owner_admin
+        }
+    };
+    assert!(!owner_admin(&w).await);
+    users::sync_idp_admin(&w.t.db, &system("req-hook-grant"), w.alice, true)
+        .await
+        .expect("granted by the role");
+    assert!(!owner_admin(&w).await, "the role's flag is no standing");
+    users::set_admin_source(
+        &w.t.db,
+        &system("req-hook-cli"),
+        w.alice,
+        forge_core::AdminSource::Cli,
+    )
+    .await
+    .expect("kept by the CLI");
+    assert!(owner_admin(&w).await, "the CLI's flag is");
+    w.t.drop_now().await;
+}

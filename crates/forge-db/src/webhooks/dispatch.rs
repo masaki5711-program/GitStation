@@ -46,14 +46,17 @@ type MaterialRow = (i64, i64, bool, Vec<String>, i64, bool, bool, String);
 
 /// What forge-auth decides a webhook's deliveries on, read now on `conn`:
 /// the webhook as stored and its owner's account and access facts on the
-/// project. `None`: the webhook is gone.
+/// project. `None`: the webhook is gone. The owner's administrator flag is
+/// a standing one (`AdminSource::standing_admin`: no live session backs a
+/// delivery, so a flag the identity provider's role granted does not
+/// count; ADR-0021 amendment 2026-11-24).
 pub(crate) async fn material_on(
     conn: &mut sqlx::postgres::PgConnection,
     webhook: WebhookId,
 ) -> Result<Option<WebhookMaterial>, ForgeError> {
     let row: Option<MaterialRow> = sqlx::query_as(
         "SELECT w.id, w.project_id, w.enabled, w.event_types, w.owner_user_id, \
-         u.state = 'active', u.is_admin, u.kind FROM forge.webhooks w \
+         u.state = 'active', u.is_admin AND u.admin_source = 'cli', u.kind FROM forge.webhooks w \
          JOIN forge.users u ON u.id = w.owner_user_id WHERE w.id = $1",
     )
     .bind(webhook.get())

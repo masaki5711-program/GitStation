@@ -536,3 +536,63 @@ fn only_forge_web_builds_portal_principals() {
         "only forge-web's authentication builds a portal principal: {offenders:?}"
     );
 }
+
+/// ADR-0021 amendment 2026-11-24: a token principal's administrator flag
+/// is the standing one `tokens::authenticate` reads (never a flag the
+/// identity provider's role granted), so a token principal is built only
+/// from its `TokenIdentity` in forge-web's authentication — or inside
+/// forge-auth, whose own trial principals carry no flag. A production file
+/// anywhere else that builds `Credential::Token(…)` fails here (a match
+/// arm, a `matches!` or a destructuring `let` is no construction).
+#[test]
+fn only_forge_web_builds_token_principals_from_the_authenticator() {
+    let needle = ["Credential::", "Token("].concat();
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(&crates).expect("crates/") {
+        let dir = entry.expect("entry").path();
+        let name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_owned();
+        if name == "forge-auth" {
+            continue;
+        }
+        let mut files = Vec::new();
+        rust_files(&dir.join("src"), &mut files);
+        for file in files {
+            let rel = file
+                .strip_prefix(&dir)
+                .map(|p| p.to_string_lossy().replace('\', "/"))
+                .unwrap_or_default();
+            let test_file = rel.ends_with("tests.rs")
+                || rel.ends_with("_tests.rs")
+                || rel.contains("/tests/")
+                || rel.ends_with("test_support.rs");
+            if test_file || format!("{name}/{rel}") == "forge-web/src/auth.rs" {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).expect("read");
+            // Production code only: stop at the file's test module.
+            let code = text.split("#[cfg(test)]").next().unwrap_or("");
+            for line in code.lines() {
+                let t = line.trim_start();
+                let pattern = t.starts_with("//")
+                    || t.starts_with('|')
+                    || t.contains("=>")
+                    || t.contains("matches!")
+                    || t.contains("let (")
+                    || t.contains("if let ")
+                    || t.trim_end().ends_with('|');
+                if t.contains(needle.as_str()) && !pattern {
+                    offenders.push(format!("{name}/{rel}: {}", t.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a token principal is built from tokens::authenticate's identity only: {offenders:?}"
+    );
+}

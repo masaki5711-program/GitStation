@@ -34,6 +34,10 @@ pub(crate) enum Case {
     Disabled,
     /// The linked account is a service account.
     ServiceAccount,
+    /// As `Ok`, the account an administrator (`users.is_admin` as read with
+    /// the request; ADR-0021 amendment 2026-11-24: the menu's
+    /// administrator link, never a right of the portal's credential).
+    Admin,
 }
 
 #[cfg(test)]
@@ -54,7 +58,7 @@ impl Case {
             self != Case::Disabled,
             kind,
             credential,
-            false,
+            self == Case::Admin,
         )
     }
 
@@ -103,6 +107,14 @@ pub(crate) const PORTAL_ROWS: &[Row] = &[
     row(A::PortalWidgetRead, W::Portal(Case::Reporter), F::ForeignUserMergeRequests, deny(E::Forbidden)),
     row(A::NotificationInboxRead, OK, F::OwnNotificationPreferences, deny(E::Forbidden)),
     row(A::UserMergeRequestList, OK, F::OwnUserMergeRequests, deny(E::Forbidden)),
+    // ADR-0021 amendment 2026-11-24: an administrator's account reads the
+    // widgets like anyone (the menu adds its link, `portal_admin_menu`),
+    // and the portal's credential never reaches the administrator screens'
+    // own action, administrator or not.
+    row(A::PortalWidgetRead, W::Portal(Case::Admin), F::Instance, Allow),
+    row(A::PortalWidgetRead, W::Portal(Case::Admin), F::PrivateProject, deny(E::NotFound)),
+    row(A::UserAdminList, W::Portal(Case::Admin), F::Instance, deny(E::Forbidden)),
+    row(A::UserAdminList, OK, F::Instance, deny(E::Forbidden)),
     // Nobody but the portal's credential.
     row(A::PortalWidgetRead, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
     row(A::PortalWidgetRead, W::Disabled, F::Instance, deny(E::AccountDisabled)),
@@ -136,4 +148,22 @@ pub(crate) fn generated_denies() -> Vec<Row> {
             ]
         })
         .collect()
+}
+
+/// ADR-0021 amendment 2026-11-24: the menu's administrator link, decided
+/// by `portal_admin_menu` on the matrix's own portal principals — the
+/// administrator's account gets it, the member's does not, and neither has
+/// administrator rights.
+#[cfg(test)]
+#[test]
+fn the_menu_admin_link_follows_the_matrix_portal_actors() {
+    use crate::portal::{portal_admin_menu, PortalWidgetCtx};
+    use crate::prove::prove;
+    for (case, link) in [(Case::Admin, true), (Case::Ok, false), (Case::Reporter, false)] {
+        let principal = W::Portal(case).principal();
+        assert!(!principal.admin_rights(), "{case:?}");
+        let proof = prove(&principal, A::PortalWidgetRead, PortalWidgetCtx::new(crate::matrix::ME))
+            .unwrap_or_else(|e| panic!("{case:?}: {e}"));
+        assert_eq!(portal_admin_menu(&proof), link, "{case:?}");
+    }
 }

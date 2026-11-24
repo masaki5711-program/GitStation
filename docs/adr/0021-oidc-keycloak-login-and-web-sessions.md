@@ -772,3 +772,17 @@ bot・無効の利用者、切り替え、CHECK）、`tokens::tests::request::an
 forge-oidc `tests/pfs.rs` の `the_admin_role_grants_at_sign_in_and_a_refresh_without_it_revokes` と
 `a_cli_admin_keeps_the_flag_and_the_role_is_ignored_when_off`、forge-web `portal_widget_routes` のメニュー、
 forge-core の設定のテスト。新しいエラーコードは無い（FG-AUTH-0008・0009 の理由を足した）。
+
+**レビューで変えた点（2026-11-24、BLOCK: HIGH 1・MEDIUM 4・LOW 2）。**
+
+| # | 重さ | 指摘 | 変えたこと |
+|---|---|---|---|
+| 1 | HIGH | セッションの外の立場（webhook の持ち主、通知の受け手、取り消しの下書きの作者、ランナーの登録者）が生の `users.is_admin` を読み、IdP を確かめないので、サインインしない元管理者が管理者のまま残る | **セッションの外の管理者の旗は CLI の旗だけ**: `AdminSource::standing_admin`（SQL では `is_admin AND admin_source = 'cli'`）。`tokens::authenticate`・`webhooks::material_on`・`notify::recipient`・`reverts::account_facts`・`users::is_active_human_admin` がこれで読む。さらに、IdP がセッションを終えた（`IdpRevoked`: `invalid_grant`、ロールが無い、確かめられない時間が 30 分を超えた ほか）ときは、そのロールで付けた旗も外す（CLI の旗は残す。外せなかったときはログに 1 回、セッションは終わる） |
+| 2 | MEDIUM | ID トークンの無いリフレッシュと IdP に届かない間の猶予で、確かめていない管理者の権利が続く | **セッションが IdP の旗で管理者の権利を持つのは、ロールを確かめてから `ADMIN_CONFIRM_SECS`（330 秒 = 5 分の確認の間隔 + 30 秒）の間だけ**（`web_sessions.access_role_seen_at`）。過ぎたら旗はそのままで、そのセッションは管理者の権利なし（画面の管理者のメニューも出ない）。確認で確かめられれば同じ要求から戻る（`RefreshingSessions` が確認のあとに読み直す）。リフレッシュトークンの無いセッションは確かめられないので IdP の管理者の権利を持たない |
+| 3 | MEDIUM | 復元の再付与（`regrant_admin`）が `admin_source = 'cli'` にして、IdP の管理者を非常口の管理者に変える | 旗を外すときに元の出どころを監査の行に残し（`oidc_user_ids`、利用者ごとの `admin_source`）、再付与は同じ出どころで戻す |
+| 4 | MEDIUM | `refresh_checked_at` を進めてからロールを当てるので、DB の失敗で外すのが 300 秒遅れる | ロールを当ててから確認を保存する。当てられなければ `access_role_seen_at` が古いままなので、上の 2 で 330 秒以内に権利が落ちる |
+| 5 | MEDIUM | 権限の表に行が無い | `TokenAdminScopeCli`（許可）/ `TokenAdminScopeIdp`（拒否）を `standing_admin` で作り `UserAdminList` の行に、ポータルの `Case::Admin` / `Case::Ok` の `PortalWidgetRead`・`UserAdminList` の行と、メニューのリンクの判定の試験。`Credential::Token` の主体を forge-web の認証の外で作るとソースの検査（`only_forge_web_builds_token_principals_from_the_authenticator`）が落ちる |
+| 6 | LOW | 書き込みの中の再確認でトークンが旗を読み直す | `reconfirm` は旗を増やさない（`account.is_admin && 認証のときの旗`）ので、トークンの主体は CLI の旗より強くならない（変更なし、試験あり） |
+| 7 | LOW | 古いコールバックがロールを外したあとで付け直す | 変えない: コールバックはその場でコードをトークンに替える（そのときの今のロール）。競合はミリ秒の幅で、次の確認（5 分）で正される |
+
+**残る幅。** IdP でロールを外してから: 使っているセッションでは次の確認まで最長 5 分（確認できなければ 330 秒で権利が落ちる）。サインインしない人の旗は残るが、セッションの外ではどこでも数えない。

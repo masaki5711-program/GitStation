@@ -243,3 +243,96 @@ async fn the_oidc_source_needs_the_flag_in_the_database() {
     );
     t.drop_now().await;
 }
+
+/// Review HIGH: every standing that no live, re-checked session backs
+/// reads only a CLI-managed flag (`AdminSource::standing_admin`): a
+/// notification's recipient, a revert draft's author, the runner
+/// registrar. A web session counts the role's flag only while its role
+/// was confirmed within `ADMIN_CONFIRM_SECS`.
+#[tokio::test]
+async fn standing_readers_count_only_a_cli_admin_flag() {
+    let t = FreshDb::migrated().await;
+    let idp = account(&t, "idp", UserKind::Human, false).await;
+    let root = account(&t, "root", UserKind::Human, true).await;
+    sync_idp_admin(&t.db, &ctx("req-std-grant"), idp, true)
+        .await
+        .expect("granted");
+    for (user, standing) in [(idp, false), (root, true)] {
+        let recipient = crate::notify::recipient(&t.db, user)
+            .await
+            .expect("recipient")
+            .expect("a user");
+        assert_eq!(recipient.is_admin, standing, "notify {user:?}");
+        let (_, _, author_admin) = crate::review::reverts::account_facts(&t.db, user)
+            .await
+            .expect("facts")
+            .expect("a user");
+        assert_eq!(author_admin, standing, "revert {user:?}");
+        assert_eq!(
+            is_active_human_admin(&t.db, user).await.expect("registrar"),
+            standing,
+            "registrar {user:?}"
+        );
+    }
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_session_counts_the_role_flag_only_while_the_role_is_confirmed() {
+    let t = FreshDb::migrated().await;
+    let idp = account(&t, "idp", UserKind::Human, false).await;
+    sync_idp_admin(&t.db, &ctx("req-sess-grant"), idp, true)
+        .await
+        .expect("granted");
+    let issued = crate::sessions::issue(
+        &t.db,
+        &ctx("req-sess-issue"),
+        &crate::sessions::NewSession {
+            user: idp,
+            idle: std::time::Duration::from_secs(3600),
+            absolute: std::time::Duration::from_secs(7200),
+            oidc: Some(crate::sessions::OidcSession {
+                issuer: "http://127.0.0.1:1/realms/synthetic".to_owned(),
+                subject: "synthetic-sub".to_owned(),
+                sid: None,
+                refresh_token_enc: Some(vec![1, 2, 3]),
+                id_token_enc: None,
+            }),
+        },
+    )
+    .await
+    .expect("session");
+    let read = |rid: &'static str| {
+        let db = t.db.clone();
+        let token = issued.token.reveal();
+        async move {
+            crate::sessions::authenticate(
+                &db,
+                &RequestId::parse(rid).expect("rid"),
+                &token,
+                std::time::Duration::from_secs(3600),
+            )
+            .await
+            .expect("authenticated")
+        }
+    };
+    let fresh = read("req-sess-1").await;
+    assert!(fresh.is_admin && fresh.admin_from_idp);
+    assert!(crate::sessions::session_admin(&t.db, fresh.session_id)
+        .await
+        .expect("now"));
+    t.exec_superuser(&format!(
+        "UPDATE forge.web_sessions SET access_role_seen_at = now() - interval '{} seconds' \
+         WHERE id = {}",
+        crate::sessions::ADMIN_CONFIRM_SECS + 1,
+        fresh.session_id
+    ))
+    .await;
+    let stale = read("req-sess-2").await;
+    assert!(!stale.is_admin, "unconfirmed: no administrator rights");
+    assert!(stale.admin_from_idp, "the flag itself is left alone");
+    assert!(!crate::sessions::session_admin(&t.db, fresh.session_id)
+        .await
+        .expect("now"));
+    t.drop_now().await;
+}

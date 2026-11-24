@@ -56,4 +56,15 @@ impl AdminSource {
     pub fn parse(raw: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|k| k.as_str() == raw)
     }
+
+    /// The administrator flag a standing that no live, re-checked web
+    /// session backs carries (a token, a webhook's owner, a notification's
+    /// recipient, a queued draft's author): only a flag the CLI manages. A
+    /// flag the identity provider's role granted is re-checked at sign-ins
+    /// and refresh checks only, so outside a session it counts as not set
+    /// (ADR-0021 amendment 2026-11-24). The SQL twin is
+    /// `is_admin AND admin_source = 'cli'`.
+    pub fn standing_admin(is_admin: bool, source: Self) -> bool {
+        is_admin && source == Self::Cli
+    }
 }

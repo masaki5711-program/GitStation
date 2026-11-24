@@ -38,6 +38,7 @@ use forge_core::{RequestId, SessionAuthenticator, SessionRevokeReason};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::identities::LoginAccount;
 use forge_db::sessions::{self, LogoutTarget, RefreshClaim, Refreshed, RevokeOutcome};
+use forge_db::users;
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::Value;
 
@@ -392,6 +393,16 @@ impl Oidc {
                 .end(request_id, &claim, reason, "session_continue_denied")
                 .await;
         }
+        // ADR-0021 amendment 2026-11-24: a role granted or removed at the
+        // provider reaches the administrator flag at this check, before the
+        // confirmation is stored: a database failure here leaves
+        // `access_role_seen_at` old, so an IdP-granted flag stops counting
+        // for the session within `sessions::ADMIN_CONFIRM_SECS` even before
+        // the next check (the failure is this request's, as for the account
+        // read above).
+        if let Some(claims) = role_source.as_ref() {
+            self.apply_admin_role(request_id, claim.user, claims).await?;
+        }
         let sealed_refresh = new_refresh
             .as_deref()
             .map(|t| self.refresh_keys.seal(aad, t.as_bytes()))
@@ -420,14 +431,6 @@ impl Oidc {
         if let (true, Some(claims)) = (stored, org_source) {
             self.record_org(&system(request_id), claim.user, &claims)
                 .await;
-        }
-        // ADR-0021 amendment 2026-11-24: a role granted or removed at the
-        // provider reaches the administrator flag at the next check (at
-        // most 5 minutes of activity). A database failure is this
-        // request's, as for the account read above.
-        if let (true, Some(claims)) = (stored, role_source) {
-            self.apply_admin_role(request_id, claim.user, &claims)
-                .await?;
         }
         Ok(RefreshVerdict::Continue)
     }
@@ -475,6 +478,22 @@ impl Oidc {
     ) -> Result<RefreshVerdict, ForgeError> {
         let _outcome =
             sessions::revoke(&self.db, &system(request_id), claim.session_id, reason).await?;
+        // ADR-0021 amendment 2026-11-24: the provider ended the person or
+        // the session, or could not confirm them: an administrator flag its
+        // role granted goes with the session (a CLI administrator's stays).
+        // The session is revoked either way; a failure is logged once and
+        // the flag no longer counts outside a confirmed session
+        // (`AdminSource::standing_admin`, `sessions::ADMIN_CONFIRM_SECS`).
+        if reason == SessionRevokeReason::IdpRevoked {
+            if let Err(e) =
+                users::sync_idp_admin(&self.db, &system(request_id), claim.user, false).await
+            {
+                forge_core::telemetry::log_failure(
+                    &e.with_context("operation", "admin_role_revoke_on_end"),
+                    request_id,
+                );
+            }
+        }
         tracing::info!(
             target: "forge_oidc",
             request_id = %request_id,
@@ -808,6 +827,15 @@ impl SessionAuthenticator for RefreshingSessions {
                     // session to here: a session the check revokes is never
                     // extended first (review of MR5).
                     let mut identity = identity;
+                    // ADR-0021 amendment 2026-11-24: an IdP-granted flag
+                    // counts only while the role was confirmed lately; the
+                    // identity was read before this check confirmed (or
+                    // removed) it.
+                    if identity.admin_from_idp {
+                        identity.is_admin =
+                            sessions::session_admin(&self.oidc.db, identity.session_id).await?;
+                        identity.admin_from_idp = identity.is_admin;
+                    }
                     if let Some(moved) = sessions::touch_session(
                         &self.oidc.db,
                         request_id,

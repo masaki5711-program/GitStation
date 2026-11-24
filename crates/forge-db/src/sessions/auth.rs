@@ -19,6 +19,43 @@ use crate::{query_error, Db};
 /// same hash and comparison as a hit (no timing signal for existence).
 pub(super) const DUMMY_HASH: [u8; 32] = [0u8; 32];
 
+/// How long a confirmation of the role lets a session carry an
+/// administrator flag the identity provider's role granted
+/// (`users.admin_source = 'oidc'`, ADR-0021 amendment 2026-11-24): the
+/// session's `access_role_seen_at` (the sign-in, or a refresh check that
+/// read a verified token) must be newer than this, or the session acts
+/// without administrator rights (the flag itself is left alone). The 5
+/// minutes of the refresh cadence and 30 s of slack; the SQL below and
+/// [`session_admin`] spell the same interval.
+pub const ADMIN_CONFIRM_SECS: i64 = 330;
+
+/// The session's administrator flag now, as [`authenticate`] computes it
+/// (after a refresh check confirmed the role: the request's identity was
+/// read before it). `false` for a session that is gone.
+pub async fn session_admin(db: &Db, session_id: i64) -> Result<bool, ForgeError> {
+    const QUERY: &str = "sessions.session_admin";
+    let found: Option<bool> = db
+        .within(QUERY, async {
+            let mut conn = db
+                .write_pool()
+                .acquire()
+                .await
+                .map_err(|e| query_error("sessions.session_admin.acquire", e))?;
+            sqlx::query_scalar(
+                "SELECT u.is_admin AND (u.admin_source = 'cli' \
+                   OR s.access_role_seen_at > now() - interval '330 seconds') \
+                 FROM forge.web_sessions s JOIN forge.users u ON u.id = s.user_id \
+                 WHERE s.id = $1",
+            )
+            .bind(session_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
+    Ok(found.unwrap_or(false))
+}
+
 /// The session and its user, as one statement reads them.
 #[derive(sqlx::FromRow)]
 struct Row {
@@ -104,7 +141,9 @@ pub async fn authenticate_with(
              (s.oidc_issuer IS NOT NULL AND s.refresh_token_enc IS NOT NULL \
               AND (s.refresh_checked_at IS NULL \
                    OR s.refresh_checked_at < now() - interval '300 seconds')) AS refresh_due, \
-             u.is_admin, u.is_admin AND u.admin_source = 'oidc' AS admin_from_idp, \
+             u.is_admin AND (u.admin_source = 'cli' \
+               OR s.access_role_seen_at > now() - interval '330 seconds') AS is_admin, \
+             u.is_admin AND u.admin_source = 'oidc' AS admin_from_idp, \
              u.state = 'active' AS active, u.username, u.display_name, u.kind, ",
             utc!("s.idle_expires_at"),
             " AS idle_expires_at, ",

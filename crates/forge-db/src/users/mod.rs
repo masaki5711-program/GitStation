@@ -470,7 +470,8 @@ pub async fn id_by_username(db: &Db, username: &str) -> Result<UserId, ForgeErro
 /// Whether `user` is an active human administrator (the operator CLI's
 /// `forge admin runner register --admin <name>` records the runner as
 /// registered by such a person, M4 C4). Reads on the read pool; a missing
-/// user is `false`.
+/// user is `false`. The standing flag only (`AdminSource::standing_admin`,
+/// ADR-0021 amendment 2026-11-24).
 pub async fn is_active_human_admin(db: &Db, user: UserId) -> Result<bool, ForgeError> {
     const QUERY: &str = "users.is_active_human_admin";
     let found: Option<bool> = db
@@ -478,7 +479,7 @@ pub async fn is_active_human_admin(db: &Db, user: UserId) -> Result<bool, ForgeE
             let mut conn = db.acquire().await?;
             sqlx::query_scalar(
                 "SELECT kind = 'human' AND state = 'active' AND is_admin \
-                 FROM forge.users WHERE id = $1",
+                 AND admin_source = 'cli' FROM forge.users WHERE id = $1",
             )
             .bind(user.get())
             .fetch_optional(&mut *conn)

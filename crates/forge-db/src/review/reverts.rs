@@ -166,7 +166,9 @@ pub async fn merge_request_iid(db: &Db, mr: MergeRequestId) -> Result<i64, Forge
 }
 
 /// `user`'s kind and account flags as they are now (`kind`, `active`,
-/// `is_admin`); `None`: no such user. The system's draft decides as the
+/// `is_admin` — the standing flag, `AdminSource::standing_admin`: a flag
+/// the identity provider's role granted does not count outside a session,
+/// ADR-0021 amendment 2026-11-24); `None`: no such user. The system's draft decides as the
 /// reverted merge request's author with them.
 pub async fn account_facts(
     db: &Db,
@@ -175,7 +177,10 @@ pub async fn account_facts(
     const QUERY: &str = "review.revert_author";
     let row: Option<(String, bool, bool)> = db
         .within(QUERY, async {
-            sqlx::query_as("SELECT kind, state = 'active', is_admin FROM forge.users WHERE id = $1")
+            sqlx::query_as(
+                "SELECT kind, state = 'active', is_admin AND admin_source = 'cli' \
+                 FROM forge.users WHERE id = $1",
+            )
                 .bind(user.get())
                 .fetch_optional(db.write_pool())
                 .await

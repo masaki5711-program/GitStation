@@ -4,7 +4,7 @@
 
 use forge_core::ids::UserId;
 use forge_core::token::{self, TokenSecret};
-use forge_core::RequestId;
+use forge_core::{AdminSource, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::PgConnection;
 
@@ -25,11 +25,12 @@ struct Row {
     is_agent: bool,
     revoked: bool,
     expired: bool,
-    /// The owner is an administrator whose flag the CLI manages: an
-    /// administrator granted by the identity provider's role is re-checked
-    /// only at sign-ins and refresh checks, which a token never passes
-    /// (ADR-0021 amendment 2026-11-24).
     is_admin: bool,
+    /// `users.admin_source`: a token carries only a flag the CLI manages
+    /// (`AdminSource::standing_admin`; an administrator granted by the
+    /// identity provider's role is re-checked only at sign-ins and refresh
+    /// checks, which a token never passes — ADR-0021 amendment 2026-11-24).
+    admin_source: String,
     active: bool,
     stale: bool,
     username: String,
@@ -69,7 +70,7 @@ pub async fn authenticate(
         let row: Option<Row> = sqlx::query_as(
             "SELECT t.id, t.user_id, t.secret_sha256, t.scopes, t.is_agent, \
              t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired, \
-             (u.is_admin AND u.admin_source = 'cli') AS is_admin, \
+             u.is_admin, u.admin_source, \
              u.state = 'active' AS active, \
              (t.last_used_at IS NULL OR t.last_used_at < now() - interval '10 minutes') AS stale, \
              u.username, u.display_name, u.kind \
@@ -89,6 +90,7 @@ pub async fn authenticate(
             revoked,
             expired,
             is_admin,
+            admin_source,
             active,
             stale,
             username,
@@ -120,6 +122,14 @@ pub async fn authenticate(
         }
         let scopes = parse_scopes(id, public_id, &scopes)?;
         let kind = crate::users::parse_kind(user_id, &kind)?;
+        let source = AdminSource::parse(&admin_source).ok_or_else(|| {
+            ForgeError::new(ErrorCode::CredentialDataInvalid)
+                .with_context("reason", "unknown_admin_source")
+                .with_context("user", user_id)
+                .with_context("token_id", id)
+                .with_context("public_id", public_id)
+        })?;
+        let is_admin = AdminSource::standing_admin(is_admin, source);
         if stale {
             touch(&mut conn, request_id, id).await;
         }

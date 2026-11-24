@@ -475,13 +475,17 @@ pub struct Recipient {
     pub is_admin: bool,
 }
 
-/// `user`'s account facts (`None`: no such user).
+/// `user`'s account facts (`None`: no such user). `is_admin` is the
+/// standing flag (`AdminSource::standing_admin`: no live session backs a
+/// notification, so a flag the identity provider's role granted does not
+/// count; ADR-0021 amendment 2026-11-24).
 pub async fn recipient(db: &Db, user: UserId) -> Result<Option<Recipient>, ForgeError> {
     const QUERY: &str = "notify.recipient";
     let row: Option<(Option<String>, String, String, String, bool)> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "SELECT email, display_name, state, kind, is_admin FROM forge.users WHERE id = $1",
+                "SELECT email, display_name, state, kind, is_admin AND admin_source = 'cli' \
+                 FROM forge.users WHERE id = $1",
             )
             .bind(user.get())
             .fetch_optional(db.write_pool())

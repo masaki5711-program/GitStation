@@ -636,3 +636,49 @@ async fn a_cli_admin_keeps_the_flag_and_the_role_is_ignored_when_off() {
     assert_eq!(admin_flags(&t, other.user).await, (false, "cli".to_owned()));
     t.drop_now().await;
 }
+
+/// Review HIGH / MEDIUM 1 (ADR-0021 amendment 2026-11-24): while the
+/// provider cannot be reached the session goes on without the role's
+/// administrator rights (the flag stays); a session the provider ends
+/// (`invalid_grant`) takes the role's flag with it.
+#[tokio::test]
+async fn an_unconfirmed_role_drops_the_rights_and_an_ended_session_the_flag() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = pfs_admin(&t, &op);
+    let with_admin = json!({"resource_access": {"gitstation": {"roles": ["access", "admin"]}}});
+    let done = sign_in(&oidc, &op, json!({}), with_admin)
+        .await
+        .expect("signed in");
+    let identity = |t: &FreshDb| {
+        let db = t.db.clone();
+        let token = done.token.reveal();
+        async move {
+            forge_db::sessions::authenticate(&db, &rid(), &token, IDLE)
+                .await
+                .expect("authenticated")
+        }
+    };
+    assert!(identity(&t).await.is_admin);
+    // Unreachable for 10 minutes: the session goes on, the rights do not.
+    op.set_fault(Endpoint::Token, Some(Fault::Status(503)));
+    t.exec_superuser(&format!(
+        "UPDATE forge.web_sessions SET access_role_seen_at = now() - interval '10 minutes' \
+         WHERE public_id = '{}'",
+        done.public_id
+    ))
+    .await;
+    assert_eq!(due_check(&t, &oidc, &done).await, RefreshVerdict::Continue);
+    let unconfirmed = identity(&t).await;
+    assert!(!unconfirmed.is_admin && unconfirmed.admin_from_idp);
+    assert_eq!(admin_flags(&t, done.user).await, (true, "oidc".to_owned()));
+    // The provider answers again but has ended the person: invalid_grant.
+    op.set_fault(Endpoint::Token, None);
+    op.revoke_refresh_tokens();
+    assert_eq!(
+        due_check(&t, &oidc, &done).await,
+        RefreshVerdict::Revoked(SessionRevokeReason::IdpRevoked)
+    );
+    assert_eq!(admin_flags(&t, done.user).await, (false, "cli".to_owned()));
+    t.drop_now().await;
+}

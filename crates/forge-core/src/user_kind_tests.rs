@@ -19,6 +19,9 @@ fn admin_sources_are_the_check_of_users_admin_source() {
     for source in AdminSource::ALL {
         assert_eq!(AdminSource::parse(source.as_str()), Some(*source));
     }
+    assert!(AdminSource::standing_admin(true, AdminSource::Cli));
+    assert!(!AdminSource::standing_admin(true, AdminSource::Oidc));
+    assert!(!AdminSource::standing_admin(false, AdminSource::Cli));
     for other in ["ldap", "OIDC", "", "keycloak"] {
         assert_eq!(AdminSource::parse(other), None, "{other:?}");
     }
