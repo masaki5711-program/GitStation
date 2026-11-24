@@ -973,8 +973,8 @@
       "committersUnknown": "who pushed the commits cannot be confirmed",
       "notInRule": "no rule asks for this approver",
       "carried": "it was carried over from an earlier version",
-      "delegationEnded": "the person it was given for removed the delegation or gave it to someone else",
-      "other": "it does not count now"
+      "other": "it does not count now",
+      "delegationEnded": "the person it was given for removed the delegation or gave it to someone else"
     },
     "actions": {
       "label": "Actions on this merge request",
@@ -1845,6 +1845,90 @@
     "none": "No organisation details yet. They appear after you sign in with your PFS account.",
     "empty": "None",
     "invalid": "The organisation details from the identity provider are invalid, so the previous ones are shown. Ask the PFS user administration to check them."
+  },
+  "aiEval": {
+    "title": "AI evaluation (compared with the approved baseline)",
+    "running": "The AI evaluation is running. The comparison with the baseline appears here when it ends.",
+    "unreadable": "The evaluation result could not be read as a table, so it is shown as received.",
+    "seeBelow": "The comparison with the baseline is under “AI evaluation” below",
+    "errorLine": "The AI evaluation could not be compared with the baseline, so the merge is stopped ({{code}}). Next:",
+    "errorNext": {
+      "noReport": "open the pipeline, check that the evaluation job ran to the end and left eval-report.json, then run the pipeline again.",
+      "noBaseline": "add the baseline to compare with (the file under evals/baselines/) in a separate merge request first.",
+      "malformed": "open the evaluation job’s log and fix how eval-report.json is written.",
+      "other": "open the pipeline and check the evaluation job’s log."
+    },
+    "job": "Evaluation job:",
+    "reasonCode": "Reason code:",
+    "runbook": "Runbook:",
+    "passedLine": "The AI evaluation is not worse than the baseline. This item does not stop the merge.",
+    "failedLine_one": "The AI’s answers are worse than the baseline in {{count}} point, so the merge is stopped. Next: fix that case and push a new version.",
+    "failedLine_other": "The AI’s answers are worse than the baseline in {{count}} points, so the merge is stopped. Next: fix those cases and push a new version.",
+    "overview": "Model {{models}} · {{total}} cases ({{safety}} safety, {{reproduction}} reproducing a miss).",
+    "flakyNote_one": "{{count}} case whose answer changed from run to run is not counted.",
+    "flakyNote_other": "{{count}} cases whose answers changed from run to run are not counted.",
+    "findingsTitle": "What stops the merge",
+    "findingsCut": "Only some reasons are shown. All of them are in the evaluation job’s eval-report.json.",
+    "casesTitle": "Cases to look at",
+    "passingCases_one": "Show {{count}} passing case",
+    "passingCases_other": "Show {{count}} passing cases",
+    "passingCaption": "Passing cases",
+    "more_one": "{{count}} more case (all cases are in eval-report.json).",
+    "more_other": "{{count}} more cases (all cases are in eval-report.json).",
+    "reason": {
+      "safetyFailed": "Safety case {{subject}} did not pass every run (a safety case must pass every time).",
+      "safetyMissing": "Safety case {{subject}} is not in this evaluation.",
+      "safetyRunsShort": "Safety case {{subject}} ran fewer times than in the baseline.",
+      "reproductionNotFixed": "Case {{subject}}, which reproduces a miss, is not fixed yet (it must pass more than half of the runs).",
+      "caseNotReproducing": "Case {{subject}} should reproduce a miss but already passes in the baseline. Review the case.",
+      "stableRegressed": "Case {{subject}} passed every run in the baseline and now fails at least half of the runs.",
+      "caseMissing": "Case {{subject}} passed every run in the baseline and is not in this evaluation.",
+      "caseKindChanged": "The kind of case {{subject}} differs from the baseline.",
+      "metricPastDelta": "The measure “{{subject}}” is worse than the baseline by more than the allowed difference."
+    },
+    "metric": {
+      "causeHitRate": "Correct cause",
+      "falseAlarmRate": "False alarms",
+      "p95Latency": "Response time (95% within)",
+      "attachPrecision": "Correct attachments",
+      "abstainAccuracy": "Correct “cannot judge”"
+    },
+    "kind": {
+      "regular": "Regular",
+      "safety": "Safety",
+      "reproduction": "Reproduces a miss"
+    },
+    "caseResult": {
+      "blocking": "Stops the merge",
+      "flaky": "Unstable (not counted)",
+      "fixed": "Fixed",
+      "fail": "Fails (does not stop)",
+      "pass": "Passes"
+    },
+    "metricResult": {
+      "ok": "Within range",
+      "pastDelta": "Out of range",
+      "shown": "For reference"
+    },
+    "seconds": "{{value}} s",
+    "points": "{{value}} pt",
+    "allowedNone": "(for reference)",
+    "allowedUpTo": "up to {{value}}",
+    "newCase": "New case",
+    "runCount": "{{passes}} of {{runs}} runs passed",
+    "col": {
+      "metric": "Measure",
+      "baseline": "Baseline",
+      "now": "Now",
+      "delta": "Difference",
+      "allowed": "Allowed difference",
+      "result": "Result",
+      "case": "Case",
+      "kind": "Kind"
+    },
+    "metricsTitle": "Measures compared with the baseline",
+    "seeFindings": "See what stops the merge",
+    "unreadableCut": "It is long, so only the beginning is shown. All of it is in the pipeline’s evaluation job."
   },
   "approvers": {
     "sel": {

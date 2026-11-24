@@ -1184,6 +1184,59 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["GET /api/v1/projects/{id}/documents"],
         output: r#"{"type":"object","required":["ref","documents","next_after","incomplete","withheld"],"properties":{"documents":{"type":"array","items":{"type":"object","required":["id","title","doctype","path","classification","translations"]}},"next_after":{"type":["string","null"]},"incomplete":{"type":["object","null"],"required":["error_code","reason"]},"withheld":{"type":["object","null"]}}}"#,
     },
+    // Plan 13 stage 4 part A (§7.5, ADR-0027): document revisions and
+    // edit claims on the server.
+    CommandSpec {
+        name: "doc status",
+        summary: "A document's open revisions and edit claim through the server: the open merge requests revising it (every language; the earliest per language holds the revision, a later one is a second revision — opening one is refused with FG-DOC-0006) and who is editing it now (an edit claim lapses 30 minutes after it was taken or last extended).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            ArgSpec { name: "doc_id", kind: "positional", required: true, repeatable: false, description: "The document id (ASCII letters, digits, '.', '_', '-'; e.g. QP-07-001)." },
+        ],
+        examples: &["gstn doc status --project 7 QP-07-001", "gstn doc status --project 7 QP-07-001 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/documents/{doc_id}/status"],
+        output: r#"{"type":"object","required":["doc_id","revisions","edit_claim","viewer"],"properties":{"revisions":{"type":"array","items":{"type":"object","required":["lang","merge_request_iid","title","author_id","since","head_sha","holds"],"properties":{"holds":{"type":"boolean"}}}},"edit_claim":{"type":["object","null"],"required":["doc_id","user_id","merge_request_iid","claimed_at","expires_at"]},"viewer":{"type":"object","required":["can_claim","can_revoke"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc versions",
+        summary: "A document's versions on the default branch through the server: each applied merge that changed its file is the next version (derived from git and the merges; nothing is written into the file). The path is the document's path at the tip. `incomplete` FG-DOC-0002 reason doc_versions: more merges than were read (5000).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            ArgSpec { name: "doc_id", kind: "positional", required: true, repeatable: false, description: "The document id (e.g. QP-07-001)." },
+        ],
+        examples: &["gstn doc versions --project 7 QP-07-001", "gstn doc versions --project 7 QP-07-001 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/documents/{doc_id}/versions"],
+        output: r#"{"type":"object","required":["doc_id","ref","path","current_revision","versions","incomplete"],"properties":{"current_revision":{"type":["integer","null"]},"versions":{"type":"array","items":{"type":"object","required":["revision","merge_request_iid","title","merged_at","commit","blob"]}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc claim",
+        summary: "Say you are editing a document (a person, Developer): take the edit claim for 30 minutes, or extend your own. Others see it in doc status; refused with 409 FG-DOC-0007 while another person's claim is live. Opening a merge request that revises the document releases it.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            ArgSpec { name: "doc_id", kind: "positional", required: true, repeatable: false, description: "The document id (e.g. QP-07-001)." },
+            arg("--merge-request", "option", false, "The open merge request (iid) the editing is for."),
+        ],
+        examples: &["gstn doc claim --project 7 QP-07-001", "gstn doc claim --project 7 QP-07-001 --merge-request 12"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/documents/{doc_id}/edit-claim"],
+        output: r#"{"type":"object","required":["claim","extended"],"properties":{"extended":{"type":"boolean"},"claim":{"type":"object","required":["doc_id","user_id","merge_request_iid","claimed_at","expires_at"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc release",
+        summary: "Release your edit claim on a document (409 FG-DOC-0007 when the live claim is another person's; 404 FG-REPO-0005 without one). With --revoke --yes: remove the live claim whoever holds it (a Maintainer, a person; audited document.edit_claim.revoked).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            ArgSpec { name: "doc_id", kind: "positional", required: true, repeatable: false, description: "The document id (e.g. QP-07-001)." },
+            arg("--revoke", "flag", false, "Revoke the claim whoever holds it (Maintainer)."),
+            arg("--yes", "flag", false, "Confirm --revoke."),
+        ],
+        examples: &["gstn doc release --project 7 QP-07-001", "gstn doc release --project 7 QP-07-001 --revoke --yes"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/projects/{id}/documents/{doc_id}/edit-claim", "POST /api/v1/projects/{id}/documents/{doc_id}/edit-claim/revoke"],
+        output: r#"{"type":"null"}"#,
+    },
     // Plan 13 Q13: the repository setting (the server's forge/doc-lint).
     CommandSpec {
         name: "doc migration show",

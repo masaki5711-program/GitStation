@@ -630,10 +630,10 @@ async fn an_unlintable_train_is_abandoned_and_reaped_on_the_third_time() {
     {
         let _guard = logs.install();
         for round in 1..=3 {
+            // Plan 18 S7: a document train is linted in the tick that
+            // built it.
             let built = worker.tick().await.expect("tick").expect("due");
-            assert_eq!(built.outcome, "built", "round {round}");
-            let ended = worker.tick().await.expect("tick").expect("due");
-            assert_eq!(ended.outcome, "reaped", "round {round}");
+            assert_eq!(built.outcome, "reaped", "round {round}");
             let batch = qdb::batch(&w.t.db, built.batch_id.expect("id"))
                 .await
                 .expect("read")
@@ -703,8 +703,7 @@ async fn an_unlintable_train_is_abandoned_and_reaped_on_the_third_time() {
     let logs = Captured::default();
     {
         let _guard = logs.install();
-        let built = hurried.tick().await.expect("tick").expect("due");
-        assert_eq!(built.outcome, "built");
+        // Plan 18 S7: linted in the tick that built the batch.
         let ended = hurried.tick().await.expect("tick").expect("due");
         assert_eq!(ended.outcome, "reaped");
     }

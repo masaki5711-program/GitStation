@@ -64,6 +64,8 @@ mod matrix_rows_mirror;
 // ── end M3 O2 ──
 // Plan 13 Q13: the document lint's migration setting.
 mod matrix_rows_doc_lint;
+// Plan 13 stage 4 part A: the document edit claims.
+mod matrix_rows_doc_revisions;
 // M4 C2: CI pipelines.
 mod matrix_rows_merge_queue;
 // M4 C9: auto-merge.

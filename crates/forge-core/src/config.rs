@@ -14,6 +14,8 @@ use std::time::Duration;
 
 use forge_errors::{ErrorCode, ForgeError};
 
+// Plan 16 A3: `agent.*`.
+mod agent;
 mod api;
 mod audit;
 mod auth;
@@ -60,6 +62,7 @@ mod web;
 mod webhook;
 // ── end M3 I2 ──
 
+pub use agent::AgentConfig;
 pub use api::ApiConfig;
 pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
@@ -126,6 +129,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_CI_",
     // M4 C11: `deploy.*`.
     "FORGE_DEPLOY_",
+    // Plan 16 A3: `agent.*`.
+    "FORGE_AGENT_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -249,6 +254,8 @@ pub struct Config {
     pub portal: PortalConfig,
     /// `org.*` (the PFS organisation master's copy, ADR-0038 §1).
     pub org: OrgConfig,
+    /// `agent.*` (the agent marketplace's signing keys, plan 16 A3).
+    pub agent: AgentConfig,
 }
 
 impl Config {
@@ -527,6 +534,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         deploy: DeployConfig::load(get)?,
         portal: PortalConfig::load(get)?,
         org: OrgConfig::load(get)?,
+        agent: AgentConfig::load(get)?,
     }
     .validate_across()
 }

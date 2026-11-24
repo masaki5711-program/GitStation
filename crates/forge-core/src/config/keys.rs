@@ -267,6 +267,17 @@ pub const KEYS: &[Key] = &[
         "merge_queue.train_lint_budget_ms",
         "FORGE_MERGE_QUEUE_TRAIN_LINT_BUDGET_MS",
     ),
+    // Plan 18 S7 (ADR-0037 (b)): the document fast path's batch bounds
+    // and the train lint's document index (0: off).
+    number(
+        "merge_queue.doc_batch_max",
+        "FORGE_MERGE_QUEUE_DOC_BATCH_MAX",
+    ),
+    number("merge_queue.ci_batch_max", "FORGE_MERGE_QUEUE_CI_BATCH_MAX"),
+    number(
+        "merge_queue.doc_index_bytes",
+        "FORGE_MERGE_QUEUE_DOC_INDEX_BYTES",
+    ),
     // M3 I1c: the feed's seal-sink comparison (ADR-0018 §5; false only in M3).
     boolean(
         "feed.require_sink_compare",
@@ -400,6 +411,8 @@ pub const KEYS: &[Key] = &[
         "FORGE_ORG_MAX_PROFILE_AGE_HOURS",
     ),
     boolean("org.allow_large_shrink", "FORGE_ORG_ALLOW_LARGE_SHRINK"),
+    // Plan 16 A3: the agent marketplace's signing keys (ADR-0032, ADR-0013).
+    text("agent.signing_keys_file", "FORGE_AGENT_SIGNING_KEYS_FILE"),
     // M4 C11: deployments over SSH (ADR-0031).
     text("deploy.ssh_key_file", "FORGE_DEPLOY_SSH_KEY_FILE"),
     text("deploy.ssh_program", "FORGE_DEPLOY_SSH_PROGRAM"),

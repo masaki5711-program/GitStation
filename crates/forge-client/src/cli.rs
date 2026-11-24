@@ -2672,6 +2672,51 @@ pub enum DocCommand {
         #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
         after: Option<String>,
     },
+    /// A document's open revisions (the merge requests revising it) and
+    /// who is editing it now, through the server (plan 13 §7.5).
+    Status {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The document id (e.g. QP-07-001).
+        #[arg(value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        id: String,
+    },
+    /// A document's versions on the default branch: each merged merge
+    /// request that changed it (plan 13 §6.1).
+    Versions {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The document id (e.g. QP-07-001).
+        #[arg(value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        id: String,
+    },
+    /// Say you are editing a document (an edit claim for 30 minutes; run
+    /// it again to extend). Refused while another person's claim is live.
+    Claim {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The document id (e.g. QP-07-001).
+        #[arg(value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        id: String,
+        /// The open merge request the editing is for.
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        merge_request: Option<i64>,
+    },
+    /// Release your edit claim on a document (with --revoke: anybody's, a
+    /// Maintainer's decision, audited).
+    Release {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The document id (e.g. QP-07-001).
+        #[arg(value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        id: String,
+        /// Revoke the claim whoever holds it (Maintainer).
+        #[arg(long)]
+        revoke: bool,
+        /// Confirm --revoke (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
     /// The repository setting that lowers broken references to warnings
     /// in forge/doc-lint until a date (plan 13 Q13): show, set, clear.
     #[command(disable_help_subcommand = true)]

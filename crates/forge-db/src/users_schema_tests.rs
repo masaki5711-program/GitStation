@@ -52,6 +52,21 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // Plan 16 A3: the agent marketplace (20270103100000).
+            AuditedTable {
+                name: "agent_part_versions".into(),
+                audit_resource: AuditResource::Literal("agent_part".into()),
+                audit_id_column: "part_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "agent_parts".into(),
+                audit_resource: AuditResource::Literal("agent_part".into()),
+                audit_id_column: "id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
             // ADR-0038 §3.5 (step C): delegations, audited on the delegator.
             AuditedTable {
                 name: "approval_delegations".into(),

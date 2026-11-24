@@ -1447,6 +1447,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_group_visibility::GROUP_VISIBILITY_ROWS,
         crate::matrix_rows_mirror::MIRROR_ROWS.as_slice(),
         crate::matrix_rows_doc_lint::DOC_LINT_ROWS,
+        crate::matrix_rows_doc_revisions::DOC_REVISION_ROWS.as_slice(),
         crate::matrix_rows_pipelines::PIPELINE_ROWS.as_slice(),
         crate::matrix_rows_merge_queue::MERGE_QUEUE_ROWS.as_slice(),
         crate::matrix_rows_revert::REVERT_ROWS,

@@ -78,6 +78,13 @@ guarded_functions = [
     # M4 C11: a deployment's identity never changes; its approval is set
     # once; it only moves forward.
     "deployments_guard",
+    # Plan 16 A3: published agent parts never change (versions: channel
+    # beta -> stable and published -> revoked only); files are append-only;
+    # signing keys retire and revoke once.
+    "agent_signing_keys_guard",
+    "agent_parts_guard",
+    "agent_part_versions_guard",
+    "agent_part_files_guard",
 ]
 
 [tables.events]
@@ -972,6 +979,66 @@ ro_columns = ["*"]
 # How old a snapshot and the master's copy may be for a binding to apply
 # (one row, the configuration's org.*_age_hours, written at start).
 [tables.org_access_policy]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# ── Plan 13 stage 4 part A (20270105100000, ADR-0027): the documents each
+# merge request revises (derived from git) and the time-limited edit claims;
+# a Maintainer's revocation writes its own audit row ──
+[tables.merge_request_documents]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.document_edit_claims]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# ── Plan 16 A3 (20270103100000, ADR-0032 A3 amendment): the agent
+# marketplace. Published parts are frozen: a part's identity, a version's
+# content and signature never change (guards *_forward); the files are
+# append-only, inserted with their version only. forge_app has no DELETE on
+# them. Builds and lesson injections are the builder's records (derived),
+# deleted with their project by the purge ──
+# Written only by forge.agent_signing_key_manage (SECURITY DEFINER, owner
+# forge_seq, EXECUTE forge_maint), which writes the key's audit row itself.
+[tables.agent_signing_keys]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.agent_parts]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "agent_part"
+audit_id_column = "id"
+unaudited_columns = []
+txn_audited_columns = []
+
+[tables.agent_part_versions]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "agent_part"
+audit_id_column = "part_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+# Inserted only in the transaction that inserted (and audited) the version.
+[tables.agent_part_files]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.agent_builds]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.agent_lesson_injections]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]

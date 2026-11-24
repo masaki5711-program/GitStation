@@ -8,7 +8,9 @@
 //! - `forge.events_retention` (M3 I1c): owner forge_purge, EXECUTE
 //!   forge_app (the worker's `events.retention` task);
 //! - `forge.feed_new_epoch` (M3 I1c): owner forge_seq, EXECUTE forge_maint
-//!   (`forge admin events new-epoch`).
+//!   (`forge admin events new-epoch`);
+//! - `forge.agent_signing_key_manage` (plan 16 A3): owner forge_seq,
+//!   EXECUTE forge_maint (`forge admin agent-key`, A5).
 //!
 //! Each finding is `FG-DB-0009 reason=guard_missing` with `guard`
 //! (function_owner / function_body / function_privilege) and `function`.
@@ -55,6 +57,15 @@ const DEFINERS: &[Definer] = &[
         signature: "forge.feed_new_epoch(text,text)",
         arguments: "reason text, request_id text, OUT old_epoch uuid, OUT new_epoch uuid",
         version: 20261118100000,
+        owner: "forge_seq",
+        grants: &["forge_maint:EXECUTE"],
+    },
+    Definer {
+        name: "agent_signing_key_manage",
+        signature: "forge.agent_signing_key_manage(text,text,text,text,text)",
+        arguments: "p_action text, p_kid text, p_public_key text, p_reason text, \
+             p_request_id text, OUT key_row_id bigint",
+        version: 20270103100000,
         owner: "forge_seq",
         grants: &["forge_maint:EXECUTE"],
     },
