@@ -755,15 +755,17 @@ pub async fn earlier_run(db: &Db, begin: &str) -> Result<(bool, Vec<AdminRemoved
     .await
 }
 
-/// The number of active human administrators (a restore that leaves none
-/// says so; `forge admin bootstrap-admin` is then the way back).
+/// The number of active human administrators the CLI manages (a restore
+/// that leaves none says so; `forge admin bootstrap-admin` is then the way
+/// back; IdP-granted administrators do not count, ADR-0021 amendment
+/// 2026-11-24).
 pub async fn active_admins(db: &Db) -> Result<i64, ForgeError> {
     const QUERY: &str = "restore.active_admins";
     let pool = db.pool().executor();
     db.within(QUERY, async {
         sqlx::query_scalar(
             "SELECT count(*) FROM forge.users WHERE is_admin AND state = 'active' \
-             AND kind = 'human'",
+             AND kind = 'human' AND admin_source = 'cli'",
         )
         .fetch_one(pool)
         .await

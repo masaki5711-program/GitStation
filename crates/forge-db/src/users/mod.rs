@@ -344,7 +344,11 @@ pub async fn disable_with(
         let row: Option<(String, String, bool)> = tx
             .step(|c| async move {
                 sqlx::query_as(
-                    "SELECT kind, state, is_admin FROM forge.users WHERE id = $1 FOR UPDATE",
+                    // The break-glass flag (`admin_source = 'cli'`): only it
+                    // keeps forge administrable without the identity
+                    // provider (ADR-0021 amendment 2026-11-24).
+                    "SELECT kind, state, is_admin AND admin_source = 'cli' FROM forge.users \
+                     WHERE id = $1 FOR UPDATE",
                 )
                 .bind(user.get())
                 .fetch_optional(c)

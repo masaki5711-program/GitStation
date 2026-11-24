@@ -336,3 +336,52 @@ async fn a_session_counts_the_role_flag_only_while_the_role_is_confirmed() {
         .expect("now"));
     t.drop_now().await;
 }
+
+/// Review MEDIUM: the last-administrator and bootstrap guards count the
+/// break-glass (CLI-managed) administrators only — an IdP-granted one does
+/// not keep forge administrable without the identity provider.
+#[tokio::test]
+async fn the_administration_guards_count_only_cli_admins() {
+    let t = FreshDb::migrated().await;
+    let root = account(&t, "root", UserKind::Human, true).await;
+    let idp = account(&t, "idp", UserKind::Human, false).await;
+    sync_idp_admin(&t.db, &ctx("req-guard-grant"), idp, true)
+        .await
+        .expect("granted");
+    // root is the last CLI administrator although idp is an administrator.
+    let err = disable(&t.db, &ctx("req-guard-root"), root)
+        .await
+        .expect_err("last break-glass administrator");
+    assert_eq!(err.code(), ErrorCode::AdministrationConflict);
+    assert!(err.to_string().contains("reason=last_admin"), "{err}");
+    assert_eq!(
+        crate::restore::active_admins(&t.db).await.expect("count"),
+        1,
+        "the restore counts the break-glass administrator only"
+    );
+    // With no CLI administrator left, bootstrap-admin recovers even though
+    // an IdP-granted administrator exists — and promoting that one makes
+    // it break-glass.
+    let _ = disable_with(&t.db, &ctx("req-guard-force"), root, Guard::Force)
+        .await
+        .expect("forced");
+    assert_eq!(
+        crate::restore::active_admins(&t.db).await.expect("count"),
+        0
+    );
+    bootstrap_admin(&t.db, &ctx("req-guard-boot"), &Bootstrap::Promote(idp))
+        .await
+        .expect("bootstrap past an IdP administrator");
+    let mut su = t.superuser().await;
+    assert_eq!(flags(&mut su, idp).await, (true, "cli".to_owned()));
+    // The IdP administrator itself is no last administrator.
+    let other = account(&t, "other", UserKind::Human, false).await;
+    sync_idp_admin(&t.db, &ctx("req-guard-grant-2"), other, true)
+        .await
+        .expect("granted");
+    let outcome = disable(&t.db, &ctx("req-guard-other"), other)
+        .await
+        .expect("an IdP administrator is no break-glass");
+    assert_eq!(outcome, DisableOutcome::Disabled);
+    t.drop_now().await;
+}

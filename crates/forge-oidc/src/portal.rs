@@ -131,9 +131,24 @@ impl PortalWidgets {
             // Verified above; `authorize()` decides it again.
             portal_party: true,
             access_role,
-            is_admin: user.is_admin,
+            is_admin: menu_admin(
+                user.is_admin,
+                user.admin_from_idp,
+                oidc.settings
+                    .admin_role
+                    .as_deref()
+                    .is_some_and(|role| oidc.has_client_role(&claims.claims, role)),
+            ),
         })
     }
+}
+
+/// The account's administrator flag as the menu may count it (ADR-0021
+/// amendment 2026-11-24): a CLI-managed flag as it is; a flag the
+/// identity provider's role granted only while the portal's verified
+/// token still holds that role (no GitStation session re-checks it here).
+fn menu_admin(is_admin: bool, admin_from_idp: bool, role_now: bool) -> bool {
+    is_admin && (!admin_from_idp || role_now)
 }
 
 impl PortalAuthenticator for PortalWidgets {
@@ -355,5 +370,20 @@ mod tests {
         assert!(e.to_string().contains("reason=expired"));
         let other = as_portal(ForgeError::new(ErrorCode::IdentityProviderUnavailable));
         assert_eq!(other.code(), ErrorCode::IdentityProviderUnavailable);
+    }
+}
+
+#[cfg(test)]
+mod menu_admin_tests {
+    use super::menu_admin;
+
+    /// Review LOW: the menu's administrator link from a confirmed flag
+    /// only — the CLI's as it is, the role's while the token holds it.
+    #[test]
+    fn an_idp_flag_needs_the_role_in_the_portal_token() {
+        assert!(menu_admin(true, false, false), "a CLI administrator");
+        assert!(menu_admin(true, true, true), "the role is still there");
+        assert!(!menu_admin(true, true, false), "the role was removed");
+        assert!(!menu_admin(false, false, true), "no flag, no link");
     }
 }

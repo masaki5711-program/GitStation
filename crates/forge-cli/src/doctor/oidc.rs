@@ -237,6 +237,13 @@ fn admin_role_line(
         counts.oidc, counts.cli
     );
     match role {
+        Some(role) if counts.cli == 0 => warn(
+            ADMIN_ROLE,
+            &format!(
+                "on: client role {role} of {client}; {held}: no break-glass administrator \
+                 (forge admin user admin-source <user> --source cli; runbook oidc-login)"
+            ),
+        ),
         Some(role) => ok(
             ADMIN_ROLE,
             &format!(
@@ -284,6 +291,12 @@ mod admin_role_tests {
             text.contains("2 administrator(s) from the role, 1 from the CLI"),
             "{text}"
         );
+        let glassless = admin_role_line(
+            Some("admin"),
+            "gitstation",
+            AdminSources { cli: 0, oidc: 2 },
+        );
+        assert!(matches!(glassless.outcome, Outcome::Warn(ref t) if t.contains("no break-glass")));
         let off = admin_role_line(None, "gitstation", AdminSources { cli: 1, oidc: 0 });
         assert!(matches!(off.outcome, Outcome::Ok(ref t) if t.starts_with("off")));
         let orphaned = admin_role_line(None, "gitstation", AdminSources { cli: 1, oidc: 1 });

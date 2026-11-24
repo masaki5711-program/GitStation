@@ -786,3 +786,16 @@ forge-core の設定のテスト。新しいエラーコードは無い（FG-AUT
 | 7 | LOW | 古いコールバックがロールを外したあとで付け直す | 変えない: コールバックはその場でコードをトークンに替える（そのときの今のロール）。競合はミリ秒の幅で、次の確認（5 分）で正される |
 
 **残る幅。** IdP でロールを外してから: 使っているセッションでは次の確認まで最長 5 分（確認できなければ 330 秒で権利が落ちる）。サインインしない人の旗は残るが、セッションの外ではどこでも数えない。
+
+**再レビューで変えた点（2026-11-24、BLOCK: HIGH 1・MEDIUM 2・LOW 2）。**
+
+- HIGH: 予定のパイプライン（`forge-pipelines` `owner_decision`）は持ち主の CLI の旗だけで決める。`forge_db::access::Account`
+  に `standing_admin`（`is_admin AND admin_source = 'cli'`）を足した（`lock_account` が読む）。
+- MEDIUM: マージとマージの列のジョブ（`job_principal`）も `standing_admin` で主体を作る（要求のセッションはもう無い）。
+- MEDIUM: 最後の管理者のガード（`users::disable`）、`bootstrap-admin` の「管理者がいる」、復元の `active_admins` は
+  **CLI の管理者（非常口）だけ**を数える。IdP の管理者だけが残る forge では `bootstrap-admin` で非常口を作れ、
+  IdP の管理者を `Promote` すると `cli` になる。`forge doctor` の `auth.oidc.admin_role` は CLI の管理者が 0 なら warn。
+- LOW: 墓標の解放（`forge-hosting` `moves`）は新しい旗を主体の管理者の権利と AND する。ポータルのメニューの管理者の
+  リンクは、IdP の旗ならポータルの確かめたトークンにまだロールがあるときだけ（`menu_admin`）。
+- 生の `users.is_admin` を読む残りは、要求の中で `reconfirm` に渡すもの（権利を増やさない）、自動の結び付けの
+  `privileged_account`（どの管理者も止める、より厳しい側）、表示（管理者の一覧、doctor の件数）、旗を書く処理だけ。

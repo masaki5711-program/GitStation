@@ -128,7 +128,8 @@ pub(super) async fn what_disable_leaves(
     let without_admin = if kind == UserKind::Human && is_admin {
         let others: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM forge.users \
-             WHERE kind = 'human' AND state = 'active' AND is_admin AND id <> $1",
+             WHERE kind = 'human' AND state = 'active' AND is_admin AND admin_source = 'cli' \
+             AND id <> $1",
         )
         .bind(user.get())
         .fetch_one(&mut *conn)
@@ -184,10 +185,14 @@ pub struct Bootstrapped {
     pub namespace_id: Option<NamespaceId>,
 }
 
-/// Refuse while an active human administrator exists (`admin_exists`).
+/// Refuse while an active human administrator the CLI manages exists
+/// (`admin_exists`). Administrators the identity provider's role granted
+/// do not count (ADR-0021 amendment 2026-11-24): the recovery path is for
+/// a forge left without a break-glass administrator.
 async fn ensure_no_admin(conn: &mut PgConnection) -> Result<(), ForgeError> {
     let admins: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM forge.users WHERE kind = 'human' AND state = 'active' AND is_admin",
+        "SELECT count(*) FROM forge.users WHERE kind = 'human' AND state = 'active' AND is_admin \
+         AND admin_source = 'cli'",
     )
     .fetch_one(conn)
     .await
@@ -255,7 +260,8 @@ pub async fn bootstrap_admin(
             tx.step(ensure_no_admin).await?;
             tx.step(|c| async move {
                 sqlx::query(
-                    "UPDATE forge.users SET is_admin = true, updated_at = now() WHERE id = $1",
+                    "UPDATE forge.users SET is_admin = true, admin_source = 'cli', \
+                     updated_at = now() WHERE id = $1",
                 )
                 .bind(user.get())
                 .execute(c)

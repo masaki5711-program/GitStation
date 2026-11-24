@@ -687,7 +687,7 @@ impl Oidc {
     }
 
     /// `resource_access.<client_id>.roles` holds `role`.
-    fn has_client_role(&self, claims: &Value, role: &str) -> bool {
+    pub(crate) fn has_client_role(&self, claims: &Value, role: &str) -> bool {
         claims
             .get("resource_access")
             .and_then(|r| r.get(&self.settings.client_id))

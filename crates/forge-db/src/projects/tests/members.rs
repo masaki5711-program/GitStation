@@ -631,7 +631,7 @@ async fn disabling_the_only_inherited_owner_of_a_project_is_refused() {
 // late in its change, so that command stays open holding its own locks
 // while the other runs (the style of `users/tests/race.rs`).
 
-const DISABLE_ROW_WAIT: &str = "is_admin FROM forge.users WHERE id = $1 FOR UPDATE";
+const DISABLE_ROW_WAIT: &str = "admin_source = 'cli' FROM forge.users WHERE id = $1 FOR UPDATE";
 const DISABLE_TOKENS_WAIT: &str = "UPDATE forge.tokens SET revoked_at";
 const OWNER_SHARE_WAIT: &str = "FOR SHARE OF u";
 const MEMBER_DELETE_WAIT: &str = "DELETE FROM forge.project_members";

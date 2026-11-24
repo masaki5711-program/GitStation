@@ -15,7 +15,12 @@ use crate::query_error;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Account {
     pub active: bool,
+    /// `users.is_admin` (a live, re-confirmed session's flag).
     pub is_admin: bool,
+    /// `AdminSource::standing_admin`: the flag a decision no live session
+    /// backs uses (a scheduled run, a queued merge; ADR-0021 amendment
+    /// 2026-11-24).
+    pub standing_admin: bool,
 }
 
 /// Lock and read `user`'s row (`FOR SHARE`). Called after the target row
@@ -24,17 +29,21 @@ pub(crate) async fn lock_account(
     conn: &mut PgConnection,
     user: UserId,
 ) -> Result<Account, ForgeError> {
-    let row: Option<(bool, bool)> = sqlx::query_as(
-        "SELECT state = 'active', is_admin FROM forge.users WHERE id = $1 FOR SHARE",
+    let row: Option<(bool, bool, bool)> = sqlx::query_as(
+        "SELECT state = 'active', is_admin, is_admin AND admin_source = 'cli' \
+         FROM forge.users WHERE id = $1 FOR SHARE",
     )
     .bind(user.get())
     .fetch_optional(conn)
     .await
     .map_err(|e| query_error("access.account", e))?;
     Ok(
-        row.map_or(Account::default(), |(active, is_admin)| Account {
-            active,
-            is_admin,
+        row.map_or(Account::default(), |(active, is_admin, standing_admin)| {
+            Account {
+                active,
+                is_admin,
+                standing_admin,
+            }
         }),
     )
 }
