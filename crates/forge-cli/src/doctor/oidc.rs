@@ -209,3 +209,97 @@ mod org_claims_tests {
         assert!(text.contains("FG-AUTH-0028"), "{text}");
     }
 }
+
+const ADMIN_ROLE: &str = "auth.oidc.admin_role";
+
+/// `auth.oidc.admin_role` (ADR-0021 amendment 2026-11-24): whether the
+/// client role grants and revokes the administrator flag, and how many
+/// active human administrators each source manages. Off with
+/// administrators the role once granted warns: nothing revokes their flag
+/// any more (`forge admin user admin-source`, runbook oidc-login).
+pub(super) async fn admin_role_check(db: &forge_db::Db, cfg: &Config) -> Check {
+    let Some(oidc) = cfg.auth.oidc.as_ref() else {
+        return super::skip(ADMIN_ROLE, "auth.oidc is not configured");
+    };
+    match forge_db::users::admin_sources(db).await {
+        Ok(counts) => admin_role_line(oidc.admin_role.as_deref(), &oidc.client_id, counts),
+        Err(e) => fail(ADMIN_ROLE, e),
+    }
+}
+
+fn admin_role_line(
+    role: Option<&str>,
+    client: &str,
+    counts: forge_db::users::AdminSources,
+) -> Check {
+    let held = format!(
+        "{} administrator(s) from the role, {} from the CLI (break-glass)",
+        counts.oidc, counts.cli
+    );
+    match role {
+        Some(role) if counts.cli == 0 => warn(
+            ADMIN_ROLE,
+            &format!(
+                "on: client role {role} of {client}; {held}: no break-glass administrator \
+                 (forge admin user admin-source <user> --source cli; runbook oidc-login)"
+            ),
+        ),
+        Some(role) => ok(
+            ADMIN_ROLE,
+            &format!(
+                "on: client role {role} of {client} grants and revokes the administrator flag \
+                 at each sign-in and refresh check; {held}"
+            ),
+        ),
+        None if counts.oidc > 0 => warn(
+            ADMIN_ROLE,
+            &format!(
+                "off, but {held}: nothing revokes the role's grants any more (set \
+                 auth.oidc.admin_role again, or `forge admin user admin-source <user> --source \
+                 cli`; runbook oidc-login)"
+            ),
+        ),
+        None => ok(
+            ADMIN_ROLE,
+            &format!("off: the CLI alone sets administrators; {held}"),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod admin_role_tests {
+    use forge_db::users::AdminSources;
+
+    use super::super::Outcome;
+    use super::*;
+
+    #[test]
+    fn the_admin_role_line_says_on_off_and_warns_on_orphaned_grants() {
+        let on = admin_role_line(
+            Some("admin"),
+            "gitstation",
+            AdminSources { cli: 1, oidc: 2 },
+        );
+        let Outcome::Ok(text) = on.outcome else {
+            panic!("on is ok");
+        };
+        assert!(
+            text.starts_with("on: client role admin of gitstation"),
+            "{text}"
+        );
+        assert!(
+            text.contains("2 administrator(s) from the role, 1 from the CLI"),
+            "{text}"
+        );
+        let glassless = admin_role_line(
+            Some("admin"),
+            "gitstation",
+            AdminSources { cli: 0, oidc: 2 },
+        );
+        assert!(matches!(glassless.outcome, Outcome::Warn(ref t) if t.contains("no break-glass")));
+        let off = admin_role_line(None, "gitstation", AdminSources { cli: 1, oidc: 0 });
+        assert!(matches!(off.outcome, Outcome::Ok(ref t) if t.starts_with("off")));
+        let orphaned = admin_role_line(None, "gitstation", AdminSources { cli: 1, oidc: 1 });
+        assert!(matches!(orphaned.outcome, Outcome::Warn(ref t) if t.contains("admin-source")));
+    }
+}

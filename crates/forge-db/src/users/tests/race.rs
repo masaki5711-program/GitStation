@@ -147,7 +147,7 @@ async fn until_waiting(t: &FreshDb, statement: &str) {
 
 /// The statements the tests wait for (fragments of the commands' SQL).
 const ADMIN_SET_WAIT: &str = "pg_advisory_xact_lock(hashtextextended($1, 0))";
-const DISABLE_ROW_WAIT: &str = "is_admin FROM forge.users WHERE id = $1 FOR UPDATE";
+const DISABLE_ROW_WAIT: &str = "admin_source = 'cli' FROM forge.users WHERE id = $1 FOR UPDATE";
 const DISABLE_TOKENS_WAIT: &str = "UPDATE forge.tokens SET revoked_at";
 const OWNER_SHARE_WAIT: &str = "FOR SHARE OF u";
 const MEMBER_DELETE_WAIT: &str = "DELETE FROM forge.group_members";

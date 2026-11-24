@@ -33,6 +33,10 @@ pub struct SessionUser {
     /// The account's administrator flag (a session carries administrator
     /// rights when it is set).
     pub is_admin: bool,
+    /// The flag was granted by the identity provider's client role
+    /// (`auth.oidc.admin_role`) and follows it at every sign-in and refresh
+    /// check; a personal access token never carries the `admin` scope then.
+    pub admin_from_idp: bool,
 }
 
 /// The caller's web session.
@@ -66,6 +70,7 @@ pub async fn read(_state: AppState, request: Dispatched<InstanceCtx>) -> Respons
                 username: caller.username.clone(),
                 display_name: caller.display_name.clone(),
                 is_admin: caller.is_admin,
+                admin_from_idp: caller.admin_from_idp,
             },
             csrf_token: session.csrf_token.clone(),
             public_id: session.public_id.clone(),

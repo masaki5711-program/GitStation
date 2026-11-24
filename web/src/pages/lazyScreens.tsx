@@ -24,6 +24,7 @@ const loaders = {
   editor: () => import('./repo/editor/EditorScreen'),
   actAs: () => import('./confirm/ActAsConfirm'),
   actAsBinding: () => import('./confirm/ActAsBindingConfirm'),
+  adminRedirect: () => import('./AdminRedirect'),
   blame: () => import('./repo/BlameScreen'),
   compare: () => import('./repo/CompareScreen'),
 };
@@ -59,6 +60,7 @@ export const ProjectSettings = screen(() => loaders.settings().then((m) => m.Pro
 export const MembersScreen = screen(() => loaders.members().then((m) => m.MembersScreen));
 export const GroupViews = screen(() => loaders.groupSettings().then((m) => m.GroupViews));
 export const Account = screen(() => loaders.account().then((m) => m.Account));
+export const AdminRedirect = screen(() => loaders.adminRedirect().then((m) => m.AdminRedirect));
 export const WebhooksScreen = screen(() => loaders.webhooks().then((m) => m.WebhooksScreen));
 export const DeliveriesScreen = screen(() => loaders.deliveries().then((m) => m.DeliveriesScreen));
 export const PipelinesScreen = screen(() => loaders.pipelines().then((m) => m.PipelinesScreen));

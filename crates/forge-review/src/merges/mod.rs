@@ -318,8 +318,16 @@ pub(crate) fn job_principal(
         CredentialState::AutoMerge { .. } => return Ok(Principal::auto_merge()),
     };
     Ok(
-        Principal::authenticated(user, account.is_admin, account.active, credential, kind)
-            .as_agent(agent),
+        // A job runs without the request's live session: the standing
+        // flag only (ADR-0021 amendment 2026-11-24).
+        Principal::authenticated(
+            user,
+            account.standing_admin,
+            account.active,
+            credential,
+            kind,
+        )
+        .as_agent(agent),
     )
 }
 
@@ -360,6 +368,7 @@ mod tests {
         let account = Account {
             active: true,
             is_admin: false,
+            standing_admin: false,
         };
         for state in [
             CredentialState::Missing,
@@ -388,5 +397,31 @@ mod tests {
         assert!(job_principal(UserId::new(1), account, &agent)
             .expect("principal")
             .is_agent());
+    }
+
+    /// ADR-0021 amendment 2026-11-24 (review MEDIUM): a merge job has no
+    /// live session; the requester's IdP-granted flag gives no
+    /// administrator rights, the CLI's does.
+    #[test]
+    fn a_job_principal_carries_only_the_standing_admin_flag() {
+        let session = CredentialFacts {
+            kind: forge_core::UserKind::Human,
+            credential: CredentialState::Session { usable: true },
+        };
+        let idp = Account {
+            active: true,
+            is_admin: true,
+            standing_admin: false,
+        };
+        assert!(!job_principal(UserId::new(1), idp, &session)
+            .expect("principal")
+            .admin_rights());
+        let cli = Account {
+            standing_admin: true,
+            ..idp
+        };
+        assert!(job_principal(UserId::new(1), cli, &session)
+            .expect("principal")
+            .admin_rights());
     }
 }

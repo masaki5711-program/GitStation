@@ -128,6 +128,11 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
 - すべての `href` が SPA の経路（`web/src/App.tsx`、`RepoViews.tsx`）にあり、問い合わせのキーと値を画面が読むことはテスト
   （forge-web `every_menu_href_is_a_screen_of_the_spa`）で確かめる。
 - カードの題は「GitStation（開発）」の形、カードの `href` は `/`。
+- **管理者の設定（2026-11-24、ADR-0021 の追記）**: 本人が GitStation の管理者なら、どの用途でも最後に「管理者の設定」
+  `/-/admin`（SPA が本人の `/{username}/-/settings?tab=admin` へ送る）を足す。決めるのは `authorize()`
+  （`forge_auth::portal_admin_menu`: その人をアカウントの管理者の旗を持つセッションとして `UserAdminList`）。旗は DB の
+  `users.is_admin`（`auth.oidc.admin_role` のロールでサインインのたびに付け外しされる）で、ポータルのトークンの claim では
+  決めない。リンクは何の権利も与えない（画面は GitStation のセッションを求める）。
 
 ### merge-queue（status、P2a）
 

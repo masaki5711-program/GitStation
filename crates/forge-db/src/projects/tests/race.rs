@@ -10,7 +10,7 @@ use super::*;
 
 /// The statements the tests wait for (fragments of the commands' SQL).
 const CREATOR_SHARE_WAIT: &str = "SELECT kind, state FROM forge.users WHERE id = $1 FOR SHARE";
-const DISABLE_ROW_WAIT: &str = "is_admin FROM forge.users WHERE id = $1 FOR UPDATE";
+const DISABLE_ROW_WAIT: &str = "admin_source = 'cli' FROM forge.users WHERE id = $1 FOR UPDATE";
 const PATH_LOCK_WAIT: &str = "pg_advisory_xact_lock(hashtextextended('namespace:'";
 
 /// Wait (bounded) until a backend of this test's database runs a statement

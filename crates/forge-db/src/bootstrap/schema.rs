@@ -1188,6 +1188,8 @@ const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
     "refresh_checked_at",
     "access_role_seen_at",
     "refresh_without_id_token",
+    // ADR-0021 amendment 2026-11-24 (20270109100100).
+    "admin_role_seen_at",
 ];
 
 /// The columns forge_app may insert into forge.agent_part_versions (plan

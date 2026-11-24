@@ -61,7 +61,7 @@
   { "action": "UserCreate", "allow": 2, "deny": 12, "public": false, "git_operation": false },
   { "action": "UserDisable", "allow": 2, "deny": 17, "public": false, "git_operation": false },
   { "action": "UserSearch", "allow": 4, "deny": 12, "public": false, "git_operation": false },
-  { "action": "UserAdminList", "allow": 3, "deny": 15, "public": false, "git_operation": false },
+  { "action": "UserAdminList", "allow": 4, "deny": 18, "public": false, "git_operation": false },
   { "action": "UserOrgAdminRead", "allow": 3, "deny": 20, "public": false, "git_operation": false },
   { "action": "UserRename", "allow": 3, "deny": 19, "public": false, "git_operation": false },
   { "action": "ServiceAccountCreate", "allow": 1, "deny": 16, "public": false, "git_operation": false },
@@ -143,5 +143,5 @@
   { "action": "WebShell", "allow": 3, "deny": 9, "public": true, "git_operation": false },
   { "action": "Health", "allow": 1, "deny": 9, "public": true, "git_operation": false },
   { "action": "Metrics", "allow": 1, "deny": 10, "public": false, "git_operation": false },
-  { "action": "PortalWidgetRead", "allow": 4, "deny": 28, "public": false, "git_operation": false }
+  { "action": "PortalWidgetRead", "allow": 5, "deny": 29, "public": false, "git_operation": false }
 ]

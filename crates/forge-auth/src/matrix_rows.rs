@@ -871,6 +871,9 @@ pub(crate) const BASE_ROWS: &[Row] = &[
     // --- UserAdminList (`GET /api/v1/admin/users`, M2 MR6) ---
     row(A::UserAdminList, W::Admin, F::Instance, Allow),
     row(A::UserAdminList, W::AdminTokenAdmin, F::Instance, Allow),
+    // ADR-0021 amendment 2026-11-24: a token carries only a CLI-managed flag.
+    row(A::UserAdminList, W::TokenAdminScopeCli, F::Instance, Allow),
+    row(A::UserAdminList, W::TokenAdminScopeIdp, F::Instance, deny(E::Forbidden)),
     row(A::UserAdminList, W::AgentAdminTokenAdmin, F::Instance, Allow),
     row(A::UserAdminList, W::AdminTokenApi, F::Instance, deny(E::Forbidden)),
     row(A::UserAdminList, W::Owner, F::Instance, deny(E::Forbidden)),

@@ -157,6 +157,8 @@ const SHELL_PATHS: &[&str] = &[
     "/-/merge-requests",
     // The caller's activity (plan 15 MR 9).
     "/-/activity",
+    // The portal menu's administrator link (ADR-0021 amendment 2026-11-24).
+    "/-/admin",
 ];
 
 #[tokio::test]

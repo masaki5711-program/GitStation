@@ -40,6 +40,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the administrator settings (the portal menu's link) */
+        get: operations["get_admin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the administrator settings (the portal menu's link) */
+        head: operations["head_admin"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/auth/backchannel-logout": {
         parameters: {
             query?: never;
@@ -7696,6 +7714,12 @@ export interface components {
         };
         /** @description The signed-in user, as the session shows it. */
         SessionUser: {
+            /**
+             * @description The flag was granted by the identity provider's client role
+             *     (`auth.oidc.admin_role`) and follows it at every sign-in and refresh
+             *     check; a personal access token never carries the `admin` scope then.
+             */
+            admin_from_idp: boolean;
             display_name: string;
             /** Format: int64 */
             id: number;
@@ -8820,6 +8844,46 @@ export interface operations {
         };
     };
     head_activity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_admin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_admin: {
         parameters: {
             query?: never;
             header?: never;

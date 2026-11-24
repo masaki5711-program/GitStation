@@ -137,6 +137,7 @@ fn facts(role: Option<Role>, active: bool, pending_deletion: bool) -> ProjectUpd
         account: Account {
             active,
             is_admin: false,
+            standing_admin: false,
         },
         project: ProjectAccessFacts {
             project: ProjectId::new(3),
@@ -173,6 +174,23 @@ fn a_schedule_whose_owner_lost_the_right_starts_nothing() {
             err.context()
         );
     }
+}
+
+/// ADR-0021 amendment 2026-11-24 (review HIGH): a scheduled run has no
+/// live session, so only the owner's standing (CLI-managed) administrator
+/// flag counts — an IdP-granted flag gives no rights on a private project
+/// the owner holds no role on.
+#[test]
+fn a_schedule_owner_counts_only_the_standing_admin_flag() {
+    let owner = UserId::new(9);
+    let mut idp = facts(None, true, false);
+    idp.account.is_admin = true;
+    let err = owner_decision(owner, &idp).expect_err("IdP flag");
+    assert_eq!(err.code(), ErrorCode::ScheduleOwnerNotAllowed);
+    let mut cli = facts(None, true, false);
+    cli.account.is_admin = true;
+    cli.account.standing_admin = true;
+    assert!(owner_decision(owner, &cli).is_ok(), "the CLI flag counts");
 }
 
 #[test]

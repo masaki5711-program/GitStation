@@ -340,6 +340,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let known_hosts = deploy::known_hosts_check(db, cfg).await;
     let portal_news = portal::news_check(db, cfg).await;
     let org_claims = oidc::org_claims_check(db, cfg).await;
+    let admin_role = oidc::admin_role_check(db, cfg).await;
     let org_master = org::master_check(db, cfg).await;
     let agent_keys = agent::signing_keys_check(db, cfg).await;
     vec![
@@ -389,6 +390,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         known_hosts,
         portal_news,
         org_claims,
+        admin_role,
         org_master,
         agent_keys,
     ]

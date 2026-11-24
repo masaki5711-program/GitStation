@@ -1086,9 +1086,19 @@ pub async fn inbox(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Res
     answer(&w.ctx, built)
 }
 
-/// The `menu` widget's `links` body.
-pub(crate) fn menu_body(purpose: MenuPurpose, project_path: Option<&str>, lang: Lang) -> Value {
-    let items: Vec<Value> = menu_links(purpose, project_path)
+/// The `menu` widget's `links` body; `admin`: the administrator link last
+/// (`forge_auth::portal_admin_menu`, ADR-0021 amendment 2026-11-24).
+pub(crate) fn menu_body(
+    purpose: MenuPurpose,
+    project_path: Option<&str>,
+    admin: bool,
+    lang: Lang,
+) -> Value {
+    let mut links = menu_links(purpose, project_path);
+    if admin {
+        links.push(forge_core::portal::admin_menu_link());
+    }
+    let items: Vec<Value> = links
         .into_iter()
         .map(|l| json!({ "label": l.label.in_lang(lang), "href": l.href }))
         .collect();
@@ -1101,6 +1111,8 @@ pub(crate) fn menu_body(purpose: MenuPurpose, project_path: Option<&str>, lang: 
 pub async fn menu(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Response {
     let query = menu_query(request.raw_query());
     let w = request.into_write();
+    // Decided by authorize() on the account's flag, never the token's roles.
+    let admin = forge_auth::portal_admin_menu(&w.proof);
     let built = async {
         let q = query?;
         let path = match q.project {
@@ -1127,7 +1139,7 @@ pub async fn menu(state: AppState, request: Dispatched<PortalWidgetCtx>) -> Resp
             &title,
             Some(HOME_HREF.to_owned()),
             STALE_MENU_S,
-            menu_body(q.purpose, path.as_deref(), q.lang),
+            menu_body(q.purpose, path.as_deref(), admin, q.lang),
         )
     }
     .await;

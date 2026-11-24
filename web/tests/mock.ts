@@ -104,7 +104,7 @@ export const SESSION = {
   idle_expires_at: '2026-11-01T04:00:00Z',
   public_id: '0123456789abcdef',
   csrf_token: 'c'.repeat(64),
-  user: { id: 5, username: 'taro', display_name: '山田 太郎', is_admin: false },
+  user: { id: 5, username: 'taro', display_name: '山田 太郎', is_admin: false, admin_from_idp: false },
 };
 
 export const PROJECT = {

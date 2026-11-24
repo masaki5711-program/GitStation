@@ -14,6 +14,7 @@ use crate::test_support::*;
 mod administration;
 mod bootstrap;
 mod guard;
+mod idp_admin;
 mod operator_only;
 mod race;
 mod request;

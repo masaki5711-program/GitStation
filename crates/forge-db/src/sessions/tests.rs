@@ -584,6 +584,7 @@ async fn an_oidc_session_stores_its_issuer_sid_and_subject() {
             sid: Some("synthetic-sid-1".to_owned()),
             refresh_token_enc: Some(vec![1, 2, 3]),
             id_token_enc: Some(vec![4, 5]),
+            admin_role_confirmed: false,
         }),
         ..new_session(alice)
     };
@@ -621,6 +622,7 @@ async fn an_oidc_session_stores_its_issuer_sid_and_subject() {
             sid: None,
             refresh_token_enc: None,
             id_token_enc: None,
+            admin_role_confirmed: false,
         }),
         ..new_session(alice)
     };
@@ -663,6 +665,7 @@ async fn revoke_all_drops_the_sealed_idp_tokens() {
         sid: None,
         refresh_token_enc: Some(vec![9]),
         id_token_enc: Some(vec![8]),
+        admin_role_confirmed: false,
     };
     for req in ["req-drop-1", "req-drop-2"] {
         let new = NewSession {
@@ -1043,6 +1046,7 @@ async fn oidc_session(
             sid: sid.map(str::to_owned),
             refresh_token_enc: Some(vec![7, 7]),
             id_token_enc: Some(vec![6]),
+            admin_role_confirmed: false,
         }),
         ..new_session(user)
     };
@@ -1142,6 +1146,7 @@ async fn a_stored_refresh_counts_the_answers_without_an_id_token() {
         refresh_token_enc: Some(&[1]),
         id_token_enc: None,
         role_confirmed: false,
+        admin_role_confirmed: false,
     };
     assert!(store_refreshed(&t.db, issued.session_id, without)
         .await
@@ -1174,6 +1179,7 @@ async fn a_stored_refresh_counts_the_answers_without_an_id_token() {
         refresh_token_enc: None,
         id_token_enc: Some(&[2, 2]),
         role_confirmed: true,
+        admin_role_confirmed: false,
     };
     assert!(store_refreshed(&t.db, issued.session_id, with)
         .await
@@ -1288,6 +1294,7 @@ async fn backchannel_targets_stay_within_the_issuer_and_logout_reads_the_id_toke
                 sid: Some("synthetic-sid-x".to_owned()),
                 refresh_token_enc: None,
                 id_token_enc: None,
+                admin_role_confirmed: false,
             }),
             ..new_session(alice)
         },

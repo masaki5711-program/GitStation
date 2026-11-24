@@ -340,3 +340,59 @@ ADR-0038 §2（段 B）。グループ・プロジェクトに「この組織（
 - メンバーの画面: 手で付けたメンバーの表とは別に「組織から入っている人」（「組織から（<部・課の名前>）」）。ここでは外せない。
 - 結び付けの一覧: 組織の名前とコード、範囲（配下を含む・主所属だけ・職位ランク）、ロール、理由。台帳に無くなった組織は
   「台帳にありません」と出る（その結び付けは何も与えない）。
+
+## 管理者の付け外し（Keycloak のロール）
+
+ADR-0021 の追記「管理者を Keycloak のクライアントロールで付け外しする（2026-11-24）」。`auth.oidc.admin_role` を設定すると、
+サインインと 5 分ごとの確認のたびに、確かめたトークンのクライアントロール（PFS ではアクセストークンの
+`resource_access.gitstation.roles`）で GitStation の管理者の旗（`forge.users.is_admin`）を付け外しする。
+
+| トークン | 今の旗 | 結果 |
+|---|---|---|
+| ロールあり | 管理者でない | 付ける（`admin_source = 'oidc'`）、監査 `user.admin_changed` |
+| ロールなし | `oidc` の管理者 | 外す（`admin_source = 'cli'`）、監査 `user.admin_changed` |
+| ロールなし | `cli` の管理者 | **そのまま**（非常口。CLI で作った管理者は IdP で外れない） |
+| どちらでも | bot・サービスアカウント・無効の利用者 | そのまま（管理者にならない） |
+
+- 反映: 使っているセッションでは最長 5 分（次の確認）。サインインではセッションを作る前に当てるので、最初の画面から
+  管理者のメニュー（ユーザーメニューの「管理」、設定の管理者のタブ、サイドバーの「グループを追加」）が出る / 消える。
+  IdP に届かない間は 30 分でセッションが終わる。サインインしない人の旗は次のサインインまで残るが、IdP の管理者の
+  トークン（PAT）は管理者の権利を持たない（`admin` スコープも付けられない。FG-AUTH-0008 `admin_scope_requires_cli_admin`）。
+- PFS のポータルの `menu` ウィジェット: 管理者には最後に「管理者の設定」（`/-/admin`）が出る（DB の旗で決める）。
+- **セッションの外では IdP の旗を数えない**: トークン、webhook の持ち主、通知の受け手、取り消しの下書きの作者、ランナーの
+  登録者は CLI の旗（`admin_source = 'cli'`）だけを管理者とみなす。セッションも、ロールを確かめてから 330 秒
+  （`access_role_seen_at`）を過ぎると IdP の旗では管理者の権利を持たない（IdP に届かない間など。旗はそのまま）。
+- IdP がセッションを終えた（`invalid_grant`、ロールが無い、30 分確かめられない）ときは、ロールで付けた旗も外れる。
+- 復元で外した旗を `regrant-admin` で戻すと、元の出どころ（`cli` / `oidc`）で戻る。
+
+### PFS の Keycloak での付け方（PFS 側の作業。GitStation では何もしない）
+
+1. realm `iotpf` のクライアント `gitstation` に、クライアントロール `admin` を作る（一度だけ。`access` と同じ場所）。
+2. 管理者にする人（またはグループ）に、クライアント `gitstation` のロール `admin` を付ける。PFS のポータルの権限管理は
+   アプリ（クライアント）ごとにこのロールを付け外しする。
+3. アクセストークンに入ることを確かめる（クライアントの「Client scopes > Evaluate」で、その人の
+   `resource_access.gitstation.roles` に `admin`）。`access` のロールも要る（無いとサインインできない）。
+4. GitStation の設定（`forge.toml`）: `[auth.oidc]` に `admin_role = "admin"`。`access_role` と同じ名前は起動で拒否
+   （FG-SYS-0002 `config_key=auth.oidc.admin_role reason=same_as_access_role`）。変えたら `forge serve` を再起動する。
+
+### 見分け方（読み取りだけ）
+
+1. `forge doctor` の `auth.oidc.admin_role`: on/off、ロールの管理者の数、CLI の管理者の数。off なのにロールの管理者が
+   残っていると warn（もう外れない）。
+2. ログ: `forge.auth.admin_role_applied`（info、`user_id`・`change` = granted / revoked・`source=oidc_role`・`request_id`）。
+3. 監査（読み取りだけ）:
+   `SELECT created_at, resource_id, details, request_id FROM forge.audit_log WHERE action IN ('user.admin_changed', 'user.admin_source_changed') ORDER BY id DESC LIMIT 20;`
+4. 旗: `SELECT id, username, is_admin, admin_source FROM forge.users WHERE is_admin ORDER BY id;`
+5. 付かない: その人のトークンに `admin` が無い（上の 3）、`admin_role` の綴り、`forge serve` の再起動忘れ、その人が
+   bot・サービスアカウント・無効。外れない: その人が `cli` の管理者（表のとおり。下の切り替え）。
+
+### 非常口と切り替え（承認された手順として）
+
+- IdP の誤設定・障害で管理者がいなくなっても、`cli` の管理者は残る。だれもいなければ `forge admin bootstrap-admin`
+  （runbook user-offboarding）。最後の管理者をロールで外すことは拒否しない（doctor の `users.administration` が
+  FG-AUTH-0010 `no_admin` を出す）。
+- 管理者の旗を IdP のロールに任せる: `forge admin user admin-source <username> --source oidc`（以後、ロールが無ければ外れる）。
+- IdP のロールに関係なく残す（非常口の管理者にする）: `forge admin user admin-source <username> --source cli`。
+- 管理者でない人を指すと FG-AUTH-0009 `not_admin`。どちらも監査 `user.admin_source_changed`。
+- 機能を止める: `admin_role` の行を消して再起動（旗はそのまま残る。残った `oidc` の管理者は doctor が warn を出すので、
+  上の `--source cli` にするか、旗を外す手順を決める）。

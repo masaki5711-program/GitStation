@@ -327,7 +327,7 @@ async fn a_release_waits_for_a_rename_of_its_caller_without_deadlock() {
             |_: &TombstoneReleaseFacts| Ok(()),
         );
         let release = async {
-            t.until_waiting("is_admin FROM forge.users WHERE id = $1 FOR SHARE")
+            t.until_waiting("admin_source = 'cli' FROM forge.users WHERE id = $1 FOR SHARE")
                 .await;
             held.commit().await;
         };

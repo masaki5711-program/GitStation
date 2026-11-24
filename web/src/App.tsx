@@ -11,7 +11,7 @@ import { Activity } from './pages/Activity';
 import { GroupsPage } from './pages/Groups';
 import { Home } from './pages/Home';
 import { Inbox } from './pages/Inbox';
-import { ActAsBindingConfirm, ActAsConfirm } from './pages/lazyScreens';
+import { ActAsBindingConfirm, ActAsConfirm, AdminRedirect } from './pages/lazyScreens';
 import { MyMergeRequests } from './pages/MyMergeRequests';
 import { NamespaceRoute } from './pages/Namespace';
 import { NotFound } from './pages/NotFound';
@@ -59,6 +59,7 @@ export function AppRoutes() {
         <Route path="-/activity" element={<Activity />} />
         <Route path="-/projects/:id/*" element={<Permalink />} />
         <Route path="-/notifications" element={<Inbox />} />
+        <Route path="-/admin" element={<AdminRedirect />} />
         <Route path="-/*" element={<NotFound />} />
         <Route path="*" element={<NamespaceRoute />} />
       </Route>

@@ -27,6 +27,10 @@ fn forge_web_never_names_the_operator_only_user_commands() {
         // M2 MR4 (ADR-0019 Amendment M2 6): the operator's identity link.
         format!("{}{}", "operator_link_", "identity"),
         format!("{}{}", "link_by_", "operator"),
+        // ADR-0021 amendment 2026-11-24: the administrator flag moves only
+        // at a sign-in / refresh check (forge-oidc) or by the operator.
+        format!("{}{}", "sync_idp_", "admin"),
+        format!("{}{}", "set_admin_", "source"),
     ];
     // M2 MR6: forge-hosting serves the HTTP account routes too.
     let mut files = Vec::new();

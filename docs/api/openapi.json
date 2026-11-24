@@ -11079,6 +11079,10 @@
         "additionalProperties": false,
         "description": "The signed-in user, as the session shows it.",
         "properties": {
+          "admin_from_idp": {
+            "description": "The flag was granted by the identity provider's client role\n(`auth.oidc.admin_role`) and follows it at every sign-in and refresh\ncheck; a personal access token never carries the `admin` scope then.",
+            "type": "boolean"
+          },
           "display_name": {
             "type": "string"
           },
@@ -11099,7 +11103,8 @@
           "id",
           "username",
           "display_name",
-          "is_admin"
+          "is_admin",
+          "admin_from_idp"
         ],
         "type": "object"
       },
@@ -13987,6 +13992,44 @@
         },
         "security": [],
         "summary": "SPA shell: the caller's activity",
+        "x-forge-action": "WebShell"
+      }
+    },
+    "/-/admin": {
+      "get": {
+        "operationId": "get_admin",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the administrator settings (the portal menu's link)",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_admin",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the administrator settings (the portal menu's link)",
         "x-forge-action": "WebShell"
       }
     },

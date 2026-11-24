@@ -330,7 +330,10 @@ impl Hosting {
             let (released, ()) = tombstones::release_decided(&self.db, &ctx, id, user, |facts| {
                 let fresh = TombstoneCtx::new(LoadedTombstone {
                     id: facts.tombstone,
-                    release: release_of(facts.access, facts.account.is_admin && admin_scope),
+                    release: release_of(
+                        facts.access,
+                        facts.account.is_admin && proof.principal().admin_rights() && admin_scope,
+                    ),
                 });
                 proof.reconfirm(account(facts.account), fresh).map(drop)
             })

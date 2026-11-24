@@ -511,6 +511,18 @@ pub enum AuditDetails {
         via: IdentityLinkVia,
     },
     // ── end M2 MR4 ──
+    // ── ADR-0021 amendment 2026-11-24: the administrator flag from the
+    // identity provider's role, audit-only, on the user ──
+    /// `user.admin_changed`: a sign-in or a refresh check read
+    /// `auth.oidc.admin_role` and moved the administrator flag to `to`
+    /// (`{"from","to","source":"oidc_role"}`; `from` is `!to`).
+    UserAdminChanged { to: bool },
+    /// `user.admin_source_changed` (`forge admin user admin-source`): who
+    /// manages an administrator's flag, `{"from","to"}`.
+    UserAdminSourceChanged {
+        from: crate::AdminSource,
+        to: crate::AdminSource,
+    },
 }
 
 /// How an identity came to be linked (`user.identity_linked`'s `via`).
@@ -629,6 +641,8 @@ impl AuditDetails {
             Self::SessionsPurged { .. } => "session.purged",
             Self::UserCreatedOnLogin { .. } => "user.created",
             Self::UserIdentityLinked { .. } => "user.identity_linked",
+            Self::UserAdminChanged { .. } => "user.admin_changed",
+            Self::UserAdminSourceChanged { .. } => "user.admin_source_changed",
             Self::MergeRequest(change) => change.action(),
             Self::MergeRequestVersion(change) => change.action(),
             Self::ApprovalRule(change) => change.action(),
@@ -743,7 +757,9 @@ impl AuditDetails {
             | Self::SessionsRevoked { .. }
             | Self::SessionsPurged { .. }
             | Self::UserCreatedOnLogin { .. }
-            | Self::UserIdentityLinked { .. } => None,
+            | Self::UserIdentityLinked { .. }
+            | Self::UserAdminChanged { .. }
+            | Self::UserAdminSourceChanged { .. } => None,
         }
     }
 
@@ -756,6 +772,7 @@ impl AuditDetails {
     /// SessionsRevoked `{"user_id","reason","revoked_sessions"}`,
     /// SessionsPurged `{"user_id","purged_sessions"}`,
     /// AdminBootstrapped `{"created","namespace_id"}`,
+    /// UserAdminChanged `{"from","to","source"}`, UserAdminSourceChanged `{"from","to"}`,
     /// GroupCreated `{"namespace_id","parent_namespace_id","owner_id"}`,
     /// ProjectCreated `{"project_id","namespace_id","parent_namespace_id",
     /// "repository_id","visibility","owner_id"}`,
@@ -1150,6 +1167,15 @@ impl AuditDetails {
                 "issuer": issuer,
                 "via": via.as_str(),
             }),
+            Self::UserAdminChanged { to } => serde_json::json!({
+                "from": !to,
+                "to": to,
+                "source": "oidc_role",
+            }),
+            Self::UserAdminSourceChanged { from, to } => serde_json::json!({
+                "from": from.as_str(),
+                "to": to.as_str(),
+            }),
             Self::MergeRequest(change) => change.to_value(),
             Self::MergeRequestVersion(change) => change.to_value(),
             Self::ApprovalRule(change) => change.to_value(),
@@ -1278,6 +1304,8 @@ impl AuditDetails {
             | Self::SessionsPurged { .. }
             | Self::UserCreatedOnLogin { .. }
             | Self::UserIdentityLinked { .. }
+            | Self::UserAdminChanged { .. }
+            | Self::UserAdminSourceChanged { .. }
             | Self::MergeRequest(_)
             | Self::MergeRequestVersion(_)
             | Self::ApprovalRule(_)
