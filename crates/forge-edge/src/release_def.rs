@@ -67,27 +67,68 @@ struct RawPayload {
     artifacts: Vec<String>,
 }
 
-/// A relative path with `/` separators: no empty, `.` or `..` segment, no
-/// leading `/`, drive letter, backslash, colon, control or non-ASCII
+/// A relative path with `/` separators, the same on Linux and Windows: no
+/// empty, `.` or `..` segment, no leading `/`, no drive letter, no
+/// backslash, `:`, `<`, `>`, `"`, `|`, `?`, `*`, control or non-ASCII
 /// character, no trailing dot or space in a segment (Windows would name it
-/// differently), at most 255 bytes. Why it failed is not needed: the
-/// caller has one reason per field.
+/// differently), no Windows device name as a segment (`CON`, `PRN`, `AUX`,
+/// `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, with or without an extension, any
+/// case), at most 255 bytes. Why it failed is not needed: the caller has
+/// one reason per field.
 pub(crate) fn check_path(path: &str) -> Result<(), ()> {
     if path.is_empty() || path.len() > MAX_PATH_BYTES {
         return Err(());
     }
-    let bytes_ok = path
-        .bytes()
-        .all(|b| (b.is_ascii_graphic() && b != b'\\' && b != b':') || b == b' ');
+    let bytes_ok = path.bytes().all(|b| {
+        (b.is_ascii_graphic()
+            && !matches!(b, b'\\' | b':' | b'<' | b'>' | b'"' | b'|' | b'?' | b'*'))
+            || b == b' '
+    });
     if !bytes_ok {
         return Err(());
     }
     for seg in path.split('/') {
-        if seg.is_empty() || seg == "." || seg == ".." || seg.ends_with('.') || seg.ends_with(' ') {
+        if seg.is_empty()
+            || seg == "."
+            || seg == ".."
+            || seg.ends_with('.')
+            || seg.ends_with(' ')
+            || is_windows_device(seg)
+        {
             return Err(());
         }
     }
     Ok(())
+}
+
+fn is_windows_device(seg: &str) -> bool {
+    let stem = seg
+        .split('.')
+        .next()
+        .unwrap_or(seg)
+        .trim_end()
+        .to_ascii_uppercase();
+    match stem.as_bytes() {
+        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
+        [b'C', b'O', b'M', d] | [b'L', b'P', b'T', d] => d.is_ascii_digit(),
+        _ => false,
+    }
+}
+
+/// Whether `path` (case-folded) and a path already in `seen` (case-folded)
+/// would need the same name as both a file and a directory (`a/b` and
+/// `a/b/c`): the device lays a release out in one directory.
+pub(crate) fn path_conflicts(seen: &BTreeSet<String>, path: &str) -> bool {
+    let ancestor_taken = path
+        .char_indices()
+        .filter(|(_, c)| *c == '/')
+        .any(|(i, _)| path.get(..i).is_some_and(|a| seen.contains(a)));
+    let under = format!("{path}/");
+    let descendant_taken = seen
+        .range(under.clone()..)
+        .next()
+        .is_some_and(|s| s.starts_with(&under));
+    ancestor_taken || descendant_taken
 }
 
 /// Whether `path` (relative, `/`-separated) names what looks like a secret
@@ -210,8 +251,12 @@ fn lint_payloads(raw: Vec<RawPayload>, problems: &mut Vec<Problem>) -> Vec<Paylo
                 problems.push(problem("artifact_path", a));
             } else if is_secret_like_path(a) {
                 problems.push(problem("secret_like_path", a));
-            } else if !seen.insert(a.to_ascii_lowercase()) {
+            } else if seen.contains(&a.to_ascii_lowercase()) {
                 problems.push(problem("duplicate_artifact", a));
+            } else if path_conflicts(&seen, &a.to_ascii_lowercase()) {
+                problems.push(problem("artifact_path_conflict", a));
+            } else {
+                seen.insert(a.to_ascii_lowercase());
             }
         }
         out.push(PayloadDefinition {

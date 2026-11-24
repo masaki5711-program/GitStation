@@ -41,10 +41,18 @@ impl SignatureDomain {
         SignatureDomain(prefix)
     }
 
-    pub fn as_bytes(&self) -> &'static [u8] {
+    pub const fn as_bytes(&self) -> &'static [u8] {
         self.0
     }
+
+    /// Whether the prefix has the required shape (non-empty, ends in NUL).
+    /// Each domain constant asserts it at compile time.
+    pub const fn is_well_formed(&self) -> bool {
+        matches!(self.0.last(), Some(&0)) && self.0.len() > 1
+    }
 }
+
+const _: () = assert!(SignatureDomain::AGENT_PART.is_well_formed());
 
 const MAX_KEYS: usize = 64;
 

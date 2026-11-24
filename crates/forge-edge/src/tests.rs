@@ -224,6 +224,14 @@ fn manifest_rejects_unsafe_blob_path() {
         "C:/x",
         "a\\\\b",
         "dir/name.",
+        "CON",
+        "dir/nul.txt",
+        "Com1",
+        "lpt9.log",
+        "a<b",
+        "a|b",
+        "what?",
+        "star*",
         "",
         "caf\u{e9}",
     ] {
@@ -319,6 +327,54 @@ fn manifest_rules_refuse_bad_fields() {
     assert_eq!(e.reason, "too_large");
 }
 
+#[test]
+fn a_blob_path_cannot_be_a_directory_of_another() {
+    for (a, b) in [("config", "config/app.toml"), ("config/app.toml", "CONFIG")] {
+        let m = manifest_json(&[("files", vec![blob(&h('1'), 1, a), blob(&h('2'), 1, b)])]);
+        let e = parse_release(envelope(&m, &format!("sha256:{}", h('0')), "k1", "x").as_bytes())
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.reason),
+            (ErrorCode::EdgeManifestInvalid, "blob_path_conflict"),
+            "{a} {b}"
+        );
+    }
+    // Siblings with a common name prefix are fine.
+    let m = manifest_json(&[(
+        "files",
+        vec![blob(&h('1'), 1, "config"), blob(&h('2'), 1, "config.d/x")],
+    )]);
+    assert!(
+        parse_release(envelope(&m, &format!("sha256:{}", h('0')), "k1", "x").as_bytes()).is_ok()
+    );
+}
+
+#[test]
+fn a_parsed_manifest_is_in_canonical_order() {
+    // The listed order is not signed, so the parsed manifest never keeps it.
+    let a = manifest_json(&standard_payloads());
+    let mut reordered = standard_payloads();
+    reordered.reverse();
+    for (_, blobs) in &mut reordered {
+        blobs.reverse();
+    }
+    let b = manifest_json(&reordered);
+    let parse = |m: &str| {
+        parse_release(envelope(m, &format!("sha256:{}", h('0')), "k1", "x").as_bytes())
+            .unwrap()
+            .manifest
+    };
+    let (ma, mb) = (parse(&a), parse(&b));
+    assert_eq!(ma, mb);
+    let kinds: Vec<PayloadKind> = ma.payloads.iter().map(|p| p.kind).collect();
+    assert_eq!(kinds, [PayloadKind::Files, PayloadKind::OciImage]);
+    let oci = &ma.payloads[1].blobs;
+    assert!(oci.windows(2).all(|w| w[0].sha256 <= w[1].sha256));
+    // A verified release comes back the same way.
+    let v = verify_release(signed(&b).as_bytes(), &keys(&SEED, "k1")).unwrap();
+    assert_eq!(v.manifest, ma);
+}
+
 // ── edge-release.toml ──
 
 const DEFINITION: &str = r#"schema_version = 1
@@ -387,6 +443,12 @@ fn release_definition_lists_every_problem() {
             "artifact_path",
             "duplicate_kind"
         ]
+    );
+    let conflict = DEFINITION.replacen("dist/hooks/can-update", "dist/config", 1);
+    let e = lint_release_definition(conflict.as_bytes()).unwrap_err();
+    assert_eq!(
+        (e[0].reason, e[0].subject.as_deref()),
+        ("artifact_path_conflict", Some("dist/config"))
     );
     let e = lint_release_definition(b"schema_version = 1\nunknown = 2\n").unwrap_err();
     assert_eq!(e[0].reason, "toml_syntax");
@@ -552,18 +614,44 @@ fn below_min_sample_waits() {
     // A wave smaller than the sample can still finish.
     let d = decide(&stats(2, 2, 2, 0, 0), WaveKind::Percent, &p, t(LATER));
     assert_eq!(d, Decision::Advance);
-    // Nobody online: wait, and after 7 days it is stalled.
-    let d = decide(
-        &stats(0, 0, 0, 0, 0),
-        WaveKind::Percent,
-        &p,
-        t("2026-11-08T00:00:00Z"),
-    );
+}
+
+#[test]
+fn an_empty_wave_waits_and_never_advances() {
+    let p = HaltPolicy::default();
+    // Nobody online (or a canary wave without canary devices): no evidence,
+    // no advance; after 7 days it is stalled.
+    for kind in [WaveKind::Canary, WaveKind::Percent] {
+        let d = decide(&stats(0, 0, 0, 0, 0), kind, &p, t("2026-11-08T00:00:00Z"));
+        assert_eq!(
+            d,
+            Decision::Wait {
+                reason: WaitReason::NoMembers,
+                stalled: true
+            }
+        );
+    }
+    assert_eq!(WaitReason::NoMembers.as_str(), "no_members");
+}
+
+#[test]
+fn failure_rate_halts_before_a_large_min_sample() {
+    // min_sample 10, three of three failed: the failure count guards the
+    // rate on its own, the sample does not delay the halt.
+    let p = HaltPolicy::new(HaltPolicySpec {
+        min_sample: 10,
+        ..HaltPolicy::default().spec()
+    })
+    .unwrap();
+    let d = decide(&stats(1000, 3, 0, 3, 0), WaveKind::Percent, &p, t(LATER));
+    assert_eq!(halt_reason(d), Some(HaltReason::FailureRate));
+    // Unresponsive devices still wait for the sample: 1 of 3 is not a rate.
+    let d = decide(&stats(1000, 3, 2, 0, 1), WaveKind::Percent, &p, t(LATER));
     assert_eq!(
         d,
         Decision::Wait {
             reason: WaitReason::BelowMinSample,
-            stalled: true
+            stalled: false
         }
     );
 }

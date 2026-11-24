@@ -56,28 +56,43 @@ fn input(reason: &str) -> ClientError {
     ClientError::local(ErrorCode::CliInputFailed, format!("reason={reason}"))
 }
 
-fn keys_problem(reason: &'static str) -> Problem {
+fn keys_problem(reason: &'static str, why: String) -> Problem {
     Problem {
         code: ErrorCode::EdgeSigningKeyUnavailable,
         reason,
-        subject: None,
+        subject: Some(why),
     }
 }
 
 /// The edge key list: `--keys`, or `edge-keys.json` in the configuration
-/// directory.
+/// directory. Why it could not be read is the problem's subject (the io
+/// error kind, `too_large`, or `config_dir_unresolved`).
 fn load_keys(env: EnvFn<'_>, over: Option<&Path>) -> std::result::Result<KeyRing, Problem> {
     let path = match over {
         Some(p) => p.to_path_buf(),
         None => crate::config::config_dir(env, None)
-            .map_err(|_| keys_problem("keys_missing"))?
+            .map_err(|_| keys_problem("keys_missing", "config_dir_unresolved".to_owned()))?
             .join(EDGE_KEYS_FILE),
     };
-    match read_small(&path, MAX_KEYS_FILE, "keys") {
-        Ok(Some(bytes)) => parse_edge_keys(&bytes),
-        Ok(None) => Err(keys_problem("keys_missing")),
-        Err(_) => Err(keys_problem("keys_unreadable")),
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(keys_problem("keys_missing", EDGE_KEYS_FILE.to_owned()));
+        }
+        Err(e) => return Err(keys_problem("keys_unreadable", format!("{:?}", e.kind()))),
+    };
+    let mut bytes = Vec::new();
+    file.take(
+        u64::try_from(MAX_KEYS_FILE)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
+    )
+    .read_to_end(&mut bytes)
+    .map_err(|e| keys_problem("keys_unreadable", format!("{:?}", e.kind())))?;
+    if bytes.len() > MAX_KEYS_FILE {
+        return Err(keys_problem("keys_unreadable", "too_large".to_owned()));
     }
+    parse_edge_keys(&bytes)
 }
 
 fn blob_problem(reason: &'static str, path: &str) -> Problem {
@@ -88,10 +103,14 @@ fn blob_problem(reason: &'static str, path: &str) -> Problem {
     }
 }
 
-/// Every blob of `manifest` under `dir`: size first (no hashing of a file
-/// of the wrong length), then SHA-256 streamed. A blob that cannot be read
-/// for another reason stops the command (`FG-CLI-0009`), never a pass.
+/// Every blob of `manifest` under `dir`: a regular file that resolves
+/// inside `dir` (a symlinked directory on the way is refused), size first
+/// (no hashing of a file of the wrong length), then SHA-256 streamed. A
+/// blob that cannot be read for another reason stops the command
+/// (`FG-CLI-0009`), never a pass.
 fn check_blobs(dir: &Path, manifest: &Manifest) -> Result<(usize, Vec<Problem>)> {
+    let root = std::fs::canonicalize(dir)
+        .map_err(|e| input(&format!("blobs_dir_unreadable kind={:?}", e.kind())))?;
     let mut checked = 0;
     let mut problems = Vec::new();
     for blob in manifest.payloads.iter().flat_map(|p| p.blobs.iter()) {
@@ -105,7 +124,10 @@ fn check_blobs(dir: &Path, manifest: &Manifest) -> Result<(usize, Vec<Problem>)>
             }
             Err(e) => return Err(input(&format!("blob_unreadable kind={:?}", e.kind()))),
         };
-        if !meta.is_file() {
+        let inside = std::fs::canonicalize(&file)
+            .map(|real| real.starts_with(&root))
+            .map_err(|e| input(&format!("blob_unreadable kind={:?}", e.kind())))?;
+        if !meta.is_file() || !inside {
             problems.push(blob_problem("blob_not_a_regular_file", &blob.path));
             continue;
         }
@@ -151,7 +173,10 @@ fn verify(
     // The manifest's own form first, so a malformed file is FG-EDGE-0002
     // whether or not keys are present.
     let parsed = parse_release(&bytes);
-    let summary_of = parsed.as_ref().ok().map(|r| r.manifest.clone());
+    let unverified_id = parsed
+        .as_ref()
+        .ok()
+        .map(|r| (r.manifest.release_id.clone(), r.manifest.version.clone()));
     match parsed {
         Err(p) => problems.push(p),
         Ok(_) => match load_keys(env, keys_over) {
@@ -168,7 +193,9 @@ fn verify(
         blobs_checked = n;
         problems.extend(found);
     }
-    let m = summary_of.as_ref();
+    // Fields of the manifest are shown only once its signature verified:
+    // nobody should read an unverified release's values as facts.
+    let m = verified.as_ref().map(|v| &v.manifest);
     let blob_count: usize = m.map_or(0, |m| m.payloads.iter().map(|p| p.blobs.len()).sum());
     let value = json!({
         "release": shown,
@@ -188,26 +215,28 @@ fn verify(
         "revocation_checked": false,
         "problems": problems.iter().map(problem_json).collect::<Vec<_>>(),
     });
-    let summary = match (m, verified.as_ref()) {
-        (Some(m), Some(v)) => format!(
+    let summary = match verified.as_ref() {
+        Some(v) => format!(
             "Release {} ({} {}, sequence {}, {}/{}): signature verified with local key {}, digest {}; {} of {} blob(s) checked; revocation not checked (offline).",
-            crate::error::sanitize(&m.release_id),
-            crate::error::sanitize(&m.project),
-            crate::error::sanitize(&m.version),
-            m.sequence,
-            m.arch.as_str(),
-            m.os,
+            crate::error::sanitize(&v.manifest.release_id),
+            crate::error::sanitize(&v.manifest.project),
+            crate::error::sanitize(&v.manifest.version),
+            v.manifest.sequence,
+            v.manifest.arch.as_str(),
+            v.manifest.os,
             crate::error::sanitize(&v.key_id),
             v.digest,
             blobs_checked,
             blob_count,
         ),
-        (Some(m), None) => format!(
-            "{shown}: release {} {} NOT verified.",
-            crate::error::sanitize(&m.release_id),
-            crate::error::sanitize(&m.version)
-        ),
-        (None, _) => format!("{shown}: not a valid edge release file."),
+        None => match &unverified_id {
+            Some((id, version)) => format!(
+                "{shown}: release {} {} (as the file claims) NOT verified.",
+                crate::error::sanitize(id),
+                crate::error::sanitize(version)
+            ),
+            None => format!("{shown}: not a valid edge release file."),
+        },
     };
     report(cli, io, value, &problems, &summary)
 }

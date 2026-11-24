@@ -60,6 +60,8 @@ pub fn manifest_digest(m: &Manifest) -> Digest {
         }
     }
     let mut payloads: Vec<&Payload> = m.payloads.iter().collect();
+    // Kinds are unique in a parsed manifest (`duplicate_kind`), so this is
+    // a total order.
     payloads.sort_unstable_by_key(|p| p.kind);
     count(&mut out, payloads.len());
     for p in payloads {

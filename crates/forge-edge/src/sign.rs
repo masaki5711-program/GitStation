@@ -21,6 +21,8 @@ use crate::{manifest_digest, parse_release, Digest, KeyRing, Manifest, Problem};
 pub const EDGE_MANIFEST_DOMAIN: SignatureDomain =
     SignatureDomain::new(b"forge-edge-manifest-signature-v1\0");
 
+const _: () = assert!(EDGE_MANIFEST_DOMAIN.is_well_formed());
+
 /// A release whose digest and signature verified.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedRelease {

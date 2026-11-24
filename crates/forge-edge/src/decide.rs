@@ -5,18 +5,23 @@
 //! 1. any `rollback_failed` → **halt** `rollback_failed` (a device's state
 //!    is unknown);
 //! 2. a canary wave with any `failed` → **halt** `canary_failure`;
-//! 3. fewer devices attempted than `min(min_sample, members)` → **wait**
-//!    `below_min_sample` (neither halts nor advances; a group smaller than
-//!    the sample can still finish);
+//! 3. no members at all (every device offline, or a canary wave with no
+//!    canary device) → **wait** `no_members` — never an advance without
+//!    evidence; it becomes `stalled` like any wait;
 //! 4. a percentage wave with `failed + unresponsive ≥ min_failures` and
 //!    `failed ÷ (succeeded + failed) > failure_rate` → **halt**
-//!    `failure_rate` (exactly the rate does not halt);
-//! 5. `unresponsive ÷ attempted > unresponsive_rate` → **halt**
+//!    `failure_rate` (exactly the rate does not halt). Its own count
+//!    (`min_failures`) guards small samples, so it does not wait for
+//!    `min_sample`;
+//! 5. fewer devices attempted than `min(min_sample, members)` → **wait**
+//!    `below_min_sample` (neither halts nor advances; a group smaller than
+//!    the sample can still finish);
+//! 6. `unresponsive ÷ attempted > unresponsive_rate` → **halt**
 //!    `unresponsive_rate`;
-//! 6. at least `done_ratio` of the members in a final state and the soak
+//! 7. at least `done_ratio` of the members in a final state and the soak
 //!    (canary 24 h, percentage 4 h) over since the wave started →
 //!    **advance**;
-//! 7. otherwise **wait** (`in_progress` or `soaking`), `stalled` once the
+//! 8. otherwise **wait** (`in_progress` or `soaking`), `stalled` once the
 //!    wave started `stall_after` (7 days) ago.
 //!
 //! Counts are the caller's `GROUP BY state` of the wave's devices: `failed`
@@ -182,6 +187,7 @@ pub struct Halt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitReason {
+    NoMembers,
     BelowMinSample,
     InProgress,
     Soaking,
@@ -190,6 +196,7 @@ pub enum WaitReason {
 impl WaitReason {
     pub fn as_str(self) -> &'static str {
         match self {
+            WaitReason::NoMembers => "no_members",
             WaitReason::BelowMinSample => "below_min_sample",
             WaitReason::InProgress => "in_progress",
             WaitReason::Soaking => "soaking",
@@ -249,9 +256,9 @@ pub fn decide(stats: &WaveStats, kind: WaveKind, policy: &HaltPolicy, now: Times
     if kind == WaveKind::Canary && stats.failed > 0 {
         return halt(HaltReason::CanaryFailure);
     }
-    if attempted < policy.min_sample.min(members.max(1)) {
+    if members == 0 {
         return Decision::Wait {
-            reason: WaitReason::BelowMinSample,
+            reason: WaitReason::NoMembers,
             stalled,
         };
     }
@@ -260,6 +267,12 @@ pub fn decide(stats: &WaveStats, kind: WaveKind, policy: &HaltPolicy, now: Times
         && over(stats.failed, results, policy.failure_rate_bp)
     {
         return halt(HaltReason::FailureRate);
+    }
+    if attempted < policy.min_sample.min(members) {
+        return Decision::Wait {
+            reason: WaitReason::BelowMinSample,
+            stalled,
+        };
     }
     if over(stats.unresponsive, attempted, policy.unresponsive_rate_bp) {
         return halt(HaltReason::UnresponsiveRate);

@@ -18,14 +18,14 @@ DB・HTTP・鍵ファイル・機器のフックは持たない（`forge-fleet`�
 
 | 公開の API | 中身 |
 |---|---|
-| `parse_release(bytes) -> Result<Release, Problem>` | リリースのファイル `{manifest, digest, key_id, signature}` を読み、マニフェストの規則を確かめる（4 MiB まで、知らない鍵を断る、パスの規則、payload の種類、`agent` は単独で blob 1 つ）。誤りは FG-EDGE-0002 |
+| `parse_release(bytes) -> Result<Release, Problem>` | リリースのファイル `{manifest, digest, key_id, signature}` を読み、マニフェストの規則を確かめる（4 MiB まで、知らない鍵を断る、パスの規則、payload の種類、`agent` は単独で blob 1 つ、Windows の装置名や別のパスのディレクトリになるパスを断る）。返すマニフェストは要約と同じ決まった並び（並びは署名されない）。誤りは FG-EDGE-0002 |
 | `manifest_digest(&Manifest) -> Digest` | 要約（`sha256:<hex>`）。payload・blob の並びによらない。`created_at` は瞬間で入れる。形は `src/digest.rs` の docs |
 | `verify_release(bytes, &KeyRing) -> Result<VerifiedRelease, Problem>` | 規則 → 要約の比較（FG-EDGE-0004 `digest_mismatch`）→ エッジの領域での署名（FG-EDGE-0004 / 知らない鍵は FG-EDGE-0003） |
 | `parse_edge_keys(bytes)` | エッジの公開鍵の一覧（部品の鍵と同じ JSON の形、別の一覧）。誤りは FG-EDGE-0003 |
 | `sign_manifest(&seed, &Digest)` / `EDGE_MANIFEST_DOMAIN` | エッジの領域での署名。E4 の `forge-fleet` のリリースの作成だけが呼ぶ（`clippy.toml`） |
 | `lint_release_definition(bytes) -> Result<ReleaseDefinition, Vec<Problem>>` / `is_secret_like_path` | `edge-release.toml` の lint。問題は全部挙げる（FG-EDGE-0001） |
 | `WavePlan` / `wave_bucket` / `first_wave` / `in_wave` | 波の計画（canary は先頭だけ、割合は厳密に増えて 100 % で終わる。FG-EDGE-0005）と、機器の bucket・最初の波（単調） |
-| `decide(&WaveStats, WaveKind, &HaltPolicy, now) -> Decision` | halt（理由と数）/ advance / wait（`below_min_sample`・`in_progress`・`soaking`、`stalled`）。規則は `src/decide.rs` の docs |
+| `decide(&WaveStats, WaveKind, &HaltPolicy, now) -> Decision` | halt（理由と数）/ advance / wait（`no_members`・`below_min_sample`・`in_progress`・`soaking`、`stalled`）。規則は `src/decide.rs` の docs |
 | `HaltPolicy::new(HaltPolicySpec)` / `HaltPolicy::spec` | しきい値（既定は計画 21 §5.6）。範囲の外は FG-EDGE-0005 |
 | `Schedule::new(tz, windows, blackouts)` / `WeeklyWindow::new` / `Blackout::new` | IANA のタイムゾーン（tz database は `jiff` に組み込み）、曜日 + `HH:MM` + 分、禁止期間。誤りは FG-EDGE-0005 |
 | `install_window(&Schedule, now) -> Option<InstallWindow>` / `may_start_install` | `now` を含む窓か次の窓（DST と日付の境をまたぐ。壁の時計の規則は `src/window.rs` の docs）と、残りの時間が `max_install_seconds` 以上か |

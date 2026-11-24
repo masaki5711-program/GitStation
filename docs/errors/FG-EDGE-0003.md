@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-Plan 21 §5.2 (ADR-0041 §3): the edge public key list needed to verify a release signature is missing, unreadable or does not name the release's key. `reason`: `keys_missing` (gstn: no `edge-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable`, `keys_invalid` (not the JSON key list `{"keys":[{"kid","public_key",…}]}`, a duplicate or empty kid, a public key that is not 32 bytes of base64, more than 64 keys), `unknown_key` (the release names a `key_id` the list does not hold: the list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The edge keys are separate from the agent part keys (plan 21 §11 Q7).
+Plan 21 §5.2 (ADR-0041 §3): the edge public key list needed to verify a release signature is missing, unreadable or does not name the release's key. `reason`: `keys_missing` (gstn: no `edge-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable` (`subject`: the io error kind or `too_large`, over 1 MiB), `keys_invalid` (not the JSON key list `{"keys":[{"kid","public_key",…}]}`, a duplicate or empty kid, a public key that is not 32 bytes of base64, more than 64 keys), `unknown_key` (the release names a `key_id` the list does not hold: the list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The edge keys are separate from the agent part keys (plan 21 §11 Q7).
 
 ## 調べ方 (diagnosis)
 

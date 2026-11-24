@@ -33,18 +33,22 @@ E1 は、I/O を持たない判断のすべて — マニフェストの形と�
 2. **リリースのファイルとマニフェスト**（`schema_version: 1`、JSON）: `{manifest, digest, key_id, signature}`。マニフェストは計画 21 §5.2 の欄
    （`release_id`・`project`・`version`・`source_sha`・`sequence`・`created_at`・`arch`・`os`・`payloads[]`（`kind`・`blobs[]` = `sha256`・`size`・
    `path`）・`max_install_seconds`・`health_soak_seconds`・`ci_pipeline_id`）。知らない鍵・重なった鍵は断る。どの文字列にも長さと字の種類の
-   上限がある。blob の `path` は `edge-release.toml` の成果物のパスと同じ規則（相対、`/` 区切り、`..`・`.`・空の区切り・`\`・`:`・制御文字・
-   ASCII でない字・区切りの末尾の `.` や空白を断る、255 バイトまで）で、**リリース全体で一意**（大小の違いだけでも重ねない。機器は 1 つの
-   ディレクトリに並べる）。`agent` の payload は blob 1 つで、他の payload と一緒にしない（エージェントの自己更新は単独の展開）。
+   上限がある。blob の `path` は `edge-release.toml` の成果物のパスと同じ規則（相対、`/` 区切り、`..`・`.`・空の区切り・`\`・`:`・`<>"|?*`・制御文字・
+   ASCII でない字・区切りの末尾の `.` や空白・Windows の装置名（`CON`・`NUL`・`COM1`・`LPT1` など、拡張子つきも、大小を問わず）を断る、
+   255 バイトまで）で、**リリース全体で一意**（大小の違いだけでも重ねない）、しかも **あるパスが別のパスのディレクトリにならない**
+   （`a/b` と `a/b/c` を断る。機器は 1 つのディレクトリに並べる）。`agent` の payload は blob 1 つで、他の payload と一緒にしない（エージェントの自己更新は単独の展開）。
    シークレットらしい名前（`.env`・`*.pem`・`*.key`・`id_ed25519*`・`.ssh/` の下など）はマニフェストでも断る。誤りは FG-EDGE-0002。
 3. **要約**: SHA-256（`"forge-edge-manifest-digest-v1\n"` ‖ 各欄。可変長の欄は 4 バイトの長さを前に付ける）。`created_at` は文字列ではなく
    **瞬間**（秒とナノ秒）を入れる（同じ瞬間の `Z` と `+07:00` は同じ要約）。payload は kind の順、blob は（sha256、path、size）の順に並べて入れる
    ので、並べた順によらない（`digest_is_independent_of_blob_order`）。どの欄・blob のハッシュ・大きさ・パスの変化でも変わる。
+   **並びは署名されない** ので、読んだマニフェストは常に要約と同じ決まった並び（payload は kind、blob は sha256・path・size）で返す
+   （`a_parsed_manifest_is_in_canonical_order`。レビューの指摘: 中継が並びを変えても、機器が「並べた順に入れる」ことで署名していない動きを
+   しない）。
 4. **署名の領域（`forge-agent::sign` の一般化）**: `SignatureDomain`（署名する文の前置きの newtype）を足し、`verify_signature_in` /
    `sign_digest_in` が領域を取る。既存の `verify_signature` / `sign_digest` は `SignatureDomain::AGENT_PART`（今までと同じ
    `forge-agent-part-signature-v1\0`）を使うので、**既に作った部品の署名はそのまま通る**（`existing_part_signatures_still_verify_after_domains`
    が A1 と同じ文を `ring` で直接署名して確かめる）。エッジは `EDGE_MANIFEST_DOMAIN = "forge-edge-manifest-signature-v1\0"`。領域はどれも NUL で
-   終わり、互いの前置きにならない。同じ鍵・同じ 32 バイトでも、部品の署名はマニフェストとして通らず、その逆も通らない
+   終わり（各定数でコンパイル時に `is_well_formed` を assert）、互いの前置きにならない。同じ鍵・同じ 32 バイトでも、部品の署名はマニフェストとして通らず、その逆も通らない
    （`agent_part_signature_does_not_verify_as_edge_manifest`）。そのうえ鍵の一覧もエッジ専用（`edge-keys.json`、E4 で `edge.signing_keys_file`。
    計画 21 §11 問い 7）なので、部品の鍵は引かれもしない。`forge-agent` の問題は理由（`reason`）を保ったまま EDGE のコードに写す
    （FG-AGENT-0002 → FG-EDGE-0004、FG-AGENT-0003 → FG-EDGE-0003）。署名する関数は `clippy.toml` の `disallowed-methods` で呼び出し元を絞る:
@@ -62,9 +66,11 @@ E1 は、I/O を持たない判断のすべて — マニフェストの形と�
    **長さの前置き** を足した（`("ab","c")` と `("a","bc")` を区別する）。機器の最初の波 = それを含むいちばん早い波で、以後のすべての波に入る
    （**単調**、`wave_membership_is_monotonic`）。bucket は展開と機器だけで決まるので、計算し直しても動かない。誤った計画は FG-EDGE-0005。
 8. **停止の判定 `decide(stats, kind, policy, now)`**: 計画 21 §5.6 の表を、上から最初に当たる規則で: `rollback_failed` が 1 台 → halt、
-   canary で `failed` が 1 台 → halt（標本の数によらない）、試みた機器が `min(min_sample, members)` 未満 → wait（止めも進めもしない。標本より
-   小さいグループも終われる）、割合の波で `failed + unresponsive ≥ 3` かつ失敗の割合 **> 2 %**（ちょうど 2 % は止めない。整数の basis point
-   で比べる）→ halt、未応答 > 10 % → halt、90 % 以上が終わりの状態で見守りの時間（canary 24 時間、割合 4 時間）が過ぎた → advance、
+   canary で `failed` が 1 台 → halt（標本の数によらない）、波に機器が 1 台も無い（全台オフライン、canary の機器が無い canary の波）→ wait
+   `no_members`（根拠なしに進めない。7 日で `stalled`。E5 は canary の波を持つ計画を canary の機器の無いグループに作らせない）、割合の波で
+   `failed + unresponsive ≥ 3` かつ失敗の割合 **> 2 %**（ちょうど 2 % は止めない。整数の basis point で比べる）→ halt（自分の数の条件で
+   小さい標本を防ぐので `min_sample` を待たない）、試みた機器が `min(min_sample, members)` 未満 → wait（止めも進めもしない。標本より
+   小さいグループも終われる）、未応答 > 10 % → halt、90 % 以上が終わりの状態で見守りの時間（canary 24 時間、割合 4 時間）が過ぎた → advance、
    ほかは wait（`in_progress` / `soaking`）で、波の開始から 7 日で `stalled`。`failed` は `failed` と `rolled_back` の合計（機器は戻ったが
    リリースは失敗）。数が食い違う（終わりの数 > 試みた数）ときは多い方を試みた数とし、失敗の割合を小さく読まない。境目は表の試験で固定する
    （`canary_single_failure_halts`・`below_min_sample_waits`・`failure_rate_boundary_2_percent`）。halt の理由と数（`Halt`）は E5 が
@@ -80,7 +86,8 @@ E1 は、I/O を持たない判断のすべて — マニフェストの形と�
    時計は読まない。サーバー・`gstn`・機器（Windows の開発機を含む）が同じ瞬間を答える。tz database の更新は `jiff` の版の更新で入る。
 10. **`gstn edge release verify --release <file> [--keys <file>] [--blobs <dir>]`**（手元だけ）: 上の確かめをし、`--blobs` があれば
     **署名の通ったマニフェストに対してだけ** 各 blob の大きさ（先に比べ、違えばハッシュを計算しない）と SHA-256 を比べる（0004
-    `blob_mismatch`・`blob_missing`・`blob_not_a_regular_file`）。鍵は `--keys` か gstn の設定のディレクトリの `edge-keys.json`。出力は
+    `blob_mismatch`・`blob_missing`・`blob_not_a_regular_file`。symlink のディレクトリを通って `--blobs` の外を指す blob も断る）。
+    マニフェストの欄（`release_id` など）は署名が通ったときだけ出力に出す（確かめていない値を事実として見せない）。鍵は `--keys` か gstn の設定のディレクトリの `edge-keys.json`。出力は
     `keys: "local"`・`revocation_checked: false` を必ず言う。いちばん重いコード（0004 → 0003 → 0002）で終了コード 1。REST を呼ばないので
     `docs/api/agent-tools.toml` は `[[not_api]]`、`coverage.rs` は `LOCAL_COMMANDS`。
 11. **エラーコード（領域 `EDGE`）**: E1 が出すものだけ登録する。計画 21 §5.11 の仮の名前の a〜q は E2 以降が登録する（番号は登録の順）。

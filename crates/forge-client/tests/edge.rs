@@ -137,7 +137,9 @@ fn a_changed_blob_fails_with_signature_invalid() {
     assert_eq!(out.code, 1, "{}", out.stdout);
     let v = out.json();
     assert_eq!(v["verified"], false);
-    let reasons: Vec<(&str, &str)> = v["problems"]
+    // Blobs are checked in the manifest's canonical order (by SHA-256), not
+    // the order the file lists them in.
+    let mut reasons: Vec<(&str, &str)> = v["problems"]
         .as_array()
         .unwrap()
         .iter()
@@ -148,11 +150,12 @@ fn a_changed_blob_fails_with_signature_invalid() {
             )
         })
         .collect();
+    reasons.sort_unstable();
     assert_eq!(
         reasons,
         [
-            ("FG-EDGE-0004", "blob_missing"),
-            ("FG-EDGE-0004", "blob_mismatch")
+            ("FG-EDGE-0004", "blob_mismatch"),
+            ("FG-EDGE-0004", "blob_missing")
         ]
     );
     assert!(out.stderr.contains("FG-EDGE-0004"), "{}", out.stderr);
@@ -175,6 +178,9 @@ fn an_agent_part_signature_or_missing_keys_never_verify() {
     let v = out.json();
     assert_eq!(v["problems"][0]["error_code"], "FG-EDGE-0004");
     assert_eq!(v["problems"][0]["reason"], "bad_signature");
+    // Nothing of an unverified manifest is shown as a fact.
+    assert_eq!(v["verified"], false);
+    assert!(v["release_id"].is_null() && v["version"].is_null(), "{v}");
 
     // No key list: FG-EDGE-0003 keys_missing.
     std::fs::remove_file(f.config.path().join("edge-keys.json")).unwrap();
@@ -183,6 +189,7 @@ fn an_agent_part_signature_or_missing_keys_never_verify() {
     let v = out.json();
     assert_eq!(v["problems"][0]["error_code"], "FG-EDGE-0003");
     assert_eq!(v["problems"][0]["reason"], "keys_missing");
+    assert_eq!(v["problems"][0]["subject"], "edge-keys.json");
 
     // Not a release file at all: FG-EDGE-0002.
     std::fs::write(f.path("release.json"), b"{}").unwrap();

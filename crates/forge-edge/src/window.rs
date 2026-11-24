@@ -183,6 +183,7 @@ fn subtract(
 /// The window containing `now`, else the next to start within 8 days;
 /// `None` when there is none (no weekly windows, all blacked out).
 pub fn install_window(schedule: &Schedule, now: Timestamp) -> Option<InstallWindow> {
+    // clone: TimeZone is reference-counted; to_zoned takes it by value.
     let today = now.to_zoned(schedule.tz.clone()).date();
     let mut day = today.yesterday().unwrap_or(today);
     let mut spans = Vec::new();

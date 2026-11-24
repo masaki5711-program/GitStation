@@ -14,7 +14,10 @@
 //! Unknown and duplicate keys are refused (nothing is ignored). Every
 //! string has a bound and an alphabet; blob paths follow the artifact path
 //! rules of `edge-release.toml` and are unique in the whole release (also
-//! by letter case), so the device can lay them out under one directory.
+//! by letter case, and no path is a directory of another), so the device
+//! can lay them out under one directory. The order of payloads and blobs is
+//! not signed: a parsed [`Manifest`] always comes back in the digest's
+//! canonical order (payloads by kind, blobs by SHA-256, path, size).
 
 use std::collections::BTreeSet;
 
@@ -22,7 +25,7 @@ use forge_errors::ErrorCode;
 use jiff::Timestamp;
 use serde::Deserialize;
 
-use crate::release_def::{check_path, is_secret_like_path};
+use crate::release_def::{check_path, is_secret_like_path, path_conflicts};
 use crate::{unhex32, Digest, Problem};
 
 /// Most bytes of a release file a caller should read (and [`parse_release`]
@@ -105,7 +108,9 @@ pub struct Payload {
     pub blobs: Vec<Blob>,
 }
 
-/// A validated manifest (`schema_version` 1).
+/// A validated manifest (`schema_version` 1), in canonical order. Built by
+/// [`parse_release`] only: a hand-built one with two payloads of one kind
+/// would not have an order-independent digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     pub release_id: String,
@@ -321,9 +326,14 @@ fn payloads(raw: Vec<RawPayload>) -> Result<Vec<Payload>, Problem> {
             if is_secret_like_path(&b.path) {
                 return Err(bad("secret_like_path", &b.path));
             }
-            if !paths.insert(b.path.to_ascii_lowercase()) {
+            let folded = b.path.to_ascii_lowercase();
+            if paths.contains(&folded) {
                 return Err(bad("duplicate_blob_path", &b.path));
             }
+            if path_conflicts(&paths, &folded) {
+                return Err(bad("blob_path_conflict", &b.path));
+            }
+            paths.insert(folded);
             let sha256 = unhex32(&b.sha256).ok_or_else(|| bad("blob_sha256", &b.path))?;
             if b.size == 0 || b.size > MAX_BLOB_SIZE {
                 return Err(bad("blob_size", &b.path));
@@ -334,10 +344,19 @@ fn payloads(raw: Vec<RawPayload>) -> Result<Vec<Payload>, Problem> {
                 path: b.path,
             });
         }
+        // The canonical order, the digest's: the order a file lists blobs
+        // in is not signed, so nobody downstream may depend on it.
+        blobs.sort_unstable_by(|a, b| {
+            a.sha256
+                .cmp(&b.sha256)
+                .then_with(|| a.path.as_bytes().cmp(b.path.as_bytes()))
+                .then(a.size.cmp(&b.size))
+        });
         out.push(Payload { kind, blobs });
     }
     if kinds.contains(&PayloadKind::Agent) && kinds.len() > 1 {
         return Err(bad("agent_not_alone", "agent"));
     }
+    out.sort_unstable_by_key(|p| p.kind);
     Ok(out)
 }
