@@ -111,6 +111,8 @@ fn act_as_merge_is_not_allowed() {
         Action::MergeRequestMerge,
         Action::MergeSettingsManage,
         Action::DocLintMigrationManage,
+        Action::DocumentEditClaim,
+        Action::DocumentEditClaimRevoke,
         Action::ApprovalRuleManage,
         Action::CodeownersEnforcementToggle,
         Action::ProtectedRefManage,

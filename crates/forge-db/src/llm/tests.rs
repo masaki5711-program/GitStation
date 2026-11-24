@@ -242,7 +242,10 @@ async fn advice_keeps_input_class() {
         is_agent: false,
         can_read_subject: false,
     };
-    assert_eq!(super::advice(&w.t.db, id, outsider).await.expect("read"), None);
+    assert_eq!(
+        super::advice(&w.t.db, id, outsider).await.expect("read"),
+        None
+    );
     assert_eq!(
         record_feedback(&w.t.db, id, None, w.alice, AGENT, Verdict::Useful)
             .await
@@ -269,7 +272,10 @@ async fn advice_keeps_input_class() {
         .bind(newer)
         .execute(&mut su)
         .await;
-    assert!(again.is_err(), "an older advice never supersedes a newer one");
+    assert!(
+        again.is_err(),
+        "an older advice never supersedes a newer one"
+    );
 }
 
 #[tokio::test]
@@ -414,8 +420,14 @@ async fn retention_sweep_keeps_feedback() {
             requests: 1
         }
     );
-    assert!(super::advice(&w.t.db, old, PERSON).await.expect("read").is_none());
-    assert!(super::advice(&w.t.db, fresh, PERSON).await.expect("read").is_some());
+    assert!(super::advice(&w.t.db, old, PERSON)
+        .await
+        .expect("read")
+        .is_none());
+    assert!(super::advice(&w.t.db, fresh, PERSON)
+        .await
+        .expect("read")
+        .is_some());
     let rows = w
         .t
         .json_rows("SELECT advice_id, purpose, verdict FROM forge.llm_advice_feedback ORDER BY id")

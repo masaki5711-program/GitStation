@@ -671,6 +671,29 @@ impl SpecChecks {
             Compared::Nothing => SpecIndex::default(),
         };
         let trace = trace_merge_request(&base, &head.index, &linked, &head.external);
+        // Plan 13 stage 4 part A: the documents this version revises,
+        // recorded for the rule "one open revision per document" (only
+        // for the merge request's current head: a job of an older version
+        // never replaces a newer one's documents).
+        if mr.state == forge_core::MergeRequestState::Open
+            && mr.head_sha.as_deref() == Some(request.head.as_str())
+        {
+            let merge_base = match &compared {
+                Compared::MergeBase(b) => Some(b),
+                Compared::Nothing => None,
+            };
+            // Never fails the job (logged when it cannot be derived).
+            let _recorded = crate::doc_revision::record_version(
+                &self.db,
+                &self.browse,
+                &self.doc_limits,
+                (request.project, request.iid, mr.id),
+                repo.id,
+                (merge_base, &request.head),
+                request_id,
+            )
+            .await;
+        }
         Ok(Some(Evaluated {
             head,
             docs,

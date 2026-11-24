@@ -70,6 +70,11 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.integration_bindings_resolving_alone()",
     // ── M4 C11: a deployment only moves forward; its approval is set once (20261214100000) ──
     "forge.deployments_guard()",
+    // ── Plan 16 A3: the agent marketplace (20270103100000) ──
+    "forge.agent_signing_keys_guard()",
+    "forge.agent_parts_guard()",
+    "forge.agent_part_versions_guard()",
+    "forge.agent_part_files_guard()",
     // ── Plan 19 L5-2: an advice keeps its class; only superseded_by changes (20270108100000) ──
     "forge.llm_advice_guard()",
     "forge.llm_requests_guard()",
@@ -99,6 +104,27 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER llm_advice_feedback_identity BEFORE UPDATE ON \
          forge.llm_advice_feedback FOR EACH ROW EXECUTE FUNCTION \
          forge.llm_advice_feedback_guard()",
+    ),
+    // ── Plan 16 A3: published agent parts never change (20270103100000) ──
+    (
+        "agent_signing_keys",
+        "agent_signing_keys_forward",
+        "CREATE TRIGGER agent_signing_keys_forward BEFORE DELETE OR UPDATE ON forge.agent_signing_keys FOR EACH ROW EXECUTE FUNCTION forge.agent_signing_keys_guard()",
+    ),
+    (
+        "agent_parts",
+        "agent_parts_forward",
+        "CREATE TRIGGER agent_parts_forward BEFORE DELETE OR UPDATE ON forge.agent_parts FOR EACH ROW EXECUTE FUNCTION forge.agent_parts_guard()",
+    ),
+    (
+        "agent_part_versions",
+        "agent_part_versions_forward",
+        "CREATE TRIGGER agent_part_versions_forward BEFORE INSERT OR DELETE OR UPDATE ON forge.agent_part_versions FOR EACH ROW EXECUTE FUNCTION forge.agent_part_versions_guard()",
+    ),
+    (
+        "agent_part_files",
+        "agent_part_files_append_only",
+        "CREATE TRIGGER agent_part_files_append_only BEFORE INSERT OR DELETE OR UPDATE ON forge.agent_part_files FOR EACH ROW EXECUTE FUNCTION forge.agent_part_files_guard()",
     ),
     // ── M4 C11: a deployment only moves forward (20261214100000) ──
     (
@@ -1052,6 +1078,77 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── Plan 16 A3: the agent marketplace (20270103100000): no DELETE
+        // on the published tables, UPDATE of the changing columns only ──
+        // The keys: forge_app reads; forge_seq writes, only through
+        // forge.agent_signing_key_manage (EXECUTE forge_maint).
+        (
+            "forge.agent_signing_keys",
+            [
+                plain(&["forge_app:SELECT", "forge_seq:SELECT"]),
+                columns("forge_seq", "INSERT", &["kid", "public_key"]),
+                columns(
+                    "forge_seq",
+                    "UPDATE",
+                    &["retired_at", "revoked_at", "revoked_reason"],
+                ),
+                ro("agent_signing_keys")?,
+            ]
+            .concat(),
+        ),
+        (
+            "forge.agent_parts",
+            [
+                plain(&["forge_app:SELECT"]),
+                columns(
+                    "forge_app",
+                    "INSERT",
+                    &["slug", "kind", "source_project_id", "created_by"],
+                ),
+                columns("forge_app", "UPDATE", &["deprecated_at", "deprecated_by"]),
+                ro("agent_parts")?,
+            ]
+            .concat(),
+        ),
+        (
+            "forge.agent_part_versions",
+            [
+                plain(&["forge_app:SELECT"]),
+                columns("forge_app", "INSERT", AGENT_VERSION_APP_INSERT),
+                columns(
+                    "forge_app",
+                    "UPDATE",
+                    &[
+                        "channel",
+                        "state",
+                        "revoked_reason",
+                        "revoked_by",
+                        "revoked_at",
+                    ],
+                ),
+                ro("agent_part_versions")?,
+            ]
+            .concat(),
+        ),
+        (
+            "forge.agent_part_files",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                ro("agent_part_files")?,
+            ]
+            .concat(),
+        ),
+        (
+            "forge.agent_builds",
+            [dml("forge_app"), ro("agent_builds")?].concat(),
+        ),
+        (
+            "forge.agent_lesson_injections",
+            [dml("forge_app"), ro("agent_lesson_injections")?].concat(),
+        ),
+        // ── Plan 13 stage 4 part A: document revisions (20270105100000) ──
+        ("forge.merge_request_documents", operational()),
+        ("forge.document_edit_claims", operational()),
         // ── Plan 19 L5-2: the local LLM's records (20270108100000) ──
         ("forge.llm_requests", operational()),
         ("forge.llm_advice", operational()),
@@ -1118,6 +1215,24 @@ const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
     "refresh_checked_at",
     "access_role_seen_at",
     "refresh_without_id_token",
+];
+
+/// The columns forge_app may insert into forge.agent_part_versions (plan
+/// 16 A3: not id, created_at or txid, which the table and its guard set).
+const AGENT_VERSION_APP_INSERT: &[&str] = &[
+    "part_id",
+    "version",
+    "channel",
+    "source_sha",
+    "tag",
+    "manifest",
+    "digest",
+    "signature",
+    "key_id",
+    "capabilities",
+    "published_by",
+    "ci_pipeline_id",
+    "state",
 ];
 
 /// The columns forge_app may update on forge.tokens.
@@ -1281,6 +1396,16 @@ const LATER_TABLES: &[&str] = &[
     // ── ADR-0038 §2: org bindings (20270101100000) ──
     "org_bindings",
     "org_access_policy",
+    // ── Plan 16 A3: the agent marketplace (20270103100000) ──
+    "agent_signing_keys",
+    "agent_parts",
+    "agent_part_versions",
+    "agent_part_files",
+    "agent_builds",
+    "agent_lesson_injections",
+    // ── Plan 13 stage 4 part A: document revisions (20270105100000) ──
+    "merge_request_documents",
+    "document_edit_claims",
     // ── Plan 19 L5-2: the local LLM's records (20270108100000) ──
     "llm_requests",
     "llm_advice",

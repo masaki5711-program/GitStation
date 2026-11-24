@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-Plan 16 §2.2 (ADR-0032 §4): the key list needed to verify a part signature is missing, unreadable or does not name the part's key. `reason`: `keys_missing` (gstn: no `agent-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable`, `keys_invalid` (not the JSON key list, a duplicate or empty kid, a public key that is not 32 bytes of base64), `unknown_key` (the lock names a `key_id` the list does not hold: the local list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The server-side key file (`agent.signing_keys_file`) comes with A3.
+Plan 16 §2.2 (ADR-0032 §4): the key list needed to verify a part signature is missing, unreadable or does not name the part's key. `reason`: `keys_missing` (gstn: no `agent-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable`, `keys_invalid` (not the JSON key list, a duplicate or empty kid, a public key that is not 32 bytes of base64), `unknown_key` (the lock names a `key_id` the list does not hold: the local list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The server-side key file (`agent.signing_keys_file`) has its own code, FG-AGENT-0014.
 
 ## 調べ方 (diagnosis)
 

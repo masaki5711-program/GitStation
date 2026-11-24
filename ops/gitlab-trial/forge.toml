@@ -87,3 +87,13 @@ secret_keys_file = "/run/forge/secrets/webhook-secret-keys"
 # deploy.allowed_networks comes from DEPLOY_ALLOWED_NETWORKS in .env
 # (optional; e.g. the server's own LAN address /32). Timeouts: defaults.
 ssh_key_file = "/run/forge/secrets/deploy-ssh-key"
+
+[portal]
+# The PFS portal's home widgets (ADR-0036, docs/portal/widgets.md). The
+# portal calls /api/portal-widgets/v1/* with the person's access token of
+# its Keycloak client `portal` (the `azp` accepted; client_id default).
+# Without this section every widget call is refused with FG-AUTH-0026
+# reason=portal_disabled and the portal shows "no permission".
+# News stays off: it needs an https (or loopback) registry_url.
+enabled = true
+client_id = "portal"

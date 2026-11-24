@@ -24,6 +24,7 @@ import { pipelineIdOfCheck } from '../../api/pipelines';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import { checkBadge } from '../labels';
+import { AI_EVAL_CHECK, AI_EVAL_TITLE_ID } from './aiEval';
 import { blobUrl, pipelineUrl, pullUrl } from '../repoUrls';
 import { StateBadge } from './StateBadge';
 import styles from './Mr.module.css';
@@ -112,7 +113,14 @@ function Run({ run, project, head }: { run: CheckRun; project: string; head: str
           <span className={styles.nextHint}>{t('mrChecks.namespace', { namespace })}</span>
         )}
       </p>
-      {run.summary.trim() !== '' && <p className={styles.runSummary}>{run.summary}</p>}
+      {run.name === AI_EVAL_CHECK ? (
+        // The comparison table is its own section below (plan 17 P17-9).
+        <p className={styles.runSummary}>
+          <a href={`#${AI_EVAL_TITLE_ID}`}>{t('aiEval.seeBelow')}</a>
+        </p>
+      ) : (
+        run.summary.trim() !== '' && <p className={styles.runSummary}>{run.summary}</p>
+      )}
       {pipelineId !== null && (
         <p className={styles.runSummary}>
           <Link to={pipelineUrl(project, pipelineId)}>{t('mrChecks.openPipeline', { id: pipelineId })}</Link>

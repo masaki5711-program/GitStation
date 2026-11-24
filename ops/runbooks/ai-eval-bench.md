@@ -4,6 +4,16 @@
 `.forge-ci.yml` のジョブが成果物 `eval-report.json` を宣言したパイプラインだけ、forge の worker（タスク `ci_ai_eval`、10 秒ごと）が
 ベンチの報告を基準 `evals/baselines/<models>.json`（パイプラインのコミットのもの）と比べて書く。形と判定は `docs/ai-eval-report.md`。
 
+**夜間の基準の候補**（計画 17 P17-6）: 定期（C12）のパイプラインが既定のブランチで通ると、forge が `ai-eval/baseline-<models>` から
+基準の候補の **下書きの MR を 1 本** 保つ（毎晩更新、人が承認）。形と止め方は `docs/ai-eval-report.md` の「夜間のベンチと基準の候補」。
+候補が出ない・MR が増えないとき: `forge serve` のログ `forge.ai_eval.baseline_proposed`（`outcome`・`reason`: `unchanged` /
+`baseline_moved`（夜のコミットの後に基準が変わった）/ `branch_exists`（閉じた候補のブランチが残っている: 消せば再開）/
+`owner_not_allowed`（定期の持ち主が MR を開けない・push できない: `forge.ai_eval.baseline_refused` の `error_code`。持ち主を Maintainer に）/
+`target_missing` / `ai_assets_disabled`（プロジェクトの `ai_assets.enabled` が off）/ `too_many_candidates`（開いた候補が 10 本）/
+`branch_missing`（開いた候補の枝が消えた））と `forge.ai_eval.baseline_skipped`（`not_scheduled` / `superseded`（新しい定期の実行がある）/ `not_default_branch` / `no_report` / `not_passing` / `unchanged` など）。
+ジョブ: `SELECT state, attempts, last_error_code FROM forge.jobs WHERE kind = 'ai_eval.baseline_candidate' ORDER BY id DESC LIMIT 5;`
+（`dead` なら `last_error_code` の runbook）。
+
 ## Trigger
 
 - `forge worker` のログに `forge.ai_eval.check_written`（warn）`error_code=FG-AIASSET-0002`: ベンチが使える報告を残さなかった。
@@ -32,6 +42,8 @@
    あるか、ベンチがそのパスに書いたかを確かめる（`out/eval-report.json` は宣言にならない）。
 4. ジョブの失敗: `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>`、ログは `gstn pipeline log`。
    GPU の Runner: `gstn runner list`（タグ `gpu-eval` の Runner が `online` か）、runbook `ci-runner`。
+   ジョブが FG-CI-0029（GPU の無い Runner がタグ `gpu-eval` を持つ）・FG-CI-0030（モデル置き場がマニフェストと合わない、**alert**）で
+   終わったなら、runbook `ci-runner`（GPU の Runner とモデル置き場）と、モデルを入れ替えている途中なら runbook `ai-model-update`。
 5. `forge.ai_eval.check_written` の他のコード:
    - FG-AIASSET-0003 BaselineMissing: `detail` が基準のパスと merge base のコミット。基準は **ベースのブランチとの merge base** から読む
      （MR の中で足した基準は使わない）。`git merge-base <sha> <ターゲットの先端>` と `git show <merge base>:evals/baselines/<models>.json` で確かめる。
@@ -63,3 +75,5 @@
 
 - ADR-0034、計画 17 §1.6・§5.3・§5.4、`docs/ai-eval-report.md`
 - runbook `ci-runner`（Runner・成果物の保存）、`ci-pipelines`（パイプラインの作成）、`checks-reporting`（チェックとマージの条件）
+- runbook `ai-model-update`（モデル・ベンチのイメージの更新、新しいモデルの基準を先に入れる）、`ai-asset-release`（リリースの前の確かめ）、
+  `ai-asset-rollback`（展開した束の戻し）

@@ -283,3 +283,99 @@ fn a_safety_case_with_fewer_runs_than_the_baseline_fails() {
     let now = report(&[case("security/injection-1", "safety", 1, 1)]);
     assert_eq!(reasons(&evaluate(&now, &baseline)), ["safety_runs_short"]);
 }
+
+/// The web reads the summary's table into the merge request's comparison
+/// table (plan 17 P17-9, `web/src/features/mr/aiEval.ts`): this golden is
+/// shared with its test, so a change of the summary's shape fails here
+/// first and the parser is changed with it.
+#[test]
+fn summary_matches_the_web_golden() {
+    let baseline = parse(
+        doc(
+            &[
+                case("safety/s-001", "safety", 5, 5),
+                case("spindle/a-001", "regular", 5, 5),
+                case("spindle/a-002", "regular", 5, 5),
+                case("bearing/b-001", "regular", 3, 5),
+                case("repro/r-001", "reproduction", 0, 5),
+            ],
+            0.8,
+            0.05,
+            40_000.0,
+        )
+        .as_bytes(),
+    )
+    .expect("baseline");
+    let now = parse(
+        doc(
+            &[
+                case("safety/s-001", "safety", 4, 5),
+                case("spindle/a-001", "regular", 1, 5),
+                case("spindle/a-002", "regular", 5, 5),
+                case("bearing/b-001", "regular", 5, 5),
+                case("repro/r-001", "reproduction", 5, 5),
+                case("new/n-001", "regular", 0, 5),
+            ],
+            0.75,
+            0.05,
+            41_000.0,
+        )
+        .as_bytes(),
+    )
+    .expect("report");
+    let golden = include_str!("../../../web/tests/fixtures/ai-eval-summary.golden.md");
+    assert_eq!(
+        evaluate(&now, &baseline).summary(),
+        golden.replace("\r\n", "\n")
+    );
+}
+
+/// Plan 17 P17-6: the nightly candidate keeps the baseline's kinds and
+/// `allowed`, turns a fixed reproduction case into a regular one, sorts
+/// the cases, and renders back to a v1 document.
+#[test]
+fn the_baseline_candidate_keeps_the_gate_and_retires_reproduction() {
+    let mut baseline = report(&[
+        case("security/injection-1", "safety", 3, 3),
+        case("a/1", "regular", 3, 3),
+    ]);
+    baseline.allowed = Some(Allowed {
+        cause_hit_rate_drop: 0.01,
+        false_alarm_rate_rise: 0.01,
+        p95_latency_rise_ratio: 0.1,
+    });
+    let mut now = report(&[
+        case("b/fix-1", "reproduction", 3, 3),
+        case("a/1", "regular", 2, 3),
+        case("security/injection-1", "safety", 3, 3),
+    ]);
+    now.allowed = Some(DEFAULT_ALLOWED);
+    let c = baseline_candidate(&now, Some(&baseline)).expect("a candidate");
+    let ids: Vec<(&str, CaseKind)> = c.cases.iter().map(|x| (x.id.as_str(), x.kind)).collect();
+    assert_eq!(
+        ids,
+        [
+            ("a/1", CaseKind::Regular),
+            ("b/fix-1", CaseKind::Regular),
+            ("security/injection-1", CaseKind::Safety),
+        ]
+    );
+    assert_eq!(c.allowed, baseline.allowed, "never the report's");
+    let bytes = render(&c).expect("render");
+    assert!(bytes.ends_with(b"}\n"));
+    assert_eq!(parse(&bytes).expect("v1"), c);
+    // The same nightly again: nothing to propose.
+    assert_eq!(baseline_candidate(&now, Some(&c)), None);
+    // No baseline yet: the report itself, without an `allowed`.
+    let first = baseline_candidate(&now, None).expect("first baseline");
+    assert_eq!(first.allowed, None);
+    assert_eq!(first.cases.len(), 3);
+}
+
+#[test]
+fn the_baseline_branch_is_one_per_models() {
+    assert_eq!(
+        baseline_branch("qwen3-14b"),
+        "refs/heads/ai-eval/baseline-qwen3-14b"
+    );
+}

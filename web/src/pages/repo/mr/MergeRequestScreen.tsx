@@ -20,6 +20,7 @@ import { Loading } from '../../../components/Loading';
 import { QueryError } from '../../../components/QueryError';
 import { formatDateTime, formatRelative, mrStateLabel } from '../../../features/labels';
 import { MarkdownView } from '../../../features/MarkdownView';
+import { AiEvalSection } from '../../lazyScreens';
 import { CheckRunsSection, ConflictsSection } from '../../../features/mr/CheckRuns';
 import { CommentForm } from '../../../features/mr/CommentForm';
 import { ConditionsPanel } from '../../../features/mr/ConditionsPanel';
@@ -321,6 +322,7 @@ function Overview({
       <QueueSection projectId={projectId} project={project} iid={mr.iid} open={mr.state === 'open'} />
       <RevertSection projectId={projectId} project={project} iid={mr.iid} merged={mr.state === 'merged'} />
       <CheckRunsSection projectId={projectId} project={project} iid={mr.iid} head={head} />
+      <AiEvalSection projectId={projectId} project={project} iid={mr.iid} head={head} />
       <ConflictsSection projectId={projectId} project={project} iid={mr.iid} />
       <section aria-labelledby="mr-description-title">
         <h2 id="mr-description-title" className={repo.sectionTitle}>

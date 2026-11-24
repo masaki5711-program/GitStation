@@ -356,6 +356,98 @@ impl Browser {
             Some(_) | None => Err(unreadable("merge_base_exit")),
         }
     }
+
+    /// The blob id of `path` at each of `commits`, in order (`None`: the
+    /// commit has no such path, or it is not a regular file there):
+    /// `cat-file --batch-check` with `<commit>:<path>` lines on stdin — one
+    /// call, the browse timeout and an output cap (plan 13 stage 4: a
+    /// document's versions are the merges that changed its blob). At most
+    /// [`MAX_BLOB_ID_LOOKUPS`] commits (more: `FG-SYS-0001
+    /// reason=too_many_lookups`, the caller bounds them).
+    pub async fn blob_ids_at(
+        &self,
+        repo: RepoId,
+        commits: &[ObjectId],
+        path: &RepoPath,
+    ) -> Result<Vec<Option<String>>, ForgeError> {
+        if commits.is_empty() {
+            return Ok(Vec::new());
+        }
+        if commits.len() > MAX_BLOB_ID_LOOKUPS {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "too_many_lookups")
+                .with_context("lookups", commits.len()));
+        }
+        if path.is_root() {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "blob_lookup_without_path"));
+        }
+        let mut stdin = String::new();
+        for c in commits {
+            // A validated full id and a validated path (no control
+            // character, so no newline): one lookup per line.
+            let rev = Revision::object_id(c.as_str())?;
+            stdin.push_str(rev.as_str());
+            stdin.push(':');
+            stdin.push_str(path.as_str());
+            stdin.push('\n');
+        }
+        // `<id> <type> <size>` or `<input> missing` per line.
+        let cap = commits
+            .len()
+            .saturating_mul(path.as_str().len().saturating_add(160));
+        let deadline = Deadline::new(self.limits.timeout);
+        let dir = self.storage.existing(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
+        let (captured, cut) = self
+            .git
+            .command("cat-file")
+            .arg("--batch-check")
+            .repo(&dir)
+            .stdin(stdin.into_bytes())
+            .timeout(deadline.left()?)
+            .output_truncated(cap)
+            .await
+            .map_err(|e| e.with_context("repo_id", repo.get()))?;
+        if cut {
+            return Err(unreadable("batch_check_too_large").with_context("repo_id", repo.get()));
+        }
+        let ids = parse_batch_check(&captured.stdout)?;
+        if ids.len() != commits.len() {
+            return Err(
+                unreadable("batch_check_count_mismatch").with_context("repo_id", repo.get())
+            );
+        }
+        Ok(ids)
+    }
+}
+
+/// [`Browser::blob_ids_at`] looks up at most this many commits in one call.
+pub const MAX_BLOB_ID_LOOKUPS: usize = 10_000;
+
+/// `cat-file --batch-check` output: per line, the blob's id (a `blob`),
+/// `None` for another type or a `missing` / `ambiguous` input.
+fn parse_batch_check(out: &[u8]) -> Result<Vec<Option<String>>, ForgeError> {
+    let text = std::str::from_utf8(out).map_err(|_| unreadable("batch_check_output"))?;
+    let mut ids = Vec::new();
+    for line in text.lines() {
+        if line.ends_with(" missing") || line.ends_with(" ambiguous") {
+            ids.push(None);
+            continue;
+        }
+        let mut parts = line.split(' ');
+        let (Some(id), Some(kind), Some(size), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err(unreadable("batch_check_line"));
+        };
+        let id = object_id(id).ok_or_else(|| unreadable("batch_check_line"))?;
+        if size.parse::<u64>().is_err() {
+            return Err(unreadable("batch_check_line"));
+        }
+        ids.push((kind == "blob").then_some(id));
+    }
+    Ok(ids)
 }
 
 /// How many of `rest` one `cat-file --batch` call reads: at least one,
@@ -405,4 +497,34 @@ fn split_batch(out: &[u8]) -> Result<Vec<&[u8]>, ForgeError> {
         rest = rest.get(end.saturating_add(1)..).unwrap_or_default();
     }
     Ok(blobs)
+}
+
+#[cfg(test)]
+mod batch_check_tests {
+    use super::parse_batch_check;
+
+    #[test]
+    fn a_blob_is_its_id_and_anything_else_is_none() {
+        let blob = "a".repeat(40);
+        let tree = "b".repeat(40);
+        let out = format!(
+            "{blob} blob 12\n{tree} tree 40\n{} missing\nabc:x y ambiguous\n",
+            "c".repeat(40) + ":docs/QP-07-001.md"
+        );
+        assert_eq!(
+            parse_batch_check(out.as_bytes()).expect("parsed"),
+            vec![Some(blob), None, None, None]
+        );
+    }
+
+    #[test]
+    fn a_line_git_never_prints_is_refused() {
+        for bad in [
+            "nonsense\n",
+            "zz blob 1\n",
+            &format!("{} blob x\n", "a".repeat(40)),
+        ] {
+            assert!(parse_batch_check(bad.as_bytes()).is_err(), "{bad}");
+        }
+    }
 }

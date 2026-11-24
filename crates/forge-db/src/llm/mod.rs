@@ -312,7 +312,10 @@ pub enum AdviceView {
     Shown(Box<StoredAdvice>),
     /// A confidential advice asked for by an agent: only that it exists
     /// ("機密の入力のため表示しません"), never its words.
-    Withheld { id: i64, input_class: InputClass },
+    Withheld {
+        id: i64,
+        input_class: InputClass,
+    },
 }
 
 type AdviceRow = (
@@ -357,8 +360,20 @@ pub async fn advice(db: &Db, id: i64, reader: Reader) -> Result<Option<AdviceVie
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    let Some((id, req, purpose, kind, subject, head, summary, findings, deep, degraded, class, sup)) =
-        row
+    let Some((
+        id,
+        req,
+        purpose,
+        kind,
+        subject,
+        head,
+        summary,
+        findings,
+        deep,
+        degraded,
+        class,
+        sup,
+    )) = row
     else {
         return Ok(None);
     };

@@ -37,9 +37,10 @@ pfs-prototype MR !82）。セル 1 つはボードの横幅の 1/4（1440px の�
 
 - ポータルは描く大きさをヘッダー `x-portal-widget-size: <大きさ>` で渡す。**GitStation は今は大きさで中身を変えない**
   （ヘッダーは読まない。件数は `limit` の設定、項目はポータルが入る分だけ描く）。大きさごとに件数を変えるのは P3 で検討する。
-- カードの見出しとアプリのタイルに出すアイコンは [brand/gitstation-portal-icon.svg](brand/gitstation-portal-icon.svg)
-  （48×48 の正方形、16px でも判別できる簡略版。配色は `web/src/assets/brand/gitstation-v1-icon.svg` と同じ）。
-  PFS 側の置き場所は `portal/public/brand/apps/gitstation/icon.svg`（PFS の MR で入れる）。
+- ポータルのアプリ一覧・アプリのタイル・ウィジェットのカードの見出しに出すアイコンは、**GitStation の正式なアイコン**
+  [`web/src/assets/brand/gitstation-v1-icon.svg`](../../web/src/assets/brand/gitstation-v1-icon.svg)（正方形、角丸。ブラウザのタブと同じ）
+  をそのまま使う（2026-11-24 利用者の指定。簡略版のアイコンは使わない）。
+  PFS 側の置き場所は `portal/public/brand/apps/gitstation/icon.svg`（PFS の MR で入れる。このリポジトリから PFS は変えない）。
 
 ## 設定（「何を表示するか」）
 

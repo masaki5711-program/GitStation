@@ -179,6 +179,8 @@ pub mod ci_artifacts;
 pub mod ci_ai_eval;
 // Plan 17 P17-3 (ADR-0035): a project's ai_assets.enabled.
 pub mod ai_assets;
+// Plan 16 A3 (ADR-0032): the agent marketplace's tables and guards.
+pub mod agent_marketplace;
 // Plan 19 L5-2 (ADR-0039): the local LLM's requests, advice and feedback.
 pub mod llm;
 // ── end M3 O1 ──

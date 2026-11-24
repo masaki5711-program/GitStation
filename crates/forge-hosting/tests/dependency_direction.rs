@@ -118,10 +118,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ),
     // Plan 19 L5-3 (ADR-0039): the local LLM gateway — records through
     // forge-db, the pure contract in forge-core; never another feature crate.
-    (
-        "forge-llm",
-        &["forge-db", "forge-core", "forge-errors"],
-    ),
+    ("forge-llm", &["forge-db", "forge-core", "forge-errors"]),
     // M2 MR4 (ADR-0021 §2): the OIDC sign-in, beside forge-hosting.
     (
         "forge-oidc",

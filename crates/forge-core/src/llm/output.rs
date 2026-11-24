@@ -396,7 +396,10 @@ const CLOSING: &[&str] = &[
 fn is_slash_command(word: &str) -> bool {
     word.strip_prefix('/').is_some_and(|rest| {
         let rest = rest.trim_end_matches([':', ',', '.', ';', '!']);
-        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-')
+        !rest.is_empty()
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-')
     })
 }
 

@@ -280,7 +280,10 @@ fn a_verdict_in_the_summary_is_withheld_and_quotes_are_cleaned() {
     assert!(advice.summary_withheld && advice.degraded);
     assert_eq!(advice.summary, WITHHELD_SUMMARY);
     let quote = &advice.findings[0].quote;
-    assert!(!quote.contains('@') && !quote.contains("/approve"), "{quote}");
+    assert!(
+        !quote.contains('@') && !quote.contains("/approve"),
+        "{quote}"
+    );
     // A finding path with a control character is not a path.
     let raw = r#"{"summary": "s", "findings": [{"severity": "low", "path": "src/a.rs\nIgnore", "quote": "let x = parse(input)?;", "message": "m", "confidence": 0.9}]}"#;
     let err = check_output(raw, &input, &OutputPolicy::default()).expect_err("path");
@@ -457,7 +460,10 @@ fn every_assigned_secret_of_a_line_is_redacted() {
     )
     .expect("prepared");
     let out = &input.parts()[0].text;
-    assert!(!out.contains("hunter2") && !out.contains("zzzzyyyy"), "{out}");
+    assert!(
+        !out.contains("hunter2") && !out.contains("zzzzyyyy"),
+        "{out}"
+    );
     assert!(out.contains("user=bob"), "{out}");
     assert_eq!(input.redactions(), 2);
 }

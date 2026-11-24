@@ -120,3 +120,38 @@ MEDIUM: MCP の行き先は、どのスキームの `scheme://`・`//host`・素
 
 LOW: `core.autocrlf=true` の checkout は LF を CRLF にするので、全部のファイルが `file_changed` になる（安全側に失敗する）。FG-AGENT-0007 の
 diagnosis / fix に書いた。
+
+## Amendment（2026-11-23、A3: 表・追記だけの守り・サーバーの鍵ファイル。同日の独立レビューを反映）
+
+1. **表**（マイグレーション `20270103100000`、計画 16 §3）: `agent_signing_keys`・`agent_parts`・`agent_part_versions`・
+   `agent_part_files`・`agent_builds`・`agent_lesson_injections`。前の 4 つは公開したものを固める表で、DB 自身が断る（`XF001` →
+   FG-DB-0009）: 部品の名前・種類・元のプロジェクトは変わらない、取り下げ（`deprecated_*`）は 1 回だけ。版は `beta`・`published` で
+   入り、退役も失効もしていない鍵の署名で、取り下げていない部品にだけ足せる（部品の行は `FOR SHARE` で押さえる。鍵の行は forge_app に
+   UPDATE が無いので押さえられないが、同時の退役・失効は後の確かめで閉じる側に倒れる）。後で変えてよいのは beta → stable（公開中だけ）と
+   published → revoked（理由・人・時刻つき）だけで、失効した版は最終。`manifest` は 1 MiB まで。ファイルは追記だけで、**版を入れた
+   トランザクションの中でしか足せない**（版の `txid` を守りが入れる）。`sha256` は中身の SHA-256、1 版 200 ファイル・1 MiB まで、
+   `path` は `.claude/…`・`CLAUDE.md`・`.mcp.json` の相対パス（`.`・`..`・空の区切り・`\`・`:`・制御文字を断る）。どれも消せない。
+   forge_app には DELETE が無く、INSERT は呼ぶ側の列だけ（`id`・`created_at`・`txid` は表と守りが決める）、UPDATE は変えてよい列だけ。
+   部品・版の変更は監査の行が同じトランザクションに要る（`agent_part`、監査の制約トリガー）。ファイルは版の監査の行で覆う。鍵は次の 2 の関数だけが書き、監査の行も同じ関数が書く（保守の接続の役割では遅延の監査トリガーを満たせないため、表の種類は derived）。
+2. **鍵の表は運用者だけが書く**: forge_app は `agent_signing_keys` を読むだけ。登録・退役・失効は SECURITY DEFINER の
+   `forge.agent_signing_key_manage(action, kid, public_key, reason, request_id)`（所有者 forge_seq、EXECUTE は forge_maint だけ。
+   `forge.feed_new_epoch` と同じ形）で、監査の行（`agent_signing_key.registered`・`.retired`・`.revoked`、`actor_label` = 接続した
+   ユーザー）も関数が書く。A5 の `forge admin agent-key` は保守の接続（`database.maint_url`）で呼ぶ。HTTP には出さない。
+3. **元のプロジェクトに外部キーを張らない**（`source_project_id`、`ci_pipeline_id`）: 公開した部品は元のプロジェクトの消去より長く残る。
+   `agent_builds`・`agent_lesson_injections` はプロジェクトの記録なので、消去で消す。
+4. **鍵ファイル `agent.signing_keys_file`**（ADR-0013 の形）: 1 行に `<kid> <64 桁の 16 進数>`（kid は 1〜65535 の 10 進、鍵は
+   Ed25519 の 32 バイトの種）。いちばん大きい kid が署名する。DB には公開鍵だけ。読み方は他の秘密のファイルと同じ（絶対パス、
+   普通のファイル、64 KiB まで、Unix では所有者だけが読める）に加えて、Linux では所有者が forge の実行ユーザーであること。
+   **forge-core は署名しない**: `forge_core::agent_signing::AgentKeyFile` は種から公開鍵を作ってすぐ捨てる（doctor が DB と比べるため）。
+   種で署名するのは機能のクレート `forge-marketplace`（A5、契約 9・計画 16 §2.3）だけで、設定を持つだけのクレートが公開の判断を
+   飛ばして署名することはできない。誤りは新しいコード **FG-AGENT-0014** SigningKeyFileInvalid（`insecure_permissions`・
+   `keys_unreadable`・`keys_invalid`・`signing_key_invalid`、doctor の `key_not_registered`・`key_mismatch`・`key_revoked`・
+   `signing_key_retired`）。利用者への文は「管理者に連絡」: FG-AGENT-0003（手元の鍵の一覧の更新を利用者に頼む）とは直す人が違う。
+   `forge_agent::sign_digest` は pub だが、clippy.toml の `disallowed-methods` で呼び出しを断る（-D warnings で CI が赤）。許すのは
+   A5 の `forge-marketplace` の公開の 1 か所と、合成の種で署名する試験（`#![allow(clippy::disallowed_methods)]`）だけ。
+   **受け入れた残る危険**: ring の `Ed25519KeyPair` は drop で秘密を消さない（zeroize しない）。種の写しは `Zeroizing` で消すが、
+   鍵の組の内部の展開した秘密はプロセスのメモリに残りうる。ed25519-dalek への切り替えは §4 で断った（新しいクレート）ので
+   入れない。緩和: 署名は公開の短い区間だけで鍵の組を作り、すぐ捨てる（A5）。サーバーのメモリを読める者はすでに鍵ファイルも読める。
+5. **doctor `agent.signing_keys`**: ファイルの鍵がすべて登録され、公開鍵が合い、失効していないこと、署名する鍵が退役していないこと。
+   設定していないホストは `skip`。権限を確かめられない OS（Windows）では合っていても `warn`。`agent.revoked_in_use` とファイルの
+   要約の抜き取りは、使う側の記録ができる A7・A9 で足す。

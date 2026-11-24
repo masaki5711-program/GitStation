@@ -1,7 +1,10 @@
 //! forge-core: domain primitives and runtime foundations shared by every
-//! server-side crate. Depends only on `forge-errors` (CLAUDE.md §3.9).
+//! server-side crate. Depends on `forge-errors` and the pure crates below it
+//! (`forge-agent`, `forge-doc`; CLAUDE.md §3.9).
 
 pub mod act_as;
+// Plan 16 A3: the server's agent part signing keys (ADR-0032).
+pub mod agent_signing;
 // Plan 17 P17-2 (ADR-0034): the AI evaluation report and its gates.
 pub mod ai_assets;
 pub mod ai_eval;
@@ -19,6 +22,8 @@ pub mod dedup_key;
 pub mod deploy;
 pub mod discussion;
 pub mod doc_lint_migration;
+// Plan 13 stage 4 part A: document revisions and edit claims.
+pub mod doc_revision;
 // M4 C2: a person's change to a CI pipeline (audit details).
 pub mod event_type;
 pub mod pipeline;

@@ -14,6 +14,7 @@
 //! resolve; a reference to another repository (`[[repo:ID]]`) is resolved by
 //! the caller against `.forge/repo.yml` and is not checked here.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::doctype::{
@@ -49,17 +50,125 @@ pub struct FileReport {
 const REQUIRED_KEYS: &[&str] = &["doctype", "id", "title", "owner"];
 
 /// What other documents may refer to.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
     doctype: String,
     /// Block id → kind.
     blocks: HashMap<String, String>,
 }
 
+/// The index of the documents other documents may refer to (originals
+/// only). Every lookup goes through [`Index::get`] / [`Index::contains_key`],
+/// so a check can be told exactly which ids it read (plan 18 S7: the
+/// incremental lint's reverse references, [`incremental`]).
+struct Index {
+    entries: HashMap<String, Entry>,
+    /// The ids looked up while recording (`None`: not recording).
+    looked_up: RefCell<Option<Vec<String>>>,
+    /// A lookup could not be recorded (never expected: one thread, no
+    /// re-entry) — the recording is then not to be trusted.
+    lost: Cell<bool>,
+}
+
+impl Index {
+    fn new(entries: HashMap<String, Entry>) -> Self {
+        Self {
+            entries,
+            looked_up: RefCell::new(None),
+            lost: Cell::new(false),
+        }
+    }
+
+    fn note(&self, id: &str) {
+        match self.looked_up.try_borrow_mut() {
+            Ok(mut recording) => {
+                if let Some(ids) = recording.as_mut() {
+                    ids.push(id.to_owned());
+                }
+            }
+            Err(_) => self.lost.set(true),
+        }
+    }
+
+    fn get(&self, id: &str) -> Option<&Entry> {
+        self.note(id);
+        self.entries.get(id)
+    }
+
+    fn contains_key(&self, id: &str) -> bool {
+        self.note(id);
+        self.entries.contains_key(id)
+    }
+
+    /// Start recording the ids looked up.
+    fn record(&self) {
+        self.lost.set(false);
+        match self.looked_up.try_borrow_mut() {
+            Ok(mut recording) => *recording = Some(Vec::new()),
+            Err(_) => self.lost.set(true),
+        }
+    }
+
+    /// The ids looked up since [`Index::record`]; `None` when one could
+    /// not be recorded.
+    fn recorded(&self) -> Option<Vec<String>> {
+        let ids = match self.looked_up.try_borrow_mut() {
+            Ok(mut recording) => recording.take(),
+            Err(_) => None,
+        };
+        if self.lost.get() {
+            return None;
+        }
+        ids
+    }
+}
+
 /// Check the repository's documents (module docs). `doctypes` are the
 /// files under [`DOCTYPES_DIR`]; `documents` the `.md` files.
 pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport> {
+    let (mut reports, types) = lint_doctypes(doctypes);
+
+    // Parse every document; keep those that name a type.
+    let parsed: Vec<(&str, Document)> = documents
+        .iter()
+        .map(|src| (src.path, parse_document(src.bytes)))
+        .collect();
+    let mut docs: Vec<(&str, &Document)> = documents
+        .iter()
+        .zip(&parsed)
+        .filter(|(src, (_, doc))| names_type(doc, src.bytes))
+        .map(|(_, (path, doc))| (*path, doc))
+        .collect();
+    docs.sort_by(|a, b| a.0.cmp(b.0));
+
+    let (index, duplicates) = build_index(&docs);
+    for (path, line, first) in duplicates {
+        reports
+            .entry(path.to_owned())
+            .or_default()
+            .push_on(line, "id_duplicate", first);
+    }
+
+    for (path, doc) in &docs {
+        let report = reports.entry((*path).to_owned()).or_default();
+        for p in &doc.problems {
+            report.add(p.clone());
+        }
+        report.dropped += doc.problems_dropped;
+        check_document(path, doc, &types, &index, report);
+    }
+
+    finish_reports(reports)
+}
+
+/// The parsed type definitions by name.
+type Types = HashMap<String, Result<Doctype, DoctypeProblem>>;
+
+/// The type definitions parsed, and the reports of the ones that do not
+/// parse.
+fn lint_doctypes(doctypes: &[Source<'_>]) -> (BTreeMap<String, Report>, Types) {
     let mut reports: BTreeMap<String, Report> = BTreeMap::new();
-    let mut types: HashMap<String, Result<Doctype, DoctypeProblem>> = HashMap::new();
+    let mut types: Types = HashMap::new();
     for src in doctypes {
         let Some(stem) = doctype_stem(src.path) else {
             continue;
@@ -73,27 +182,29 @@ pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport
         }
         types.insert(stem.to_owned(), parsed);
     }
+    (reports, types)
+}
 
-    // Parse every document; keep those that name a type.
-    let mut docs: Vec<(&str, Document)> = Vec::new();
-    for src in documents {
-        let doc = parse_document(src.bytes);
-        // A `doctype` key of any value, or — when the front matter could not
-        // be read (not UTF-8, too large, broken YAML) — a line that names
-        // one: such a file is a document whose problems are reported, never
-        // silently skipped (review MR2a).
-        let names_type = doc.meta_field("doctype").is_some()
-            || (doc.meta.is_none() && mentions_doctype(src.bytes));
-        if names_type {
-            docs.push((src.path, doc));
-        }
-    }
-    docs.sort_by(|a, b| a.0.cmp(b.0));
+/// Whether `doc` (parsed from `bytes`) is a document: a `doctype` key of
+/// any value, or — when the front matter could not be read (not UTF-8, too
+/// large, broken YAML) — a line that names one: such a file is a document
+/// whose problems are reported, never silently skipped (review MR2a).
+fn names_type(doc: &Document, bytes: &[u8]) -> bool {
+    doc.meta_field("doctype").is_some() || (doc.meta.is_none() && mentions_doctype(bytes))
+}
 
-    // The index: originals only (a translation resolves to its original).
-    let mut index: HashMap<String, Entry> = HashMap::new();
-    let mut first_path: HashMap<String, &str> = HashMap::new();
-    for (path, doc) in &docs {
+/// A file told that another file (by path) has its id.
+type Duplicate<'d> = (&'d str, usize, &'d str);
+
+/// The index of `docs` (sorted by path): originals only (a translation
+/// resolves to its original). The first file (by path) keeps an id; the
+/// others are returned as `(path, line, first path)` to be told which file
+/// has it.
+fn build_index<'d>(docs: &[(&'d str, &Document)]) -> (Index, Vec<Duplicate<'d>>) {
+    let mut entries: HashMap<String, Entry> = HashMap::new();
+    let mut first_path: HashMap<String, &'d str> = HashMap::new();
+    let mut duplicates = Vec::new();
+    for (path, doc) in docs {
         let (Some(id), Some(doctype)) = (doc.id(), doc.doctype()) else {
             continue;
         };
@@ -101,18 +212,12 @@ pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport
             continue;
         }
         if let Some(first) = first_path.get(id) {
-            // The first file (by path) keeps the id; the others are told
-            // which file has it.
             let line = doc.meta_field("id").map_or(1, |f| f.line);
-            let first = (*first).to_owned();
-            reports
-                .entry((*path).to_owned())
-                .or_default()
-                .push_on(line, "id_duplicate", &first);
+            duplicates.push((*path, line, *first));
             continue;
         }
         first_path.insert(id.to_owned(), path);
-        index.insert(
+        entries.insert(
             id.to_owned(),
             Entry {
                 doctype: doctype.to_owned(),
@@ -124,16 +229,10 @@ pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport
             },
         );
     }
+    (Index::new(entries), duplicates)
+}
 
-    for (path, doc) in &docs {
-        let report = reports.entry((*path).to_owned()).or_default();
-        for p in &doc.problems {
-            report.add(p.clone());
-        }
-        report.dropped += doc.problems_dropped;
-        check_document(path, doc, &types, &index, report);
-    }
-
+fn finish_reports(reports: BTreeMap<String, Report>) -> Vec<FileReport> {
     reports
         .into_iter()
         .filter(|(_, r)| !r.problems.is_empty() || r.dropped > 0)
@@ -145,6 +244,10 @@ pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport
 struct Report {
     problems: Vec<Problem>,
     dropped: usize,
+    /// Recording (the incremental lint): every problem added, in order,
+    /// before the de-duplication and the bound — replayed later through a
+    /// plain report, which then answers exactly as if checked in place.
+    raw: Option<Vec<Problem>>,
 }
 
 impl Report {
@@ -158,6 +261,10 @@ impl Report {
     }
 
     fn add(&mut self, p: Problem) {
+        if let Some(raw) = self.raw.as_mut() {
+            raw.push(p);
+            return;
+        }
         if self.problems.contains(&p) {
             return;
         }
@@ -224,13 +331,7 @@ fn doctype_rule(reason: &'static str) -> &'static str {
     }
 }
 
-fn check_document(
-    path: &str,
-    doc: &Document,
-    types: &HashMap<String, Result<Doctype, DoctypeProblem>>,
-    index: &HashMap<String, Entry>,
-    report: &mut Report,
-) {
+fn check_document(path: &str, doc: &Document, types: &Types, index: &Index, report: &mut Report) {
     let Some(meta) = &doc.meta else {
         return;
     };
@@ -265,7 +366,7 @@ fn check_meta(
     doc: &Document,
     meta: &[MetaField],
     ty: Option<&Doctype>,
-    index: &HashMap<String, Entry>,
+    index: &Index,
     report: &mut Report,
 ) {
     for key in REQUIRED_KEYS {
@@ -397,7 +498,7 @@ fn check_filename(path: &str, doc: &Document, report: &mut Report) {
     }
 }
 
-fn check_retired(f: &MetaField, index: &HashMap<String, Entry>, report: &mut Report) {
+fn check_retired(f: &MetaField, index: &Index, report: &mut Report) {
     let Value::Map(entries) = &f.value else {
         report.push(f.line, "retired_invalid");
         return;
@@ -424,7 +525,7 @@ fn date_ok(raw: &str) -> bool {
         })
 }
 
-fn check_field(f: &MetaField, def: &ValueDef, index: &HashMap<String, Entry>, report: &mut Report) {
+fn check_field(f: &MetaField, def: &ValueDef, index: &Index, report: &mut Report) {
     match (&def.ty, &f.value) {
         (ValueType::List, Value::List(items)) => {
             if items.iter().any(|(_, v)| v.as_text().is_none()) {
@@ -484,7 +585,7 @@ fn check_sections(doc: &Document, ty: &Doctype, report: &mut Report) {
     }
 }
 
-fn check_blocks(doc: &Document, ty: &Doctype, index: &HashMap<String, Entry>, report: &mut Report) {
+fn check_blocks(doc: &Document, ty: &Doctype, index: &Index, report: &mut Report) {
     let default_id = Pattern::new(DEFAULT_BLOCK_ID);
     let mut seen: HashSet<&str> = HashSet::new();
     for b in &doc.blocks {
@@ -533,13 +634,7 @@ fn check_blocks(doc: &Document, ty: &Doctype, index: &HashMap<String, Entry>, re
     }
 }
 
-fn check_attrs(
-    doc: &Document,
-    b: &Block,
-    defs: &[ValueDef],
-    index: &HashMap<String, Entry>,
-    report: &mut Report,
-) {
+fn check_attrs(doc: &Document, b: &Block, defs: &[ValueDef], index: &Index, report: &mut Report) {
     for a in &b.attrs {
         match a.key.as_str() {
             "status" => {
@@ -596,13 +691,7 @@ fn resolve_block(doc: &Document, id: &str, kind: Option<&str>, line: usize, repo
 }
 
 /// A document of this repository, optionally of one type.
-fn resolve_doc(
-    id: &str,
-    doctype: Option<&str>,
-    line: usize,
-    index: &HashMap<String, Entry>,
-    report: &mut Report,
-) {
+fn resolve_doc(id: &str, doctype: Option<&str>, line: usize, index: &Index, report: &mut Report) {
     match index.get(id) {
         None => report.push_on(line, "ref_broken", id),
         Some(entry) => {
@@ -614,7 +703,7 @@ fn resolve_doc(
 }
 
 /// `[[…]]` in the text: in this repository, the document (and block) exist.
-fn check_refs(doc: &Document, index: &HashMap<String, Entry>, report: &mut Report) {
+fn check_refs(doc: &Document, index: &Index, report: &mut Report) {
     for r in doc.refs.iter().filter(|r| r.repo.is_none()) {
         let target = match &r.block {
             Some(b) => format!("{}#{b}", r.doc),
@@ -720,6 +809,10 @@ fn check_rules(doc: &Document, ty: &Doctype, report: &mut Report) {
         }
     }
 }
+
+// Plan 18 S7 (ADR-0037 (b) 3): the content-addressed, incremental lint.
+#[path = "lint_incremental.rs"]
+pub mod incremental;
 
 #[cfg(test)]
 #[path = "lint_tests.rs"]

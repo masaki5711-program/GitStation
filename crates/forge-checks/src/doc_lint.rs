@@ -113,11 +113,30 @@ impl DocTree {
         }
     }
 
+    /// What a run's summary says of the tree read.
+    pub fn shape(&self) -> TreeShape {
+        TreeShape {
+            markdown: self.markdown.len(),
+            doctypes: self.doctypes.len(),
+            incomplete: self.incomplete,
+        }
+    }
+
     /// In path order (the answers are by path).
     pub fn sort(&mut self) {
         self.doctypes.sort_by(|a, b| a.0.cmp(&b.0));
         self.markdown.sort_by(|a, b| a.0.cmp(&b.0));
     }
+}
+
+/// What a `forge/doc-lint` run says of the tree it read: the files read
+/// and the first bound hit (the train lint's index reads no bytes of the
+/// files it already holds, so it answers with the counts only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeShape {
+    pub markdown: usize,
+    pub doctypes: usize,
+    pub incomplete: Option<&'static str>,
 }
 
 /// A file that may be a document: `.md` (the name is the document's id).
@@ -286,7 +305,7 @@ pub fn assess_doc_lint_with(
     tree: &DocTree,
     migration: Option<&str>,
 ) -> Result<forge_db::checks::NewCheckRun, ForgeError> {
-    assess_doc_lint_reports(tree, &lint_tree(tree), migration, None)
+    assess_doc_lint_reports(tree.shape(), &lint_tree(tree), migration, None)
 }
 
 /// [`assess_doc_lint_with`] on `reports`, the lint of `tree` already run
@@ -294,7 +313,7 @@ pub fn assess_doc_lint_with(
 /// with the base's, plan 18 S1). `preface`: a line of the summary before the
 /// result (after the migration's, which stays first).
 pub(crate) fn assess_doc_lint_reports(
-    tree: &DocTree,
+    tree: TreeShape,
     reports: &[FileReport],
     migration: Option<&str>,
     preface: Option<String>,
@@ -325,8 +344,7 @@ pub(crate) fn assess_doc_lint_reports(
         lines.push(format!(
             "No document problem at this commit ({} Markdown file(s) and {} type definition(s) \
              read).",
-            tree.markdown.len(),
-            tree.doctypes.len()
+            tree.markdown, tree.doctypes
         ));
         if tree.incomplete.is_some() {
             CheckConclusion::Neutral
