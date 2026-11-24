@@ -257,6 +257,24 @@ pub enum Command {
         #[arg(long, value_parser = parse_limit, value_name = "N")]
         limit: Option<u32>,
     },
+    /// Search projects and merge requests you may read (plan 20 K3).
+    Search {
+        /// The words to search for (2..=200 characters in all).
+        #[arg(required = true, value_parser = parse_text, value_name = "WORDS")]
+        words: Vec<String>,
+        /// Only these kinds (default: every kind).
+        #[arg(long, value_delimiter = ',', value_parser = ["project", "merge_request"], value_name = "A,B")]
+        scope: Vec<String>,
+        /// Only hits of this project (its id).
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: Option<i64>,
+        /// Hits per page, 1..=50 (server default 20).
+        #[arg(long, value_parser = parse_search_limit, value_name = "N")]
+        limit: Option<u32>,
+        /// Continue from a previous page's `next_cursor`.
+        #[arg(long, value_parser = parse_text, value_name = "CURSOR")]
+        cursor: Option<String>,
+    },
     /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
     Admin {
@@ -326,6 +344,13 @@ fn parse_limit(raw: &str) -> Result<u32, String> {
     match raw.parse::<u32>() {
         Ok(n) if (1..=100).contains(&n) => Ok(n),
         _ => Err("--limit is a whole number from 1 to 100".to_string()),
+    }
+}
+
+fn parse_search_limit(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(n) if (1..=50).contains(&n) => Ok(n),
+        _ => Err("--limit is a whole number from 1 to 50".to_string()),
     }
 }
 

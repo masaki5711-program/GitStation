@@ -50,6 +50,7 @@ pub mod mr_work_items;
 pub mod notifications;
 pub mod registry;
 pub mod review;
+pub mod search;
 pub mod specs;
 // M3 X5: the context API and the MCP server; its tools are the agent tools
 // manifest (docs/api/agent-tools.toml).

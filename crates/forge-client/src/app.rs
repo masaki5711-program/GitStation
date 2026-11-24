@@ -240,6 +240,24 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Activity { before, limit } => {
             crate::activity::activity(cli, *before, *limit, env, io)
         }
+        Command::Search {
+            words,
+            scope,
+            project,
+            limit,
+            cursor,
+        } => crate::search::search(
+            cli,
+            &crate::search::SearchArgs {
+                words,
+                scope,
+                project: *project,
+                limit: *limit,
+                cursor: cursor.as_deref(),
+            },
+            env,
+            io,
+        ),
         Command::Admin { command } => crate::admin::admin(cli, command, env, io),
         Command::Browse { command } => crate::browse::browse(cli, command, env, io),
         Command::Api(a) => api(cli, a, env, io),

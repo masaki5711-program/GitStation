@@ -9051,6 +9051,92 @@
       "summary": "The recent events of the projects you are involved in, newest first: only those you may read, with only the allowed fields (a page may hold fewer than --limit); next_before pages back. A person's: an agent's token is refused."
     },
     {
+      "args": [
+        {
+          "description": "The words to search for (2..=200 characters).",
+          "kind": "positional",
+          "name": "WORDS",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Only these kinds: project, merge_request (comma-separated).",
+          "kind": "option",
+          "name": "--scope",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Only hits of this project (its id).",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Hits per page, 1..=50 (default 20).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue from a previous page's next_cursor.",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn search 設備 仕様 --json",
+        "gstn search login --scope merge_request --project 7"
+      ],
+      "name": "search",
+      "output": {
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "required": [
+                "kind",
+                "project_id",
+                "project_path",
+                "title",
+                "iid",
+                "snippet",
+                "updated_at",
+                "truncated"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/search"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Search projects and merge requests you may read: only what you may read is shown, never a total; a page can be short (even empty) while has_more is true, and next_cursor continues it."
+    },
+    {
       "args": [],
       "examples": [
         "gstn admin service-account list --json"

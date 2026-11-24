@@ -988,6 +988,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "notifications count",
             "notifications read",
             "activity",
+            "search",
             "admin service-account list",
             "admin service-account view",
             "admin service-account update",
