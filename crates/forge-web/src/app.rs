@@ -3416,6 +3416,13 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: the caller's activity",
                 shell,
             )
+            .route(
+                verb,
+                ADMIN_PAGE,
+                Action::WebShell,
+                "SPA shell: the administrator settings (the portal menu's link)",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -3658,3 +3665,6 @@ pub const MY_GROUPS_PAGE: &str = "/-/groups";
 pub const MY_MERGE_REQUESTS_PAGE: &str = "/-/merge-requests";
 /// The "My work" sidebar's activity page (plan 15 MR 9).
 pub const MY_ACTIVITY_PAGE: &str = "/-/activity";
+/// The portal menu's administrator link (ADR-0021 amendment 2026-11-24):
+/// the SPA sends the person on to their own administrator settings.
+pub const ADMIN_PAGE: &str = "/-/admin";

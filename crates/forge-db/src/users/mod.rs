@@ -21,6 +21,8 @@ use crate::{query_error, Db};
 pub(crate) mod admin;
 // M2 MR6: the user search and the administration list.
 mod directory;
+// ADR-0021 amendment 2026-11-24: the administrator flag from the IdP role.
+mod idp_admin;
 mod rename;
 
 pub(crate) use admin::lock_admin_set;
@@ -28,6 +30,10 @@ pub use admin::{administration, bootstrap_admin, Administration, Bootstrap, Boot
 pub use directory::{
     admin_page, search, AdminUserRow, StateFilter, UserMatch, MAX_ADMIN_PAGE, MAX_SEARCH_CHARS,
     MAX_SEARCH_RESULTS, MIN_SEARCH_CHARS,
+};
+pub use idp_admin::{
+    admin_sources, idp_admin_change, set_admin_source, sync_idp_admin, AdminFacts, AdminSourceSet,
+    AdminSources, IdpAdmin,
 };
 pub use rename::{rename_decided, UserRenameFacts};
 

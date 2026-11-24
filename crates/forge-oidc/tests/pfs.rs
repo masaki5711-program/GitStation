@@ -510,3 +510,129 @@ async fn a_pfs_sign_in_without_org_claims_stores_an_empty_snapshot() {
     assert_eq!(row["invalid"], false);
     t.drop_now().await;
 }
+
+/// The PFS configuration with `auth.oidc.admin_role = "admin"`.
+fn pfs_admin(t: &FreshDb, op: &MockOp) -> Arc<Oidc> {
+    let mut settings = op.settings(BASE);
+    settings.claims_source = OidcClaimsSource::AccessToken;
+    settings.employee_number_claim = "staff_id".to_owned();
+    settings.access_role = "access".to_owned();
+    settings.admin_role = Some("admin".to_owned());
+    Arc::new(Oidc::new(settings, &web_keys(), t.db.clone()).expect("oidc"))
+}
+
+async fn admin_flags(t: &FreshDb, user: forge_core::UserId) -> (bool, String) {
+    let rows = t
+        .json_rows(&format!(
+            "SELECT is_admin, admin_source FROM forge.users WHERE id = {}",
+            user.get()
+        ))
+        .await;
+    (
+        rows[0]["is_admin"].as_bool().expect("is_admin"),
+        rows[0]["admin_source"]
+            .as_str()
+            .expect("admin_source")
+            .to_owned(),
+    )
+}
+
+async fn admin_changes(t: &FreshDb, user: forge_core::UserId) -> Vec<Value> {
+    t.json_rows(&format!(
+        "SELECT details FROM forge.audit_log WHERE action = 'user.admin_changed' \
+         AND resource_id = {} ORDER BY id",
+        user.get()
+    ))
+    .await
+    .into_iter()
+    .map(|r| r["details"].clone())
+    .collect()
+}
+
+/// ADR-0021 amendment 2026-11-24: the client role `admin` grants the
+/// administrator flag at the sign-in (before the session exists), the
+/// refresh check without it revokes it, and each change is one audit row.
+#[tokio::test]
+async fn the_admin_role_grants_at_sign_in_and_a_refresh_without_it_revokes() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = pfs_admin(&t, &op);
+    let with_admin = json!({"resource_access": {"gitstation": {"roles": ["access", "admin"]}}});
+    let done = sign_in(&oidc, &op, json!({}), with_admin.clone())
+        .await
+        .expect("signed in");
+    assert_eq!(admin_flags(&t, done.user).await, (true, "oidc".to_owned()));
+    let identity = forge_db::sessions::authenticate(&t.db, &rid(), &done.token.reveal(), IDLE)
+        .await
+        .expect("authenticated");
+    assert!(
+        identity.is_admin && identity.admin_from_idp,
+        "the first page sees it"
+    );
+    // A refresh that still carries the role changes nothing.
+    op.set_refresh_access(with_admin);
+    assert_eq!(due_check(&t, &oidc, &done).await, RefreshVerdict::Continue);
+    assert_eq!(admin_changes(&t, done.user).await.len(), 1);
+    // The role was removed at the provider: the next check revokes it, the
+    // session goes on.
+    op.set_refresh_access(json!({"resource_access": {"gitstation": {"roles": ["access"]}}}));
+    assert_eq!(due_check(&t, &oidc, &done).await, RefreshVerdict::Continue);
+    assert_eq!(admin_flags(&t, done.user).await, (false, "cli".to_owned()));
+    assert_eq!(
+        admin_changes(&t, done.user).await,
+        vec![
+            json!({"from": false, "to": true, "source": "oidc_role"}),
+            json!({"from": true, "to": false, "source": "oidc_role"}),
+        ]
+    );
+    // Signing in again without it: nothing more.
+    sign_in(&oidc, &op, json!({}), json!({}))
+        .await
+        .expect("again");
+    assert_eq!(admin_changes(&t, done.user).await.len(), 2);
+    t.drop_now().await;
+}
+
+/// Break-glass: an administrator made by the CLI and linked keeps the flag
+/// when the token has no admin role; without `auth.oidc.admin_role` the
+/// role is never read.
+#[tokio::test]
+async fn a_cli_admin_keeps_the_flag_and_the_role_is_ignored_when_off() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let mut new = forge_db::users::NewUser::human("root", "Root", "root@example.test");
+    new.employee_number = Some("SYN9001".to_owned());
+    new.is_admin = true;
+    let ctx = ChangeContext::new(Actor::System, rid());
+    let root = forge_db::users::create(&t.db, &ctx, &new)
+        .await
+        .expect("root")
+        .user_id;
+    // An administrator is never linked automatically (privileged_account);
+    // the operator links them (runbook oidc-identity-link).
+    let linked =
+        forge_oidc::operator_link_identity(&t.db, &ctx, root, &op.issuer, "synthetic-sub-pfs-1")
+            .await
+            .expect("linked");
+    assert_eq!(linked, forge_db::identities::OperatorLink::Linked);
+    let done = sign_in(&pfs_admin(&t, &op), &op, json!({}), json!({}))
+        .await
+        .expect("signed in");
+    assert_eq!(done.user, root);
+    assert_eq!(admin_flags(&t, root).await, (true, "cli".to_owned()));
+    assert!(admin_changes(&t, root).await.is_empty());
+    // Off: a new person with the role in the token stays a member.
+    let off = pfs(&t, &op);
+    let other = sign_in(
+        &off,
+        &op,
+        json!({"sub": "synthetic-sub-pfs-2"}),
+        json!({"sub": "synthetic-sub-pfs-2", "staff_id": "SYN9002",
+               "preferred_username": "syn9002", "email": "pfs.two@example.test",
+               "resource_access": {"gitstation": {"roles": ["access", "admin"]}}}),
+    )
+    .await
+    .expect("signed in");
+    assert_eq!(admin_flags(&t, other.user).await, (false, "cli".to_owned()));
+    t.drop_now().await;
+}

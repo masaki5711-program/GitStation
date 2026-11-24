@@ -15,6 +15,7 @@ use forge_db::identities::{
 };
 use forge_db::org_profiles::{self, Observed, OrgSnapshot, Recorded};
 use forge_db::sessions::{self, NewSession, OidcSession};
+use forge_db::users::{self, IdpAdmin};
 use forge_db::Db;
 use forge_errors::ForgeError;
 use serde_json::Value;
@@ -69,6 +70,9 @@ pub struct OidcSettings {
     pub ca_pem: Option<Vec<u8>>,
     pub employee_number_claim: String,
     pub access_role: String,
+    /// `auth.oidc.admin_role` (ADR-0021 amendment 2026-11-24): `None` —
+    /// the administrator flag is the CLI's alone.
+    pub admin_role: Option<String>,
     pub signing_algs: Vec<OidcSigningAlg>,
     pub auto_link: bool,
     /// `auth.oidc.claims_source`: where the identity claims and the client
@@ -94,6 +98,7 @@ impl std::fmt::Debug for OidcSettings {
             .field("signing_algs", &self.signing_algs)
             .field("auto_link", &self.auto_link)
             .field("claims_source", &self.claims_source)
+            .field("admin_role", &self.admin_role)
             .field("base_origin", &self.base_origin)
             .finish_non_exhaustive()
     }
@@ -128,6 +133,7 @@ impl OidcSettings {
             ca_pem,
             employee_number_claim: cfg.employee_number_claim.clone(),
             access_role: cfg.access_role.clone(),
+            admin_role: cfg.admin_role.clone(),
             signing_algs: cfg.signing_algs.clone(),
             auto_link: cfg.auto_link,
             claims_source: cfg.claims_source,
@@ -425,6 +431,13 @@ impl Oidc {
         )
         .await?;
         let user = outcome.user();
+        // ADR-0021 amendment 2026-11-24: the administrator flag follows
+        // `auth.oidc.admin_role` before the session exists, so the first
+        // page already shows (or no longer shows) the administrator menus.
+        // A failure ends the sign-in (fail closed: never a session on a
+        // flag the role no longer grants).
+        self.apply_admin_role(input.request_id, user, source)
+            .await?;
         if matches!(outcome, LoginOutcome::Existing { .. }) {
             if let Err(e) =
                 identities::record_login(&self.db, &self.settings.issuer, &claims.subject).await
@@ -670,16 +683,48 @@ impl Oidc {
 
     /// `resource_access.<client_id>.roles` holds `auth.oidc.access_role`.
     pub(crate) fn has_access_role(&self, claims: &Value) -> bool {
+        self.has_client_role(claims, &self.settings.access_role)
+    }
+
+    /// `resource_access.<client_id>.roles` holds `role`.
+    fn has_client_role(&self, claims: &Value, role: &str) -> bool {
         claims
             .get("resource_access")
             .and_then(|r| r.get(&self.settings.client_id))
             .and_then(|c| c.get("roles"))
             .and_then(Value::as_array)
-            .is_some_and(|roles| {
-                roles
-                    .iter()
-                    .any(|r| r.as_str() == Some(self.settings.access_role.as_str()))
-            })
+            .is_some_and(|roles| roles.iter().any(|r| r.as_str() == Some(role)))
+    }
+
+    /// Apply `auth.oidc.admin_role` of verified `claims` (the sign-in's, or
+    /// a refresh check's) to `user` (ADR-0021 amendment 2026-11-24): see
+    /// `forge_db::users::sync_idp_admin`. Nothing without the setting. A
+    /// grant or a revoke is one audited change (`user.admin_changed`,
+    /// actor system, this request) and the info event
+    /// `forge.auth.admin_role_applied`.
+    pub(crate) async fn apply_admin_role(
+        &self,
+        request_id: &RequestId,
+        user: UserId,
+        claims: &Value,
+    ) -> Result<(), ForgeError> {
+        let Some(role) = self.settings.admin_role.as_deref() else {
+            return Ok(());
+        };
+        let has_role = self.has_client_role(claims, role);
+        let ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the change owns its id
+        let done = users::sync_idp_admin(&self.db, &ctx, user, has_role).await?;
+        if done != IdpAdmin::Unchanged {
+            tracing::info!(
+                target: "forge_oidc",
+                request_id = %request_id,
+                user_id = user.get(),
+                change = done.as_str(),
+                source = "oidc_role",
+                "forge.auth.admin_role_applied"
+            );
+        }
+        Ok(())
     }
 
     /// The person as `claims` (the ID token's or the access token's) say.

@@ -543,7 +543,7 @@ pub async fn remove_all_admin_flags(
         let rows: Vec<(i64, String)> = tx
             .step(|c| async move {
                 sqlx::query_as(
-                    "UPDATE forge.users SET is_admin = false, updated_at = now() \
+                    "UPDATE forge.users SET is_admin = false, admin_source = 'cli', updated_at = now() \
                      WHERE is_admin RETURNING id, username",
                 )
                 .fetch_all(c)

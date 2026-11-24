@@ -38,6 +38,10 @@ pub struct PortalIdentity {
     /// `resource_access.<auth.oidc.client_id>.roles` holds
     /// `auth.oidc.access_role`.
     pub access_role: bool,
+    /// The account's `users.is_admin` as read now (never a claim of the
+    /// portal's token): the menu's administrator link, decided by
+    /// `authorize()` (ADR-0021 amendment 2026-11-24). Never a right.
+    pub is_admin: bool,
 }
 
 /// The future a [`PortalAuthenticator`] returns.
@@ -243,10 +247,12 @@ pub enum Word {
     SpecFindings,
     SpecNoFindings,
     SpecChecking,
+    // ADR-0021 amendment 2026-11-24: the administrator link of the menu.
+    MenuAdmin,
 }
 
 impl Word {
-    pub const ALL: [Word; 70] = [
+    pub const ALL: [Word; 71] = [
         Self::TitleReview,
         Self::TitleMine,
         Self::TitleStopped,
@@ -317,6 +323,7 @@ impl Word {
         Self::SpecFindings,
         Self::SpecNoFindings,
         Self::SpecChecking,
+        Self::MenuAdmin,
     ];
 
     /// `[ja, en, id]`.
@@ -500,6 +507,7 @@ impl Word {
             ],
             Self::SpecNoFindings => ["指摘なし", "No findings", "Tidak ada temuan"],
             Self::SpecChecking => ["確認中", "Being checked", "Sedang diperiksa"],
+            Self::MenuAdmin => ["管理者の設定", "Administration", "Administrasi"],
         }
     }
 
@@ -628,6 +636,10 @@ pub const UNREAD_NOTIFICATIONS_HREF: &str = "/-/notifications?unread=1";
 pub const MEMBER_PROJECTS_HREF: &str = "/-/projects?tab=member";
 /// GitStation's home.
 pub const HOME_HREF: &str = "/";
+/// The administrator's settings (the SPA sends it on to the signed-in
+/// person's `/{username}/-/settings?tab=admin`; ADR-0021 amendment
+/// 2026-11-24).
+pub const ADMIN_HREF: &str = "/-/admin";
 
 /// A merge request's changes (`/{path}/-/pull/{iid}/changes`): where a
 /// conflict is seen.
@@ -753,6 +765,15 @@ fn entries(purpose: MenuPurpose) -> &'static [(Word, Target)] {
             (Word::MenuGroups, Fixed("/-/groups")),
             (Word::MenuActivity, Fixed("/-/activity")),
         ],
+    }
+}
+
+/// The menu's administrator link, added last for a person
+/// `forge_auth::portal_admin_menu` allows (ADR-0021 amendment 2026-11-24).
+pub fn admin_menu_link() -> MenuLink {
+    MenuLink {
+        label: Word::MenuAdmin,
+        href: ADMIN_HREF.to_owned(),
     }
 }
 

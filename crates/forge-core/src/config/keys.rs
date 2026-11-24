@@ -346,6 +346,8 @@ pub const KEYS: &[Key] = &[
         "FORGE_AUTH_OIDC_EMPLOYEE_NUMBER_CLAIM",
     ),
     text("auth.oidc.access_role", "FORGE_AUTH_OIDC_ACCESS_ROLE"),
+    // ADR-0021 amendment 2026-11-24: the administrator from the client role.
+    text("auth.oidc.admin_role", "FORGE_AUTH_OIDC_ADMIN_ROLE"),
     text("auth.oidc.signing_algs", "FORGE_AUTH_OIDC_SIGNING_ALGS"),
     boolean("auth.oidc.auto_link", "FORGE_AUTH_OIDC_AUTO_LINK"),
     // PFS Keycloak (ADR-0021 amendment 2026-11-17).

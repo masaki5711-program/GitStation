@@ -131,6 +131,7 @@ impl PortalWidgets {
             // Verified above; `authorize()` decides it again.
             portal_party: true,
             access_role,
+            is_admin: user.is_admin,
         })
     }
 }

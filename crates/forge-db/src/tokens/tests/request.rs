@@ -126,6 +126,52 @@ async fn admin_scope_for_a_non_admin_owner_is_refused() {
     t.drop_now().await;
 }
 
+/// ADR-0021 amendment 2026-11-24: an administrator granted by the
+/// identity provider's role never puts the `admin` scope on a token, and a
+/// token of such an owner (issued while the CLI managed the flag) carries
+/// no administrator flag: the role is re-checked at sign-ins and refresh
+/// checks only.
+#[tokio::test]
+async fn an_idp_granted_admin_gets_no_admin_token() {
+    let t = FreshDb::migrated().await;
+    let root = human(&t, "root", true).await;
+    let early = issue_ok(&t, "req-idp-tok-0", root, &[Scope::Api, Scope::Admin]).await;
+    users::set_admin_source(
+        &t.db,
+        &ctx("req-idp-tok-1"),
+        root,
+        forge_core::AdminSource::Oidc,
+    )
+    .await
+    .expect("handed to the role");
+    let err = issue(
+        &t.db,
+        &ctx("req-idp-tok-2"),
+        &request(root, &[Scope::Api, Scope::Admin]),
+    )
+    .await
+    .expect_err("an IdP administrator");
+    assert_reason(
+        &err,
+        ErrorCode::TokenRequestInvalid,
+        "admin_scope_requires_cli_admin",
+    );
+    {
+        // Nothing written: only the token issued before the hand-over.
+        let mut su = t.superuser().await;
+        assert_eq!(count(&mut su, "SELECT count(*) FROM forge.tokens").await, 1);
+        assert!(audit_rows(&mut su, "req-idp-tok-2").await.is_empty());
+    }
+    let plain = issue_ok(&t, "req-idp-tok-3", root, &[Scope::Api]).await;
+    for token in [early, plain] {
+        let id = authenticate(&t.db, &rid("req-idp-tok-4"), &token.token.reveal())
+            .await
+            .expect("authenticates");
+        assert!(!id.is_admin, "a token never carries an IdP-granted flag");
+    }
+    t.drop_now().await;
+}
+
 #[tokio::test]
 async fn a_bot_cannot_hold_a_token() {
     let t = FreshDb::migrated().await;

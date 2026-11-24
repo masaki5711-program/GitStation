@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use forge_core::ids::UserId;
 use forge_core::token::{self, PlainToken};
-use forge_core::{AuditDetails, Scope, UserKind};
+use forge_core::{AdminSource, AuditDetails, Scope, UserKind};
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, DomainEvent};
@@ -246,16 +246,19 @@ async fn issue_as(
             .with_context("source", format!("{e:?}"))
     })?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let owner: Option<(String, String, bool)> = tx
+    let owner: Option<(String, String, bool, String)> = tx
         .step(|c| async move {
-            sqlx::query_as("SELECT kind, state, is_admin FROM forge.users WHERE id = $1 FOR UPDATE")
-                .bind(user.get())
-                .fetch_optional(c)
-                .await
-                .map_err(|e| crate::query_error("tokens.issue.owner", e))
+            sqlx::query_as(
+                "SELECT kind, state, is_admin, admin_source FROM forge.users \
+                 WHERE id = $1 FOR UPDATE",
+            )
+            .bind(user.get())
+            .fetch_optional(c)
+            .await
+            .map_err(|e| crate::query_error("tokens.issue.owner", e))
         })
         .await?;
-    let Some((kind, state, is_admin)) = owner else {
+    let Some((kind, state, is_admin, admin_source)) = owner else {
         return Err(not_found("user"));
     };
     if kind == UserKind::Bot.as_str() {
@@ -269,6 +272,14 @@ async fn issue_as(
     }
     if scopes.contains(&Scope::Admin) && !is_admin {
         return Err(refuse("admin_scope_requires_admin"));
+    }
+    // ADR-0021 amendment 2026-11-24: an administrator granted by the
+    // identity provider's role is re-checked at sign-ins and refresh checks
+    // only, which a token never passes: it never carries the `admin` scope
+    // (and `authenticate` gives such an owner's tokens no administrator
+    // flag).
+    if scopes.contains(&Scope::Admin) && admin_source != AdminSource::Cli.as_str() {
+        return Err(refuse("admin_scope_requires_cli_admin"));
     }
     // M3 S2 (ADR-0025 §2): acting for a person is an integration's service
     // account's, never an agent's (authorize() checks both again).

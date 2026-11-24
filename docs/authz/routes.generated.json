@@ -38,6 +38,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/admin",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/admin",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/assets/{file}",
     "people_only": false,
     "public": true,

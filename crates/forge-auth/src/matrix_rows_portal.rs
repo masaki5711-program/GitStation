@@ -49,7 +49,13 @@ impl Case {
         } else {
             AccountKind::Human
         };
-        Principal::portal(crate::matrix::ME, self != Case::Disabled, kind, credential)
+        Principal::portal(
+            crate::matrix::ME,
+            self != Case::Disabled,
+            kind,
+            credential,
+            false,
+        )
     }
 
     pub(crate) fn role(self) -> Option<crate::model::Role> {

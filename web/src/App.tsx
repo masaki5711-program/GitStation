@@ -8,6 +8,7 @@ import { ApiProvider } from './api/context';
 import { watchSessionUser } from './api/namespaces';
 import { Layout } from './components/Layout';
 import { Activity } from './pages/Activity';
+import { AdminRedirect } from './pages/AdminRedirect';
 import { GroupsPage } from './pages/Groups';
 import { Home } from './pages/Home';
 import { Inbox } from './pages/Inbox';
@@ -59,6 +60,7 @@ export function AppRoutes() {
         <Route path="-/activity" element={<Activity />} />
         <Route path="-/projects/:id/*" element={<Permalink />} />
         <Route path="-/notifications" element={<Inbox />} />
+        <Route path="-/admin" element={<AdminRedirect />} />
         <Route path="-/*" element={<NotFound />} />
         <Route path="*" element={<NamespaceRoute />} />
       </Route>

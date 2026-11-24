@@ -120,7 +120,7 @@ pub use model::{
     RunnerJob, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
     ViaView, Visibility, SSH_KEY_SCOPES,
 };
-pub use portal::{portal_may, portal_reader, PortalWidgetCtx};
+pub use portal::{portal_admin_menu, portal_may, portal_reader, PortalWidgetCtx};
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
     GroupTransferCtx, InstanceCtx, JobSelfCtx, LoadedGroup, LoadedMembership, LoadedNamespace,

@@ -66,6 +66,13 @@ client_secret_file = "/run/forge/secrets/oidc-client-secret"
 claims_source = "access_token"
 employee_number_claim = "staff_id"
 access_role = "access"
+# The client role `admin` of the client gitstation (the PFS portal's
+# permission management assigns it per app) makes a person an
+# administrator at each sign-in and 5-minute refresh check; without it an
+# IdP-granted administrator loses the flag. Administrators made by the CLI
+# (break-glass) keep theirs (ADR-0021 amendment 2026-11-24, runbook
+# oidc-login 「管理者の付け外し」).
+admin_role = "admin"
 
 [maintenance]
 window_start = "02:00"

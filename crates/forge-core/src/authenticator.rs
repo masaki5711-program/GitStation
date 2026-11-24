@@ -157,6 +157,11 @@ pub struct SessionIdentity {
     /// The user is an administrator (a session carries every scope, so
     /// this is administrator rights: `forge_auth::Principal::admin_rights`).
     pub is_admin: bool,
+    /// The flag was granted by the identity provider's role
+    /// (`users.admin_source = 'oidc'`, ADR-0021 amendment 2026-11-24): the
+    /// screen offers no `admin` token scope (tokens never carry it). Never
+    /// an authorization input.
+    pub admin_from_idp: bool,
     /// When the session ends without activity / at the latest (RFC 3339, UTC).
     pub idle_expires_at: String,
     pub absolute_expires_at: String,

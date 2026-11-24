@@ -244,10 +244,17 @@ impl Oidc {
         // The verified access token's claims (access_token mode): the org
         // claims' snapshot is refreshed from them once the session goes on.
         let mut org_source: Option<Value> = None;
+        // The verified claims the roles were read from (none when an ID
+        // token mode refresh brought no ID token: the last flags stand).
+        let mut role_source: Option<Value> = None;
         let access_role = match self.settings.claims_source {
             OidcClaimsSource::IdToken => match id_token.as_deref() {
                 Some(token) => match self.verify_refreshed(&doc, token, &claim).await {
-                    Ok(claims) => self.has_access_role(&claims.claims),
+                    Ok(claims) => {
+                        let role = self.has_access_role(&claims.claims);
+                        role_source = Some(claims.claims);
+                        role
+                    }
                     Err(e) if e.code() == ErrorCode::IdentityProviderUnavailable => {
                         // The JWKS could not be fetched: nothing was learned.
                         return self.unreachable(&e, request_id, &claim).await;
@@ -334,6 +341,7 @@ impl Oidc {
                 {
                     Ok(claims) => {
                         let role = self.has_access_role(&claims.claims);
+                        role_source = Some(claims.claims.clone()); // clone: the org snapshot reads them too
                         org_source = Some(claims.claims);
                         role
                     }
@@ -412,6 +420,14 @@ impl Oidc {
         if let (true, Some(claims)) = (stored, org_source) {
             self.record_org(&system(request_id), claim.user, &claims)
                 .await;
+        }
+        // ADR-0021 amendment 2026-11-24: a role granted or removed at the
+        // provider reaches the administrator flag at the next check (at
+        // most 5 minutes of activity). A database failure is this
+        // request's, as for the account read above.
+        if let (true, Some(claims)) = (stored, role_source) {
+            self.apply_admin_role(request_id, claim.user, &claims)
+                .await?;
         }
         Ok(RefreshVerdict::Continue)
     }

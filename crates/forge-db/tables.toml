@@ -131,7 +131,7 @@ kind = "audited"
 # Not email, employee_number or external_id (personal data).
 ro_columns = [
     "id", "kind", "username", "display_name", "auth_source", "state", "is_admin", "created_at",
-    "updated_at",
+    "updated_at", "admin_source",
 ]
 audit_resource = "user"
 audit_id_column = "id"

@@ -13,6 +13,10 @@
 //!   `auth.oidc.access_role` (default `access`), `auth.oidc.signing_algs`
 //!   (default `RS256`; a comma list of `RS256` and `ES256` only),
 //!   `auth.oidc.auto_link` (default `true`, ADR-0021 §13).
+//! - `auth.oidc.admin_role` (default unset: off): the client role, read where
+//!   the access role is, that makes a person an administrator at each
+//!   sign-in and refresh check (ADR-0021 amendment 2026-11-24); never the
+//!   access role (`same_as_access_role`).
 //! - `auth.oidc.claims_source` (default `id_token`; `access_token` for a
 //!   provider that puts the identity claims and the client roles in the
 //!   access token only, the PFS Keycloak — ADR-0021 amendment 2026-11-17).
@@ -43,6 +47,7 @@ const CLIENT_SECRET_FILE: &str = "auth.oidc.client_secret_file";
 const CA_FILE: &str = "auth.oidc.ca_file";
 const EMPLOYEE_NUMBER_CLAIM: &str = "auth.oidc.employee_number_claim";
 const ACCESS_ROLE: &str = "auth.oidc.access_role";
+const ADMIN_ROLE: &str = "auth.oidc.admin_role";
 const SIGNING_ALGS: &str = "auth.oidc.signing_algs";
 const AUTO_LINK: &str = "auth.oidc.auto_link";
 const CLAIMS_SOURCE: &str = "auth.oidc.claims_source";
@@ -57,6 +62,7 @@ const ALL: &[&str] = &[
     CA_FILE,
     EMPLOYEE_NUMBER_CLAIM,
     ACCESS_ROLE,
+    ADMIN_ROLE,
     SIGNING_ALGS,
     AUTO_LINK,
     CLAIMS_SOURCE,
@@ -135,6 +141,11 @@ pub struct OidcConfig {
     pub ca_file: Option<PathBuf>,
     pub employee_number_claim: String,
     pub access_role: String,
+    /// `auth.oidc.admin_role` (ADR-0021 amendment 2026-11-24): the client
+    /// role that makes a person an administrator, read where
+    /// `access_role` is. `None` (the default): the administrator flag is
+    /// the CLI's alone. Never equal to `access_role` (`same_as_access_role`).
+    pub admin_role: Option<String>,
     pub signing_algs: Vec<OidcSigningAlg>,
     pub auto_link: bool,
     /// `auth.oidc.claims_source`.
@@ -248,6 +259,17 @@ impl AuthConfig {
                 Err(invalid(key, "invalid"))
             }
         };
+        let access_role = claim(ACCESS_ROLE, "access")?;
+        let admin_role = match text(ADMIN_ROLE)? {
+            None => None,
+            Some(_) => {
+                let role = claim(ADMIN_ROLE, "")?;
+                if role == access_role {
+                    return Err(invalid(ADMIN_ROLE, "same_as_access_role"));
+                }
+                Some(role)
+            }
+        };
         let signing_algs = match text(SIGNING_ALGS)? {
             None => vec![OidcSigningAlg::Rs256],
             Some(list) => {
@@ -299,7 +321,8 @@ impl AuthConfig {
                 client_secret,
                 ca_file,
                 employee_number_claim: claim(EMPLOYEE_NUMBER_CLAIM, "employee_number")?,
-                access_role: claim(ACCESS_ROLE, "access")?,
+                access_role,
+                admin_role,
                 signing_algs,
                 auto_link,
                 claims_source,

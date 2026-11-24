@@ -63,6 +63,17 @@ connection, mapping driver errors to registered codes, migrations
   exists (`admin_exists`), for bots / service accounts (`not_human`) and
   disabled users (`user_disabled`); same lock order; one audit row
   `user.admin_bootstrapped` (`created`, `namespace_id`), no event.
+  ADR-0021 amendment 2026-11-24 (migration `20270109100000`,
+  `users.admin_source` `cli`|`oidc`): `users::sync_idp_admin(&Db,
+  &ChangeContext, UserId, has_role) -> IdpAdmin` (forge-oidc only, at the
+  sign-in and the refresh check: grants `oidc`, revokes only `oidc`, never a
+  `cli` admin, a bot, a service account or a disabled user; one
+  `user.admin_changed` audit row under `users.admin_set`, nothing written when
+  unchanged), `users::set_admin_source` (`forge admin user admin-source`;
+  FG-AUTH-0009 `not_admin`; `user.admin_source_changed`) and
+  `users::admin_sources` (doctor `auth.oidc.admin_role`). `tokens::authenticate`
+  hands a token only a `cli` administrator flag; `tokens::issue` refuses the
+  `admin` scope to an `oidc` administrator (`admin_scope_requires_cli_admin`).
   `users::administration(&Db) -> Option<Administration>` (read pool; `None`
   before the migration) is what `forge doctor` reports as
   `users.administration`: `check()` is FG-AUTH-0010 (`no_admin` /

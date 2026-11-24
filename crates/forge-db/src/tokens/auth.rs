@@ -25,6 +25,10 @@ struct Row {
     is_agent: bool,
     revoked: bool,
     expired: bool,
+    /// The owner is an administrator whose flag the CLI manages: an
+    /// administrator granted by the identity provider's role is re-checked
+    /// only at sign-ins and refresh checks, which a token never passes
+    /// (ADR-0021 amendment 2026-11-24).
     is_admin: bool,
     active: bool,
     stale: bool,
@@ -64,7 +68,8 @@ pub async fn authenticate(
             .map_err(|e| query_error("tokens.authenticate.acquire", e))?;
         let row: Option<Row> = sqlx::query_as(
             "SELECT t.id, t.user_id, t.secret_sha256, t.scopes, t.is_agent, \
-             t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired, u.is_admin, \
+             t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired, \
+             (u.is_admin AND u.admin_source = 'cli') AS is_admin, \
              u.state = 'active' AS active, \
              (t.last_used_at IS NULL OR t.last_used_at < now() - interval '10 minutes') AS stale, \
              u.username, u.display_name, u.kind \

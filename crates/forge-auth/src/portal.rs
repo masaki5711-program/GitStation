@@ -108,6 +108,32 @@ pub fn portal_reader(proof: &Authorized<PortalWidgetCtx>) -> Result<Principal, F
     })
 }
 
+/// Whether the menu widget shows the person the administrator link
+/// (ADR-0021 amendment 2026-11-24): `authorize()` decides
+/// `UserAdminList` on the instance — the administrator screen's own
+/// decision — for the person as a session with the account's
+/// administrator flag (`users.is_admin` as read with the request; kept to
+/// `auth.oidc.admin_role` at the GitStation sign-ins, never read from the
+/// portal's token). Only a proof of the widget route answers `true`; the
+/// link grants nothing: the screen asks for a GitStation session.
+pub fn portal_admin_menu(proof: &Authorized<PortalWidgetCtx>) -> bool {
+    let principal = proof.principal();
+    if proof.action() != Action::PortalWidgetRead || principal.portal_credential().is_none() {
+        return false;
+    }
+    let Some(user) = principal.user() else {
+        return false;
+    };
+    let person = Principal::authenticated(
+        user,
+        principal.admin_flag(),
+        principal.active(),
+        Credential::Session,
+        principal.account_kind(),
+    );
+    crate::authorize::authorize(&person, Action::UserAdminList, &Resource::Instance).is_ok()
+}
+
 /// A widget route as the portal reaches it: the person's own widgets. The
 /// id is the person (the lists are always their own).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +168,10 @@ mod tests {
     const ME: UserId = UserId::new(1);
 
     fn portal(party: bool, role: bool) -> Principal {
+        portal_of(party, role, false)
+    }
+
+    fn portal_of(party: bool, role: bool, is_admin: bool) -> Principal {
         Principal::portal(
             ME,
             true,
@@ -150,7 +180,28 @@ mod tests {
                 portal_party: party,
                 access_role: role,
             },
+            is_admin,
         )
+    }
+
+    /// ADR-0021 amendment 2026-11-24: the administrator link follows the
+    /// account's flag through `authorize()`; the reader of the lists still
+    /// has no administrator rights.
+    #[test]
+    fn the_admin_menu_follows_the_account_flag_and_grants_nothing() {
+        let admin = portal_of(true, true, true);
+        let proof =
+            prove(&admin, Action::PortalWidgetRead, PortalWidgetCtx::new(ME)).expect("allowed");
+        assert!(portal_admin_menu(&proof));
+        assert!(
+            !admin.admin_rights(),
+            "the portal's credential has no rights"
+        );
+        assert!(!portal_reader(&proof).expect("reader").admin_rights());
+        let member = portal_of(true, true, false);
+        let proof =
+            prove(&member, Action::PortalWidgetRead, PortalWidgetCtx::new(ME)).expect("allowed");
+        assert!(!portal_admin_menu(&proof));
     }
 
     #[test]

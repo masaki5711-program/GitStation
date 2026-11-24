@@ -297,9 +297,27 @@ fn every_menu_href_is_a_screen_of_the_spa() {
     assert!(words.iter().any(|w| w == "merge-queue"));
 }
 
+/// ADR-0021 amendment 2026-11-24: the administrator link comes last, only
+/// when asked for, and its screen is a route of the SPA that sends the
+/// person on to their administrator settings.
+#[test]
+fn the_admin_link_is_last_and_a_screen_of_the_spa() {
+    let plain = menu_body(MenuPurpose::Developer, None, false, Lang::Ja);
+    let admin = menu_body(MenuPurpose::Developer, None, true, Lang::Ja);
+    let plain = plain["items"].as_array().expect("items");
+    let admin = admin["items"].as_array().expect("items");
+    assert_eq!(admin.len(), plain.len() + 1);
+    assert!(plain.iter().all(|i| i["href"] != "/-/admin"));
+    let last = admin.last().expect("a link");
+    assert_eq!(last["href"], "/-/admin");
+    assert_eq!(last["label"], "管理者の設定");
+    assert!(web_source("App.tsx").contains("path=\"-/admin\""));
+    assert!(web_source("pages/AdminRedirect.tsx").contains("tab=admin"));
+}
+
 #[test]
 fn the_p1_bodies_follow_the_contract() {
-    let links = menu_body(MenuPurpose::Spec, Some("acme/spec"), Lang::Ja);
+    let links = menu_body(MenuPurpose::Spec, Some("acme/spec"), false, Lang::Ja);
     let items = links["items"].as_array().expect("items");
     assert!(!items.is_empty() && items.len() <= 20);
     assert!(items.iter().all(|i| i["label"]
