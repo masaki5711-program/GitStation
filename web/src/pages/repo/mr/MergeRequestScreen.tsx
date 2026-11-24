@@ -20,7 +20,7 @@ import { Loading } from '../../../components/Loading';
 import { QueryError } from '../../../components/QueryError';
 import { formatDateTime, formatRelative, mrStateLabel } from '../../../features/labels';
 import { MarkdownView } from '../../../features/MarkdownView';
-import { AiEvalSection } from '../../../features/mr/AiEvalReport';
+import { AiEvalSection } from '../../lazyScreens';
 import { CheckRunsSection, ConflictsSection } from '../../../features/mr/CheckRuns';
 import { CommentForm } from '../../../features/mr/CommentForm';
 import { ConditionsPanel } from '../../../features/mr/ConditionsPanel';

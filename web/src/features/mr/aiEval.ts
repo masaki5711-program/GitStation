@@ -230,3 +230,6 @@ export const isRate = (name: string) => name !== 'p95_latency_ms';
 
 /** Which way is worse for a gated metric: a drop (hit rate) or a rise. */
 export const worseWhenLower = (name: string) => name === 'cause_hit_rate';
+
+/** The id of the AI evaluation section's title (the check list links to it). */
+export const AI_EVAL_TITLE_ID = 'mr-ai-eval-title';
