@@ -19,7 +19,8 @@
     "signedInAs": "ログイン中のユーザー",
     "logout": "ログアウト",
     "account": "アカウントの設定",
-    "admin": "管理"
+    "admin": "管理",
+    "search": "プロジェクトと MR を検索"
   },
   "theme": {
     "legend": "テーマ",
@@ -1928,5 +1929,29 @@
     "metricsTitle": "指標（基準と今回）",
     "seeFindings": "止めている理由を見る",
     "unreadableCut": "長いため先頭だけを表示しています。すべてはパイプラインの評価のジョブにあります。"
+  },
+  "search": {
+    "title": "検索",
+    "titleFor": "「{{q}}」の検索",
+    "explain": "プロジェクトと MR から、あなたが見てよい物だけを探します。",
+    "label": "探す言葉",
+    "submit": "検索",
+    "kinds": "種類で絞る",
+    "kindAll": "すべて",
+    "kindProject": "プロジェクト",
+    "kindMergeRequest": "MR",
+    "kindOther": "その他",
+    "prompt": "探したい言葉を入れてください。日本語でも探せます。",
+    "tooShort": "{{n}} 文字以上で探してください。",
+    "shown_one": "{{count}} 件を表示しています",
+    "shown_other": "{{count}} 件を表示しています",
+    "noResults": "「{{q}}」に当てはまる物は見つかりませんでした。",
+    "noResultsHint": "短い言葉や別の言い方で試してください。見てよい物だけが出ます。",
+    "allKinds": "すべての種類で探す",
+    "toProjects": "プロジェクトの一覧を見る",
+    "notYet": "ここまでに当てはまる物はありません。続きを探せます。",
+    "more": "さらに探す",
+    "updated": "更新 {{time}}",
+    "truncated": "長いため、始めの部分だけを検索しています。"
   }
 }

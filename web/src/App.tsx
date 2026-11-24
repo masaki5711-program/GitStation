@@ -7,11 +7,10 @@ import { ApiFailure, type ApiClient } from './api/client';
 import { ApiProvider } from './api/context';
 import { watchSessionUser } from './api/namespaces';
 import { Layout } from './components/Layout';
-import { Activity } from './pages/Activity';
 import { GroupsPage } from './pages/Groups';
 import { Home } from './pages/Home';
 import { Inbox } from './pages/Inbox';
-import { ActAsBindingConfirm, ActAsConfirm } from './pages/lazyScreens';
+import { ActAsBindingConfirm, ActAsConfirm, Activity, SearchScreen } from './pages/lazyScreens';
 import { MyMergeRequests } from './pages/MyMergeRequests';
 import { NamespaceRoute } from './pages/Namespace';
 import { NotFound } from './pages/NotFound';
@@ -59,6 +58,7 @@ export function AppRoutes() {
         <Route path="-/activity" element={<Activity />} />
         <Route path="-/projects/:id/*" element={<Permalink />} />
         <Route path="-/notifications" element={<Inbox />} />
+        <Route path="-/search" element={<SearchScreen />} />
         <Route path="-/*" element={<NotFound />} />
         <Route path="*" element={<NamespaceRoute />} />
       </Route>

@@ -19,7 +19,8 @@
     "signedInAs": "Signed in as",
     "logout": "Sign out",
     "account": "Account settings",
-    "admin": "Administration"
+    "admin": "Administration",
+    "search": "Search projects and MRs"
   },
   "theme": {
     "legend": "Theme",
@@ -1928,5 +1929,29 @@
     "metricsTitle": "Measures compared with the baseline",
     "seeFindings": "See what stops the merge",
     "unreadableCut": "It is long, so only the beginning is shown. All of it is in the pipeline’s evaluation job."
+  },
+  "search": {
+    "title": "Search",
+    "titleFor": "Search for “{{q}}”",
+    "explain": "Finds projects and merge requests you are allowed to see.",
+    "label": "Search words",
+    "submit": "Search",
+    "kinds": "Filter by kind",
+    "kindAll": "All",
+    "kindProject": "Projects",
+    "kindMergeRequest": "Merge requests",
+    "kindOther": "Other",
+    "prompt": "Type what you are looking for. Japanese works too.",
+    "tooShort": "Type at least {{n}} characters.",
+    "shown_one": "Showing {{count}} result",
+    "shown_other": "Showing {{count}} results",
+    "noResults": "Nothing matches “{{q}}”.",
+    "noResultsHint": "Try shorter or different words. Only what you may see is shown.",
+    "allKinds": "Search every kind",
+    "toProjects": "Browse projects",
+    "notYet": "No matches so far. You can search further.",
+    "more": "Search further",
+    "updated": "Updated {{time}}",
+    "truncated": "Long text: only its first part is searched."
   }
 }
