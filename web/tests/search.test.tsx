@@ -80,6 +80,31 @@ describe('search: the header box', () => {
     expect(document.activeElement).toBe(page);
   });
 
+  it('"/" leaves the focus alone while a modal is open', async () => {
+    const server = mockServer(routes(() => pageOf([])));
+    await renderApp({ fetch: server.fetch, path: '/-/search' });
+    const box = await screen.findByRole('searchbox', { name: 'プロジェクトと MR を検索' });
+    const modal = document.createElement('div');
+    modal.setAttribute('aria-modal', 'true');
+    document.body.append(modal);
+    try {
+      expect(fireEvent.keyDown(document.body, { key: '/' })).toBe(true);
+      expect(document.activeElement).not.toBe(box);
+    } finally {
+      modal.remove();
+    }
+  });
+
+  it('an empty header search opens the screen that says what to type', async () => {
+    const server = mockServer(routes(() => pageOf([])));
+    await renderApp({ fetch: server.fetch });
+    const box = await screen.findByRole('searchbox', { name: 'プロジェクトと MR を検索' });
+    fireEvent.submit(box.closest('form') as HTMLFormElement);
+    expect(await screen.findByText('探したい言葉を入れてください。日本語でも探せます。')).toBeTruthy();
+    expect(screen.getByTestId('location').textContent).toBe('/-/search');
+    expect(searches(server.calls)).toEqual([]);
+  });
+
   it('is not shown to someone signed out', async () => {
     const server = mockServer({ 'GET /api/v1/session': () => apiError(401, 'ログインしてください。', 'req-anon') });
     await renderApp({ fetch: server.fetch });

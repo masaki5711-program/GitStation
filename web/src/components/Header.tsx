@@ -27,7 +27,8 @@ export interface NavToggle {
   onToggle: () => void;
 }
 
-/** `/` outside a text field and a dialog moves to the box. */
+/** `/` outside a text field, a dialog or an open menu moves to the box.
+ * An empty search opens /-/search, which says what to type. */
 function SearchBox() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -35,9 +36,9 @@ function SearchBox() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target;
-      if (e.key !== '/' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key !== '/' || e.repeat || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       if (el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
-      if (document.querySelector('dialog[open]') !== null) return;
+      if (document.querySelector('dialog[open],[aria-modal="true"],[role="menu"]') !== null) return;
       e.preventDefault();
       input.current?.focus();
     };
@@ -53,7 +54,7 @@ function SearchBox() {
       onSubmit={(e) => {
         e.preventDefault();
         const q = input.current?.value.trim() ?? '';
-        if (q !== '') void navigate(`/-/search?${new URLSearchParams({ q }).toString()}`);
+        void navigate(q === '' ? '/-/search' : `/-/search?${new URLSearchParams({ q }).toString()}`);
       }}
     >
       <input

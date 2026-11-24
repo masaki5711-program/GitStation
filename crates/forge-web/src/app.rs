@@ -3427,6 +3427,15 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: the caller's activity",
                 shell,
             )
+            // The search results (plan 20 K5): a shared or reloaded result
+            // link needs the shell too.
+            .route(
+                verb,
+                SEARCH_PAGE,
+                Action::WebShell,
+                "SPA shell: search results",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -3669,3 +3678,5 @@ pub const MY_GROUPS_PAGE: &str = "/-/groups";
 pub const MY_MERGE_REQUESTS_PAGE: &str = "/-/merge-requests";
 /// The "My work" sidebar's activity page (plan 15 MR 9).
 pub const MY_ACTIVITY_PAGE: &str = "/-/activity";
+/// The search results page (plan 20 K5; the API is `GET /api/v1/search`).
+pub const SEARCH_PAGE: &str = "/-/search";

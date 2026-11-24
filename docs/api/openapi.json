@@ -14473,6 +14473,44 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/-/search": {
+      "get": {
+        "operationId": "get_search",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: search results",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_search",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: search results",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/api/portal-widgets/v1/attention-count": {
       "get": {
         "operationId": "get_api_portal_widgets_v1_attention_count",
