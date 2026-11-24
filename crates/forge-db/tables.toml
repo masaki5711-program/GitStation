@@ -81,6 +81,9 @@ guarded_functions = [
     # Plan 19 L5-2: an advice keeps at least its request's input class and
     # never changes but for superseded_by.
     "llm_advice_guard",
+    # A request moves forward only; a verdict changes only its verdict.
+    "llm_requests_guard",
+    "llm_advice_feedback_guard",
 ]
 
 [tables.events]

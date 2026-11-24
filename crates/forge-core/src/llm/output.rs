@@ -20,7 +20,11 @@
 //! - repeats (same path, line and message) collapse into one;
 //! - at most [`OutputPolicy::max_findings`] stay, most severe and most
 //!   confident first;
-//! - every text loses mentions (`@name` → `name`), closing keywords
+//! - a summary that states a verdict (`LGTM`, `safe to merge`) is
+//!   replaced and the advice marked degraded (no evidence gate can prove a
+//!   summary); findings dropped for evidence also mark it degraded;
+//! - every text (quotes too) loses slash commands (`/merge`), mentions
+//!   (`@name` → `name`), closing keywords
 //!   (`closes #12`), images and links: an advice can notify no one, close
 //!   nothing and carry nothing out (ADR-0017 §2);
 //! - any other key (`"approve": true`) is ignored: an advice has no action
@@ -94,8 +98,51 @@ pub struct Advice {
     pub dropped_low_confidence: usize,
     /// Findings dropped over the cap (after the two above).
     pub dropped_over_cap: usize,
-    /// Mentions, closing keywords, images and links removed.
+    /// Mentions, closing keywords, slash commands, images and links
+    /// removed (in the summary, messages, quotes and the deep-review reason).
     pub stripped: usize,
+    /// The summary stated a verdict (`LGTM`, `safe to merge`, ...): an
+    /// advice never decides, so the summary was replaced by
+    /// [`WITHHELD_SUMMARY`].
+    pub summary_withheld: bool,
+    /// Less trustworthy than its words suggest: the summary was withheld or
+    /// findings were dropped for their evidence (shown as such).
+    pub degraded: bool,
+}
+
+/// What replaces a summary that stated a verdict.
+pub const WITHHELD_SUMMARY: &str =
+    "[summary withheld: the model stated a verdict; the AI advises only]";
+
+/// Words of a verdict (lowercase). An advice that says them about the
+/// change is not an advice; injected text tries exactly that.
+const VERDICT_PHRASES: &[&str] = &[
+    "lgtm",
+    "looks good to me",
+    "safe to merge",
+    "ready to merge",
+    "ok to merge",
+    "okay to merge",
+    "i approve",
+    "approve this",
+    "approve the merge",
+    "approval granted",
+    "ship it",
+    "no issues found",
+    "nothing to review",
+    "マージしてよい",
+    "マージ可能",
+    "問題ありません",
+    "問題なし",
+    "承認してよい",
+    "承認して問題",
+    "aman untuk digabung",
+    "disetujui",
+];
+
+fn states_a_verdict(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    VERDICT_PHRASES.iter().any(|p| lower.contains(p))
 }
 
 impl Advice {
@@ -157,6 +204,13 @@ pub fn check_output(
         Some(_) => return Err(invalid("summary_type")),
         None => return Err(invalid("summary_missing")),
     };
+    // No evidence gate can prove a summary; a verdict in it is refused.
+    let summary_withheld = states_a_verdict(&summary);
+    let summary = if summary_withheld {
+        WITHHELD_SUMMARY.to_owned()
+    } else {
+        summary
+    };
     let raw_findings = match top.get("findings") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(items)) => items.clone(),
@@ -201,7 +255,15 @@ pub fn check_output(
             dropped_evidence += 1;
             continue;
         }
-        let finding = Finding { message, ..finding };
+        // The quote passed the evidence check as given; what is stored and
+        // shown is cleaned like every other text.
+        let (quote, n) = clean(&finding.quote, policy.max_quote_chars);
+        stripped += n;
+        let finding = Finding {
+            message,
+            quote,
+            ..finding
+        };
         let repeat = kept.iter().any(|k| {
             k.path == finding.path && k.line == finding.line && k.message == finding.message
         });
@@ -225,6 +287,8 @@ pub fn check_output(
         dropped_low_confidence,
         dropped_over_cap,
         stripped,
+        summary_withheld,
+        degraded: summary_withheld || dropped_evidence > 0,
     })
 }
 
@@ -246,7 +310,9 @@ fn parse_finding(f: &Map<String, Value>, policy: &OutputPolicy) -> Result<Findin
     };
     let path = match f.get("path") {
         None | Some(Value::Null) => None,
-        Some(Value::String(p)) if !p.trim().is_empty() && p.len() <= 1_000 => {
+        Some(Value::String(p))
+            if !p.trim().is_empty() && p.len() <= 1_000 && !p.chars().any(char::is_control) =>
+        {
             Some(p.trim().to_owned())
         }
         Some(_) => return Err(invalid("finding_path")),
@@ -324,12 +390,23 @@ const CLOSING: &[&str] = &[
     "closes", "close", "closed", "fixes", "fix", "fixed", "resolves", "resolve", "resolved",
 ];
 
-/// The text without mentions, closing keywords, images and links, cut at
-/// `max` characters; and how many were removed.
+/// A word that is a slash command of a forge or a chat (`/merge`,
+/// `/approve`, `/close`): a slash and letters only (a path has another `/`
+/// or a `.`).
+fn is_slash_command(word: &str) -> bool {
+    word.strip_prefix('/').is_some_and(|rest| {
+        let rest = rest.trim_end_matches([':', ',', '.', ';', '!']);
+        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-')
+    })
+}
+
+/// The text without mentions, closing keywords, slash commands, images and
+/// links, its whitespace runs as one space, cut at `max` characters; and
+/// how many were removed.
 fn clean(text: &str, max: usize) -> (String, usize) {
     let mut n = 0usize;
     let mut out: Vec<String> = Vec::new();
-    let words: Vec<&str> = text.split(' ').collect();
+    let words: Vec<&str> = text.split_whitespace().collect();
     let mut i = 0;
     while let Some(&word) = words.get(i) {
         i += 1;
@@ -342,6 +419,10 @@ fn clean(text: &str, max: usize) -> (String, usize) {
         {
             // `closes #12`, `fixes group/project#3`: both words go.
             i += 1;
+            n += 1;
+            continue;
+        }
+        if is_slash_command(word) {
             n += 1;
             continue;
         }

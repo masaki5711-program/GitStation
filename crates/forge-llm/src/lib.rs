@@ -570,6 +570,7 @@ impl Gateway {
                 advice.dropped_evidence + advice.dropped_low_confidence + advice.dropped_over_cap,
             )
             .unwrap_or(i32::MAX),
+            degraded: advice.degraded,
             input_class: advice.input_class,
             model: self.inner.cfg.model.name.clone(),
             prompt_version: s.prompt.version,

@@ -207,13 +207,17 @@ pub struct NewAdvice {
     pub findings: serde_json::Value,
     pub deep_review: Option<String>,
     pub dropped_findings: i32,
+    /// The summary was withheld or findings were dropped for evidence.
+    pub degraded: bool,
     pub input_class: InputClass,
     pub model: String,
     pub prompt_version: i32,
 }
 
-/// Write an advice; the previous live advice of the same subject and
-/// purpose is marked superseded by it. Its id.
+/// Write an advice; every older live advice of the same subject and
+/// purpose is marked superseded by it. Its id. Two writers of the same
+/// subject and purpose take turns (a transaction-scoped advisory lock),
+/// so the newest always supersedes the older ones and never the reverse.
 pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
     const QUERY: &str = "llm.insert_advice";
     db.within(QUERY, async {
@@ -222,11 +226,21 @@ pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
             .begin()
             .await
             .map_err(|e| query_error(QUERY, e))?;
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtextextended( \
+               'llm_advice:' || $1 || ':' || coalesce($2::text, '') || ':' || $3, 0))",
+        )
+        .bind(&a.subject_kind)
+        .bind(a.subject_id)
+        .bind(a.purpose.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO forge.llm_advice (llm_request_id, purpose, subject_kind, subject_id, \
                project_id, head_sha, summary, findings, deep_review, dropped_findings, \
-               input_class, model, prompt_version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
+               degraded, input_class, model, prompt_version) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id",
         )
         .bind(a.llm_request_id)
         .bind(a.purpose.as_str())
@@ -238,6 +252,7 @@ pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
         .bind(&a.findings)
         .bind(&a.deep_review)
         .bind(a.dropped_findings)
+        .bind(a.degraded)
         .bind(a.input_class.as_str())
         .bind(&a.model)
         .bind(a.prompt_version)
@@ -247,7 +262,7 @@ pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
         sqlx::query(
             "UPDATE forge.llm_advice SET superseded_by = $1 \
              WHERE subject_kind = $2 AND subject_id IS NOT DISTINCT FROM $3 AND purpose = $4 \
-               AND id <> $1 AND superseded_by IS NULL",
+               AND id < $1 AND superseded_by IS NULL",
         )
         .bind(id)
         .bind(&a.subject_kind)
@@ -262,6 +277,18 @@ pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
     .await
 }
 
+/// Who reads an advice, as the caller decided it (the route's
+/// `authorize()` decision; L5-4 builds it). The store applies the data
+/// boundary itself so no caller can forget it (plan 19 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reader {
+    /// An agent token or a delegated (act-as) tool, not a person.
+    pub is_agent: bool,
+    /// The reader may read the advice's subject (its merge request,
+    /// deployment, incident).
+    pub can_read_subject: bool,
+}
+
 /// A stored advice (read pool).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredAdvice {
@@ -274,8 +301,18 @@ pub struct StoredAdvice {
     pub summary: String,
     pub findings: serde_json::Value,
     pub deep_review: Option<String>,
+    pub degraded: bool,
     pub input_class: InputClass,
     pub superseded_by: Option<i64>,
+}
+
+/// What a reader gets for an advice.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdviceView {
+    Shown(Box<StoredAdvice>),
+    /// A confidential advice asked for by an agent: only that it exists
+    /// ("機密の入力のため表示しません"), never its words.
+    Withheld { id: i64, input_class: InputClass },
 }
 
 type AdviceRow = (
@@ -288,6 +325,7 @@ type AdviceRow = (
     String,
     serde_json::Value,
     Option<String>,
+    bool,
     String,
     Option<i64>,
 );
@@ -298,14 +336,19 @@ fn stored_invalid(column: &'static str) -> ForgeError {
         .with_context("column", column)
 }
 
-/// The advice `id` (`None`: none, or swept).
-pub async fn advice(db: &Db, id: i64) -> Result<Option<StoredAdvice>, ForgeError> {
+/// The advice `id` for `reader` (`None`: none, swept, or the reader may
+/// not read its subject — the same answer, so existence does not leak).
+/// A confidential advice is [`AdviceView::Withheld`] from an agent.
+pub async fn advice(db: &Db, id: i64, reader: Reader) -> Result<Option<AdviceView>, ForgeError> {
     const QUERY: &str = "llm.advice";
+    if !reader.can_read_subject {
+        return Ok(None);
+    }
     let row: Option<AdviceRow> = db
         .within(QUERY, async {
             sqlx::query_as(
                 "SELECT id, llm_request_id, purpose, subject_kind, subject_id, head_sha, summary, \
-                   findings, deep_review, input_class, superseded_by \
+                   findings, deep_review, degraded, input_class, superseded_by \
                  FROM forge.llm_advice WHERE id = $1",
             )
             .bind(id)
@@ -314,11 +357,16 @@ pub async fn advice(db: &Db, id: i64) -> Result<Option<StoredAdvice>, ForgeError
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    let Some((id, req, purpose, kind, subject, head, summary, findings, deep, class, sup)) = row
+    let Some((id, req, purpose, kind, subject, head, summary, findings, deep, degraded, class, sup)) =
+        row
     else {
         return Ok(None);
     };
-    Ok(Some(StoredAdvice {
+    let input_class = InputClass::parse(&class).ok_or_else(|| stored_invalid("input_class"))?;
+    if reader.is_agent && !input_class.shown_to_agents() {
+        return Ok(Some(AdviceView::Withheld { id, input_class }));
+    }
+    Ok(Some(AdviceView::Shown(Box::new(StoredAdvice {
         id,
         llm_request_id: req,
         purpose: Purpose::parse(&purpose).ok_or_else(|| stored_invalid("purpose"))?,
@@ -328,9 +376,10 @@ pub async fn advice(db: &Db, id: i64) -> Result<Option<StoredAdvice>, ForgeError
         summary,
         findings,
         deep_review: deep,
-        input_class: InputClass::parse(&class).ok_or_else(|| stored_invalid("input_class"))?,
+        degraded,
+        input_class,
         superseded_by: sup,
-    }))
+    }))))
 }
 
 /// What [`record_feedback`] did.
@@ -341,89 +390,75 @@ pub enum FeedbackOutcome {
     Changed,
     /// The same verdict was already there.
     Unchanged,
-    /// No such advice (or swept), or no such finding.
+    /// No such advice (or swept), no such finding, or a reader who may not
+    /// read its subject.
     NoAdvice,
+    /// An agent token or a delegated tool: feedback is people's only (it
+    /// is the measure of the advice; plan 19 §4).
+    NotAllowed,
 }
 
 /// A person's verdict on `finding` (`None`: the advice as a whole) of an
-/// advice. The caller has decided that `user` may (a person who can read
-/// the advice's subject, never an agent token: L5-4).
+/// advice. One statement decides it, so a concurrent vote of the same
+/// person is never reported as recorded twice: a new row is `Recorded`, a
+/// changed verdict `Changed`, the same verdict `Unchanged`.
 pub async fn record_feedback(
     db: &Db,
     advice_id: i64,
     finding: Option<u8>,
     user: UserId,
+    reader: Reader,
     verdict: Verdict,
 ) -> Result<FeedbackOutcome, ForgeError> {
     const QUERY: &str = "llm.record_feedback";
+    if reader.is_agent {
+        return Ok(FeedbackOutcome::NotAllowed);
+    }
+    if !reader.can_read_subject {
+        return Ok(FeedbackOutcome::NoAdvice);
+    }
     let index: i16 = finding.map_or(-1, i16::from);
     db.within(QUERY, async {
-        let mut tx = db
-            .write_pool()
-            .begin()
-            .await
-            .map_err(|e| query_error(QUERY, e))?;
-        let found: Option<(String, String, i32)> = sqlx::query_as(
-            "SELECT purpose, input_class, jsonb_array_length(findings) FROM forge.llm_advice \
-             WHERE id = $1 FOR SHARE",
-        )
-        .bind(advice_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| query_error(QUERY, e))?;
-        let Some((purpose, class, count)) = found else {
-            return Ok(FeedbackOutcome::NoAdvice);
-        };
-        if index >= 0 && i32::from(index) >= count {
-            return Ok(FeedbackOutcome::NoAdvice);
-        }
-        let before: Option<String> = sqlx::query_scalar(
-            "SELECT verdict FROM forge.llm_advice_feedback \
-             WHERE advice_id = $1 AND finding_index = $2 AND user_id = $3 FOR UPDATE",
+        // Inserted (xmax = 0) or updated; no row: the advice or the finding
+        // is not there, or the verdict was already this one.
+        let written: Option<bool> = sqlx::query_scalar(
+            "INSERT INTO forge.llm_advice_feedback (advice_id, purpose, input_class, \
+               finding_index, user_id, verdict) \
+             SELECT a.id, a.purpose, a.input_class, $2, $3, $4 FROM forge.llm_advice a \
+              WHERE a.id = $1 AND ($2 < 0 OR $2 < jsonb_array_length(a.findings)) \
+             ON CONFLICT (advice_id, finding_index, user_id) WHERE advice_id IS NOT NULL \
+             DO UPDATE SET verdict = EXCLUDED.verdict, updated_at = now() \
+               WHERE forge.llm_advice_feedback.verdict IS DISTINCT FROM EXCLUDED.verdict \
+             RETURNING (xmax = 0)",
         )
         .bind(advice_id)
         .bind(index)
         .bind(user.get())
-        .fetch_optional(&mut *tx)
+        .bind(verdict.as_str())
+        .fetch_optional(db.write_pool())
         .await
         .map_err(|e| query_error(QUERY, e))?;
-        let outcome = match before.as_deref() {
-            Some(v) if v == verdict.as_str() => FeedbackOutcome::Unchanged,
-            Some(_) => {
-                sqlx::query(
-                    "UPDATE forge.llm_advice_feedback SET verdict = $4, updated_at = now() \
-                     WHERE advice_id = $1 AND finding_index = $2 AND user_id = $3",
-                )
-                .bind(advice_id)
-                .bind(index)
-                .bind(user.get())
-                .bind(verdict.as_str())
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| query_error(QUERY, e))?;
-                FeedbackOutcome::Changed
-            }
+        match written {
+            Some(true) => Ok(FeedbackOutcome::Recorded),
+            Some(false) => Ok(FeedbackOutcome::Changed),
             None => {
-                sqlx::query(
-                    "INSERT INTO forge.llm_advice_feedback (advice_id, purpose, input_class, \
-                       finding_index, user_id, verdict) VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (advice_id, finding_index, user_id) \
-                       WHERE advice_id IS NOT NULL DO NOTHING",
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM forge.llm_advice_feedback \
+                     WHERE advice_id = $1 AND finding_index = $2 AND user_id = $3)",
                 )
                 .bind(advice_id)
-                .bind(&purpose)
-                .bind(&class)
                 .bind(index)
                 .bind(user.get())
-                .bind(verdict.as_str())
-                .execute(&mut *tx)
+                .fetch_one(db.write_pool())
                 .await
                 .map_err(|e| query_error(QUERY, e))?;
-                FeedbackOutcome::Recorded
+                Ok(if exists {
+                    FeedbackOutcome::Unchanged
+                } else {
+                    FeedbackOutcome::NoAdvice
+                })
             }
-        };
-        tx.commit().await.map_err(|e| query_error(QUERY, e))?;
-        Ok(outcome)
+        }
     })
     .await
 }

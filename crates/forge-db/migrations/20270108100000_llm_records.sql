@@ -108,6 +108,9 @@ CREATE TABLE forge.llm_advice (
         CHECK (char_length(deep_review) BETWEEN 1 AND 2000),
     dropped_findings integer NOT NULL DEFAULT 0 CONSTRAINT llm_advice_dropped
         CHECK (dropped_findings >= 0),
+    -- the summary was withheld (it stated a verdict) or findings were
+    -- dropped for their evidence: shown as less trustworthy
+    degraded         boolean NOT NULL DEFAULT false,
     input_class      text NOT NULL CONSTRAINT llm_advice_input_class
         CHECK (input_class IN ('public', 'internal', 'confidential')),
     model            text NOT NULL CONSTRAINT llm_advice_model
@@ -156,6 +159,7 @@ BEGIN
        OR NEW.findings IS DISTINCT FROM OLD.findings
        OR NEW.deep_review IS DISTINCT FROM OLD.deep_review
        OR NEW.dropped_findings IS DISTINCT FROM OLD.dropped_findings
+       OR NEW.degraded IS DISTINCT FROM OLD.degraded
        OR NEW.input_class IS DISTINCT FROM OLD.input_class
        OR NEW.model IS DISTINCT FROM OLD.model
        OR NEW.prompt_version IS DISTINCT FROM OLD.prompt_version
@@ -164,6 +168,19 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = 'XF001',
             MESSAGE = 'an advice on forge.llm_advice never changes but for superseded_by (its input_class is never lowered)';
     END IF;
+    -- superseded_by is set once, to a newer advice of the same subject and
+    -- purpose (or cleared by its FK when that advice is deleted).
+    IF NEW.superseded_by IS DISTINCT FROM OLD.superseded_by AND NEW.superseded_by IS NOT NULL
+       AND (OLD.superseded_by IS NOT NULL
+            OR NEW.superseded_by <= NEW.id
+            OR NOT EXISTS (SELECT 1 FROM forge.llm_advice s
+                            WHERE s.id = NEW.superseded_by
+                              AND s.subject_kind = NEW.subject_kind
+                              AND s.subject_id IS NOT DISTINCT FROM NEW.subject_id
+                              AND s.purpose = NEW.purpose)) THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'an advice on forge.llm_advice is superseded once, by a newer advice of its subject and purpose';
+    END IF;
     RETURN NEW;
 END
 $$;
@@ -171,6 +188,50 @@ REVOKE ALL ON FUNCTION forge.llm_advice_guard() FROM PUBLIC;
 CREATE TRIGGER llm_advice_guarded BEFORE INSERT OR UPDATE ON forge.llm_advice
     FOR EACH ROW EXECUTE FUNCTION forge.llm_advice_guard();
 ALTER TABLE forge.llm_advice ENABLE ALWAYS TRIGGER llm_advice_guarded;
+
+-- A request's identity never changes; its state only moves forward
+-- (queued -> running -> succeeded | failed | abandoned, queued -> an end);
+-- an ended request never changes.
+CREATE FUNCTION forge.llm_requests_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.purpose IS DISTINCT FROM OLD.purpose
+       OR NEW.priority IS DISTINCT FROM OLD.priority
+       OR NEW.subject_kind IS DISTINCT FROM OLD.subject_kind
+       OR NEW.subject_id IS DISTINCT FROM OLD.subject_id
+       OR NEW.project_id IS DISTINCT FROM OLD.project_id
+       OR NEW.requested_by IS DISTINCT FROM OLD.requested_by
+       OR NEW.model IS DISTINCT FROM OLD.model
+       OR NEW.model_digest IS DISTINCT FROM OLD.model_digest
+       OR NEW.prompt_id IS DISTINCT FROM OLD.prompt_id
+       OR NEW.prompt_version IS DISTINCT FROM OLD.prompt_version
+       OR NEW.input_sha256 IS DISTINCT FROM OLD.input_sha256
+       OR NEW.input_class IS DISTINCT FROM OLD.input_class
+       OR NEW.request_id IS DISTINCT FROM OLD.request_id
+       OR NEW.queued_at IS DISTINCT FROM OLD.queued_at THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'the identity of a request on forge.llm_requests never changes';
+    END IF;
+    IF OLD.state IN ('succeeded', 'failed', 'abandoned') AND NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'an ended request on forge.llm_requests never changes';
+    END IF;
+    IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
+           (OLD.state = 'queued' AND NEW.state IN ('running', 'succeeded', 'failed', 'abandoned'))
+           OR (OLD.state = 'running' AND NEW.state IN ('succeeded', 'failed', 'abandoned'))) THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'a request on forge.llm_requests only moves forward';
+    END IF;
+    RETURN NEW;
+END
+$$;
+REVOKE ALL ON FUNCTION forge.llm_requests_guard() FROM PUBLIC;
+CREATE TRIGGER llm_requests_forward BEFORE UPDATE ON forge.llm_requests
+    FOR EACH ROW EXECUTE FUNCTION forge.llm_requests_guard();
+ALTER TABLE forge.llm_requests ENABLE ALWAYS TRIGGER llm_requests_forward;
 
 CREATE TABLE forge.llm_advice_feedback (
     id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -193,6 +254,31 @@ CREATE UNIQUE INDEX llm_advice_feedback_one ON forge.llm_advice_feedback
 CREATE INDEX llm_advice_feedback_user ON forge.llm_advice_feedback (user_id);
 CREATE INDEX llm_advice_feedback_purpose ON forge.llm_advice_feedback (purpose, created_at);
 
+-- A verdict row keeps its identity: only verdict and updated_at change
+-- (and advice_id becomes NULL when the sweep deletes its advice).
+CREATE FUNCTION forge.llm_advice_feedback_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.purpose IS DISTINCT FROM OLD.purpose
+       OR NEW.input_class IS DISTINCT FROM OLD.input_class
+       OR NEW.finding_index IS DISTINCT FROM OLD.finding_index
+       OR NEW.user_id IS DISTINCT FROM OLD.user_id
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+       OR (NEW.advice_id IS DISTINCT FROM OLD.advice_id AND NEW.advice_id IS NOT NULL) THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'a verdict on forge.llm_advice_feedback changes only its verdict';
+    END IF;
+    RETURN NEW;
+END
+$$;
+REVOKE ALL ON FUNCTION forge.llm_advice_feedback_guard() FROM PUBLIC;
+CREATE TRIGGER llm_advice_feedback_identity BEFORE UPDATE ON forge.llm_advice_feedback
+    FOR EACH ROW EXECUTE FUNCTION forge.llm_advice_feedback_guard();
+ALTER TABLE forge.llm_advice_feedback ENABLE ALWAYS TRIGGER llm_advice_feedback_identity;
+
 CREATE TABLE forge.project_llm (
     project_id bigint PRIMARY KEY REFERENCES forge.projects (id),
     review     text NOT NULL CONSTRAINT project_llm_review
@@ -213,9 +299,13 @@ GRANT SELECT ON forge.project_llm TO forge_ro;
 
 INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
     ('function', 'forge.llm_advice_guard()'),
-    ('trigger', 'llm_advice_guarded on forge.llm_advice')
+    ('trigger', 'llm_advice_guarded on forge.llm_advice'),
+    ('function', 'forge.llm_requests_guard()'),
+    ('trigger', 'llm_requests_forward on forge.llm_requests'),
+    ('function', 'forge.llm_advice_feedback_guard()'),
+    ('trigger', 'llm_advice_feedback_identity on forge.llm_advice_feedback')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20270108100000, "guarded_changes": ["forge.llm_advice_guard", "forge.llm_advice.llm_advice_guarded"]}');
+    '{"version": 20270108100000, "guarded_changes": ["forge.llm_advice_guard", "forge.llm_advice.llm_advice_guarded", "forge.llm_requests_guard", "forge.llm_requests.llm_requests_forward", "forge.llm_advice_feedback_guard", "forge.llm_advice_feedback.llm_advice_feedback_identity"]}');

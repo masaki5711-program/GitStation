@@ -120,6 +120,25 @@ impl PreparedInput {
     }
 }
 
+/// `meta` with control characters as `?` and at most 300 characters; and
+/// how many characters were replaced.
+fn inert_meta(meta: &str) -> (String, usize) {
+    let mut n = 0;
+    let out = meta
+        .chars()
+        .take(300)
+        .map(|c| {
+            if c.is_control() {
+                n += 1;
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect();
+    (out, n)
+}
+
 fn refused(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::LlmInputRefused).with_context("reason", reason)
 }
@@ -133,6 +152,17 @@ pub fn prepare(parts: Vec<InputPart>, limits: &InputLimits) -> Result<PreparedIn
     let mut out = Vec::with_capacity(parts.len());
     let mut chars = 0usize;
     for mut part in parts {
+        // The label and path go into the BEGIN line, outside the data: a
+        // control character (a newline in a git path) could start a line
+        // of its own there, so each one becomes `?` (counted).
+        let (label, m) = inert_meta(&part.label);
+        redactions += m;
+        part.label = label;
+        if let Some(path) = part.path.take() {
+            let (path, m) = inert_meta(&path);
+            redactions += m;
+            part.path = Some(path);
+        }
         let (text, n) = redact(&part.text)
             .map_err(|reason| refused(reason).with_context("label", &part.label))?;
         redactions += n;
@@ -263,23 +293,44 @@ fn redact_pem(text: &str) -> Result<(String, usize), &'static str> {
 /// `name = "value"` / `name: value` with a secret-looking name: the value.
 /// A call or an expression (`password = read()`) is code, not a value.
 fn redact_assignment(line: &str) -> (String, usize) {
-    let lower = line.to_ascii_lowercase();
-    let Some(name_end) = SECRET_NAMES
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    let mut n = 0;
+    // Every assignment of the line, left to right (bounded: each step
+    // consumes at least one secret name).
+    for _ in 0..256 {
+        match assignment_step(rest) {
+            Some((done, remaining, redacted)) => {
+                out.push_str(&done);
+                n += usize::from(redacted);
+                rest = remaining;
+            }
+            None => break,
+        }
+    }
+    out.push_str(rest);
+    (out, n)
+}
+
+/// The first secret-looking name of `seg`: the text up to it (its value
+/// redacted when it is an assigned literal), what follows, and whether a
+/// value was redacted. `None`: no such name.
+fn assignment_step(seg: &str) -> Option<(String, &str, bool)> {
+    let lower = seg.to_ascii_lowercase();
+    let name_end = SECRET_NAMES
         .iter()
         .filter_map(|name| lower.find(name).map(|i| i + name.len()))
-        .min()
-    else {
-        return (line.to_owned(), 0);
-    };
+        .min()?;
+    let skip = || Some((seg[..name_end].to_owned(), &seg[name_end..], false));
     // The rest of the name (`password_file`), then `=` or `:`.
-    let after_name = &line[name_end..];
+    let after_name = &seg[name_end..];
     let name_tail = after_name
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .unwrap_or(after_name.len());
     let after = &after_name[name_tail..];
     let trimmed = after.trim_start_matches([' ', '\t', '"', '\'']);
     let Some(value) = trimmed.strip_prefix(['=', ':']) else {
-        return (line.to_owned(), 0);
+        return skip();
     };
     let value_trim = value.trim_start();
     let quoted = value_trim.starts_with(['"', '\'']);
@@ -297,14 +348,13 @@ fn redact_assignment(line: &str) -> (String, usize) {
         candidate.len() >= 8
     };
     if is_code || !long_enough {
-        return (line.to_owned(), 0);
+        return skip();
     }
-    let start = line.len() - body.len();
-    let mut out = String::with_capacity(line.len());
-    out.push_str(&line[..start]);
+    let start = seg.len() - body.len();
+    let mut out = String::with_capacity(start + 26);
+    out.push_str(&seg[..start]);
     out.push_str("[REDACTED:assigned_secret]");
-    out.push_str(&body[len..]);
-    (out, 1)
+    Some((out, &body[len..], true))
 }
 
 fn word_char(c: char) -> bool {

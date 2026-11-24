@@ -188,6 +188,7 @@ async fn an_advice_is_written_and_its_class_kept() {
     let rows = records.advice.lock().expect("lock");
     assert_eq!(rows[0].input_class, InputClass::Confidential);
     assert_eq!(rows[0].dropped_findings, 1);
+    assert!(rows[0].degraded, "a finding was dropped for its evidence");
     assert_eq!(rows[0].findings[0]["severity"], "high");
     let requests = records.requests.lock().expect("lock");
     // Only the hash of the input is recorded.

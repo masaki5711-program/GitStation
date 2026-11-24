@@ -72,6 +72,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.deployments_guard()",
     // ── Plan 19 L5-2: an advice keeps its class; only superseded_by changes (20270108100000) ──
     "forge.llm_advice_guard()",
+    "forge.llm_requests_guard()",
+    "forge.llm_advice_feedback_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -84,6 +86,19 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "llm_advice_guarded",
         "CREATE TRIGGER llm_advice_guarded BEFORE INSERT OR UPDATE ON forge.llm_advice \
          FOR EACH ROW EXECUTE FUNCTION forge.llm_advice_guard()",
+    ),
+    (
+        "llm_requests",
+        "llm_requests_forward",
+        "CREATE TRIGGER llm_requests_forward BEFORE UPDATE ON forge.llm_requests \
+         FOR EACH ROW EXECUTE FUNCTION forge.llm_requests_guard()",
+    ),
+    (
+        "llm_advice_feedback",
+        "llm_advice_feedback_identity",
+        "CREATE TRIGGER llm_advice_feedback_identity BEFORE UPDATE ON \
+         forge.llm_advice_feedback FOR EACH ROW EXECUTE FUNCTION \
+         forge.llm_advice_feedback_guard()",
     ),
     // ── M4 C11: a deployment only moves forward (20261214100000) ──
     (

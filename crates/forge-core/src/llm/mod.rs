@@ -28,7 +28,9 @@ pub mod output;
 pub mod provider;
 
 pub use input::{prepare, InputLimits, InputPart, PreparedInput};
-pub use output::{check_output, Advice, DeepReview, Finding, FindingSeverity, OutputPolicy};
+pub use output::{
+    check_output, Advice, DeepReview, Finding, FindingSeverity, OutputPolicy, WITHHELD_SUMMARY,
+};
 pub use provider::{generate_checked, ChatFuture, ChatReply, ChatRequest, Generated, LlmProvider};
 
 /// The most findings one advice keeps (plan 19 §3.1, §4).

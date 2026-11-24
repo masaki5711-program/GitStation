@@ -451,9 +451,14 @@ async fn gpu_eval_claim_waits_at_most_10_min() {
         .expect("complete");
     // A second bench: a stale interactive row (a dead worker's) holds nothing.
     w.t.exec_superuser(&format!(
-        "UPDATE forge.llm_requests SET queued_at = now() - interval '20 minutes' WHERE id = {live}"
+        "UPDATE forge.llm_requests SET state = 'abandoned', error_code = 'FG-SYS-0001', \
+           finished_at = now() WHERE id = {live}"
     ))
     .await;
+    sqlx::query_scalar::<_, i64>(&interactive("20 minutes"))
+        .fetch_one(&mut w.t.superuser().await)
+        .await
+        .expect("a stale interactive row");
     w.pipeline('c', false, vec![job("bench", &[], &["gpu-eval"], &[])])
         .await;
     assert!(lease::claim_with(&w.t.db, gpu, &policy)

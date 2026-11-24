@@ -105,6 +105,8 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "integration_bindings_resolving_alone",
             "deployments_guard",
             "llm_advice_guard",
+            "llm_requests_guard",
+            "llm_advice_feedback_guard",
         ]
     );
 }

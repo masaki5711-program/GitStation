@@ -83,10 +83,61 @@ fn advice(w: &World, request: Option<i64>, class: InputClass) -> NewAdvice {
         ]),
         deep_review: None,
         dropped_findings: 0,
+        degraded: false,
         input_class: class,
         model: "qwen3:27b".to_owned(),
         prompt_version: 1,
     }
+}
+
+const PERSON: Reader = Reader {
+    is_agent: false,
+    can_read_subject: true,
+};
+const AGENT: Reader = Reader {
+    is_agent: true,
+    can_read_subject: true,
+};
+
+/// A request queued `age` ago, in `state` (as written then).
+async fn old_request(w: &World, age: &str, state: &str) -> i64 {
+    let ended = if matches!(state, "succeeded" | "failed" | "abandoned") {
+        format!("now() - interval '{age}'")
+    } else {
+        "NULL".to_owned()
+    };
+    let code = if state == "succeeded" || state == "running" {
+        "NULL"
+    } else {
+        "'FG-SYS-0001'"
+    };
+    sqlx::query_scalar(&format!(
+        "INSERT INTO forge.llm_requests (purpose, priority, subject_kind, subject_id, project_id, \
+           model, prompt_id, prompt_version, input_sha256, input_class, request_id, state, \
+           error_code, queued_at, started_at, finished_at) \
+         VALUES ('mr_review', 'review', 'merge_request', 7, $1, 'qwen3:27b', 'mr_review', 1, \
+           repeat('b', 64), 'internal', 'req-llm-old', '{state}', {code}, \
+           now() - interval '{age}', now() - interval '{age}', {ended}) RETURNING id"
+    ))
+    .bind(w.web.project_id.get())
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("old request")
+}
+
+fn shown(view: Option<AdviceView>) -> StoredAdvice {
+    match view {
+        Some(AdviceView::Shown(a)) => *a,
+        other => panic!("not shown: {other:?}"),
+    }
+}
+
+#[test]
+fn a_stale_live_row_is_older_than_any_live_request() {
+    // The longest deadline plus the longest checked call (two attempts of
+    // llm.timeout_ms ≤ 600 s, and 5 s).
+    let longest = Priority::Batch.deadline().as_secs() + 2 * 600 + 5;
+    assert!(u64::try_from(STALE_LIVE_SECS).unwrap_or(0) > longest);
 }
 
 #[tokio::test]
@@ -127,13 +178,17 @@ async fn a_request_moves_forward_and_records_its_code() {
     // running worker's (younger) rows stay.
     let mut interactive = request(&w, InputClass::Internal);
     interactive.priority = Priority::Interactive;
-    let live = insert_request(&w.t.db, &interactive).await.expect("queued");
+    let live = old_request(&w, "8 hours", "running").await;
     let young = insert_request(&w.t.db, &interactive).await.expect("queued");
     assert!(interactive_active(&w.t.db).await.expect("active"));
-    w.t.exec_superuser(&format!(
-        "UPDATE forge.llm_requests SET queued_at = now() - interval '8 hours' WHERE id = {live}"
-    ))
+    // The identity of a request (its queue time too) never changes.
+    let moved = sqlx::query(
+        "UPDATE forge.llm_requests SET queued_at = now() - interval '1 day' WHERE id = $1",
+    )
+    .bind(young)
+    .execute(&mut w.t.superuser().await)
     .await;
+    assert!(moved.is_err(), "the guard keeps queued_at");
     assert_eq!(
         abandon_stale(&w.t.db, ErrorCode::Internal, STALE_LIVE_SECS)
             .await
@@ -172,11 +227,28 @@ async fn advice_keeps_input_class() {
     let id = insert_advice(&w.t.db, &advice(&w, Some(req), InputClass::Confidential))
         .await
         .expect("kept");
-    let stored = super::advice(&w.t.db, id)
-        .await
-        .expect("read")
-        .expect("there");
+    let stored = shown(super::advice(&w.t.db, id, PERSON).await.expect("read"));
     assert_eq!(stored.input_class, InputClass::Confidential);
+    // An agent learns only that it exists; a reader of another subject
+    // learns nothing; an agent cannot vote.
+    assert_eq!(
+        super::advice(&w.t.db, id, AGENT).await.expect("read"),
+        Some(AdviceView::Withheld {
+            id,
+            input_class: InputClass::Confidential
+        })
+    );
+    let outsider = Reader {
+        is_agent: false,
+        can_read_subject: false,
+    };
+    assert_eq!(super::advice(&w.t.db, id, outsider).await.expect("read"), None);
+    assert_eq!(
+        record_feedback(&w.t.db, id, None, w.alice, AGENT, Verdict::Useful)
+            .await
+            .expect("refused"),
+        FeedbackOutcome::NotAllowed
+    );
     // Never lowered afterwards, even by hand.
     let mut su = w.t.superuser().await;
     let lowered = sqlx::query("UPDATE forge.llm_advice SET input_class = 'internal' WHERE id = $1")
@@ -188,11 +260,16 @@ async fn advice_keeps_input_class() {
     let newer = insert_advice(&w.t.db, &advice(&w, None, InputClass::Confidential))
         .await
         .expect("newer");
-    let stored = super::advice(&w.t.db, id)
-        .await
-        .expect("read")
-        .expect("there");
+    let stored = shown(super::advice(&w.t.db, id, PERSON).await.expect("read"));
     assert_eq!(stored.superseded_by, Some(newer));
+    // Superseded once, by a newer advice of its subject only.
+    let mut su = w.t.superuser().await;
+    let again = sqlx::query("UPDATE forge.llm_advice SET superseded_by = $1 WHERE id = $2")
+        .bind(id)
+        .bind(newer)
+        .execute(&mut su)
+        .await;
+    assert!(again.is_err(), "an older advice never supersedes a newer one");
 }
 
 #[tokio::test]
@@ -241,19 +318,19 @@ async fn feedback_one_per_user_and_finding() {
         .expect("advice");
     let db = &w.t.db;
     assert_eq!(
-        record_feedback(db, id, Some(0), w.alice, Verdict::Useful)
+        record_feedback(db, id, Some(0), w.alice, PERSON, Verdict::Useful)
             .await
             .expect("first"),
         FeedbackOutcome::Recorded
     );
     assert_eq!(
-        record_feedback(db, id, Some(0), w.alice, Verdict::Useful)
+        record_feedback(db, id, Some(0), w.alice, PERSON, Verdict::Useful)
             .await
             .expect("again"),
         FeedbackOutcome::Unchanged
     );
     assert_eq!(
-        record_feedback(db, id, Some(0), w.alice, Verdict::Wrong)
+        record_feedback(db, id, Some(0), w.alice, PERSON, Verdict::Wrong)
             .await
             .expect("changed"),
         FeedbackOutcome::Changed
@@ -261,7 +338,7 @@ async fn feedback_one_per_user_and_finding() {
     // Another finding, another person, the advice as a whole: their own rows.
     for (finding, user) in [(Some(1), w.alice), (Some(0), w.bob), (None, w.alice)] {
         assert_eq!(
-            record_feedback(db, id, finding, user, Verdict::Useful)
+            record_feedback(db, id, finding, user, PERSON, Verdict::Useful)
                 .await
                 .expect("own row"),
             FeedbackOutcome::Recorded
@@ -269,13 +346,13 @@ async fn feedback_one_per_user_and_finding() {
     }
     // A finding the advice does not have, an advice that does not exist.
     assert_eq!(
-        record_feedback(db, id, Some(2), w.alice, Verdict::Useful)
+        record_feedback(db, id, Some(2), w.alice, PERSON, Verdict::Useful)
             .await
             .expect("none"),
         FeedbackOutcome::NoAdvice
     );
     assert_eq!(
-        record_feedback(db, id + 1000, None, w.alice, Verdict::Useful)
+        record_feedback(db, id + 1000, None, w.alice, PERSON, Verdict::Useful)
             .await
             .expect("none"),
         FeedbackOutcome::NoAdvice
@@ -302,12 +379,9 @@ async fn feedback_one_per_user_and_finding() {
 #[tokio::test]
 async fn retention_sweep_keeps_feedback() {
     let w = world().await;
-    let req = insert_request(&w.t.db, &request(&w, InputClass::Internal))
-        .await
-        .expect("queued");
-    finish(&w.t.db, req, Ending::Succeeded, Usage::default())
-        .await
-        .expect("done");
+    // A request that ended 91 days ago (written as it was then: the guard
+    // keeps its identity and its end).
+    let req = old_request(&w, "91 days", "succeeded").await;
     // An advice of 181 days ago (written as it was then: the guard lets
     // only superseded_by change afterwards).
     let old: i64 = sqlx::query_scalar(
@@ -322,7 +396,7 @@ async fn retention_sweep_keeps_feedback() {
     .fetch_one(&mut w.t.superuser().await)
     .await
     .expect("old advice");
-    record_feedback(&w.t.db, old, Some(0), w.alice, Verdict::Wrong)
+    record_feedback(&w.t.db, old, Some(0), w.alice, PERSON, Verdict::Wrong)
         .await
         .expect("feedback");
     // A fresh request and advice stay.
@@ -332,11 +406,6 @@ async fn retention_sweep_keeps_feedback() {
     let mut a = advice(&w, None, InputClass::Internal);
     a.subject_id = Some(8);
     let fresh = insert_advice(&w.t.db, &a).await.expect("fresh advice");
-    w.t.exec_superuser(&format!(
-        "UPDATE forge.llm_requests SET queued_at = now() - interval '91 days', \
-           finished_at = now() - interval '91 days' WHERE id = {req}"
-    ))
-    .await;
     let swept = sweep_retention(&w.t.db).await.expect("swept");
     assert_eq!(
         swept,
@@ -345,8 +414,8 @@ async fn retention_sweep_keeps_feedback() {
             requests: 1
         }
     );
-    assert!(super::advice(&w.t.db, old).await.expect("read").is_none());
-    assert!(super::advice(&w.t.db, fresh).await.expect("read").is_some());
+    assert!(super::advice(&w.t.db, old, PERSON).await.expect("read").is_none());
+    assert!(super::advice(&w.t.db, fresh, PERSON).await.expect("read").is_some());
     let rows = w
         .t
         .json_rows("SELECT advice_id, purpose, verdict FROM forge.llm_advice_feedback ORDER BY id")
