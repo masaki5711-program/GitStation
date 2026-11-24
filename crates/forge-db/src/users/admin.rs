@@ -373,7 +373,8 @@ pub async fn administration(db: &Db) -> Result<Option<Administration>, ForgeErro
             sqlx::query_as(
                 "WITH counts AS ( \
                      SELECT pg_catalog.count(*) AS users, pg_catalog.count(*) FILTER \
-                         (WHERE kind = 'human' AND state = 'active' AND is_admin) AS admins \
+                         (WHERE kind = 'human' AND state = 'active' AND is_admin \
+                          AND admin_source = 'cli') AS admins \
                      FROM forge.users), \
                  ownerless AS ( \
                      SELECT g.id FROM forge.groups g \

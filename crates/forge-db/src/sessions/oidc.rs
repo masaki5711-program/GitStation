@@ -157,6 +157,10 @@ pub struct Refreshed<'a> {
     /// or with `claims_source = access_token` a verified access token):
     /// `access_role_seen_at = now()`.
     pub role_confirmed: bool,
+    /// The verified token held `auth.oidc.admin_role` (configured):
+    /// `admin_role_seen_at = now()`. Never on a role that was not read
+    /// (ADR-0021 amendment 2026-11-24).
+    pub admin_role_confirmed: bool,
 }
 
 /// Store a refresh the check allowed: the new sealed tokens;
@@ -182,6 +186,7 @@ pub async fn store_refreshed(
                  refresh_token_enc = COALESCE($2, refresh_token_enc), \
                  id_token_enc = COALESCE($3, id_token_enc), \
                  access_role_seen_at = CASE WHEN $5 THEN now() ELSE access_role_seen_at END, \
+                 admin_role_seen_at = CASE WHEN $6 THEN now() ELSE admin_role_seen_at END, \
                  refresh_without_id_token = CASE WHEN $4 THEN 0 \
                      ELSE LEAST(refresh_without_id_token + 1, 1000) END \
                  WHERE id = $1 AND revoked_at IS NULL",
@@ -191,6 +196,7 @@ pub async fn store_refreshed(
             .bind(refreshed.id_token_enc)
             .bind(with_id_token)
             .bind(refreshed.role_confirmed)
+            .bind(refreshed.admin_role_confirmed)
             .execute(&mut *conn)
             .await
             .map_err(|e| query_error("sessions.store_refreshed.update", e))

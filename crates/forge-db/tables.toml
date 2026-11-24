@@ -268,6 +268,7 @@ ro_columns = [
     "id", "public_id", "user_id", "created_at", "last_seen_at", "idle_expires_at",
     "absolute_expires_at", "revoked_at", "revoked_reason", "oidc_issuer", "oidc_sid",
     "refresh_checked_at", "access_role_seen_at", "refresh_without_id_token",
+    "admin_role_seen_at",
 ]
 # session.created / session.revoked (and user.disabled) are audited on the user.
 audit_resource = "user"
@@ -278,6 +279,8 @@ unaudited_columns = [
     "refresh_checked_at", "access_role_seen_at",
     # M2 MR5: refreshes in a row without an ID token (ADR-0021 §7).
     "refresh_without_id_token",
+    # ADR-0021 amendment 2026-11-24: the admin role last seen (20270109100100).
+    "admin_role_seen_at",
 ]
 txn_audited_columns = []
 

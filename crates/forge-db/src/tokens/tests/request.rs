@@ -135,6 +135,8 @@ async fn admin_scope_for_a_non_admin_owner_is_refused() {
 async fn an_idp_granted_admin_gets_no_admin_token() {
     let t = FreshDb::migrated().await;
     let root = human(&t, "root", true).await;
+    // A second break-glass administrator: root may be handed to the role.
+    let _keeper = human(&t, "keeper", true).await;
     let early = issue_ok(&t, "req-idp-tok-0", root, &[Scope::Api, Scope::Admin]).await;
     users::set_admin_source(
         &t.db,

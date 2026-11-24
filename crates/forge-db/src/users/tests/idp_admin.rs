@@ -164,6 +164,8 @@ async fn a_cli_admin_keeps_the_flag_and_bots_never_gain_it() {
 async fn the_cli_switches_who_manages_an_administrator() {
     let t = FreshDb::migrated().await;
     let root = account(&t, "root", UserKind::Human, true).await;
+    // A second break-glass administrator: root may be handed to the role.
+    let _keeper = account(&t, "keeper", UserKind::Human, true).await;
     let alice = account(&t, "alice", UserKind::Human, false).await;
     let done = set_admin_source(&t.db, &ctx("req-src-oidc"), root, AdminSource::Oidc)
         .await
@@ -297,6 +299,7 @@ async fn a_session_counts_the_role_flag_only_while_the_role_is_confirmed() {
                 sid: None,
                 refresh_token_enc: Some(vec![1, 2, 3]),
                 id_token_enc: None,
+                admin_role_confirmed: true,
             }),
         },
     )
@@ -322,7 +325,7 @@ async fn a_session_counts_the_role_flag_only_while_the_role_is_confirmed() {
         .await
         .expect("now"));
     t.exec_superuser(&format!(
-        "UPDATE forge.web_sessions SET access_role_seen_at = now() - interval '{} seconds' \
+        "UPDATE forge.web_sessions SET admin_role_seen_at = now() - interval '{} seconds' \
          WHERE id = {}",
         crate::sessions::ADMIN_CONFIRM_SECS + 1,
         fresh.session_id
@@ -383,5 +386,44 @@ async fn the_administration_guards_count_only_cli_admins() {
         .await
         .expect("an IdP administrator is no break-glass");
     assert_eq!(outcome, DisableOutcome::Disabled);
+    t.drop_now().await;
+}
+
+/// Third review LOW: the last break-glass administrator is never handed to
+/// the identity provider's role (`last_admin`, nothing written); the
+/// doctor's `no_admin` counts break-glass administrators only.
+#[tokio::test]
+async fn the_last_cli_admin_stays_with_the_cli() {
+    let t = FreshDb::migrated().await;
+    let root = account(&t, "root", UserKind::Human, true).await;
+    let idp = account(&t, "idp", UserKind::Human, false).await;
+    sync_idp_admin(&t.db, &ctx("req-last-grant"), idp, true)
+        .await
+        .expect("granted");
+    let err = set_admin_source(&t.db, &ctx("req-last-src"), root, AdminSource::Oidc)
+        .await
+        .expect_err("the last break-glass administrator");
+    assert_eq!(err.code(), ErrorCode::AdministrationConflict);
+    assert!(err.to_string().contains("reason=last_admin"), "{err}");
+    let mut su = t.superuser().await;
+    assert!(audit_rows(&mut su, "req-last-src").await.is_empty());
+    assert_eq!(flags(&mut su, root).await, (true, "cli".to_owned()));
+    let seen = administration(&t.db)
+        .await
+        .expect("administration")
+        .expect("migrated");
+    assert_eq!(seen.active_human_admins, 1, "root only, not the IdP's");
+    let _ = disable_with(&t.db, &ctx("req-last-force"), root, Guard::Force)
+        .await
+        .expect("forced");
+    let seen = administration(&t.db)
+        .await
+        .expect("administration")
+        .expect("migrated");
+    assert_eq!(seen.active_human_admins, 0);
+    assert!(
+        seen.check().is_err(),
+        "no_admin although an IdP administrator is active"
+    );
     t.drop_now().await;
 }

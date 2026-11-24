@@ -134,10 +134,7 @@ impl PortalWidgets {
             is_admin: menu_admin(
                 user.is_admin,
                 user.admin_from_idp,
-                oidc.settings
-                    .admin_role
-                    .as_deref()
-                    .is_some_and(|role| oidc.has_client_role(&claims.claims, role)),
+                oidc.admin_role_held(&claims.claims),
             ),
         })
     }

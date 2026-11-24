@@ -75,6 +75,10 @@ pub struct OidcSession {
     pub refresh_token_enc: Option<Vec<u8>>,
     /// The sealed ID token (purpose `id-token`).
     pub id_token_enc: Option<Vec<u8>>,
+    /// The sign-in's verified token held `auth.oidc.admin_role` (the
+    /// setting is configured): `admin_role_seen_at = now()` (ADR-0021
+    /// amendment 2026-11-24).
+    pub admin_role_confirmed: bool,
 }
 
 /// The request to issue a session.
@@ -209,11 +213,13 @@ pub async fn issue_with_token(
                 sqlx::query_as(concat!(
                     "INSERT INTO forge.web_sessions (public_id, secret_sha256, user_id, \
                      idle_expires_at, absolute_expires_at, oidc_issuer, oidc_sid, oidc_sub, \
-                     refresh_token_enc, id_token_enc, refresh_checked_at, access_role_seen_at) \
+                     refresh_token_enc, id_token_enc, refresh_checked_at, access_role_seen_at, \
+                     admin_role_seen_at) \
                      VALUES ($1, $2, $3, now() + make_interval(secs => $4), \
                      now() + make_interval(secs => $5), $6, $7, $8, $9, $10, \
                      CASE WHEN $6::text IS NULL THEN NULL ELSE now() END, \
-                     CASE WHEN $6::text IS NULL THEN NULL ELSE now() END) \
+                     CASE WHEN $6::text IS NULL THEN NULL ELSE now() END, \
+                     CASE WHEN $11 THEN now() END) \
                      RETURNING id, ",
                     utc!("idle_expires_at"),
                     ", ",
@@ -229,6 +235,7 @@ pub async fn issue_with_token(
                 .bind(oidc.map(|o| o.subject.as_str()))
                 .bind(oidc.and_then(|o| o.refresh_token_enc.as_deref()))
                 .bind(oidc.and_then(|o| o.id_token_enc.as_deref()))
+                .bind(oidc.is_some_and(|o| o.admin_role_confirmed))
                 .fetch_one(c)
                 .await
                 .map_err(|e| query_error("sessions.issue.insert", e))

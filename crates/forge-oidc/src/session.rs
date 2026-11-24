@@ -426,6 +426,11 @@ impl Oidc {
                     OidcClaimsSource::IdToken => sealed_id.is_some(),
                     OidcClaimsSource::AccessToken => true,
                 },
+                // Only a verified token that holds the configured admin
+                // role confirms an IdP-granted administrator flag.
+                admin_role_confirmed: role_source
+                    .as_ref()
+                    .is_some_and(|claims| self.admin_role_held(claims)),
             },
         )
         .await?;

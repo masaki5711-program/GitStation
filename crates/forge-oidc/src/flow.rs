@@ -469,6 +469,7 @@ impl Oidc {
                 sid: claims.sid.clone(),
                 refresh_token_enc,
                 id_token_enc,
+                admin_role_confirmed: self.admin_role_held(source),
             }),
         };
         let issued = sessions::issue_with_token(&self.db, &ctx, &new, token).await?;
@@ -684,6 +685,16 @@ impl Oidc {
     /// `resource_access.<client_id>.roles` holds `auth.oidc.access_role`.
     pub(crate) fn has_access_role(&self, claims: &Value) -> bool {
         self.has_client_role(claims, &self.settings.access_role)
+    }
+
+    /// `auth.oidc.admin_role` is configured and `claims` (a verified
+    /// token's) hold it: what confirms an IdP-granted administrator flag
+    /// for a session (ADR-0021 amendment 2026-11-24).
+    pub(crate) fn admin_role_held(&self, claims: &Value) -> bool {
+        self.settings
+            .admin_role
+            .as_deref()
+            .is_some_and(|role| self.has_client_role(claims, role))
     }
 
     /// `resource_access.<client_id>.roles` holds `role`.

@@ -205,7 +205,8 @@ pub enum AdminSourceSet {
 /// `user.admin_source_changed` audit row.
 ///
 /// Errors (nothing is written): `FG-AUTH-0009` `not_admin` for a user who
-/// is not an administrator, `not_human`, `user_disabled`; `FG-REPO-0005`
+/// is not an administrator, `not_human`, `user_disabled`, `last_admin`
+/// (`oidc` for the last active human administrator the CLI manages); `FG-REPO-0005`
 /// for an unknown user.
 pub async fn set_admin_source(
     db: &Db,
@@ -245,6 +246,27 @@ pub async fn set_admin_source(
         }
         if facts.source == to {
             return Ok(Settle::Discard(AdminSourceSet::Unchanged));
+        }
+        // Handing the last break-glass administrator to the identity
+        // provider would leave forge administrable only through it: refused
+        // as `users::disable` refuses the last administrator.
+        if to == AdminSource::Oidc {
+            let others: i64 = tx
+                .step(|c| async move {
+                    sqlx::query_scalar(
+                        "SELECT count(*) FROM forge.users WHERE kind = 'human' \
+                         AND state = 'active' AND is_admin AND admin_source = 'cli' \
+                         AND id <> $1",
+                    )
+                    .bind(user.get())
+                    .fetch_one(c)
+                    .await
+                    .map_err(|e| query_error("users.admin_source.cli_count", e))
+                })
+                .await?;
+            if others == 0 {
+                return Err(refuse("last_admin"));
+            }
         }
         tx.step(|c| async move {
             sqlx::query(

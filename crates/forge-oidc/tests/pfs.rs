@@ -663,7 +663,8 @@ async fn an_unconfirmed_role_drops_the_rights_and_an_ended_session_the_flag() {
     // Unreachable for 10 minutes: the session goes on, the rights do not.
     op.set_fault(Endpoint::Token, Some(Fault::Status(503)));
     t.exec_superuser(&format!(
-        "UPDATE forge.web_sessions SET access_role_seen_at = now() - interval '10 minutes' \
+        "UPDATE forge.web_sessions SET access_role_seen_at = now() - interval '10 minutes', \
+         admin_role_seen_at = now() - interval '10 minutes' \
          WHERE public_id = '{}'",
         done.public_id
     ))
@@ -680,5 +681,62 @@ async fn an_unconfirmed_role_drops_the_rights_and_an_ended_session_the_flag() {
         RefreshVerdict::Revoked(SessionRevokeReason::IdpRevoked)
     );
     assert_eq!(admin_flags(&t, done.user).await, (false, "cli".to_owned()));
+    t.drop_now().await;
+}
+
+/// Third review MEDIUM (ADR-0021 amendment 2026-11-24): with
+/// `auth.oidc.admin_role` unset nothing confirms the role, so an
+/// administrator flag it granted earlier gives a session no rights — at a
+/// new sign-in, and on an existing session once its last confirmation is
+/// older than `ADMIN_CONFIRM_SECS`, refresh or not. The flag itself stays.
+#[tokio::test]
+async fn with_the_setting_off_an_idp_flag_gives_no_rights() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let with_admin = json!({"resource_access": {"gitstation": {"roles": ["access", "admin"]}}});
+    let granted = sign_in(&pfs_admin(&t, &op), &op, json!({}), with_admin.clone())
+        .await
+        .expect("signed in");
+    assert_eq!(
+        admin_flags(&t, granted.user).await,
+        (true, "oidc".to_owned())
+    );
+    // The operator turns the setting off.
+    let off = pfs(&t, &op);
+    let again = sign_in(&off, &op, json!({}), with_admin.clone())
+        .await
+        .expect("signed in");
+    let read = |token: String| {
+        let db = t.db.clone();
+        async move {
+            forge_db::sessions::authenticate(&db, &rid(), &token, IDLE)
+                .await
+                .expect("authenticated")
+        }
+    };
+    let fresh = read(again.token.reveal()).await;
+    assert!(
+        !fresh.is_admin && fresh.admin_from_idp,
+        "a new sign-in: no rights"
+    );
+    // The earlier session: its confirmation ages out, and a refresh with the
+    // setting off never confirms it again (even with the role in the token).
+    t.exec_superuser(&format!(
+        "UPDATE forge.web_sessions SET admin_role_seen_at = now() - interval '10 minutes' \
+         WHERE public_id = '{}'",
+        granted.public_id
+    ))
+    .await;
+    op.set_refresh_access(with_admin);
+    assert_eq!(
+        due_check(&t, &off, &granted).await,
+        RefreshVerdict::Continue
+    );
+    let old = read(granted.token.reveal()).await;
+    assert!(!old.is_admin, "never confirmed while the setting is off");
+    assert_eq!(
+        admin_flags(&t, granted.user).await,
+        (true, "oidc".to_owned())
+    );
     t.drop_now().await;
 }

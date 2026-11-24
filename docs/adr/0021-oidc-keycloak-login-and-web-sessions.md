@@ -799,3 +799,12 @@ forge-core の設定のテスト。新しいエラーコードは無い（FG-AUT
   リンクは、IdP の旗ならポータルの確かめたトークンにまだロールがあるときだけ（`menu_admin`）。
 - 生の `users.is_admin` を読む残りは、要求の中で `reconfirm` に渡すもの（権利を増やさない）、自動の結び付けの
   `privileged_account`（どの管理者も止める、より厳しい側）、表示（管理者の一覧、doctor の件数）、旗を書く処理だけ。
+
+**三度目のレビューで変えた点（2026-11-24、MEDIUM 1・LOW 2）。**
+
+- MEDIUM: セッションが IdP の旗で管理者の権利を持つ確認は、アクセスのロールの `access_role_seen_at` ではなく、新しい
+  `web_sessions.admin_role_seen_at`（マイグレーション `20270109100100`、監査しない列）で数える。サインインと確認で、
+  `auth.oidc.admin_role` が設定され、確かめたトークンがそのロールを持つときだけ進む。設定を外すと進まないので、
+  `oidc` の旗はどのセッションでも（新しいサインインではすぐ、既存のセッションでは 330 秒以内に）権利にならない。
+- LOW: `forge admin user admin-source --source oidc` は、CLI の管理者が 0 人になるなら FG-AUTH-0009 `last_admin`。
+- LOW: `forge doctor` の `users.administration`（FG-AUTH-0010 `no_admin`）は CLI の管理者だけを数える。
