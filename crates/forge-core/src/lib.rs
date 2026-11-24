@@ -22,6 +22,8 @@ pub mod dedup_key;
 pub mod deploy;
 pub mod discussion;
 pub mod doc_lint_migration;
+// Plan 13 stage 4 part A: document revisions and edit claims.
+pub mod doc_revision;
 // M4 C2: a person's change to a CI pipeline (audit details).
 pub mod event_type;
 pub mod pipeline;

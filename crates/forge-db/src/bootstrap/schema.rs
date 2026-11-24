@@ -1122,6 +1122,9 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             "forge.agent_lesson_injections",
             [dml("forge_app"), ro("agent_lesson_injections")?].concat(),
         ),
+        // ── Plan 13 stage 4 part A: document revisions (20270105100000) ──
+        ("forge.merge_request_documents", operational()),
+        ("forge.document_edit_claims", operational()),
     ])
 }
 
@@ -1364,6 +1367,9 @@ const LATER_TABLES: &[&str] = &[
     "agent_part_files",
     "agent_builds",
     "agent_lesson_injections",
+    // ── Plan 13 stage 4 part A: document revisions (20270105100000) ──
+    "merge_request_documents",
+    "document_edit_claims",
 ];
 
 /// Every table the first migration creates.

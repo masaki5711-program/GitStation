@@ -107,6 +107,23 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Resu
     };
     match cmd {
         DocCommand::Migration { command } => crate::doc_migration::migration(cli, command, env, io),
+        DocCommand::Status { project, id } => {
+            crate::doc_revision::status(cli, *project, id, env, io)
+        }
+        DocCommand::Versions { project, id } => {
+            crate::doc_revision::versions(cli, *project, id, env, io)
+        }
+        DocCommand::Claim {
+            project,
+            id,
+            merge_request,
+        } => crate::doc_revision::claim(cli, *project, id, *merge_request, env, io),
+        DocCommand::Release {
+            project,
+            id,
+            revoke,
+            yes,
+        } => crate::doc_revision::release(cli, *project, id, (*revoke, *yes), env, io),
         DocCommand::Show {
             project,
             id,
