@@ -209,6 +209,21 @@ describe('document references in the text', () => {
     expect(escapeMarkdown('a|b')).toBe('a\\|b');
   });
 
+  it('draws wiki references as text, never a link into this project', () => {
+    const wiki = [
+      ref({ doc: 'WIKI-1', wiki: true, target: 'found', title: 'Wiki page' }),
+      ref({ doc: 'WIKI-2', wiki: true, target: 'unreadable' }),
+      ref({ doc: 'WIKI-3', wiki: true, target: 'no_wiki' }),
+    ];
+    const out = linkRefs('[[wiki:WIKI-1]] [[wiki:WIKI-2]] [[wiki:WIKI-3]] [[WIKI-1]]', wiki as never, words);
+    expect(out).toContain('wiki:WIKI-1 Wiki page');
+    expect(out).toContain('wiki:WIKI-2 \\(more confidential\\)');
+    expect(out).toContain('wiki:WIKI-3 \\(not found\\)');
+    expect(out).not.toContain('/-/doc-ref/WIKI');
+    // A local [[WIKI-1]] is not the wiki's page.
+    expect(out).toContain('\\[\\[WIKI-1\\]\\]');
+  });
+
   it('reads the link target back', () => {
     expect(docRefTarget('-/doc-ref/QP-1')).toEqual({ doc: 'QP-1' });
     expect(docRefTarget('-/doc-ref/URS-1/REQ-2')).toEqual({ doc: 'URS-1', block: 'REQ-2' });

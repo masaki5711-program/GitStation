@@ -7,7 +7,8 @@
 //   taken from the document);
 // - hidden (more confidential than this document): the id and a note — the
 //   server never sent the title, so none can be shown;
-// - broken: the id and a note; external: `repo:ID` as text.
+// - broken: the id and a note; external: `repo:ID` as text;
+// - `[[wiki:ID]]`: `wiki:ID title` as text, or the id and a note.
 //
 // Code fences are left alone. Every piece of text that came from the
 // document is escaped so it cannot become Markdown of its own.
@@ -45,6 +46,20 @@ function rewrite(inner: string, refs: Map<string, DocumentRef>, words: RefWords)
   const label = p.block === null ? p.doc : `${p.doc}#${p.block}`;
   const ref = refs.get(keyOf(p.repo, p.doc, p.block));
   if (ref === undefined) return escapeMarkdown(`[[${inner}]]`);
+  if (ref.wiki) {
+    // `[[wiki:ID]]` (plan 20 W3): a page of the linked wiki, drawn as text
+    // (its screen is another project's); `unreadable` is the id only.
+    const shown = `wiki:${label}`;
+    switch (ref.target) {
+      case 'found':
+        return escapeMarkdown(ref.title ? `${shown} ${ref.title}` : shown);
+      case 'hidden':
+      case 'unreadable':
+        return escapeMarkdown(`${shown} (${words.hidden})`);
+      default:
+        return escapeMarkdown(`${shown} (${words.broken})`);
+    }
+  }
   switch (ref.target) {
     case 'found': {
       const title = ref.title ?? '';
@@ -65,7 +80,7 @@ function rewrite(inner: string, refs: Map<string, DocumentRef>, words: RefWords)
 
 /** `markdown` with each reference drawn as its resolution says. */
 export function linkRefs(markdown: string, refs: DocumentRef[], words: RefWords): string {
-  const byKey = new Map(refs.map((r) => [keyOf(r.repo, r.doc, r.block), r]));
+  const byKey = new Map(refs.map((r) => [keyOf(r.wiki ? 'wiki' : r.repo, r.doc, r.block), r]));
   let fence: string | null = null;
   return markdown
     .split('\n')

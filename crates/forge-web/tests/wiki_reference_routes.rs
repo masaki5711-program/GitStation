@@ -118,6 +118,7 @@ struct World {
     t: FreshDb,
     _home: tempfile::TempDir,
     _root: tempfile::TempDir,
+    storage: StorageRoot,
     router: axum::Router,
     olga: Principal,
     nina: Principal,
@@ -179,6 +180,7 @@ async fn world() -> World {
         t,
         _home: home,
         _root: root,
+        storage,
         router,
         project: web.project_id.get(),
     }
@@ -255,6 +257,13 @@ async fn readable_wiki_ref_resolves_against_the_wiki_tip() {
         refs.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
         vec!["no_wiki", "no_wiki"]
     );
+    // W3 review: `no_wiki` only for who may manage the link (Maintainer);
+    // anyone else reads `unreadable`, as for a wiki they may not read.
+    let (refs, _) = w.refs(&w.nina).await;
+    assert_eq!(
+        refs.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
+        vec!["unreadable", "unreadable"]
+    );
     let wiki = w.create_wiki().await;
     let (refs, _) = w.refs(&w.olga).await;
     assert_eq!(
@@ -322,4 +331,29 @@ async fn unreadable_wiki_ref_shows_id_only() {
     // The owner still sees it.
     let (refs, _) = w.refs(&w.olga).await;
     assert_eq!(refs[0].1, "found");
+}
+
+/// W3 review: a wiki whose git cannot be read never fails the owner's
+/// document — its references show the id only.
+#[tokio::test]
+async fn wiki_git_failure_degrades_to_id_only() {
+    let w = world().await;
+    let wiki = w.create_wiki().await;
+    let repo: i64 = sqlx::query_scalar("SELECT id FROM forge.repositories WHERE project_id = $1")
+        .bind(wiki)
+        .fetch_one(w.t.db.pool().executor())
+        .await
+        .expect("repo");
+    let path = w
+        .storage
+        .existing(forge_core::RepoId::new(repo))
+        .expect("path");
+    std::fs::remove_dir_all(&path).expect("remove");
+    let (refs, whole) = w.refs(&w.olga).await;
+    assert!(
+        refs.iter()
+            .all(|r| matches!(r.1.as_str(), "unreadable" | "broken") && r.2.is_null()),
+        "{refs:?}"
+    );
+    assert!(!whole.contains(WIKI_TITLE), "{whole}");
 }

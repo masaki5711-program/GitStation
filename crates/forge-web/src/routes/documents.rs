@@ -83,7 +83,7 @@ use crate::routes::browse::{
     load_project_lookup, query, rev_body, take, RepositoryOf, RevBody, Target,
 };
 use crate::routes::context::{audience, withheld, Audience, ContextWithheldBody};
-use crate::routes::doc_wiki::{wiki_side, ViewResolver};
+use crate::routes::doc_wiki::{wiki_side, ViewResolver, WikiViewer};
 use crate::routes::projects::PREFIX as PROJECT_PREFIX;
 use crate::routes::specs::{caller_of, charge, respond, revision};
 
@@ -1092,8 +1092,14 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
                 index: &index,
                 tip: &tip,
             };
-            let principal = request.proof().principal();
-            let wiki = wiki_side(&state, principal, &t, caller, &shown.doc).await?;
+            let viewer = WikiViewer {
+                principal: request.proof().principal(),
+                owner: request
+                    .project()
+                    .map(|r| ProjectCtx::new(crate::routes::projects::loaded(r))),
+                request_id: request.ctx().request_id.to_string(),
+            };
+            let wiki = wiki_side(&state, &viewer, &t, caller, &shown.doc).await?;
             let here: &dyn Resolver = if who.is_agent() { &agent_view } else { &index };
             let resolver = ViewResolver {
                 here,
@@ -1351,8 +1357,14 @@ pub async fn block(state: AppState, request: Dispatched<ProjectCtx>) -> Response
             index: &index,
             tip: &tip,
         };
-        let principal = request.proof().principal();
-        let wiki = wiki_side(&state, principal, &t, caller, &shown.doc).await?;
+        let viewer = WikiViewer {
+            principal: request.proof().principal(),
+            owner: request
+                .project()
+                .map(|r| ProjectCtx::new(crate::routes::projects::loaded(r))),
+            request_id: request.ctx().request_id.to_string(),
+        };
+        let wiki = wiki_side(&state, &viewer, &t, caller, &shown.doc).await?;
         let here: &dyn Resolver = if who.is_agent() { &agent_view } else { &index };
         let resolver = ViewResolver {
             here,

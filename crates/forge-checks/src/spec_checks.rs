@@ -63,7 +63,7 @@ use forge_git::browse::{Browser, RefLookup};
 
 use crate::ci_lint::{assess_ci_lint, read_input as read_ci_input, CiLintInput};
 use crate::doc_lint::{assess_doc_lint_wiki, DocLimits, DocTree};
-use crate::doc_wiki::{read_wiki, WikiRead};
+use crate::doc_wiki::{read_wiki, WikiRead, WikiReadFor};
 use crate::spec_index::{index_commit, index_head, IndexLimits, Indexed, Tags};
 use crate::spec_refs::RepoConfigRead;
 
@@ -654,14 +654,16 @@ impl SpecChecks {
         .await?;
         // Plan 20 W3: the linked wiki's tip, only when a document names it.
         let wiki = read_wiki(
-            &self.db,
-            &self.browse,
-            self.projects.as_ref(),
-            project,
+            (&self.db, &self.browse, self.projects.as_ref()),
+            WikiReadFor {
+                project,
+                visibility: record.access.visibility,
+                request_id,
+            },
             &docs,
             (&self.doc_limits, LOOKUP_TIMEOUT),
         )
-        .await?;
+        .await;
         let compared = match self.browse.find_ref(repo.id, &mr.target_branch).await? {
             RefLookup::Commit(tip) => {
                 let tip = ObjectId::parse(&tip.commit).map_err(|_| {
