@@ -338,6 +338,28 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - runbook `ci-runner`（「GPU の Runner とモデル置き場」）、FG-CI-0029 GpuUnavailable（新規、warn）、FG-CI-0030 ModelStoreUnverified
   （新規、alert）。
 
+## Amendment 2026-11-25（計画 21 G1）— 保護ブランチの成果物を残す（`artifacts: { keep: true }`）
+
+- **背景**: 計画 21（ADR-0041 の Amendment 2026-11-25）は、エッジのファームウェアと I/O の意味の辞書のリリースを「保護ブランチ `release` の
+  push のパイプラインの成果物」とする。保持は 30 日で、`keep` を立てるのはデプロイの worker だけだった（C11）ので、リリースが消える。
+- **決定**:
+  1. `.forge-ci.yml` のジョブの `artifacts` に `keep`（`true` / `false` だけ、既定 `false`）。lint は型だけ（それ以外は FG-CI-0001
+     `artifacts_keep_invalid`）。**求めるだけ**で、どこで効くかはファイルでは決められない。
+  2. **効くのは保護ブランチの push のパイプラインだけ**: `forge_ci::Trigger::may_use_secrets()`（`event = push` かつ `protected`）。
+     計画の `PlannedJob::keep_artifacts` に決めた値を入れ、`ci_jobs.artifacts_keep`（新しい列、derived）に書く。送られてきたファイルの
+     記録（`ci_artifacts::record`）は、パイプラインの行の `source = 'push' AND protected` ともう一度合わせて `ci_artifacts.keep` を書く
+     （シークレットの判定 `StoredPipeline::secrets_allowed` と同じ値。どちらかの行だけでは残らない）。
+  3. **それ以外では無視するが黙らない**: 保護されていないブランチ・MR・手動・定期・merge queue・autofix のパイプラインでは 30 日で消える。
+     Runner はクレームの `secrets_allowed` から同じ答えを知り、ジョブのログに 1 行書く（残る / 残らない）。成果物の一覧の `keep` でも見える。
+     パイプラインを失敗にはしない（同じ `.forge-ci.yml` を MR と `release` の両方で動かすため）。
+  4. `ci_artifact_expiry` は `keep` の行を消さない（今のまま）。割り当て `ci.artifact_quota_bytes` は `keep` の行も数える（FG-CI-0022）。
+     `keep` を外す API・CLI は作らない（runbook `ci-runner` の手順、必要になったら管理者の CLI）。
+- **選ばなかったもの**: 保護されていないパイプラインの `keep` を lint や計画で断る — MR のパイプラインで同じファイルが赤くなる。
+  Runner が送るときに `keep` を言う — Runner の申告で保持が決まることになる（判定はサーバーの行だけ）。保持の日数をファイルで選ばせる —
+  リリースに要るのは「消さない」だけ。
+- **受け入れたリスク**: 保護ブランチに push できる主体（ADR-0008 の保護の規則しだい）は、割り当ての範囲で成果物を残し続けられる。
+- 新しいエラーコードは無い（FG-CI-0001 の `reason` が 1 つ増える）。runbook `ci-runner` の「残す成果物」。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。
@@ -349,4 +371,5 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 
 - 計画 17 P17-1（2026-11-14）: FG-CI-0029 GpuUnavailable（warn）、FG-CI-0030 ModelStoreUnverified（alert）、FG-CI-0001 に `service_gpu_without_tag`、FG-CI-0008 に `gpu_without_tag`。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節、P17-1 で「GPU の Runner とモデル置き場」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
+- 計画 21 G1（2026-11-25）: FG-CI-0001 に `artifacts_keep_invalid`。runbook `ci-runner` に「残す成果物」の節。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

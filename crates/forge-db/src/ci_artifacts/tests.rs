@@ -62,24 +62,37 @@ fn job(name: &str, needs: &[&str]) -> NewCiJob {
         tags: Vec::new(),
         secrets: Vec::new(),
         manual: false,
+        artifacts_keep: false,
     }
 }
 
 impl World {
     async fn pipeline(&self, sha: char, mark: CopyMark, jobs: Vec<NewCiJob>) -> i64 {
+        self.pipeline_on(sha, mark, (Source::Push, false), jobs)
+            .await
+    }
+
+    /// A pipeline of `source` on `main`, `protected` or not.
+    async fn pipeline_on(
+        &self,
+        sha: char,
+        mark: CopyMark,
+        (source, protected): (Source, bool),
+        jobs: Vec<NewCiJob>,
+    ) -> i64 {
         let new = NewPipeline {
             ai_eval_job: None,
             request: PipelineRequest {
                 project: self.web.project_id,
                 git_ref: forge_core::RefName::parse("refs/heads/main").expect("ref"),
                 sha: ObjectId::parse(&sha.to_string().repeat(40)).expect("sha"),
-                source: Source::Push,
+                source,
                 merge_request: None,
                 triggered_by: None,
             },
             request_id: "req-plan".to_owned(),
             definition_hash: Some(pipelines::definition_hash(b"version: 1")),
-            protected: false,
+            protected,
             copy_mark: mark,
             planned: Planned::Jobs(jobs),
         };
@@ -434,4 +447,127 @@ async fn more_needed_files_than_the_bound_is_an_error_not_a_short_list() {
     let e = needs_of(&w.t.db, test.job_id).await.expect_err("too many");
     assert_eq!(e.code(), ErrorCode::ArtifactTooLarge);
     assert!(e.to_string().contains("too_many_needed_files"), "{e}");
+}
+
+// ── plan 21 G1: `artifacts: { keep: true }` (ADR-0029 amendment 2026-11-25)
+
+/// A job that asked to keep its artifacts (as the planner writes it).
+fn kept_job(name: &str) -> NewCiJob {
+    NewCiJob {
+        artifacts_keep: true,
+        ..job(name, &[])
+    }
+}
+
+impl World {
+    /// Claim the one pending job and store `path` for it: the row's
+    /// `(keep, days until it expires)`.
+    async fn stored_keep(&self, runner: i64, path: &str) -> (bool, i32) {
+        let claimed = lease::claim(&self.t.db, runner)
+            .await
+            .expect("claim")
+            .expect("job");
+        let id = self.store(claimed.job_id, path, 1).await;
+        sqlx::query_as(
+            "SELECT keep, extract(day FROM expires_at - created_at + interval '1 minute')::int              FROM forge.ci_artifacts WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(self.t.db.write_pool())
+        .await
+        .expect("row")
+    }
+}
+
+#[tokio::test]
+async fn keep_is_set_only_on_protected_push_pipelines() {
+    let w = world().await;
+    let runner = w.runner().await;
+    // A protected push pipeline whose job asked: kept.
+    w.pipeline_on(
+        'a',
+        CopyMark::Open,
+        (Source::Push, true),
+        vec![kept_job("fw")],
+    )
+    .await;
+    assert!(w.stored_keep(runner, "app.bin").await.0, "protected push");
+    // The same request on an unprotected push: not kept.
+    w.pipeline_on(
+        'b',
+        CopyMark::Open,
+        (Source::Push, false),
+        vec![kept_job("fw")],
+    )
+    .await;
+    assert!(
+        !w.stored_keep(runner, "app.bin").await.0,
+        "unprotected push"
+    );
+    // A protected push whose job did not ask: not kept.
+    w.pipeline_on(
+        'c',
+        CopyMark::Open,
+        (Source::Push, true),
+        vec![job("fw", &[])],
+    )
+    .await;
+    assert!(!w.stored_keep(runner, "app.bin").await.0, "not asked");
+    // A manual run (never a protected push) whose job row says keep (a
+    // planner defect): the record decides again from the pipeline row.
+    w.pipeline_on(
+        'd',
+        CopyMark::Open,
+        (Source::Manual, false),
+        vec![kept_job("fw")],
+    )
+    .await;
+    assert!(!w.stored_keep(runner, "app.bin").await.0, "manual run");
+}
+
+#[tokio::test]
+async fn unprotected_pipeline_keep_expires_in_30_days() {
+    let w = world().await;
+    let runner = w.runner().await;
+    w.pipeline_on(
+        'a',
+        CopyMark::Open,
+        (Source::Push, false),
+        vec![kept_job("fw")],
+    )
+    .await;
+    let (keep, days) = w.stored_keep(runner, "app.bin").await;
+    assert!(!keep);
+    assert_eq!(days, 30, "the ordinary retention");
+    // Past it, the sweep takes it like any other.
+    w.t.exec_superuser(
+        "UPDATE forge.ci_artifacts SET created_at = now() - interval '31 days',          expires_at = now() - interval '1 day'",
+    )
+    .await;
+    let due = due(&w.t.db, 10).await.expect("due");
+    assert_eq!(due.len(), 1, "the unkept artifact is due");
+    assert!(forget(&w.t.db, due[0].0).await.expect("forget"));
+}
+
+#[tokio::test]
+async fn kept_artifacts_survive_expiry_sweep() {
+    let w = world().await;
+    let runner = w.runner().await;
+    w.pipeline_on(
+        'a',
+        CopyMark::Open,
+        (Source::Push, true),
+        vec![kept_job("fw")],
+    )
+    .await;
+    assert!(w.stored_keep(runner, "app.bin").await.0);
+    let kept: i64 = sqlx::query_scalar("SELECT id FROM forge.ci_artifacts")
+        .fetch_one(w.t.db.write_pool())
+        .await
+        .expect("id");
+    w.t.exec_superuser(
+        "UPDATE forge.ci_artifacts SET created_at = now() - interval '400 days',          expires_at = now() - interval '370 days'",
+    )
+    .await;
+    assert!(due(&w.t.db, 10).await.expect("due").is_empty());
+    assert!(!forget(&w.t.db, kept).await.expect("forget"));
 }

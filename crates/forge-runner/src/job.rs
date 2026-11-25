@@ -129,8 +129,9 @@ struct Started {
     services: Vec<(String, String)>,
     /// M4 C6: the work tree and the declared artifact paths of a script
     /// that exited 0 — uploaded only once the container (and its pod) is
-    /// confirmed removed.
-    upload: Option<(std::path::PathBuf, Vec<String>)>,
+    /// confirmed removed — and whether the job asked to keep them (plan
+    /// 21 G1).
+    upload: Option<(std::path::PathBuf, Vec<String>, bool)>,
     /// M4 C14: the job directories of an autofix fixer whose script
     /// exited 0 — its work tree becomes the bundle once the container is
     /// confirmed removed.
@@ -344,9 +345,9 @@ impl Executor {
         // of the job runs any more (no process can change a file while it
         // is read and sent).
         let ran = match (ran, started.upload.take()) {
-            (Ok(ScriptEnd::Exited(0)), Some((work, paths))) => {
+            (Ok(ScriptEnd::Exited(0)), Some((work, paths, keep))) => {
                 if container_gone && !pod_left {
-                    self.upload_artifacts(api, job, &work, &paths, stop, &mut sink)
+                    self.upload_artifacts(api, job, (&work, &paths, keep), stop, &mut sink)
                         .map(|()| ScriptEnd::Exited(0))
                 } else {
                     Err(ForgeError::new(ErrorCode::ArtifactTransferFailed)
@@ -654,7 +655,11 @@ impl Executor {
                 // M4 C6: a successful script's declared artifacts, sent
                 // after the container is removed (`execute`).
                 if code == 0 && !spec.artifacts().is_empty() {
-                    started.upload = Some((dirs.work.clone(), spec.artifacts().to_vec()));
+                    started.upload = Some((
+                        dirs.work.clone(),
+                        spec.artifacts().to_vec(),
+                        spec.artifacts_keep(),
+                    ));
                     // clone: sent after the cleanup
                 }
                 // M4 C14: a fixer's work tree, bundled after the cleanup.
@@ -832,13 +837,14 @@ impl Executor {
     /// Upload the regular files under the declared `paths` of `work`
     /// (`crate::artifacts::collect`): links and missing paths are named in
     /// the log, never sent. `FG-CI-0019` past a bound (nothing sent),
-    /// `FG-CI-0020` when one upload fails (the job fails).
+    /// `FG-CI-0020` when one upload fails (the job fails). Plan 21 G1: a
+    /// job that asked to keep them is told in its log whether forge keeps
+    /// them ([`keep_note`]).
     fn upload_artifacts(
         &self,
         api: &dyn RunnerApi,
         job: &ClaimedJob,
-        work: &std::path::Path,
-        paths: &[String],
+        (work, paths, keep): (&std::path::Path, &[String], bool),
         stop: &AtomicBool,
         sink: &mut LogSink<'_>,
     ) -> Result<(), ForgeError> {
@@ -870,6 +876,9 @@ impl Executor {
                 })?;
         }
         sink.line(&format!("uploaded {} artifact file(s)", found.files.len()));
+        if let Some(note) = keep_note(keep, job.secrets_allowed) {
+            sink.line(note);
+        }
         Ok(())
     }
 
@@ -1253,5 +1262,21 @@ impl Executor {
             request_id,
         );
         false
+    }
+}
+
+/// Plan 21 G1 (ADR-0029 amendment 2026-11-25): the job-log line for a job
+/// that asked `artifacts: { keep: true }`. forge keeps the artifacts only
+/// in a push pipeline of a protected branch — the claim's
+/// `secrets_allowed`, the same answer the server records the upload with —
+/// so a request elsewhere is said, never silently dropped. `None`: the job
+/// did not ask.
+pub(crate) fn keep_note(asked: bool, protected_push: bool) -> Option<&'static str> {
+    match (asked, protected_push) {
+        (false, _) => None,
+        (true, true) => Some("artifacts kept: they do not expire (a push pipeline of a protected branch)"),
+        (true, false) => Some(
+            "artifacts keep: true is not honoured here (only a push pipeline of a protected branch keeps artifacts): they expire after 30 days",
+        ),
     }
 }

@@ -325,6 +325,10 @@ pub struct NewCiJob {
     /// `when: manual` (M4 C12): written as `manual`, run when a person
     /// starts it.
     pub manual: bool,
+    /// Plan 21 G1: the job asked to keep its artifacts and the pipeline is
+    /// a push to a protected branch (`forge_ci::PlannedJob::keep_artifacts`).
+    /// The record of each upload decides again from the pipeline row.
+    pub artifacts_keep: bool,
 }
 
 /// What the planning found.
@@ -486,8 +490,8 @@ async fn insert(
         };
         sqlx::query(
             "INSERT INTO forge.ci_jobs (pipeline_id, project_id, name, stage, wave, needs, \
-               image, timeout_s, tags, secrets, status, manual) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+               image, timeout_s, tags, secrets, status, manual, artifacts_keep) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(pipeline_id)
         .bind(r.project.get())
@@ -501,6 +505,7 @@ async fn insert(
         .bind(&job.secrets)
         .bind(status.as_str())
         .bind(job.manual)
+        .bind(job.artifacts_keep)
         .execute(&mut *c)
         .await
         .map_err(|e| query_error(query, e))?;
