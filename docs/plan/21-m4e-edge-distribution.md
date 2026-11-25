@@ -1,340 +1,284 @@
-# 21 M4E の計画 — 工場のエッジ機器への署名付き・段階的な配布（pull 型、自動停止、稼働中は更新しない）
+# 21 M4E の計画 — エッジ向けの署名付きリリース（作成・署名・読み取りの API・公開の通知。機器の管理は別のアプリ）
 
-- 作成: 2026-11-23（`planner` 相当。GitStation は `main` 1bb6a535 を読み取りだけで確かめた。PFS のリポジトリは読んでいない）
-- 状態: **ドラフト（利用者の承認待ち）**。ADR の番号は E1 で **0041**（0039 は計画 19 L5-1、0040 は計画 20 が使用。2026-11-24）。§3 の推奨と §11 の問いの既定で進めてよいかを聞く。§11 の 1〜6 は 01 §8「2026-10-28 追加」の 6 つの問いの答えを兼ねる。
-- 参照: 01 §3.4・§3.10・§8（M4E）・§8 の 2026-10-28 の問い、04（承認付きデプロイ、stg / prod）、05（Q5: 機器の行為者の記録は M4E の ADR へ）、07 W13（Kanflow からのデプロイ、保守の時間帯）、09（PFS のポータルと Keycloak）、14（C11 の SSH デプロイ、環境・承認・凍結・ロールバック）、16（A1 の Ed25519）、17 §0.3（AI ノードは C11 を使い M4E は使わない）、18（負荷試験の型）、ADR-0010・0013・0018・0029・0031・0032。
+- 作成: 2026-11-23（`planner` 相当）。**範囲の変更: 2026-11-25（§0）**。2026-11-23 版（機器の台帳・展開・機器のエージェントまで持つ形）は
+  コミット `50e86273` の本文にある。
+- 状態: **範囲の変更は利用者の決定（2026-11-25）**。E1 は `main` に入った（`bc58f07e`）。E4 の形と §11 の問いの既定で進めてよいかを聞く。
+- ADR: **0041**（E1。2026-11-25 の Amendment で範囲を変えた）。
+- 参照: 01 §3.10・§8（M4E）、04（承認付きデプロイ）、14（C6b の成果物、C11 の承認の形）、16（A1 の Ed25519）、ADR-0010・0013・0016・0018・
+  0019・0031・0032・0041。
 
-## 0. 前提の点検
+## 0. 範囲の変更（2026-11-25）
 
-### 0.1 目標（1 文）
+### 0.1 何が変わったか
 
-CI が作った不変のリリースに GitStation が署名し、工場の数千台のエッジ機器が自分から HTTPS で取りに来て、署名を確かめ、**保守の時間帯の中で、かつ設備が止まっているときだけ** 入れ、失敗すれば自分で前の版に戻り、失敗が増えれば展開そのものが自動で止まる — その展開（カナリア → 割合 → 全台）を、prod では人の承認から始める。
+| | 2026-11-23 版 | 2026-11-25 から |
+|---|---|---|
+| GitStation の役割 | リリース + 機器の台帳・登録・グループ・波・停止・承認・時間帯・機器のエージェント | **リリースの作成と署名だけ**（利用者の選択「リリースの作成と署名だけ」） |
+| 機器の管理 | GitStation（`forge-fleet`・`forge-edge-agent`） | **別のエッジ管理・設定のアプリ**（利用者が作る） |
+| 機器の資格情報 | `Credential::Device`（機器のトークン） | **作らない**。機器は GitStation に接続しない |
+| GitStation とエッジのアプリの境目 | — | 署名したリリースの **読み取りの API** と、公開の **イベント / Webhook**（§3） |
 
-### 0.2 決まっていること（議論し直さない）
+### 0.2 なぜ
+
+- 利用者はエッジ管理・設定のアプリを別に作っている。そのアプリが機器の台帳・登録・グループ・機器ごとの設定・展開の波・停止・承認・
+  機器の上のエージェントを持つ。GitStation が同じものを持つと二重になる（入口は 1 つ、08 §1）。
+- GitStation の強みは「保護されたタグ → パイプラインの成功 → 不変の成果物 → 署名 → 誰が出したかの記録」で、ここは既に CI（M4）と
+  署名（ADR-0032・0041）がある。機器の都合（時間帯・稼働中か・戻し）は機器の近くのアプリが判断する方が正しい。
+
+### 0.3 エッジのアプリへ移るもの（GitStation は作らない）
+
+機器の台帳と登録、機器の資格情報、グループと機器ごとの設定、展開の波・停止の判定・再開・戻し、prod の展開の承認、保守の時間帯と
+`can-update`、機器の上のエージェント（取得・確かめ・A/B・フック・自分での戻し・報告）、工場の中継、負荷試験とパイロットの機器の側。
+
+### 0.4 GitStation に残るもの
+
+1. **リリースの作成**: 保護されたタグ `edge/v*` → そのタグのパイプラインが成功 → 成果物を内容のハッシュの blob に → マニフェスト → **エッジ専用の鍵**で
+   Ed25519 の署名（ADR-0041 の領域）。
+2. **読み取りの API**: マニフェスト（署名の封筒のまま）・blob（`Range`、読むたびに sha256 を確かめ直す）・公開鍵。エッジのアプリはサービスアカウントの
+   トークンで読む。
+3. **公開の通知**: ドメインイベント `edge_release.published`（Outbox）と、既存の Webhook（M3 I2）での配信。
+4. **監査**: 誰が（タグを push した人・パイプライン・手で作った人）いつ何を出したか・取り下げたか。
+
+### 0.5 変わらない前提
 
 | 出典 | 決定 |
 |---|---|
-| 01 §3.10（2026-10-28） | pull 型（エッジは外から接続を受けない）。機器は `authorize()` の主体になり、権限の表に行を持つ。署名付きの不変のリリース。カナリア → 割合 → 全台、しきい値で自動停止。保守の時間帯。前の版を残して自分で戻る。prod は人の承認。工場ごとの中継は Should、オフラインの更新は M8、機器のログ・指標の収集は Won't |
-| 01 §3.10 の設計の制約 | 機器の定期の接続（心拍）は `events` / `audit_log` に入れない。台帳の行を上書きし、記録するのは状態の変化だけ。ジョブキューに機器ごとのジョブを積まない。エラーの領域 `EDGE` はエージェントモデルの側で先に足す |
-| 05 Q5 | 機器の行為者の記録は M4E の ADR で決める。機器は `UserKind` ではない（試験 `a_device_is_not_a_user_kind`）。`edge`・`fleet`・`devices` は予約した名前（`forge-core/src/namespace_path.rs`） |
-| 14 §9-8、ADR-0031 | prod の承認は Maintainer 以上の人の Web のセッションだけ。要求者と、その SHA の背後の人（MR の作成者・push した人・author / committer）は承認できない。デプロイできるのは保護ブランチから到達できるコミットだけ |
-| 17 §0.3 | PFS の AI ノード（数台）は C11 の SSH デプロイを使い、M4E は使わない。**この計画は変えない** |
-| 契約 7・8 | 本番の変更は人の承認（承認済みの runbook の手順は除く）。オンプレだけ、外部のサービスに頼らない |
-
-### 0.3 コードで確かめたこと（`main` 1bb6a535）
-
-- `forge-deploy`（C11）は forge の worker から SSH で **押す** 形。待ちのデプロイを `FOR UPDATE SKIP LOCKED` で 1 つずつ動かす（`crates/forge-deploy/README.md`）。数千台・NAT の内側・機器の都合の時間帯には合わない（§3）。ただし環境・承認・凍結・「背後の人は承認できない」の判定（`forge-auth/src/deploy_ctx.rs`）は形を借りる。
-- `Credential` は `Session`・`Token`・`ActAs`・`Runner`・`Job`・自動マージの主体（`forge-auth/src/model.rs`）。Runner と Job は `job.rs` の自分の腕で判定する。**機器も同じ形で `Credential::Device` を足す**。
-- 署名は `forge-agent/src/sign.rs`（純粋、`ring` の Ed25519、`KeyRing`、`verify_signature`、`sign_digest`）。ただし署名の領域の文字列が定数 `SIGNATURE_DOMAIN = "forge-agent-part-signature-v1\0"` に固定されている。エッジのマニフェストには **別の領域** が要る（同じ鍵の署名を流用させない）。
-- 秘密の鍵のファイル（ADR-0013）、CI の成果物（C6b、`ci_artifacts`、sha256 を持つ）、保護ブランチからの到達の判定（ADR-0031 Amendment 1）、`ops/loadtest/` の負荷試験の型（計画 18）は既にある。
-- `forge-errors/build.rs` の AREAS に **`EDGE` は無い**（14 個。`AGENT`・`AIASSET` まで）。
-- コンテナのレジストリは GitStation に無く（01 §3.9 で範囲の外）、社内 GitLab のレジストリは壊れている（PFS の試験サーバーのデプロイはサーバーの Docker でイメージを作っている）。
-
-### 0.4 前提への意見
-
-1. **GitStation が持つもの・持たないもの**を最初に分ける（§1）。GitStation は「リリースの正本・署名・台帳・展開の判断・承認・記録」と **機器の上の汎用のエージェント `forge-edge-agent`** を持つ。PFE のコンテナをどう止めてどう起こすか、設備が今動いているかは **機器の側のフック**（PFS が書く）が答える。GitStation のコード・試験は PFS のリポジトリに依存しない。
-2. **01 §3.10 の「機器ごとの証明書による相互 TLS」は、最初は機器ごとのトークンにする**ことを推奨する（§4）。理由: 今の GitStation は TLS を前段の reverse proxy に任せており、相互 TLS は証明書の発行・失効の運用（社内 CA）を GitStation の外に新しく作る。トークンなら PAT（ADR-0019）と同じハッシュの保存・失効・入れ替えの仕組みで、Claude がログと表だけで診断できる。改ざんはマニフェストの署名で防ぎ、トークンの盗聴は TLS で防ぐ。相互 TLS は M8 の選択肢に残す（§11 問い 10）。
-3. **「稼働中は更新しない」は時間帯だけでは守れない**。計画どおり止めた日でもラインが動いていることがある。サーバーの時間帯（§5.4）と、入れる直前の機器のフック `can-update`（今止まっているか）の **両方** が許したときだけ入れる。
-4. **差分の配布は「ファイル・層の単位で持っていないものだけ取る」で足りる**。内容のハッシュで名前を付けた塊（blob）にすれば、変わらない層は取りに来ない。バイナリの差分（bsdiff など）は作らない（M8 で需要を見て）。
-5. 既製品（Eclipse hawkBit、Mender）は §3 の案 D として比べた。考え方（展開のグループ、失敗のしきい値、DDI の pull の API、保守の時間帯）は借りるが、製品は入れない。
+| 契約 7 | 本番の変更は人の承認。**リリースの公開は展開ではない**（GitStation は機器に何も入れない）。prod の展開の承認はエッジのアプリが持つ |
+| 契約 8 | オンプレだけ。エッジのアプリも社内 |
+| ADR-0041 | マニフェストの形（`schema_version: 1`）、要約、署名の領域 `forge-edge-manifest-signature-v1\0`、`edge-release.toml` の lint、エッジ専用の鍵の一覧 |
+| 17 §0.3 | PFS の AI ノードは C11 の SSH デプロイのまま |
 
 ## 1. 範囲 — 誰が何を持つか
 
 | 持ち主 | 持つもの | 持たないもの |
 |---|---|---|
-| **GitStation（サーバー）** | 機器の台帳と登録・トークン、グループ、リリース（CI の成果物 → マニフェスト → 署名、内容のハッシュの blob 置き場）、展開の状態機械・承認・時間帯・停止の判断、望ましい状態の API、報告の受け取り、画面、監査、runbook | 機器のログ・製造データ・指標の収集（01 で Won't）、OS の更新、PLC のプログラムの書き込み |
-| **`forge-edge-agent`（GitStation の製品、機器の上の常駐）** | ポーリング、署名の確かめ、blob の取得（途中から再開）、置き場（A/B: 今の版と前の版）、フックの呼び出し、健全性の確認と自分での戻し、報告、トークンの入れ替え、自分自身の更新 | PFE の中身の知識。設備の状態の判断（フックに聞く） |
-| **機器のフック（PFS が PFE と一緒に配る）** | `can-update`（今入れてよいか）、`install`（例: `docker load` → `docker compose up -d`）、`health`、`rollback` | GitStation の API を直接呼ばない |
-| **PFS** | PFE のリポジトリと `.forge-ci.yml`・`edge-release.toml`、機器の用意（エージェントの初回の導入と登録のトークンの投入）、中継の置き場所 | GitStation の DB・鍵 |
-
-**範囲の外**: AI ノード（17、C11 のまま）、Kanflow からの展開のボタン（07 W13 の形で後から。承認は GitStation の Web のセッションのまま）、USB のオフラインの更新（M8）、設備の仕様書との結び付け（台帳のラベルに仕様書のパスを持てるようにするだけ。画面の結び付けは Could）。
+| **GitStation** | `edge-release.toml` の lint、リリースの候補と作成、blob の置き場、マニフェストと署名、署名の鍵（ファイル、`forge admin edge-key`）、読み取りの API、`edge_release.published` / `.withdrawn`、監査、取り下げ、runbook | 機器・グループ・設定・展開・承認・時間帯・機器のエージェント・中継。機器のログ・指標 |
+| **エッジ管理・設定のアプリ**（利用者が作る、別のリポジトリ） | §0.3 のすべて。GitStation の API をサービスアカウントで読む。マニフェストを **そのまま** 機器へ渡す（作り直さない） | GitStation の DB・鍵 |
+| **機器** | 署名と blob のハッシュを確かめる（GitStation の公開鍵を固定）。確かめは ADR-0041 §5 の順 | GitStation への接続（資格情報を持たない） |
+| **PFS** | PFE のリポジトリと `.forge-ci.yml`・`edge-release.toml` | — |
 
 ## 2. 依存の順
 
 ```
-E0 [root] ─▶ E1（forge-edge: マニフェスト・署名・波・停止の判定。ADR-0041）
-             ├▶ E2（機器の主体・登録・トークン）─▶ E3（台帳・グループ）
-             └▶ E4（リリース・blob・署名の worker）
-E3 + E4 ─▶ E5（展開の状態機械・望ましい状態・報告・評価の worker）─▶ E6（forge-edge-agent）─▶ E9（負荷試験・パイロット）═▶ M4E の完了
-E5 ─▶ E7（画面）     E6 ─▶ E8（工場の中継、Should）
+E0 [root] ✓ ─▶ E1 ✓（forge-edge: マニフェスト・要約・署名・lint。ADR-0041）
+                └▶ E4a（リリースの作成・blob・署名）─▶ E4b（読み取りの API・イベント / Webhook）═▶ M4E の完了（GitStation の側）
+E1 ─▶ E1b（任意、後片付け: 波・停止・時間帯を退役。§5.6）
+E2・E3・E5・E6・E7・E8・E9: 取りやめ（エッジのアプリへ。§6）
 ```
 
-前提: M4 の C6b（成果物）・C11（デプロイ。承認の判定の形）は入っている。計画 17 の P17-7 と E1 はどちらも署名の領域を一般化する。先に入った方が `sign.rs` を変え、後の方はそれを使う。
+前提: M4 の C6b（成果物、sha256）、M3 I2（Webhook）、ADR-0031 Amendment 1（保護ブランチからの到達）は入っている。E4b の後、エッジのアプリとの
+**結合の確かめ**（§10-3）は向こうのリポジトリの試験で行う。
 
-## 3. 設計の選択肢と推奨
+## 3. エッジのアプリとの境目（連携の契約）
 
-| 軸 | **A: pull の API + 署名したマニフェスト + 自前のエージェント（推奨）** | B: OCI レジストリで配る | C: C11 のデプロイのターゲットを使う | D: 既製品（hawkBit / Mender）を置く |
-|---|---|---|---|---|
-| 内容 | 機器が `GET /api/v1/edge/desired` を数分ごとに聞く（ETag で多くは 304）。サーバーが展開の波・時間帯から答え、機器はマニフェストの署名を確かめて blob を取る。展開の進み具合は機器の報告と台帳から決める | GitStation の横にレジストリ（distribution など）を置き、リリースを OCI の成果物にし、機器は pull。展開の判断は GitStation の API | 機器ごとに `deploy_targets` を作り、worker が SSH で押す | 配布と展開を既製品に任せ、GitStation は CI のリリースを渡すだけ |
-| pull / NAT | ○ | ○ | **×** 押す形。工場の NAT の内側に届かない | ○ |
-| 数千台 | ○ 状態は台帳の上書きと集計 1 回。機器ごとのジョブなし | ○（配る部分） | **×** worker が 1 つずつ、SSH の鍵を数千台に | ○ |
-| 認可の単一点（契約 4） | ○ すべて `authorize()` | △ レジストリの認可は別の仕組み（トークンの写し） | ○ | **×** 機器・展開の認可が外の製品にある |
-| 失敗の見え方（契約 1・2） | ○ すべて FG-EDGE、`request_id`・`device_id`・`rollout_id` | △ レジストリのログは別の形 | ○ | **×** 外の製品のログと DB（Java / MongoDB など）。Claude がコードから追えない |
-| 稼働中は更新しない | ○ 時間帯 + 機器のフック | ○（同じ API を作れば） | × 機器の都合を聞けない | ○（hawkBit は時間帯あり） |
-| 新しく動かすもの | エージェント 1 つ（Rust、GitStation のリポジトリ） | レジストリ + エージェント | なし | 別のサーバー・DB・運用 |
-| 判断 | **採用** | 今は不採用。イメージの層の配布は A の blob で同じ効果。社内のレジストリが直ったら、blob の取り先にレジストリを足すのは A の拡張でできる | 不採用（01 §3.10 が既に除外） | 不採用。展開のグループ・しきい値・時間帯の考え方だけ借りる |
-
-**推奨: 案 A**。配るものの形は次の 3 種類から始める（マニフェストの `payloads[].kind`）。
-
-| kind | 中身 | 機器での入れ方 |
+| 方向 | 形 | 中身 |
 |---|---|---|
-| `files` | ファイルの組（設定・スクリプト・実行ファイル）。各ファイルが blob | エージェントが `releases/<digest>/` に置き、フック `install` に渡す |
-| `oci-image` | OCI の image layout（index・manifest・config・層）。各層が blob | エージェントが layout を組み立て、フック `install` が `docker load`（OCI の tar）と `docker compose up -d` |
-| `agent` | `forge-edge-agent` 自身 | エージェントが新しいバイナリを置き、systemd で入れ替え、起動の確認に失敗したら前のバイナリに戻す |
+| GitStation → アプリ（知らせ） | Webhook `edge_release.published` / `edge_release.withdrawn`（既存の Webhook の署名・再送・無効化） | `release_id`、`project`、`version`、`sequence`、`digest`、`key_id`、`source_sha`、`ci_pipeline_id`、`created_by`、封筒の URL。**マニフェストの本文は入れない**（知らせはヒント、正本は API） |
+| アプリ → GitStation（取る） | `GET …/edge/releases?after_sequence=` で取りこぼしを埋める（Webhook が落ちても追い付く） | 一覧は `sequence` の順、カーソル |
+| アプリ → GitStation（取る） | 封筒・blob・公開鍵の取得 | §5.3 |
+| アプリ → 機器 | アプリの都合（波・時間帯・承認） | 封筒を **そのまま** 渡す。機器が GitStation の鍵で確かめる（アプリが改ざんしても通らない） |
 
-## 4. 機器の身元と認証
+**信頼の起点は GitStation のエッジの鍵**。アプリは配る経路で、信用しない（中継と同じ扱い）。アプリが blob を自分の置き場へ写すのは自由
+（推奨。§8）。
 
-### 4.1 登録
+## 4. 設計の選択肢と推奨（2026-11-25）
 
-1. 管理者が登録のトークンを作る（`EdgeEnrollmentTokenCreate`、人の Web のセッション）。トークンはサイト（工場）とラベル（ライン・設備・機種）に結び付き、**使える回数**（既定 1、まとめての用意には最大 500）と **期限**（既定 72 時間）を持つ。平文は作成のときに 1 度だけ見せ、DB にはハッシュだけ。
-2. 機器の用意（PFS の手順）で、エージェントの設定に登録のトークンとサーバーの URL・CA を入れる。
-3. エージェントは最初の起動で `POST /api/v1/edge/enroll`（`machine_id`（`/etc/machine-id`）、ホスト名、CPU の種類、OS、エージェントの版）。サーバーは `device_id` と **機器のトークン** を返す。登録のトークンの回数を 1 減らし、`edge_device.enrolled` の監査の行を書く。
-4. 同じ `machine_id` の有効な機器が既にあれば断る（FG-EDGE `DeviceDuplicate`）。入れ替えた機器は管理者が古い行を廃止してから登録し直す。
-
-### 4.2 機器のトークンと入れ替え
-
-- 形: `gse_` + 256 ビットの乱数。DB には SHA-256 だけ（`edge_devices.token_hash`）。期限 90 日。
-- **自動の入れ替え**: 期限の 3 分の 2 を過ぎたら、エージェントが `POST /api/v1/edge/token/rotate` で新しいトークンを受け取る。古いトークンは「新しいトークンが 1 度使われる」か「24 時間」の早い方まで有効（入れ替えの途中で切れても機器が締め出されない）。入れ替えは監査の行 `edge_device.token_rotated`。
-- 期限が切れた機器は 401（FG-AUTH-0001 `reason=device_token_expired`）。戻すのは管理者の「再発行」（新しい登録のトークン、同じ `device_id`）。
-- **失効**: 管理者が機器を無効にすると、次の要求から 401。盗まれた機器は無効にし、`machine_id` も拒否の一覧に入れる。
-- トークンが漏れても、できるのは「その機器に割り当てられたリリースを読む・その機器として報告する」だけ（§6）。
-- 機器の経路は **TLS が必須**。`edge.require_tls`（既定 `true`）のとき、前段の proxy が付けた `X-Forwarded-Proto: https` の無い機器の要求は断る（試験環境だけ `false`）。doctor `edge.tls` が設定を確かめる。
-
-### 4.3 主体と監査（05 Q5 の答え）
-
-- `Credential::Device(DeviceCredential { device_id, site_id })`。forge-web の認証だけが作り、`authorize()` の自分の腕（`forge-auth/src/device.rs`、`job.rs` と同じ形）で判定する。
-- 監査の行為者は `kind = device`、`device_id`。`users` の行は作らない（`a_device_is_not_a_user_kind` を保つ）。
-- 機器のポーリング（心拍）は監査にもイベントにも入れない。監査に入るのは登録・入れ替え・無効化・ラベルの変更（人の操作）だけ。機器ごとの版の変化は §5.6 の専用の表に入れる。
+| 軸 | **A: 読み取りの API + Webhook（推奨）** | B: Webhook に全部を入れて押す | C: アプリに GitStation の DB / 置き場を読ませる |
+|---|---|---|---|
+| 内容 | 知らせは Webhook、取得は pull、取りこぼしは `sequence` で埋める | 封筒と blob の URL を押し、アプリが受けたら終わり | 直接読む |
+| 取りこぼし | ○ 一覧で埋まる | × 再送が尽きると欠ける | ○ |
+| 認可の単一点（契約 4） | ○ `authorize()` と権限の表 | ○（配信先の登録だけ） | **×** |
+| 失敗の見え方 | ○ FG-EDGE と `request_id`、Webhook の配信の記録 | △ | × |
+| 判断 | **採用** | 不採用（Webhook は知らせだけに使う） | 不採用 |
 
 ## 5. 設計の要点
 
-### 5.1 クレートと依存（契約 9 を変える → root の E0 が先）
+### 5.1 クレートと依存（契約 9）
 
 | クレート | 層 | 中身 |
 |---|---|---|
-| `forge-edge`（新規、純粋） | `forge-core → forge-edge → forge-agent → forge-ci → forge-doc → forge-errors` | マニフェストの形・決まった並びの要約・署名の確かめ（`forge-agent::sign` を領域つきに一般化して使う）、`edge-release.toml` の lint、波の割り当て、停止の判定、時間帯の計算。I/O・時計・DB なし（時刻は引数） |
-| `forge-fleet`（新規、機能クレート） | `forge-web / forge-cli → forge-fleet → forge-auth / forge-db / forge-git → forge-core` | 台帳・登録・リリースの作成・blob の置き場・展開の状態機械・評価の worker。他の機能クレートには依存しない（成果物とパイプラインの状態は `forge-db` の読み取り。タグの push はドメインイベント `repository.pushed` の購読で受ける。パイプラインの完了のイベントは今は無い） |
-| `forge-edge-agent`（新規、バイナリ） | `forge-errors`・`forge-edge`・`forge-client` だけ。サーバーのクレートに依存しない。何もこれに依存しない | 機器の常駐（`forge-runner` と同じ置き方） |
+| `forge-edge`（E1、純粋） | `forge-core → forge-edge → forge-agent → …` | マニフェスト・要約・署名・lint（使う）。波・停止・時間帯（退役の候補、§5.6） |
+| `forge-edge-release`（E4a、新しい機能クレート。旧名 `forge-fleet`） | `forge-web / forge-cli → forge-edge-release → forge-auth / forge-db / forge-git → forge-core` | 候補・リリースの作成の worker・blob の置き場・署名の鍵の読み込み・取り下げ。他の機能クレートに依存しない（パイプラインと成果物の状態は `forge-db` の読み取り、タグは `repository.pushed` の購読） |
+| ~~`forge-fleet`~~・~~`forge-edge-agent`~~ | — | **作らない**（2026-11-25） |
 
-`forge-client`（`gstn`）は `forge-edge` に依存してよい（ADR-0020 の Amendment。`gstn edge release verify` で手元でマニフェストを確かめるため）。
+`clippy.toml` の `forge_edge::sign_manifest` の呼び出し元は `forge-edge-release` のリリースの作成だけ（E4a で名前を直す）。
 
-### 5.2 リリースとマニフェスト
+### 5.2 リリースの作り方とマニフェスト（2026-11-23 版から変えない部分）
 
-- **作り方**: リポジトリの `edge-release.toml`（配るもの: `payloads` の kind と CI の成果物のパス、対象の `arch`（`amd64` / `arm64`）と `os`（`ubuntu-24.04`）、`max_install_seconds`、`health_soak_seconds`）。**保護されたタグ** `edge/v*` の push を購読者（`repository.pushed`、C12 の `spec.publish` と同じ入口）が受けて、リリースの候補の行（`pending`）を書く。worker のタスク `edge_release_builder`（30 秒）が、そのタグのパイプラインが成功した候補だけを取り（失敗・取り消しなら候補を `failed` にして理由を残す）、次を行う。タグのコミットが保護ブランチから到達できることを確かめ（ADR-0031 Amendment 1 と同じ判定）、成果物を blob に移し（sha256 を確かめ直す）、マニフェストを作って worker の鍵で署名する。人が手で作る経路（`EdgeReleaseCreate`、Maintainer 以上の人）も同じ候補の行を書き、同じタスクを通す。
-- **マニフェスト**（`schema_version: 1`）: `release_id`、`project`、`version`、`source_sha`、`sequence`（プロジェクトの中で単調に増える）、`created_at`、`arch`・`os`、`payloads[]`（`kind`、`blobs[]` = `sha256`・`size`・`path`）、`max_install_seconds`、`health_soak_seconds`、`ci_pipeline_id`。
-- **要約と署名**: ADR-0032 と同じ作り方（可変長の欄に長さ、blob はハッシュの順）で `"forge-edge-manifest-digest-v1\n"` から始まる SHA-256。署名の文は `"forge-edge-manifest-signature-v1\0"` ‖ 要約。鍵は **エッジ専用の鍵ファイル** `edge.signing_keys_file`（ADR-0013 の形、`kid`、入れ替え。§11 問い 7）。公開鍵は `GET /api/v1/edge/keys` で配り、エージェントは導入のときの鍵を手元に固定し、新しい鍵は「今信じている鍵で署名された鍵の一覧」だけで受け入れる。
-- **不変**: `edge_releases`・`edge_release_blobs` は追記だけ（ADR-0018 のトリガー）。同じ版の作り直しは FG-EDGE `ReleaseVersionExists`。タグを動かしても既存のリリースは変わらない。
-- **blob の置き場**: `<storage.root>/edge-blobs/sha256/<2 文字>/<hex>`。読むときにハッシュを確かめ直す（合わなければ FG-EDGE `BlobIntegrityMismatch`、alert、配らない）。`GET /api/v1/edge/blobs/{sha256}` は `Range` に対応（途中から再開）。同時の送信は `edge.blob_max_concurrent`（既定 64）まで、超えたら 429 と `Retry-After`。
-- **シークレットを入れない**: lint が `edge-release.toml` の対象から `*.env`・鍵らしいファイル名を断る。機器ごとの秘密は機器の側（PFS の用意）に置く。
-- **保持**: 展開に使ったリリースと、各グループの今の版・前の版の blob は消さない。それ以外は 180 日で消す（worker の `edge_blob_expiry`）。
+- **作り方**: `edge-release.toml`（E1 の lint）。保護されたタグ `edge/v*` の push を購読者（`repository.pushed`）が受け、候補（`pending`）を書く。
+  worker のタスク `edge_release_builder`（30 秒）がタグのパイプラインの成功を待ち（失敗・取り消しなら `failed` と理由）、タグのコミットが保護ブランチから
+  到達できることを確かめ、成果物を blob に移し（sha256 を確かめ直し、展開した各ファイルに `is_secret_like_path`）、マニフェスト → `manifest_digest` →
+  `sign_manifest`。人が手で作る経路（`EdgeReleaseCreate`、Maintainer 以上の人の Web のセッション）も同じ候補の行を書き、同じタスクを通す。
+- **マニフェスト・要約・署名・封筒**: ADR-0041 §2〜5 のまま（`schema_version: 1`）。`max_install_seconds`・`health_soak_seconds` は **エッジのアプリへの
+  ヒント** として残す（署名に入っている。使うかはアプリが決める）。
+- **鍵**: `edge.signing_keys_file`（ADR-0013 の形、`kid`、入れ替え）。部品（計画 16）の鍵と分ける。公開鍵は `GET /api/v1/edge/keys`。新しい鍵は
+  「今信じている鍵で署名した鍵の一覧」で配る（機器が固定した鍵から辿れる）。
+- **不変**: `edge_releases`・`edge_release_blobs` は追記だけ（ADR-0018 のトリガー）。同じ版の作り直しは FG-EDGE `ReleaseVersionExists`。
+  タグを動かしても既存のリリースは変わらない。
+- **取り下げ**（`EdgeReleaseWithdraw`）: 別の追記だけの表 `edge_release_withdrawals`（理由・人）。リリースは消さず、一覧と封筒の答えに
+  `withdrawn` を付け、`edge_release.withdrawn` を出す。機器から消すかはアプリが決める。
+- **blob の置き場**: `<storage.root>/edge-blobs/sha256/<2 文字>/<hex>`。読むたびにハッシュを確かめ直す（合わなければ FG-EDGE `BlobIntegrityMismatch`、
+  alert、配らない）。同時の送信は `edge.blob_max_concurrent`（既定 16。読み手はアプリだけ）、超えたら 429 と `Retry-After`。
+- **保持**: 各プロジェクトの新しい 10 リリースと、180 日以内のリリースの blob は消さない。それ以外は worker `edge_blob_expiry` が消す（マニフェスト・
+  監査は残す。消した blob は 410 `blob_expired`）。§11 問い 7。
 
-### 5.3 グループと波
+### 5.3 読み取りの API とイベント
 
-- **グループ**: ラベルの選び方（例 `site=bekasi AND line=L3 AND model=pfe-gw2`）で決める。機器のラベルが変わったときにだけ所属の表 `edge_group_members` を作り直す（ポーリングのたびに計算しない）。1 台は 1 つのプロジェクトについて **1 つのグループにだけ** 入れる（重なれば FG-EDGE `GroupOverlap` で保存を断る）。
-- グループはプロジェクトに結び付ける（`EdgeGroupBind`、管理者）。プロジェクトはそのグループにだけ展開できる。
-- **グループの環境**: `stg`（試験のライン）か `prod`。prod は承認が要る（§5.5）。
-- **波**: 展開ごとに波の列を持つ。既定は `[canary, 5 %, 25 %, 100 %]`。canary はグループの中のラベル `edge.canary=true` の機器（既定は 1 ラインの 5 台以内）。割合の波は `bucket = u32(SHA-256("forge-edge-wave-v1" ‖ rollout_id ‖ device_id)[0..4]) mod 10000` が `割合 × 100` 未満の機器。**単調**（5 % の機器は 25 % にも入る）で、同じ展開の中では再計算しても変わらない。
-- 機器の種類が合わない（`arch`・`os`）機器は展開から外し、画面に数を出す（失敗に数えない）。
-
-### 5.4 保守の時間帯と「稼働中は更新しない」
-
-1. **サーバーの時間帯**: グループごとの週の繰り返し（曜日・開始・長さ、IANA のタイムゾーン）と、例外の禁止期間（`tstzmultirange`、C11 の凍結と同じ形）。望ましい状態の答えに `install_window: { not_before, not_after }` を入れる。
-2. **時間帯の外**: 取得と確かめ（ダウンロード・署名・置き場への展開）はしてよい。**入れない**。
-3. **入れる直前**: 残りの時間帯が `max_install_seconds` より短ければ始めない。フック `can-update` を呼び、終了コード 0（止まっている）のときだけ入れる。0 以外は `deferred`（FG-EDGE `AgentUpdateDeferred`、info）を報告し、時間帯の中で 1 分ごとに聞き直す。フックが無い・時間切れ（30 秒）は **入れない側** に倒す（`can-update` の失敗で入れることはない）。
-4. 入れている途中で時間帯が終わっても止めない（止める方が危ない）。`max_install_seconds` を超えたら失敗として戻す。
-
-### 5.5 展開の状態機械
-
-展開（`edge_rollouts`）= リリース × グループ × 波の計画 × 停止の規則。
-
-```
-draft ─(提出)→ pending_approval ─(承認)→ scheduled ─(時間帯)→ running(wave k)
-  │                 │(期限 7 日)→ expired                    │  ├─(波の条件を満たす)→ running(wave k+1) … → completed
-  │                 └(却下)→ rejected                         │  ├─(人の一時停止)→ paused ─(再開: 承認と同じ権限)→ running
-  └(取り消し)→ canceled                                        │  └─(停止の条件)→ halted
-halted ─(再開: 承認と同じ権限、理由の記入)→ running
-halted / paused ─(前の版に戻す)→ reverting ─→ reverted       halted / paused ─(打ち切り)→ aborted
-```
-
-- stg のグループは `pending_approval` を飛ばす（承認の規則を持たせることはできる）。
-- **prod の承認**: `EdgeRolloutApprove`。Maintainer 以上の人の Web のセッションだけ。展開を作った人と、そのリリースの SHA の背後の人（ADR-0031 Amendment 2 と同じ判定）は承認できない。承認は **波の計画全体** に対するもの（各波の前に毎回は聞かない。§11 問い 8）。
-- 1 つのグループで `running`・`paused`・`halted` の展開は 1 つだけ（部分の一意な索引）。
-- **前の版に戻す**（`reverting`）: 「そのグループで最後に `completed` になった展開のリリース」を目標にした逆向きの展開を作る。その版は既に人が承認したものなので、prod でも **人の 1 回の操作（Maintainer 以上の Web のセッション）** で始めてよく、2 人目の承認は要らない（17 の決定 2 と同じ考え方。§11 問い 8）。時間帯と `can-update` はそのまま守る。
-- 状態の変化は監査の行（`edge_rollout.*`）と、ドメインイベント `edge_rollout.state_changed`（Outbox。1 展開あたり十数件）。機器ごとのイベントは出さない。
-
-**機器ごとの状態**（`edge_rollout_devices`、(rollout, device) ごとに 1 行を上書き）:
-
-```
-offered → downloading → staged → installing → verifying ─(健全 health_soak_seconds)→ succeeded
-                │            │(時間帯の外 / can-update が拒む)→ deferred → installing
-                └────────────┴─(取得・署名・入れる・健全性の失敗)→ failed → rolled_back | rollback_failed
-offered … (期限まで報告なし) → unresponsive
-```
-
-- `failed` のあと、エージェントは **自分で前の版に戻す**（フック `rollback`、A/B の前の版。人の承認は要らない: 前の版は動いていた版で、機器の中だけの戻し）。戻せなければ `rollback_failed`（機器の状態が分からない）。
-- `unresponsive` の期限 = その機器の時間帯の終わり + 2 時間。オフライン（24 時間以上ポーリングが無い）の機器は分母から外し、一覧に出す。
-
-### 5.6 停止の判定と進む条件（`forge-edge` の純粋な関数 `decide(wave_stats, policy, now)`）
-
-| 規則（既定、展開ごとに変えられる） | 結果 |
-|---|---|
-| `rollback_failed` が 1 台でも | **halt**（`reason=rollback_failed`）。すぐに |
-| canary の波で `failed` が 1 台でも | **halt**（`reason=canary_failure`） |
-| 割合の波で `failed + unresponsive ≥ 3` かつ 失敗の割合（失敗 ÷（成功 + 失敗））> 2 % | **halt**（`reason=failure_rate`） |
-| 波の `unresponsive` が 試みた機器の 10 % を超える | **halt**（`reason=unresponsive_rate`） |
-| 波の機器の 90 % 以上が終わりの状態、上の規則に当たらない、見守りの時間（canary 24 時間、他 4 時間）が過ぎた | **advance** |
-| 試みた機器が `min_sample`（既定 3）未満 | **wait**（止めもしないし進みもしない） |
-| 波の開始から 7 日たっても進めない | `RolloutStalled`（warn）を出し、画面に「何が足りないか」の 1 行 |
-
-- 停止は自動、再開・戻しは人（§5.5）。停止の判断と理由（数・割合・機器の上位の FG コード）は `edge_rollouts.halt_details` に保存し、FG-EDGE `RolloutHalted`（**alert**、runbook `edge-rollout`）を 1 回記録する。
-- 評価は worker のタスク `edge_rollout_evaluator`（30 秒ごと、動いている展開ごとに 1 回の `GROUP BY state` の集計）。判定は純粋な関数なので、境目（ちょうど 2 %、`min_sample`、オフライン）を表の試験で固定する。
-
-### 5.7 望ましい状態と報告の API（機器の経路）
-
-| ルート | 中身 |
-|---|---|
-| `GET /api/v1/edge/desired`（`If-None-Match`） | 機器の今のグループの動いている展開について、機器が今の波に入っていれば `{ release: マニフェスト + 署名, install_window, rollout_id }`、入っていなければ今の版を返す。`ETag` = (グループ、展開、波、時間帯の版、機器の今の版) のハッシュ。多くは 304。`next_poll_seconds` を返す（サーバーが間隔を広げられる） |
-| `POST /api/v1/edge/report` | 状態の変化だけ（§5.5 の遷移、FG コード、エージェントの版、今の版・前の版）。冪等キー `(rollout_id, state, attempt)` |
-| `GET /api/v1/edge/blobs/{sha256}` | その機器に今・前・望ましいとして割り当てたリリースの blob だけ |
-| `POST /api/v1/edge/token/rotate`・`GET /api/v1/edge/keys` | §4.2・§5.2 |
-
-人の経路: `…/projects/{id}/edge/releases`・`…/rollouts`（作成・提出・承認・一時停止・再開・戻し・打ち切り）、`/api/v1/admin/edge/devices`・`groups`・`enrollment-tokens`・`windows`。`gstn edge device|group|release|rollout …`（承認のコマンドは無い。ADR-0031 Amendment 3 と同じ）。
-
-### 5.8 エージェント（`forge-edge-agent`）の動き
-
-- systemd のサービス（root で動かすが、フックは設定した利用者で動かせる）。設定は `/etc/forge-edge/agent.toml`（URL、CA、鍵の固定、フックのパス、置き場）。トークンは `/var/lib/forge-edge/token`（0600）。
-- ポーリングは `next_poll_seconds`（既定 300 秒）に ±20 % のゆらぎ。失敗は指数の待ち（最大 30 分）。サーバーの再起動のあとに一斉に来ないよう、最初の 1 回もゆらぎを入れる。
-- 取得: blob ごとにハッシュを確かめ、途中なら `Range` で続きから。持っている blob は取らない（層・ファイルの単位の差分）。空きが足りなければ取らずに `AgentDiskSpaceInsufficient`。
-- 署名を確かめる前のものは置き場の外（`incoming/`）にだけ置き、確かめてから `releases/<digest>/` に移す。今の版と前の版の 2 つを残し、それより古いものは消す。
-- フックは argv で呼ぶ（シェルの文字列を組まない）。引数は `release_digest`・`releases/<digest>` のパスだけ。時間切れ（`can-update` 30 秒、`install` は `max_install_seconds`、`health` 60 秒）。出力は機器のログにだけ残し、サーバーには FG コードと終了コードだけ送る（製造の情報を送らない）。
-- 機器のログは JSON（journald）。`device_id`・`rollout_id`・`release_digest`・`error_code` を必ず付ける。報告が届かなければ手元に貯めて、つながったら古い順に送る（失われない）。
-
-### 5.9 データ（すべて追記のマイグレーション。`tables.toml` の台帳と doctor の期待値も更新）
-
-| MR | 表 | 種類 |
+| ルート | Action | 中身 |
 |---|---|---|
-| E2 | `edge_enrollment_tokens`（ハッシュ、サイト、ラベル、残りの回数、期限、作った人）、`edge_devices`（`machine_id`、名前、サイト、`token_hash`・`prev_token_hash`・`token_expires_at`、状態、`arch`・`os`・`agent_version`、`last_seen_at`、`current_release_id`・`previous_release_id`） | 監査あり（人の操作だけ。`last_seen_at`・版の列は監査しない列） |
-| E3 | `edge_device_labels`、`edge_groups`（選び方、環境、タイムゾーン）、`edge_group_members`（派生）、`edge_group_projects`、`edge_windows` | 監査あり（members は派生） |
-| E4 | `edge_release_candidates`（タグ、SHA、パイプライン、状態 `pending` / `built` / `failed`、理由。派生）、`edge_blobs`（sha256、大きさ、置き場、最後に使った日）、`edge_releases`（マニフェスト、要約、`kid`、署名、`sequence`、作った人・パイプライン）、`edge_release_blobs` | releases / release_blobs は追記だけ（トリガー） |
-| E5 | `edge_rollouts`（リリース、グループ、波の計画、停止の規則、状態、今の波、波の開始、承認者、`halt_details`）、`edge_rollout_devices`（PK (rollout, device)、状態、試行、FG コード、更新時刻）、`edge_device_history`（機器ごとの版の変化だけ、追記、月ごとのパーティション、保持 2 年） | rollouts は監査あり、rollout_devices は派生、history は追記だけ |
+| `GET /api/v1/projects/{id}/edge/releases?after_sequence=&limit=` | `EdgeReleaseRead` | 一覧（`sequence` の順、`withdrawn`、`digest`、`key_id`） |
+| `GET /api/v1/projects/{id}/edge/releases/{release_id}` | `EdgeReleaseRead` | 封筒 `{manifest, digest, key_id, signature}`（`gstn edge release verify` が読む形と同じバイト列）。`ETag` = 要約 |
+| `GET /api/v1/projects/{id}/edge/blobs/{sha256}` | `EdgeReleaseRead` | そのプロジェクトのリリースに含まれる blob だけ（他は 404）。`Range`、読みながら sha256 を確かめ、合わなければ途中で切って alert |
+| `GET /api/v1/edge/keys` | `EdgeKeysRead` | 公開鍵の一覧（鍵で署名した一覧）。インスタンスの資源 |
+| `POST /api/v1/projects/{id}/edge/releases` | `EdgeReleaseCreate` | 手で候補を作る（人の Web のセッション） |
+| `POST …/edge/releases/{release_id}/withdraw` | `EdgeReleaseWithdraw` | 取り下げ（人、理由は必須） |
 
-- `edge_devices` は `fillfactor = 70`（`last_seen_at` の上書きを HOT にする）。
-- 索引: `edge_rollout_devices (rollout_id, state)`、`edge_group_members (device_id)`、`edge_devices (token_hash)`、`edge_rollouts (group_id) WHERE state IN ('running','paused','halted')` の一意。
+- **イベント**: `edge_release.published`・`edge_release.withdrawn`（`VisibilityClass::Integration` = プロジェクトの Reporter。Webhook の配信は既存の
+  `WebhookDeliver` の判定）。1 リリースに 1〜2 件。
+- `gstn edge release list|get|withdraw`（取得したファイルを `gstn edge release verify` でそのまま確かめられる）。
 
-### 5.10 Action と権限の表（どれも allow と deny の行。`authz-matrix-auditor` が確かめる）
+### 5.4 トークンと Action（ADR-0019 の形）
 
-| Action | allow | deny（代表） |
+今のトークン（ADR-0019）はスコープで役割を絞る。`read_api` を持つ Reporter のトークンはプロジェクトのコードも読める。エッジのアプリのトークンが
+漏れてもソースが読まれないよう、**新しいスコープ `edge_release_read`** を足す（`MergeExecute` と同じく **自分自身だけで満たされる**: `read_api`・
+`api`・`admin` は満たさず、ほかのスコープも満たさない）。エッジのアプリは **サービスアカウント**（ADR-0019 の Amendment、`admin` は付かない）を
+エッジのプロジェクト（またはそのグループ）の **Reporter** にし、`edge_release_read` だけのトークン（期限 365 日以内、入れ替えは runbook）で読む。
+
+| Action | スコープ | allow | deny（代表。どれも権限の表に行） |
+|---|---|---|---|
+| **EdgeReleaseRead**（新規） | `edge_release_read` | プロジェクトの Reporter 以上の人の Web のセッション、`edge_release_read` のトークン（人・サービスアカウント、Reporter 以上） | `read_api` / `api` / `admin` だけのトークン（FG-AUTH-0002 `scope`）、メンバーでない・読めないプロジェクト → 404、エージェントのトークン（`is_agent`）、代理（act-as）、ポータルの資格情報、Runner、Job、ボット、無効の利用者・失効したトークン（401） |
+| **EdgeKeysRead**（新規） | `edge_release_read` | サインインした有効な人、`edge_release_read` のトークン | 匿名、Runner、Job、ポータル、エージェント |
+| **EdgeReleaseCreate** | —（セッションだけ） | system（保護されたタグの購読者）、Maintainer 以上の人の Web のセッション | トークン（`session_required`）、Developer、サービスアカウント、ボット、エージェント、代理、自動マージの主体、Runner、Job（ジョブはリリースを作れない） |
+| **EdgeReleaseWithdraw** | —（セッションだけ） | Maintainer 以上の人の Web のセッション | トークン、Developer、サービスアカウント、ボット、エージェント、代理、Runner、Job |
+| 署名の鍵の管理 | — | HTTP に出さない。`forge admin edge-key` だけ | — |
+
+`EdgeReleaseCreate`・`EdgeReleaseWithdraw` は `is_session_only` と `is_people_only` に入れる。`EdgeReleaseRead` は `required_scope = Some(EdgeReleaseRead)`。
+§11 問い 1 で `read_api` でも読めるようにする案を聞く。
+
+### 5.5 データ（すべて追記のマイグレーション。`tables.toml` と doctor の期待値も更新）
+
+| 表 | 種類 |
+|---|---|
+| `edge_release_candidates`（タグ、SHA、タグを push した人、パイプライン、状態 `pending` / `built` / `failed`、理由） | 派生 |
+| `edge_blobs`（sha256、大きさ、置き場、最後に参照したリリース） | 派生 |
+| `edge_releases`（プロジェクト、版、`sequence`、マニフェスト、要約、`kid`、署名、作った主体、パイプライン） | 追記だけ（トリガー）、監査あり |
+| `edge_release_blobs`（リリース × blob） | 追記だけ |
+| `edge_release_withdrawals`（リリース、人、理由、時刻） | 追記だけ、監査あり |
+
+監査: `edge_release.created`（行為者 = system とタグを push した人・パイプライン、または人）、`edge_release.withdrawn`、`edge_signing_key.*`（CLI）。
+
+### 5.6 `forge-edge`（E1）の各部の扱い
+
+| 部分 | 推奨 | 理由 |
 |---|---|---|
-| EdgeEnrollmentTokenCreate / Revoke | 管理者の人の Web のセッション | トークン、エージェント、サービスアカウント、ボット、代理、Runner、Job、機器 |
-| EdgeDeviceManage（ラベル・無効化・再発行）/ EdgeGroupManage / EdgeGroupBind / EdgeWindowManage | 管理者の人（時間帯はグループを結んだプロジェクトの Maintainer 以上の人も） | Developer、エージェント、サービスアカウント、機器 |
-| EdgeDeviceRead / EdgeRolloutRead | 結んだプロジェクトの Reporter 以上、管理者。エージェントも読める（台帳と状態だけ） | 結んでいないプロジェクトの人 → 404、機器（自分以外） |
-| EdgeReleaseCreate | system（保護されたタグのパイプラインの購読者）、Maintainer 以上の人 | Developer、エージェント、サービスアカウント、Runner、Job（ジョブはリリースを作れない） |
-| EdgeRolloutCreate / Submit / Cancel | Maintainer 以上の人 | Developer、エージェント、サービスアカウント、自動マージの主体 |
-| EdgeRolloutApprove（prod） | Maintainer 以上の人の Web のセッション、作った人と SHA の背後の人を除く | トークン（`session_required`）、エージェント、サービスアカウント、ボット、代理、自動マージの主体、Runner、Job、機器、作った人（FG-EDGE `RolloutSelfApproval`） |
-| EdgeRolloutPause | Developer 以上（止めるのは安全側。`MergeQueuePause` と同じ） | Reporter、機器 |
-| EdgeRolloutResume / Revert / Abort | 承認と同じ（Revert は 2 人目の承認なし、§5.5） | 承認と同じ |
-| EdgeDesiredRead / EdgeStatusReport / EdgeTokenRotate | 有効な機器、自分の分だけ | 無効・期限切れの機器、他の機器の分、人・トークン・Runner・Job |
-| EdgeBlobRead | 有効な機器、自分に割り当てたリリースの blob だけ。人は `EdgeRolloutRead` と同じ範囲 | 他のグループのリリースの blob（機器）→ 404 |
-| 署名の鍵の管理 | HTTP に出さない。`forge admin edge-key` だけ | — |
+| マニフェスト・`parse_release`・`manifest_digest`・`verify_release`・`parse_edge_keys` | **残す** | E4 の作成、`gstn edge release verify`、仕様と試験の値としてエッジのアプリ・機器の確かめの正本 |
+| `sign_manifest`・`EDGE_MANIFEST_DOMAIN`・`forge-agent` の領域の一般化 | **残す** | E4a が使う |
+| `lint_release_definition`・`is_secret_like_path` | **残す** | E4a と `gstn` |
+| payload の kind `agent` | **残す（意味を変える）** | 「エッジのアプリの機器のエージェント（単独のバイナリ）」として使える。形は変えない（署名した形を変えない）。§11 問い 9 |
+| 欄 `max_install_seconds`・`health_soak_seconds` | **残す** | `schema_version: 1` の署名した欄。アプリへのヒント |
+| 波（`WavePlan`・`wave_bucket`・`first_wave`・`in_wave`） | **退役** | 展開はアプリが持つ。GitStation に呼び出し元が無くなる |
+| 停止の判定（`decide`・`HaltPolicy`・`WaveStats`） | **退役** | 同上 |
+| 保守の時間帯（`Schedule`・`install_window`・`may_start_install`）と `jiff` | **退役** | 同上。退役で `gstn` とワークスペースから `jiff`（tz database 入り）が抜ける |
+| FG-EDGE-0005 EdgeRolloutPolicyInvalid | **退役**（コードは再利用しない。errors.toml の退役の手順） | 波・停止・時間帯だけが出す |
 
-### 5.11 エラーコード（仮。領域 `EDGE`、番号は登録の順）
+**今はコードを消さない**。E1b（任意、`refactor/core-edge-retire-rollout`）で、エッジのアプリが Rust の `forge-edge` を
+ライブラリとして使わないこと（§11 問い 3）を確かめてから消す。それまでは README と ADR-0041 の Amendment に「退役の候補、新しい呼び出し元を作らない」と書く。
+
+### 5.7 エラーコード（仮。領域 `EDGE`、番号は登録の順で 0006 から）
 
 | 仮の名前 | 内容 | 重さ | runbook |
 |---|---|---|---|
-| EDGE-a EnrollmentTokenInvalid | 登録のトークンが無い・期限切れ・回数切れ | info | `edge-enrollment` |
-| EDGE-b DeviceDuplicate | 同じ `machine_id` の有効な機器 | info | `edge-enrollment` |
-| EDGE-c ReleaseDefinitionInvalid | `edge-release.toml` の形・対象・シークレットらしいファイル | info | — |
-| EDGE-d ReleaseNotFromProtectedRef | タグのコミットが保護ブランチから届かない | info | — |
-| EDGE-e ReleaseVersionExists | 同じ版の作り直し | info | — |
-| EDGE-f EdgeSigningKeyUnavailable | 鍵ファイルが無い・権限が緩い・DB の公開鍵と合わない | **alert** | `edge-signing-key` |
-| EDGE-g BlobIntegrityMismatch | 置き場の blob のハッシュが合わない | **alert** | `edge-rollout` |
-| EDGE-h BlobDownloadThrottled | 同時の送信の上限（429） | info | — |
-| EDGE-i GroupOverlap | 1 台が同じプロジェクトの 2 つのグループに入る | info | — |
-| EDGE-j RolloutApprovalRequired / RolloutSelfApproval | 承認待ち / 作った人・背後の人の承認 | info | `edge-rollout` |
-| EDGE-k RolloutHalted | 停止の条件に当たった（`reason`、数、割合） | **alert** | `edge-rollout` |
-| EDGE-l RolloutStalled | 7 日進めない | warn | `edge-rollout` |
-| EDGE-m AgentSignatureInvalid | 機器がマニフェストの署名・blob のハッシュを確かめられない（改ざんの疑い） | **alert** | `edge-agent` |
-| EDGE-n AgentInstallFailed / AgentHealthCheckFailed | フック `install` / `health` の失敗（機器は自分で戻す） | warn | `edge-agent` |
-| EDGE-o AgentRollbackFailed | 前の版に戻せない（機器の状態が分からない） | **alert** | `edge-agent` |
-| EDGE-p AgentUpdateDeferred | 時間帯の外・`can-update` が拒んだ | info | — |
-| EDGE-q AgentDiskSpaceInsufficient | 置き場の空きが足りない | warn | `edge-agent` |
+| EdgeReleaseNotFromProtectedRef | タグのコミットが保護ブランチから届かない | info | — |
+| EdgeReleaseVersionExists | 同じ版の作り直し | info | — |
+| EdgeReleaseBuildFailed | パイプラインの失敗・成果物が無い・成果物のハッシュが合わない・シークレットらしいファイル（`reason`） | warn | `edge-release` |
+| EdgeServerSigningKeyUnavailable | サーバーの鍵ファイルが無い・権限が緩い・DB の公開鍵と合わない | **alert** | `edge-signing-key` |
+| EdgeBlobIntegrityMismatch | 置き場の blob のハッシュが合わない（配らない） | **alert** | `edge-release` |
+| EdgeBlobThrottled | 同時の送信の上限（429） | info | — |
+| EdgeBlobExpired | 保持の期限で消した blob（410） | info | `edge-release` |
+| EdgeReleaseAlreadyWithdrawn | 取り下げの重複 | info | — |
 
-認証の失敗は FG-AUTH-0001（`reason=device_token_*`）、拒否は FG-AUTH-0003。機器の側のコード（m〜q）は機器のログに出し、報告で `error_code` としてサーバーに送る。画面に出すのは `user_message` と `request_id`（機器の報告なら `report_id`）だけ。
+認証の失敗は FG-AUTH-0001、拒否は FG-AUTH-0002（スコープ・セッション）/ 0003。`EdgeReleaseBuildFailed` は候補の行の理由にも残し、画面に
+「なぜ作れなかったか・次に何をするか」の 1 行を出す。
 
 ## 6. MR の分け方
 
-置き場所: **[root]** = エージェントモデル（先に入れる）、印なし = GitStation。各 MR の終わりは計画 14 §5 と同じ（fmt・clippy `-D warnings`・nextest、`gen-catalog`・`gen-authz` の差分なし、`/review` で CRITICAL / HIGH なし）。評価役は 2 つまで。ブランチの area に `edge` は無いので `deploy`・`auth`・`core`・`ui`・`ops` を使う。
+置き場所: **[root]** = エージェントモデル（先に入れる）、印なし = GitStation。各 MR の終わりは計画 14 §5 と同じ。評価役は 2 つまで。
 
-| MR | ブランチ | 中身 | 先に書く試験（例） | 評価役 | 前提 |
-|---|---|---|---|---|---|
-| **E0 [root]** | `chore/harness-m4e-edge-area` | 領域 `EDGE`（`validate-error-registry.js` の AREAS、`forge-error-contract.md`）、契約 9 に `forge-edge`・`forge-fleet`・`forge-edge-agent`、`deploy-safety-reviewer` にエッジの観点（機器のトークンの範囲、署名の領域、時間帯と `can-update` の失敗で入れない、停止の判定、戻しの承認）と eval | eval `edge-install-when-can-update-errors`、`device-token-reads-other-group-blob` | `harness-optimizer` | なし（今すぐ） |
-| **E1** | `feat/core-edge-manifest` | `forge-edge`（純粋）: マニフェスト・要約・`edge-release.toml` の lint・波の割り当て・`decide`・時間帯。`forge-agent::sign` を領域つきに一般化（既存の関数は今の領域のまま）。`gstn edge release verify`。ADR-0041 | `digest_is_independent_of_blob_order`、`agent_part_signature_does_not_verify_as_edge_manifest`、`wave_membership_is_monotonic`、`canary_single_failure_halts`、`below_min_sample_waits`、`failure_rate_boundary_2_percent`、`window_across_dst_and_midnight`、`purity` | `rust-reviewer`、`security-reviewer` | E0 |
-| **E2** | `feat/auth-edge-device-principal` | `Credential::Device`、`device.rs`、登録・トークン・入れ替え・失効、TLS の必須、監査の行為者 `device`、§5.10 の機器の行と登録の行 | `device_cannot_read_repository`、`revoked_device_denied_next_request`、`old_token_valid_until_new_used_or_24h`、`enrollment_token_single_use_race`、`duplicate_machine_id_refused`、`plain_http_refused_when_require_tls`、`a_device_is_not_a_user_kind`（維持） | `security-reviewer`、`authz-matrix-auditor` | E1 |
-| **E3** | `feat/deploy-edge-inventory` | `forge-fleet` の台帳・ラベル・グループ・所属の作り直し・プロジェクトへの結び付け・時間帯、管理の API、`gstn edge device|group`、doctor `edge.devices`（最後の接続の古さの分布） | `label_change_rebuilds_membership_once`、`group_overlap_refused`、`unbound_project_sees_404`、`last_seen_update_is_throttled` | `database-reviewer`、`authz-matrix-auditor` | E2 |
-| **E4** | `feat/deploy-edge-releases` | 保護されたタグの push → 候補 → `edge_release_builder`（パイプラインの成功を待つ）→ blob → マニフェスト → 署名（`edge.signing_keys_file`、`forge admin edge-key`）、blob の API（`Range`・429・ハッシュの確かめ直し）、保持の worker、doctor `edge.signing_key`、runbook `edge-signing-key` | `release_only_from_protected_reachable_tag`、`moved_tag_has_no_effect`、`release_rows_are_append_only`、`blob_corruption_is_not_served`、`range_resume_matches_sha256`、`secret_like_file_refused`、`job_token_cannot_create_release` | `deploy-safety-reviewer`、`security-reviewer` | E1、E3、M4 C6b |
-| **E5** | `feat/deploy-edge-rollouts` | 展開の状態機械、承認・一時停止・再開・戻し・打ち切り、望ましい状態の API（ETag・304・`next_poll_seconds`）、報告の API（冪等）、`edge_rollout_evaluator`、イベント `edge_rollout.state_changed`、`gstn edge rollout`、doctor `edge.rollouts`、runbook `edge-rollout` | `prod_approve_denied_for_creator_and_people_behind_sha`、`approve_requires_web_session`、`device_outside_wave_gets_current_release`、`outside_window_install_window_is_closed`、`halt_is_recorded_once_with_details`、`revert_targets_last_completed_release`、`one_active_rollout_per_group`、`heartbeat_never_writes_audit_or_outbox`、`no_job_per_device` | `deploy-safety-reviewer`、`database-reviewer` | E3、E4 |
-| **E6** | `feat/deploy-edge-agent` | `forge-edge-agent`: ポーリング・ゆらぎ・待ち、取得と再開、署名の確かめ、A/B の置き場、フック（argv・時間切れ・`can-update` の失敗で入れない）、健全性の見守り・自分での戻し、報告の貯めと再送、トークンの入れ替え、自分自身の更新（`agent` の kind）、systemd のユニットと例のフック、runbook `edge-agent`、`edge-enrollment` | `tampered_manifest_never_reaches_releases_dir`、`can_update_timeout_defers`、`no_install_when_window_shorter_than_max_install`、`health_failure_rolls_back_and_reports`、`rollback_failure_reports_alert_code`、`reports_survive_offline_and_send_in_order`、`hook_argv_has_no_shell`、`self_update_reverts_on_failed_start`。本物のフックの試験は Ubuntu 24.04 のコンテナで | `deploy-safety-reviewer`、`rust-reviewer` | E5 |
-| E7 | `feat/ui-edge-fleet` | 画面: 機器の台帳（版・最後の接続・状態）、展開の進み具合（波ごとの数）、停止の 1 行（「なぜ止まったか・次に押すもの」、08）、承認待ちに prod の展開を合流 | 読み上げ、色だけに頼らない、権限の無い人にボタンを出さない | `a11y-architect`、`design-reviewer` | E5 |
-| E8（Should） | `feat/deploy-edge-relay` | 工場の中継: `forge-edge-agent relay` のモード（blob だけを読み取りキャッシュ。望ましい状態・報告は本体へ通す。中継は信用しない — 署名とハッシュは機器が確かめる）。機器の設定 `blob_sources` | `relay_cannot_forge_blob`、`relay_down_falls_back_to_origin`、`relay_never_caches_desired_or_report` | `deploy-safety-reviewer`、`security-reviewer` | E6 |
-| **E9** | `chore/ops-edge-pilot` | `ops/loadtest/edge`（偽の機器 10 000 台）、§8 の数字の測定、パイロット（1 工場 1 ライン）の手順と記録、runbook の仕上げ | 負荷試験の記録（§8 の目標） | `deploy-safety-reviewer`、`silent-failure-hunter` | E6（E7 があれば望ましい） |
+| MR | 状態 | ブランチ | 中身 | 先に書く試験（例） | 評価役 | 前提 |
+|---|---|---|---|---|---|---|
+| **E0 [root]** | 済 | `chore/harness-m4e-edge-area` | 領域 `EDGE`、契約 9、`deploy-safety-reviewer` のエッジの観点 | — | — | — |
+| **E1** | 済（`bc58f07e`） | `feat/core-edge-manifest` | `forge-edge`、署名の領域の一般化、`gstn edge release verify`、ADR-0041 | — | — | — |
+| **E0b [root]** | 新規 | `chore/harness-edge-rescope` | 契約 9（`forge-fleet`・`forge-edge-agent` を消し `forge-edge-release`）、`deploy-safety-reviewer` の機器・波・時間帯の観点を「リリースの作成・読み取りの範囲」に置き換え、機器の eval 2 つを退役し `edge-release-read-token-reads-source`・`release-from-unprotected-tag` を足す | eval 2 つ | `harness-optimizer` | なし |
+| **E4a** | 新規 | `feat/deploy-edge-releases` | `forge-edge-release`: 候補（`repository.pushed`）→ `edge_release_builder` → blob → 署名（`edge.signing_keys_file`、`forge admin edge-key`）、取り下げ、保持の worker、監査、doctor `edge.signing_key`・`edge.blob_store`、runbook `edge-release`・`edge-signing-key` の更新 | `release_only_from_protected_reachable_tag`、`release_waits_for_green_pipeline`、`failed_pipeline_marks_candidate_failed_with_reason`、`moved_tag_has_no_effect`、`release_rows_are_append_only`、`secret_like_file_in_artifact_refused`、`job_token_cannot_create_release`、`signed_release_verifies_with_gstn` | `deploy-safety-reviewer`、`security-reviewer` | E0b、E1、M4 C6b |
+| **E4b** | 新規 | `feat/web-edge-release-read-api` | スコープ `edge_release_read`、Action `EdgeReleaseRead`・`EdgeKeysRead`・`EdgeReleaseCreate`・`EdgeReleaseWithdraw` と権限の表、§5.3 のルート（`Range`・429・410・読みながらの確かめ）、イベント `edge_release.published` / `.withdrawn` と Webhook、`gstn edge release list|get|withdraw`、`docs/api/agent-tools.toml` | `read_api_token_cannot_read_edge_release`、`edge_release_read_token_cannot_clone_or_browse`、`blob_of_other_project_is_404`、`blob_corruption_is_not_served`、`range_resume_matches_sha256`、`after_sequence_fills_missed_webhook`、`withdrawn_release_is_marked_not_deleted`、`publish_event_once_per_release` | `security-reviewer`、`authz-matrix-auditor` | E4a |
+| E1b（任意） | 新規 | `refactor/core-edge-retire-rollout` | §5.6 の退役（波・停止・時間帯・`jiff`・FG-EDGE-0005 の退役） | `purity` の依存の一覧の更新 | `rust-reviewer` | §11 問い 3 の答え |
+| ~~E2~~ | **取りやめ** | — | 機器の主体・登録・トークン → **エッジのアプリ** が機器の登録と資格情報を持つ | — | — | — |
+| ~~E3~~ | **取りやめ** | — | 台帳・ラベル・グループ・時間帯 → **エッジのアプリ** が台帳・グループ・機器ごとの設定・時間帯を持つ | — | — | — |
+| ~~E5~~ | **取りやめ** | — | 展開の状態機械・承認・望ましい状態・報告 → **エッジのアプリ** が波・停止・承認・戻しを持ち、GitStation のリリースを使う | — | — | — |
+| ~~E6~~ | **取りやめ** | — | `forge-edge-agent` → **エッジのアプリ** の機器のエージェントが取得・署名の確かめ（GitStation の鍵）・入れる・戻すをする | — | — | — |
+| ~~E7~~ | **取りやめ** | — | 台帳と展開の画面 → **エッジのアプリ** の画面。GitStation はリリースの一覧と取り下げだけ（E4b の範囲で既存の画面に足すかは §11 問い 8） | — | — | — |
+| ~~E8~~ | **取りやめ** | — | 工場の中継 → **エッジのアプリ** が blob を写して配る（中継・キャッシュ） | — | — | — |
+| ~~E9~~ | **取りやめ** | — | 偽の 10 000 台の負荷試験とパイロット → **エッジのアプリ** が機器の側で行う。GitStation の読み取りの量は §8 の小さな試験で足りる | — | — | — |
 
 ## 7. 運用で足すもの
 
-- **doctor**: `edge.signing_key`（鍵の有無・権限・DB との一致）、`edge.tls`、`edge.devices`（15 分 / 1 時間 / 24 時間以上ポーリングの無い台数）、`edge.rollouts`（`halted`・7 日以上進まない展開）、`edge.blob_store`（空き）。
-- **メトリクス**: ポーリングの数と 304 の割合、機器の状態ごとの台数、波ごとの成功・失敗・未応答、blob の送信量と 429 の数、`edge_rollout_evaluator` の所要時間。
-- **ログ**: すべての失敗に `request_id`・`error_code`、エッジは `device_id`・`rollout_id`・`release_id`。トークン・登録のトークンは出さない。
-- **runbook（新規）**: `edge-enrollment`（登録・再発行・盗まれた機器）、`edge-rollout`（停止の調べ方: 上位の FG コード → 機器の一覧 → 再開か戻しか。blob の破損）、`edge-signing-key`（入れ替え、漏えいのとき: 失効 → 新しい鍵 → 全グループの今の版を署名し直したリリースで展開）、`edge-agent`（機器の上: ログの見方、`rollback_failed` の機器の手での復旧、ディスク、時計のずれ）、`edge-relay`（E8）。
+- **doctor**: `edge.signing_key`（鍵の有無・権限・DB との一致）、`edge.blob_store`（空き・保持の worker の最後の成功）、`edge.release_candidates`
+  （24 時間以上 `pending` の候補）。
+- **メトリクス**: リリースの作成の数と失敗、blob の送信量・429・410、Webhook の配信の失敗（既存）。
+- **ログ**: すべての失敗に `request_id`・`error_code`、エッジは `release_id`・`project_id`・`digest`。鍵・トークンは出さない。
+- **runbook**: `edge-release`（新規: 候補が作られない・失敗した理由、blob の破損、保持）、`edge-signing-key`（入れ替え、漏えいのとき: 失効 → 新しい鍵 →
+  エッジのアプリに知らせ、使っているリリースを作り直す）、`edge-agent`（FG-EDGE-0004。機器の手順は書かず「エッジのアプリの runbook へ」に直す）。
 
-## 8. 規模の想定（推定。E9 で測って置き換える）
+## 8. 規模の想定（推定）
 
 | 量 | 想定 | 計算 |
 |---|---|---|
-| 機器の数 | 設計 10 000 台、当面 ≤ 5 000 台、30 工場まで | §11 問い 1 |
-| ポーリング | 300 秒 ±20 % | 10 000 / 300 ≈ **33 件/秒**。99 % 以上が 304（展開の無い時間） |
-| ポーリング 1 件の DB | トークンのハッシュの索引で 1 行、所属 1 行、動いている展開（メモリに 10 秒保持）。`last_seen_at` の書き込みは前回から 10 分以上たったときだけ | 書き込み ≤ 10 000 / 600 ≈ **17 件/秒**（HOT の更新） |
-| 報告 | 状態の変化だけ、1 展開で 1 台 5〜7 件 | 10 000 台の展開でも 1 日 7 万件以下 |
-| 評価の worker | 動いている展開ごとに 30 秒に 1 回の集計（≤ 10 000 行、索引あり） | 1 回 ≤ 20 ms の見込み |
-| 帯域 | 1 リリース 200 MB、変わる層 20 MB を想定 | 中継なし: 10 000 × 20 MB = 200 GB を波に分けて。中継あり: 30 工場 × 20 MB = 600 MB が本体から。同時の送信は 64 まで |
-| Outbox / 監査 | 展開あたり十数件、人の操作だけ | 機器の数に比例しない |
+| 読み手 | エッジのアプリ 1〜2 台（冗長）。**機器は GitStation に来ない** | — |
+| リリース | 1 日に数件、1 リリース 200 MB（変わる層 20 MB） | 作成の worker は 1 件 ≤ 数分 |
+| blob の読み | アプリが blob を写すなら 1 リリースにつき 1 回 | ≤ 1 GB / 日。同時 16 で足りる |
+| 一覧の読み | アプリが 1〜5 分ごと（取りこぼしの埋め） | ≤ 1 件 / 秒 |
+| Outbox / 監査 | 1 リリースに数件 | 機器の数に比例しない |
 
-試験: 偽の機器 10 000 台がポーリング・報告・取得をし、serve の p95 ≤ 100 ms、DB の CPU ≤ 30 %、Outbox と `audit_log` の行が機器の数で増えないことを確かめる（計画 18 と同じく Linux のホストで測る）。
+試験: E4b の結合の試験で 200 MB の blob の `Range` の再開と、同時 16 + 429 を確かめる。アプリが blob を写さず機器の代わりに毎回取りに来る形は
+想定しない（§11 問い 5）。
 
 ## 9. 危険と対策
 
 | 危険 | 対策 |
 |---|---|
-| 改ざんしたプログラムが機器に入る | マニフェストの Ed25519 の署名（エッジ専用の鍵・領域）、blob のハッシュ、確かめる前は置き場の外。中継は信用しない |
-| 稼働中の設備を止める | 時間帯 + `can-update` の両方、失敗は入れない側、残り時間の確認 |
-| 悪い版が全台に広がる | canary は 1 台の失敗で停止、割合の波はしきい値で停止、承認は人、波の見守りの時間 |
-| 機器のトークンの漏えい | 読めるのは自分に割り当てたリリースだけ、90 日の入れ替え、すぐの失効、TLS の必須 |
-| 数千台の一斉のアクセス | ゆらぎ、ETag、`next_poll_seconds`、429 と `Retry-After`、中継 |
-| 戻せない機器 | A/B で前の版を残す、`rollback_failed` は即停止の alert、runbook の手での復旧 |
-| 自動化が prod の展開を承認する | 権限の表の deny の行（エージェント・自動マージ・Runner・Job・機器）、Web のセッションだけ |
+| 改ざんしたプログラムが機器に入る | エッジ専用の鍵と領域の署名、blob のハッシュ。アプリは信用しない経路（機器が GitStation の鍵で確かめる） |
+| アプリのトークンの漏えいでソースが読まれる | スコープ `edge_release_read` は自分だけで満たされ、コード・API を読めない。サービスアカウントは Reporter、`admin` なし、すぐ失効できる |
+| 保護されていないコミットがリリースになる | 保護されたタグ + 保護ブランチからの到達 + パイプラインの成功。ジョブはリリースを作れない |
+| 悪い版を出してしまった | 取り下げ（`edge_release.withdrawn`）。消さずに印を付け、機器から消すかはアプリ |
+| Webhook の取りこぼし | `after_sequence` の一覧で埋める |
 | 署名の鍵の漏えい | 鍵は worker のホストのファイルだけ、`kid` の入れ替えと失効、runbook `edge-signing-key` |
 
-## 10. 完了の条件（01 §8 の M4E）
+## 10. 完了の条件（01 §8 の M4E。GitStation の側）
 
-1. 1 つの工場の 1 ライン（パイロット）で、canary → 割合 → 全台の展開が保守の時間帯の中だけで進み、`can-update` が拒んだ機器は入れずに待つ。
-2. 失敗するように作ったリリースで、失敗した機器が自分で前の版に戻り、展開が自動で `halted` になり、alert と runbook で原因が追える。
-3. prod の展開はエージェント・サービスアカウント・作った人が承認できない（権限の表の行）。
-4. 偽の 10 000 台の負荷試験で §8 の目標を満たす。
-5. 新しいルート・Action はすべて権限の表にあり、カタログ・runbook・ADR-0041 がそろい、Windows でも全体の試験が緑。
+1. 保護されたタグの push から、パイプラインの成功のあとに署名したリリースができ、`gstn edge release get` で取った封筒が `gstn edge release verify --blobs`
+   で通る。保護されていないタグ・失敗したパイプライン・ジョブのトークンからはできない。
+2. `edge_release_read` のトークンでリリース・blob・鍵を読め、同じトークンでコード・他の API は読めない（権限の表の行）。
+3. エッジのアプリ（または同じ API を使う試験の偽のアプリ）が Webhook を受け、取りこぼしを一覧で埋め、封筒を機器の確かめに渡せる。
+4. 新しいルート・Action・スコープはすべて権限の表にあり、カタログ・runbook・ADR-0041 の Amendment がそろい、Windows でも全体の試験が緑。
 
 **確かめのコマンド**: 計画 11 §9 と同じ（fmt・clippy `-D warnings`・nextest・`gen-catalog` / `gen-authz` の差分なし・`node scripts/self-heal.js --check`）。
 
 ## 11. 利用者に聞くこと（それぞれ推奨の既定）
 
+2026-11-23 版の問い 1〜12 のうち、台数・回線・稼働の予定・承認の単位・フック・機器の身元・しきい値（1・4・5・6・8・9・10・12）は
+**エッジのアプリの問い** になった。署名の鍵を分ける（7）は「分ける」のまま。OS・CPU（2）と配るものの形（3）は manifest の `arch`・`os`・
+`payloads[].kind` に残る（Ubuntu 24.04、`amd64` / `arm64`、`oci-image` と `files`）。
+
 | # | 問い | 推奨の既定 |
 |---|---|---|
-| 1 | エッジは何台、いくつの工場・ラインか | 設計 10 000 台・30 工場、当面 ≤ 5 000 台 |
-| 2 | 機器の OS と CPU | Ubuntu 24.04（PFS のエッジサーバーと同じ）、`amd64` と `arm64`。Windows IoT は範囲の外 |
-| 3 | 配るものの形 | PFE のコンテナ（`oci-image`）と設定ファイル（`files`）。PLC のプログラムは範囲の外 |
-| 4 | 回線: エッジから GitStation へ HTTPS で届くか、工場に中継を置けるか | 直接の HTTPS（社内 CA、前段の proxy で TLS）。機器が 50 台を超える工場には E8 の中継 |
-| 5 | 稼働の予定はどこで決まるか、連携するか | GitStation のグループごとの週の時間帯 + 機器のフック `can-update`。生産管理のシステムとの連携は後（フックの中で PFS が見てもよい） |
-| 6 | 今の更新の仕組み（置き換えるもの） | 無い（手の SSH と `docker compose`）と仮定。あれば E9 で並行の期間を作る |
-| 7 | 署名の鍵をマーケットプレイス（計画 16）と分けるか | **分ける**（`edge.signing_keys_file`。漏えいの範囲を機器の群に閉じる） |
-| 8 | prod の承認の単位と戻し | 承認は展開（全部の波）に 1 回。停止は自動、再開は承認と同じ権限。前の完了した版への戻しは人の 1 回の操作で、2 人目の承認なし |
-| 9 | 機器のフック（`can-update`・`install`・`health`・`rollback`）を誰が書くか | PFS が PFE と一緒に配る。GitStation は例のフックと契約の試験だけを持つ |
-| 10 | 機器の身元: トークンか相互 TLS か | 機器ごとのトークン（90 日、自動の入れ替え）+ TLS 必須。相互 TLS は M8 の選択肢 |
-| 11 | エージェント自身の導入と更新 | 初回は PFS の用意の手順で `.deb` を入れる。以後は kind `agent` のリリースとして同じ展開で更新（前のバイナリを残す） |
-| 12 | 停止のしきい値の既定（canary 1 台、割合 2 % かつ 3 台、未応答 10 %、見守り 24 時間 / 4 時間） | この値で始め、パイロットの結果で決め直す |
+| 1 | **エッジのアプリはどう認証するか** | サービスアカウント（エッジのプロジェクトかそのグループの Reporter）+ スコープ `edge_release_read` だけのトークン（365 日、runbook で入れ替え）。`read_api` で読める形にはしない（漏えいでソースが読まれる） |
+| 2 | **pull か Webhook か** | 両方。Webhook `edge_release.published` は知らせだけ、正本は API。アプリは 5 分ごとに `after_sequence` の一覧で取りこぼしを埋める |
+| 3 | **アプリが読むマニフェストの形** | ADR-0041 の封筒 `{manifest, digest, key_id, signature}`（`schema_version: 1`、JSON）をそのまま。GitStation は形の説明と試験の値（`docs/edge/release-format.md`、署名の通る例・通らない例）を出す。アプリが Rust なら `forge-edge` をライブラリとして使ってもよいが、既定は「形の説明と試験の値で各自が実装」（GitStation のクレートに外の依存を作らない） |
+| 4 | **署名を確かめるのは誰か** | **機器**（GitStation の鍵を導入のときに固定）。アプリも受け取るときに確かめる。アプリは署名し直さない（信頼の起点を 1 つにする） |
+| 5 | **blob を機器へどう配るか** | アプリが自分の置き場へ写し、機器はアプリから取る。機器は GitStation に接続しない |
+| 6 | 取り下げを作るか | 作る（E4a・E4b。小さい）。消さずに印、イベント `edge_release.withdrawn` |
+| 7 | blob の保持 | プロジェクトごとに新しい 10 リリース + 180 日。それより古い blob はアプリの置き場に頼る |
+| 8 | GitStation の画面にリリースの一覧を出すか | 出す（プロジェクトの「リリース」の 1 画面: 版・作った人・パイプライン・取り下げ）。展開の様子はアプリの画面へのリンク（設定で URL） |
+| 9 | payload の kind `agent` | 残し、「エッジのアプリの機器のエージェント」に使ってよい。使わないなら次の `schema_version` で外す |
+| 10 | 波・停止・時間帯の退役（E1b） | 問い 3 の答えの後に消す。それまで呼び出し元を作らない |
+| 11 | prod 向けのリリースに GitStation での人の承認を足すか | 足さない。リリースは展開ではなく、prod の展開の承認はアプリが持つ（契約 7 はアプリの側で守る）。保護されたタグを push できる人を絞るのが GitStation の側の統制 |

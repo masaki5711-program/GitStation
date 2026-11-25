@@ -44,4 +44,4 @@
 | [0038](0038-org-based-access-and-approval.md) | 部・課・職位によるアクセス制限と承認 — 組織の台帳の写し、組織による所属（上限 Developer）、承認者の指定、確かめられないときは閉じる | proposed（PFS 側の前提と利用者の確認の後に accepted） | 2026-11-20 |
 | [0039](0039-local-llm-gateway.md) | ローカル LLM のゲートウェイ — `forge-core::llm` の契約、`forge-llm` の列と調停、データの境界、助言の見せ方 | proposed（accepted は計画 19 の L5-1〜L5-3 のレビューの後） | 2026-11-23 |
 | [0040](0040-knowledge-wiki-notes-search.md) | ナレッジ — Wiki は結び付けた普通のプロジェクト、ノートは自分の非公開プロジェクト、検索はアプリ側の 2-gram と `tsvector` | proposed（accepted は K1〜K3 のレビューの後） | 2026-11-23 |
-| [0041](0041-edge-manifest-signature-waves-and-windows.md) | エッジのリリースのマニフェスト・署名の領域・波・停止の判定・保守の時間帯（`forge-edge`、計画 21 E1。0039 は計画 19 が使用） | proposed（accepted は E1 のレビューの後） | 2026-11-24 |
+| [0041](0041-edge-manifest-signature-waves-and-windows.md) | エッジのリリースのマニフェスト・署名の領域・波・停止の判定・保守の時間帯（`forge-edge`、計画 21 E1。0039 は計画 19 が使用）。**Amendment 2026-11-25**: GitStation はリリースの作成と署名だけ（機器・展開はエッジのアプリ）。波・停止・時間帯は退役の候補 | proposed（accepted は E1 のレビューの後） | 2026-11-24 |

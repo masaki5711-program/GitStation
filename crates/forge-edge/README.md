@@ -3,8 +3,9 @@
 エッジ機器への配布（計画 21 M4E、ADR-0041）の **純粋な** 判断: リリースのマニフェストと並びによらない要約、エッジの領域での Ed25519 の
 署名の確かめ、`edge-release.toml` の lint、波の割り当て、停止・前進の判定、保守の時間帯。I/O・時計・DB・非同期の実行時を使わない（バイトと
 値を受け取り、値を返す。時刻は引数 `now`。`tests/purity.rs` の `purity`）。契約 9 の層は `forge-core → forge-edge → forge-agent`。
-`gstn`（`gstn edge release verify`）が使い、E4・E5 から `forge-fleet`（リリースの作成・展開の評価）、E6 から `forge-edge-agent`（機器）が
-同じ関数を使う。
+`gstn`（`gstn edge release verify`）が使い、計画 21 E4a から `forge-edge-release`（リリースの作成と署名）が同じ関数を使う。
+**2026-11-25 の範囲の変更**（ADR-0041 Amendment）: 機器・展開はエッジのアプリが持ち、`forge-fleet`・`forge-edge-agent` は作らない。
+波・停止の判定・保守の時間帯（と FG-EDGE-0005）は **退役の候補** で、新しい呼び出し元を作らない（計画 21 §5.6、E1b で消す）。
 
 ## 責任
 
@@ -12,7 +13,7 @@
 - 配ったものが署名したものと同じか（要約・署名・blob のハッシュ）。部品の署名や他の領域の署名を通さない。
 - 誰がいつ入れるか（波の単調な所属、保守の時間帯、残りの時間）と、いつ止めるか（`decide`）。
 
-DB・HTTP・鍵ファイル・機器のフックは持たない（`forge-fleet`・`forge-web`・`forge-edge-agent`）。
+DB・HTTP・鍵ファイルは持たない（`forge-edge-release`・`forge-web`）。
 
 ## 公開の API
 
@@ -22,7 +23,7 @@ DB・HTTP・鍵ファイル・機器のフックは持たない（`forge-fleet`�
 | `manifest_digest(&Manifest) -> Digest` | 要約（`sha256:<hex>`）。payload・blob の並びによらない。`created_at` は瞬間で入れる。形は `src/digest.rs` の docs |
 | `verify_release(bytes, &KeyRing) -> Result<VerifiedRelease, Problem>` | 規則 → 要約の比較（FG-EDGE-0004 `digest_mismatch`）→ エッジの領域での署名（FG-EDGE-0004 / 知らない鍵は FG-EDGE-0003） |
 | `parse_edge_keys(bytes)` | エッジの公開鍵の一覧（部品の鍵と同じ JSON の形、別の一覧）。誤りは FG-EDGE-0003 |
-| `sign_manifest(&seed, &Digest)` / `EDGE_MANIFEST_DOMAIN` | エッジの領域での署名。E4 の `forge-fleet` のリリースの作成だけが呼ぶ（`clippy.toml`） |
+| `sign_manifest(&seed, &Digest)` / `EDGE_MANIFEST_DOMAIN` | エッジの領域での署名。E4a の `forge-edge-release` のリリースの作成だけが呼ぶ（`clippy.toml`） |
 | `lint_release_definition(bytes) -> Result<ReleaseDefinition, Vec<Problem>>` / `is_secret_like_path` | `edge-release.toml` の lint。問題は全部挙げる（FG-EDGE-0001） |
 | `WavePlan` / `wave_bucket` / `first_wave` / `in_wave` | 波の計画（canary は先頭だけ、割合は厳密に増えて 100 % で終わる。FG-EDGE-0005）と、機器の bucket・最初の波（単調） |
 | `decide(&WaveStats, WaveKind, &HaltPolicy, now) -> Decision` | halt（理由と数）/ advance / wait（`no_members`・`below_min_sample`・`in_progress`・`soaking`、`stalled`）。規則は `src/decide.rs` の docs |
