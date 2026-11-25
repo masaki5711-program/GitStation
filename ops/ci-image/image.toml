@@ -4,7 +4,7 @@
 # crates/forge-runner/tests/own_ci_image.rs fails when this file, Cargo.lock,
 # rust-toolchain.toml and .forge-ci.yml disagree (ops/ci-image/README.md).
 rust_channel = "1.99.1"
-rust_image = "sha256:1cd18821d0777cc10729bfc62ec3c6d76c8424366be3ad690b8754b3ce5b595a"
-postgres_image = "sha256:9b7429f1f88dcfeb3d58a9f29510fb16fbf94795c4ac70151b245aaf26d79697"
-crates = 467
-crates_sha256 = "b0dba52c90dde0d77369c35c5809d1e9b081983539a4222acf6416acbce4586a"
+rust_image = "sha256:4237f89110f2c5f6bc23062ab5d51066f6c36302ac0d102b668b6204da48297a"
+postgres_image = "sha256:c89c8044956683e4938895d446da83f780fa8fef2f22ba4aef17dde9a07e1fd1"
+crates = 466
+crates_sha256 = "5b199ba7dc93e3ec1e6d2f6f40d3c6e28cfa752b062f5f8630652820250e16ba"
