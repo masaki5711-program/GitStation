@@ -1323,3 +1323,49 @@ fn too_many_fixers_are_refused() {
     let text = with_fixers(&(0..=MAX_FIXERS).map(one).collect::<String>());
     assert!(reasons(&text).contains(&"too_many_fixers"));
 }
+
+// ── fetch_depth (plan 21 G2, ADR-0029 amendment 2026-11-25) ────────────
+
+#[test]
+fn default_depth_is_one() {
+    let def = check(valid().as_bytes(), &ctx()).expect("valid");
+    assert!(def.jobs.iter().all(|j| j.fetch_depth() == 1));
+}
+
+#[test]
+fn fetch_depth_is_read_within_its_bounds() {
+    for (value, depth) in [("1", 1), ("2", 2), ("\"2\"", 2), ("50", MAX_FETCH_DEPTH)] {
+        let text = one_job(&format!("{}fetch_depth: {value}\n", base_job()));
+        let def = check(text.as_bytes(), &ctx()).expect("valid");
+        assert_eq!(def.jobs[0].fetch_depth(), depth, "{value}");
+    }
+}
+
+#[test]
+fn depth_out_of_range_is_ci_0001() {
+    for bad in [
+        "0",
+        "51",
+        "100",
+        "-1",
+        "2.5",
+        "two",
+        "+2",
+        "02",
+        "4294967297",
+    ] {
+        let text = one_job(&format!("{}fetch_depth: {bad}\n", base_job()));
+        let found = problems(&text);
+        assert_eq!(
+            found.iter().map(|p| p.reason).collect::<Vec<_>>(),
+            ["fetch_depth_out_of_range"],
+            "{bad}"
+        );
+        assert_eq!(found[0].line, 9, "{bad}");
+        let def = check(text.as_bytes(), &ctx()).expect_err("invalid");
+        assert_eq!(invalid(&def).code(), ErrorCode::CiConfigInvalid, "{bad}");
+    }
+    // Not a single value: the type's problem.
+    let text = one_job(&format!("{}fetch_depth: [2]\n", base_job()));
+    assert_eq!(reasons(&text), ["field_invalid"]);
+}

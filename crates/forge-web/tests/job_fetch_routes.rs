@@ -621,3 +621,88 @@ async fn a_merge_request_job_fetches_its_merge_result_commit() {
     );
     w.t.drop_now().await;
 }
+
+/// A protocol v0 fetch of `want` with `deepen <depth>` (plan 21 G2: what
+/// `git fetch --depth=<n>` sends on a fresh clone).
+fn want_deep(oid: &str, depth: u32) -> Vec<u8> {
+    format!(
+        "{}{}0000{}",
+        pkt(&format!("want {oid} ofs-delta\n")),
+        pkt(&format!("deepen {depth}\n")),
+        pkt("done\n")
+    )
+    .into_bytes()
+}
+
+/// Plan 21 G2: a job of a merge request pipeline with `fetch_depth: 2`
+/// gets the merge result AND its parents — `HEAD^1` is the target
+/// branch's tip (the append-only checks of plan 21 §2 compare with it).
+/// With depth 1 the merge result alone is the shallow boundary. The want
+/// check is unchanged: only the pinned commit may be wanted.
+#[tokio::test]
+async fn fetch_depth_2_has_head_parent() {
+    let w = World::new().await;
+    let path = w.storage.existing(w.web_repo).expect("repo path");
+    let side = commit_on(&path, Some(&w.c1), "side\n");
+    let tree = plumb(&path, &["rev-parse", &format!("{side}^{{tree}}")], None);
+    // As forge writes it (forge-git merge_result): target tip, then head.
+    let merged = plumb(
+        &path,
+        &[
+            "commit-tree",
+            tree.as_str(),
+            "-m",
+            "merge result",
+            "-p",
+            &w.c2,
+            "-p",
+            &side,
+        ],
+        None,
+    );
+    plumb(
+        &path,
+        &["update-ref", "refs/merge-requests/1/merge", &merged],
+        None,
+    );
+    let runner = ci_runners::register(
+        &w.t.db,
+        &ChangeContext::new(Actor::User(w.ada), RequestId::parse("req-reg").expect("id")),
+        &NewRunner {
+            name: "r1".to_owned(),
+            description: String::new(),
+            tags: Vec::new(),
+        },
+    )
+    .await
+    .expect("runner");
+    let own = w.pipeline(w.web, &merged, "test").await;
+    let claimed = lease::claim(&w.t.db, runner.runner.id)
+        .await
+        .expect("claim")
+        .expect("job");
+    assert_eq!(claimed.pipeline.id, own);
+    let token = claimed.token.reveal();
+    let uri = rpc(claimed.job_id);
+    let fetch = |body: Vec<u8>| w.call("POST", &uri, Who::Bearer(token.clone()), Some(body));
+    let deep = fetch(want_deep(&merged, 2)).await;
+    assert_eq!(deep.status, StatusCode::OK);
+    let text = deep.text();
+    assert!(deep.body.windows(4).any(|b| b == b"PACK"), "{text}");
+    // Depth 2: the merge result's parents are the boundary, so both are in
+    // the pack — the first one is the target tip.
+    assert!(text.contains(&format!("shallow {}", w.c2)), "{text}");
+    assert!(text.contains(&format!("shallow {side}")), "{text}");
+    assert!(!text.contains(&format!("shallow {merged}")), "{text}");
+    let shallow = fetch(want_deep(&merged, 1)).await;
+    let text = shallow.text();
+    assert!(text.contains(&format!("shallow {merged}")), "{text}");
+    assert!(!text.contains(&format!("shallow {}", w.c2)), "{text}");
+    // Deeper history never widens the wants: a commit the pipeline ref
+    // does not reach (a newer one on the target branch) is still refused.
+    let newer = commit_on(&path, Some(&w.c2), "newer\n");
+    let refused = fetch(want_deep(&newer, 2)).await;
+    assert!(refused.text().contains("ERR"), "{}", refused.text());
+    assert!(!refused.body.windows(4).any(|b| b == b"PACK"));
+    w.t.drop_now().await;
+}

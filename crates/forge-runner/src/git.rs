@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 
 use forge_core::ObjectId;
 
+use forge_client::forge_ci;
+
 use crate::api::JobToken;
 use crate::process::Cmd;
 
@@ -110,9 +112,39 @@ impl GitPlan {
     }
 
     /// The fetch of the pipeline's ref from `url` (the job's fetch route)
-    /// with `token`: shallow, no tags, no submodules; the refspec after
-    /// `--`.
+    /// with `token`: shallow (`--depth=1`), no tags, no submodules; the
+    /// refspec after `--`.
     pub fn fetch(&self, work: &Path, url: &str, pipeline_id: i64, token: &JobToken) -> Cmd {
+        self.fetch_depth(work, url, pipeline_id, token, 1)
+    }
+
+    /// Plan 21 G2: the same fetch again with `--depth=<depth>` — the job's
+    /// `fetch_depth` from the pinned, hash-checked definition — so the
+    /// shallow clone holds that many commits of the pipeline's history
+    /// (`HEAD^1` with 2). The value is a number, never text from the claim;
+    /// `None` outside 2..=[`forge_ci::MAX_FETCH_DEPTH`] (the lint refuses
+    /// such a file first, so this is a second wall, never a silent clamp).
+    pub fn deepen(
+        &self,
+        work: &Path,
+        url: &str,
+        pipeline_id: i64,
+        token: &JobToken,
+        depth: u32,
+    ) -> Option<Cmd> {
+        (2..=forge_ci::MAX_FETCH_DEPTH)
+            .contains(&depth)
+            .then(|| self.fetch_depth(work, url, pipeline_id, token, depth))
+    }
+
+    fn fetch_depth(
+        &self,
+        work: &Path,
+        url: &str,
+        pipeline_id: i64,
+        token: &JobToken,
+        depth: u32,
+    ) -> Cmd {
         let mut header = OsString::from("Authorization: Bearer ");
         header.push(token.expose());
         let cmd = self
@@ -121,7 +153,7 @@ impl GitPlan {
             .arg("--no-tags")
             .arg("--no-recurse-submodules")
             .arg("--no-write-fetch-head")
-            .arg("--depth=1")
+            .arg(format!("--depth={depth}"))
             .arg("--")
             .arg(url)
             .arg(format!("+refs/pipelines/{pipeline_id}/head:refs/forge/job"))
@@ -314,6 +346,47 @@ mod tests {
             cmd.env_value("GIT_SSL_CAINFO"),
             Some(std::ffi::OsStr::new("/etc/forge-runner/ca.pem"))
         );
+    }
+
+    /// Plan 21 G2: the first fetch is `--depth=1`; the deepening fetch
+    /// carries the job's depth (2..=50, nothing outside it), everything
+    /// else as the first.
+    #[test]
+    fn the_deepening_fetch_carries_the_jobs_depth_and_nothing_else_changes() {
+        let token = JobToken::new("fgj_abc_secret".to_owned());
+        let url = "https://forge.internal/api/v1/runner/jobs/7/repo.git";
+        let work = Path::new("/w");
+        let depth_of = |cmd: &Cmd| -> Vec<String> {
+            cmd.argv()
+                .into_iter()
+                .filter(|a| a.starts_with("--depth"))
+                .collect()
+        };
+        let first = plan().fetch(work, url, 3, &token);
+        assert_eq!(depth_of(&first), ["--depth=1"]);
+        for asked in [0, 1, 51, u32::MAX] {
+            assert!(
+                plan().deepen(work, url, 3, &token, asked).is_none(),
+                "{asked}"
+            );
+        }
+        for (asked, argv) in [(2, "--depth=2"), (50, "--depth=50")] {
+            let deeper = plan()
+                .deepen(work, url, 3, &token, asked)
+                .expect("in range");
+            assert_eq!(depth_of(&deeper), [argv], "{asked}");
+            let same = |c: &Cmd| -> Vec<String> {
+                c.argv()
+                    .into_iter()
+                    .filter(|a| !a.starts_with("--depth"))
+                    .collect()
+            };
+            assert_eq!(same(&deeper), same(&first), "{asked}");
+            assert_eq!(
+                deeper.env_value("GIT_CONFIG_VALUE_0"),
+                first.env_value("GIT_CONFIG_VALUE_0")
+            );
+        }
     }
 
     #[test]
