@@ -17,6 +17,8 @@
 
 ## Diagnose（読み取りのみ）
 
+0. `forge doctor`（worker のホストで）: `llm.model` が同じ比べ方をする（FG-LLM-0003 と `expected_digest` / `actual_digest`、
+   または `reason=model_missing`）。`llm.endpoint` が `FAIL` なら Ollama に届いていない（runbook `llm-gateway`）。
 1. `curl -s <llm.endpoint>/api/tags` で `name` と `digest` を見る。設定の `llm.model`（`name:tag@sha256:<digest>`）と比べる。
 2. Kanflow の側に、モデルを更新したか・いつ・どの版かを聞く（`num_ctx` も変えたか）。
 3. 意図した更新でなければ、Ollama のホストへの不正な操作を疑う（runbook `credential-data` の観点で確かめる）。
@@ -34,10 +36,11 @@
 
 ## Verify
 
+- `forge doctor` の `llm.model` が `ok`、`llm.num_ctx` が `warn` でない（Kanflow と同じ文脈の長さ）。
 - `forge.llm.model_verified`（info）が出た。`forge.llm.request_finished outcome=ok` が戻った。
 - `SELECT model_digest, count(*) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1;` が設定の digest だけ。
 
 ## 関連
 
 - ADR-0039、計画 19 §8.5、計画 17 §6（`ai-model-update` と同じ型）
-- runbook `llm-gateway`、`ai-eval-bench`
+- runbook `llm-gateway`、`llm-advice-quality`（モデルを変えた後に助言の質が落ちたとき）、`ai-eval-bench`

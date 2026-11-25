@@ -20,7 +20,7 @@ Plan 19 §8.1 (ADR-0039): the gateway could not get an answer from the in-house 
 
 ## 調べ方 (diagnosis)
 
-The worker logs `forge.llm.request_finished` with `error_code=FG-LLM-0001`, `reason`, `purpose`, `llm_request_id`, `model`; the model check logs it with `task=llm_model_check` once per streak. Metrics: `forge_llm_requests_total{outcome="FG-LLM-0001"}`. From the worker host (read-only): `curl -s <llm.endpoint>/api/tags`, `nvidia-smi` (GPU memory), Kanflow's own Ollama status. `SELECT state, error_code, count(*) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1, 2`.
+The worker logs `forge.llm.request_finished` with `error_code=FG-LLM-0001`, `reason`, `purpose`, `llm_request_id`, `model`; the model check logs it with `task=llm_model_check` once per streak. Metrics: `forge_llm_requests_total{outcome="FG-LLM-0001"}`. `forge doctor` on the worker host asks the same Ollama once: `llm.endpoint` fails with this code and the `reason`, `llm.num_ctx` warns when the shared model is loaded with another context than `llm.num_ctx` (each switch between forge and Kanflow reloads it: slow answers, `timeout`). From the worker host (read-only): `curl -s <llm.endpoint>/api/tags`, `nvidia-smi` (GPU memory), Kanflow's own Ollama status. `SELECT state, error_code, count(*) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1, 2`.
 
 ## 対処 (fix)
 

@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 422 |
 | 重大度 | info |
-| Runbook | なし |
+| Runbook | [`secret-removal`](../../ops/runbooks/secret-removal.md) |
 | 発生させるテスト | `secret_in_input_refused` |
 
 ## 利用者向けメッセージ
@@ -24,4 +24,4 @@ The caller logs it with `purpose`, `reason`, `label` (the part: `diff`, `log`, �
 
 ## 対処 (fix)
 
-`secret_unredactable` / `too_many_secrets`: the source holds credentials — rotate them (a committed secret is a leak) and remove them; `too_large`: the input builder must split or trim the input (a defect of the purpose's builder). `empty`: a builder bug, fix it.
+`secret_unredactable` / `too_many_secrets`: the source holds credentials — rotate them (a committed secret is a leak) and remove them from the merge request's versions too (runbook secret-removal); `too_large`: the input builder must split or trim the input (a defect of the purpose's builder). `empty`: a builder bug, fix it. Nothing to do on the LLM side: the request never reached a model.

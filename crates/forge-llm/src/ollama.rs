@@ -1,6 +1,7 @@
 //! The Ollama provider (plan 19 §2): `POST {endpoint}/api/chat` (one
-//! answer, no streaming, `format: "json"`, the configured `num_ctx`) and
-//! `GET {endpoint}/api/tags` (the model's digest).
+//! answer, no streaming, `format: "json"`, the configured `num_ctx`),
+//! `GET {endpoint}/api/tags` (the model's digest) and, for `forge doctor`
+//! only, `GET {endpoint}/api/ps` (the context a loaded model runs with).
 //!
 //! Transport: rustls with `llm.ca_file`'s roots only (no public roots), no
 //! proxy, no redirect, `llm.timeout_ms` per call (connect at most 3 s), at
@@ -101,6 +102,37 @@ pub(crate) async fn read_body(
     }
 }
 
+/// How a model is loaded in Ollama now (`/api/ps`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Loaded {
+    /// Not in memory: the next call loads it with the caller's `num_ctx`.
+    NotLoaded,
+    /// In memory with this context length (`context_length`).
+    Context(u64),
+    /// In memory, but this Ollama does not report its context length.
+    Unknown,
+}
+
+/// Read `/api/ps`'s answer for `model` (`name:tag`); an answer without a
+/// `models` list is `FG-LLM-0001 reason=body_invalid`.
+pub fn parse_loaded(body: &[u8], model: &str) -> Result<Loaded, ForgeError> {
+    let value: Value = serde_json::from_slice(body).map_err(|_| unavailable("body_invalid"))?;
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .ok_or_else(|| unavailable("body_invalid"))?;
+    let Some(entry) = models.iter().find(|m| {
+        m.get("name").and_then(Value::as_str) == Some(model)
+            || m.get("model").and_then(Value::as_str) == Some(model)
+    }) else {
+        return Ok(Loaded::NotLoaded);
+    };
+    Ok(entry
+        .get("context_length")
+        .and_then(Value::as_u64)
+        .map_or(Loaded::Unknown, Loaded::Context))
+}
+
 /// The Ollama HTTP API.
 pub struct OllamaProvider {
     client: reqwest::Client,
@@ -192,6 +224,20 @@ impl OllamaProvider {
     }
 }
 
+impl OllamaProvider {
+    /// How `model` is loaded now (`GET /api/ps`; `forge doctor`'s
+    /// `llm.num_ctx`). Failures are `FG-LLM-0001` with `reason`.
+    pub async fn loaded(&self, model: &str) -> Result<Loaded, ForgeError> {
+        let sent = self
+            .client
+            .get(format!("{}/api/ps", self.endpoint))
+            .send()
+            .await;
+        let bytes = read_body(sent, MAX_BODY_BYTES).await?;
+        parse_loaded(&bytes, model)
+    }
+}
+
 impl LlmProvider for OllamaProvider {
     fn chat<'a>(&'a self, request: &'a ChatRequest) -> ChatFuture<'a> {
         Box::pin(self.chat_once(request))
@@ -201,5 +247,37 @@ impl LlmProvider for OllamaProvider {
 impl crate::ModelCatalog for OllamaProvider {
     fn digest<'a>(&'a self, model: &'a str) -> DigestFuture<'a> {
         Box::pin(self.digest_once(model))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_loaded_model_reports_its_context_length() {
+        let ps = br#"{"models":[
+            {"name":"other:7b","model":"other:7b","context_length":4096},
+            {"name":"qwen3:27b","model":"qwen3:27b","context_length":8192}]}"#;
+        assert_eq!(
+            parse_loaded(ps, "qwen3:27b").expect("parsed"),
+            Loaded::Context(8192)
+        );
+        assert_eq!(
+            parse_loaded(ps, "missing:1b").expect("parsed"),
+            Loaded::NotLoaded
+        );
+        assert_eq!(
+            parse_loaded(br#"{"models":[{"model":"qwen3:27b"}]}"#, "qwen3:27b").expect("parsed"),
+            Loaded::Unknown
+        );
+        assert_eq!(
+            parse_loaded(br#"{"models":[]}"#, "qwen3:27b").expect("parsed"),
+            Loaded::NotLoaded
+        );
+        for bad in [&b"<html>"[..], br#"{"error":"x"}"#] {
+            let e = parse_loaded(bad, "qwen3:27b").expect_err("invalid");
+            assert_eq!(e.code(), ErrorCode::LlmUnavailable);
+        }
     }
 }

@@ -444,7 +444,16 @@ async fn the_ollama_provider_speaks_the_chat_and_tags_api() {
         {"name": "qwen3:27b", "model": "qwen3:27b", "digest": digest()},
     ]})
     .to_string();
-    let (url, seen) = fake_ollama(vec![("/api/chat", 200, chat), ("/api/tags", 200, tags)]).await;
+    let ps = serde_json::json!({"models": [
+        {"name": "qwen3:27b", "model": "qwen3:27b", "context_length": 4096},
+    ]})
+    .to_string();
+    let (url, seen) = fake_ollama(vec![
+        ("/api/chat", 200, chat),
+        ("/api/tags", 200, tags),
+        ("/api/ps", 200, ps),
+    ])
+    .await;
     let provider = ollama::OllamaProvider::new(&url, None, Duration::from_secs(5)).expect("client");
     let request = ChatRequest {
         model: "qwen3:27b".to_owned(),
@@ -469,6 +478,11 @@ async fn the_ollama_provider_speaks_the_chat_and_tags_api() {
             .await
             .expect("tags"),
         None
+    );
+    // forge doctor's llm.num_ctx reads the loaded model's context.
+    assert_eq!(
+        provider.loaded("qwen3:27b").await.expect("ps"),
+        ollama::Loaded::Context(4096)
     );
 }
 
