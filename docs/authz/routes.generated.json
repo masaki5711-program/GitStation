@@ -3007,6 +3007,30 @@
     "planned": true
   },
   {
+    "action": "AiAdviceFeedback",
+    "planned": true
+  },
+  {
+    "action": "AiReviewRerun",
+    "planned": true
+  },
+  {
+    "action": "LlmSettingsManage",
+    "planned": true
+  },
+  {
+    "action": "OpsDiagnosisRead",
+    "planned": true
+  },
+  {
+    "action": "LlmPause",
+    "planned": true
+  },
+  {
+    "action": "LlmResume",
+    "planned": true
+  },
+  {
     "action": "SessionCreate",
     "decided_in": "/-/auth/callback"
   },

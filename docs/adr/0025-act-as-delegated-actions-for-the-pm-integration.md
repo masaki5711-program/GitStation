@@ -498,3 +498,25 @@ Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 �
 - **決定（2026-11-10、利用者「推奨で」）**: 押せない人（権限の無い人・連携の状態を知るべきでない人）には、MR と結びつけの両方の確認の画面で
   **すべて同じ 404** を返す（連携の ID の有無も、結びつけの状態も言わない）。実装は別の変更で行う。
 - **実装した（2026-11-10、クラウド）**: `authorize()` が `ActAsConfirmView` / `ActAsAssertionIssue` の断り（`FG-AUTH-0001` / `FG-AUTH-0004` を除く）を見えないプロジェクトと同じ `FG-REPO-0005` に変える（ログには元の理由を `refused_code` と文脈で残す）。権限の表の断りの行は 404、`binding_routes` / `act_as_routes` で Developer・Reporter・作成者・トークン・無い／無効の／結びついていない連携・結びついていない先の解除の GET と POST が問い合わせ番号の他はバイトまで同じ 404 になることを確かめ、両方の画面の 404 は同じ中立の文（ja / en / id）にした。
+
+## Amendment（2026-11-25、M5 L5-4 `feat/auth-llm-actions`: 代理の読み取りにパイプラインとデプロイを足す）
+
+計画 19 §3.3・§8.2 の「代理の許可リストに読み取りの Action を足す。書き込みは足さない」を実装し、**許可リストを明示的に広げた**（閉じた既定を変える決定）。
+
+1. **足した**: `PipelineRead`・`DeployRead` を `ReadWithoutAssertion`（主張なし、§3 の min のロール、両方に見えること、結びつけた
+   プロジェクトだけ）。Kanflow の AI チャットの読み取りの道具（「パイプラインの失敗」「デプロイの状況」、計画 19 §3.3、L5-9）が、
+   聞いた本人の権限で答えるため。読めるのはサービスアカウントが既に読める範囲の部分集合で、何も広がらない（§3 と同じ理由）。
+2. **足さない**（計画 19 §8.2、テスト `act_as_cannot_rerun_review`）: LLM の書き込みと管理者の読み取りはすべて `Denied` —
+   `AiAdviceFeedback`（評価は人だけ）・`AiReviewRerun`・`LlmSettingsManage`・`LlmPause` / `LlmResume`・`OpsDiagnosisRead`（管理者の権限は
+   通さない、§3）。パイプラインの出力（`CiLogRead`・`PipelineDiagnosisRead`・`CiArtifactRead`）とデプロイの変更・承認も外のまま。
+   `ReadWithoutAssertion` の Action はちょうど `ProjectRead`・`MergeRequestRead`・`MergeRequestList`・`PipelineRead`・`DeployRead`
+   （テストで固定。書き込みが紛れ込むと赤になる）。
+3. **経路はまだ答えない**: パイプラインとデプロイの経路のローダーは代理の事実（`ViaView`）をまだ読み込まないので、代理の要求は
+   `FG-AUTH-0003 reason=act_as_facts_missing` で断られる（素のリソースを本人のものとして判定しない、S2 のレビューの HIGH と同じ）。
+   ローダーに `routes::act_as::project_ctx` を足すのは L5-9（道具のパック）で、そのときに経路ごとの答えの中身（機密の印・CI の出力を
+   含めない）を確かめる。
+4. **助言の本文**（ADR-0039 決定 6）: 代理の要求は助言の読み手として常にエージェント（`forge_auth::advice_reader` が
+   `Credential::ActAs` を `Agent` にする）。`confidential` の助言は本文を出さない（テスト `confidential_advice_withheld_for_agent`）。
+5. 権限の表: `matrix_rows_act_as.rs` に `PipelineRead` / `DeployRead` の allow 3 行（本人のセッションの双子つき）と deny 10 行
+   （結びつけていない・どちらかに見えない・min のロール・主張つき・エージェントのトークン・事実を読み込まない経路）。LLM の
+   Action の代理の deny は `generated_denies` が作る。

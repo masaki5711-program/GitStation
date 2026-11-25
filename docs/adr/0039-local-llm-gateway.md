@@ -74,3 +74,12 @@ Claude（保守者）がログと成果物だけで失敗を診断できるこ�
   （助言は依頼を参照するだけで、依頼の状態を前提にしない）。依頼した機能がやり直すと新しい助言が古いものを置き換える。
 - 要約は根拠で確かめられない。判定の語（`LGTM`・「マージしてよい」など）を含む要約は伏せ、助言を `degraded` にする。
   指摘を根拠で捨てたときも `degraded`。画面はそれを「信頼度が低い」と示す（L5-6）。
+
+## Amendment（2026-11-25、L5-4 `feat/auth-llm-actions`: 権限）
+
+計画 19 §8.2 の Action を `forge-auth` に足した: `AiAdviceFeedback`・`AiReviewRerun`・`LlmSettingsManage`・`OpsDiagnosisRead`・
+`LlmPause`・`LlmResume`（allow と deny の行は `matrix_rows_llm.rs`）。助言を読むのは対象の読み取り（`MergeRequestRead`・`DeployRead`・
+`OpsDiagnosisRead`）で、新しい Action を作らない。決定 6 の「本文を出さない相手」は `forge_auth::authorize_advice` が 1 か所で決める:
+対象の `authorize()` の後、人（セッション・`is_agent` でない人のトークン）だけが `Person`、エージェントのトークン・サービスアカウント・
+ボット・代理・`Forge-Context-Audience: agent` を宣言した要求・人でない資格情報はすべて `Agent`（閉じた既定）。forge-db の
+`advice_decided` / `record_feedback_decided` の `decide` はこの関数を通す（L5-5 以降の経路）。経路はまだ無い（forge-web の `PLANNED`）。
