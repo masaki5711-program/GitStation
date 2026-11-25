@@ -468,10 +468,20 @@ impl Default for AppConfig {
 }
 
 /// Actions that have permission-matrix rows but no route yet (API
-/// resources: phase 8b).
+/// resources: phase 8b; the local LLM's: plan 19 L5-5 to L5-9).
 /// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
 /// stale row; an action leaves this list in the commit that routes it.
-pub const PLANNED: &[Action] = &[Action::UserCreate, Action::AuditRead, Action::Metrics];
+pub const PLANNED: &[Action] = &[
+    Action::UserCreate,
+    Action::AuditRead,
+    Action::Metrics,
+    Action::AiAdviceFeedback,
+    Action::AiReviewRerun,
+    Action::LlmSettingsManage,
+    Action::OpsDiagnosisRead,
+    Action::LlmPause,
+    Action::LlmResume,
+];
 
 /// Actions decided inside another route's handler, never a route's own
 /// (M2 MR4): `SessionCreate` is decided in `GET /-/auth/callback`

@@ -718,6 +718,37 @@ actions! {
     // --- operations ---
     Health,
     Metrics,
+    // --- the local LLM (M5, plan 19 §8.2, ADR-0039) ---
+    // Reading an advice is its subject's read (`MergeRequestRead`,
+    // `DeployRead`, `OpsDiagnosisRead`): no action of its own. What a
+    // reader is shown is `crate::llm::authorize_advice`'s audience.
+    /// A person's verdict ("useful" / "wrong") on an AI advice or one of
+    /// its findings (plan 19 §4): whoever may read the advice's subject —
+    /// a merge request or a project's deployment (Reporter), an incident
+    /// diagnosis on the instance (an administrator; anyone else 404) —
+    /// people only (an agent's token, a service account, a bot: 403, so
+    /// agents never weigh in on the measure of the advice), `api`.
+    AiAdviceFeedback,
+    /// Ask the AI first-pass review of a merge request again (plan 19
+    /// §3.1): Developer and above, people only, `api`. The route limits it
+    /// to 3 an hour per merge request (`FG-WEB-0010`).
+    AiReviewRerun,
+    /// A project's `llm.review` (`off` / `advisory` / `required`): a
+    /// Maintainer's, a person's, in a web session only (like
+    /// `AiAssetsSettingManage`), audited.
+    LlmSettingsManage,
+    /// The AI first diagnosis of an incident (plan 19 §3.2): instance
+    /// administrators (a token needs the `admin` scope); anyone else is
+    /// answered as if there were none (`FG-REPO-0005`). An administrator's
+    /// agent token reads it, but a confidential one is withheld from it
+    /// (`crate::llm::authorize_advice`).
+    OpsDiagnosisRead,
+    /// Pause the LLM gateway (no new inference): an administrator, a
+    /// person (`admin` scope on a token), `api`. In production only as an
+    /// approved runbook step (`llm-gateway`, CLAUDE.md contract 7).
+    LlmPause,
+    /// Resume the paused gateway. As `LlmPause`.
+    LlmResume,
     // --- the PFS portal (ADR-0036) ---
     /// `GET /api/portal-widgets/v1/**`: the portal's home widgets read for
     /// the person whose portal access token the portal forwards. Only a
@@ -777,6 +808,8 @@ impl Action {
                 | Action::DeployApprove
                 // Plan 15 MR 3: who may see a group is decided in a session.
                 | Action::GroupVisibilityChange
+                // Plan 19 §8.2: `llm.review` is a person's, in a session.
+                | Action::LlmSettingsManage
         )
     }
 
@@ -863,6 +896,13 @@ impl Action {
                 | Action::PipelineScheduleManage
                 // M4 C12 review: a protected job gets secrets.
                 | Action::PipelinePlayProtected
+                // Plan 19 §8.2: the measure of the advice, the rerun, the
+                // setting and the gateway's pause are a person's.
+                | Action::AiAdviceFeedback
+                | Action::AiReviewRerun
+                | Action::LlmSettingsManage
+                | Action::LlmPause
+                | Action::LlmResume
         )
     }
 
@@ -918,6 +958,8 @@ impl Action {
             | Action::GroupVisibilityChange
             // ADR-0036: a portal credential only (no token reaches it).
             | Action::PortalWidgetRead
+            // Plan 19 §8.2: session only (see `is_session_only`).
+            | Action::LlmSettingsManage
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -970,6 +1012,7 @@ impl Action {
             | Action::MergeQueueRead
             | Action::CiArtifactRead
             | Action::DeployRead
+            | Action::OpsDiagnosisRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -1029,6 +1072,10 @@ impl Action {
             | Action::DeployCreate
             | Action::PipelineScheduleManage
             | Action::PipelinePlayProtected
+            | Action::AiAdviceFeedback
+            | Action::AiReviewRerun
+            | Action::LlmPause
+            | Action::LlmResume
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge
@@ -1053,6 +1100,12 @@ impl Action {
             Action::ProjectRead | Action::MergeRequestRead | Action::MergeRequestList => {
                 ActAsRule::ReadWithoutAssertion
             }
+            // Plan 19 §3.3, §8.2 (ADR-0025 Amendment L5-4): kanflow's read
+            // tools ask about pipelines and deployments as the person who
+            // asked — reads only, by the same min rule. A route answers
+            // them once its loader adds the act-as facts (L5-9); until
+            // then `act_as_facts_missing`.
+            Action::PipelineRead | Action::DeployRead => ActAsRule::ReadWithoutAssertion,
             // F-36: a person approves from kanflow with an assertion they
             // confirmed in a forge session (§4, §5).
             Action::MergeRequestApprove => ActAsRule::RequiresAssertion(Intent::Approve),
@@ -1162,9 +1215,8 @@ impl Action {
             | Action::DocLintMigrationManage
             | Action::DocumentEditClaim
             | Action::DocumentEditClaimRevoke
-            // M4 C2: pipelines are no act-as action (ADR-0025 §4).
-            | Action::PipelineRead
-            // M4 C5: nor are their outputs.
+            // M4 C5: pipeline outputs are no act-as action (ADR-0025 §4;
+            // plan 19 §8.2 added the pipeline read, not its outputs).
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
             | Action::CiArtifactRead
@@ -1189,8 +1241,8 @@ impl Action {
             | Action::AutofixSettingsManage
             // M4 C6: nor are CI secrets.
             | Action::CiVariableManage
-            // M4 C11: nor are deployments (an approval is a person's own).
-            | Action::DeployRead
+            // M4 C11: nor are deployment changes (an approval is a
+            // person's own).
             | Action::DeployEnvironmentManage
             | Action::DeployApproversManage
             | Action::DeployTargetManage
@@ -1222,6 +1274,15 @@ impl Action {
             | Action::WebShell
             | Action::Health
             | Action::Metrics
+            // Plan 19 §8.2: no write of the LLM is acted for — no vote, no
+            // rerun, no setting, no pause — nor the diagnosis (an
+            // administrator's; no administrator right is lent, §3).
+            | Action::AiAdviceFeedback
+            | Action::AiReviewRerun
+            | Action::LlmSettingsManage
+            | Action::OpsDiagnosisRead
+            | Action::LlmPause
+            | Action::LlmResume
             // ADR-0036: the portal's widgets are no act-as action.
             | Action::PortalWidgetRead => ActAsRule::Denied,
         }
@@ -1396,6 +1457,13 @@ impl Action {
             | Action::IntegrationBindingManage
             | Action::IntegrationBindingRemove
             | Action::RepositorySearch
+            // Plan 19 §8.2: nor anything of the LLM.
+            | Action::AiAdviceFeedback
+            | Action::AiReviewRerun
+            | Action::LlmSettingsManage
+            | Action::OpsDiagnosisRead
+            | Action::LlmPause
+            | Action::LlmResume
             // ADR-0036: nor the portal's widgets.
             | Action::PortalWidgetRead => CiRule::Denied,
         }

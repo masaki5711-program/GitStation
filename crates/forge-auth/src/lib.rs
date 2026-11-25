@@ -30,6 +30,8 @@ mod feed_ctx;
 mod integration_ctx;
 // M4 C0: CI runner and job principals (ADR-0029).
 mod job;
+// M5 (plan 19 §8.2): who reads an AI advice.
+mod llm;
 pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
@@ -76,6 +78,8 @@ mod matrix_rows_autofix;
 mod matrix_rows_portal;
 // Plan 17 P17-3: ai_assets.enabled.
 mod matrix_rows_ai_assets;
+// M5 L5-4 (plan 19 §8.2): the local LLM's actions.
+mod matrix_rows_llm;
 // ADR-0038 §2: org bindings.
 mod matrix_rows_org_bindings;
 // M4 C13: the SSH git transport and SSH keys (ADR-0033).
@@ -113,6 +117,7 @@ pub use deploy_ctx::{DeploymentCtx, LoadedDeployment};
 pub use feed_ctx::{prove_visible, IntegrationFeedCtx, LoadedIntegrationFeed};
 pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
 pub use job::authorize_pinned_copy;
+pub use llm::{advice_reader, authorize_advice, AdviceReader};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,

@@ -378,6 +378,12 @@ pub(crate) const ACT_AS_ROWS: &[Row] = &[
     row(A::MergeRequestRead, READER, BOUND_MR, Allow),
     row(A::ProjectRead, via(MAINTAINER, ViaToken::Reader, Assert::None), BOUND_PROJECT, Allow),
     row(A::ProjectRead, via(REPORTER, ViaToken::Approver, Assert::None), BOUND_PROJECT, Allow),
+    // Plan 19 §8.2 (ADR-0025 Amendment L5-4): kanflow's read tools ask
+    // about pipelines and deployments as the person, by the same min rule.
+    row(A::PipelineRead, READER, BOUND_PROJECT, Allow),
+    row(A::DeployRead, READER, BOUND_PROJECT, Allow),
+    row(A::PipelineRead, via(REPORTER, ViaToken::Reader, Assert::None), BOUND_PROJECT, Allow),
+    row(A::DeployRead, via(REPORTER, ViaToken::Reader, Assert::None), BOUND_PROJECT, Allow),
     // Approve / unapprove with the matching assertion.
     row(A::MergeRequestApprove, APPROVER, BOUND_MR, Allow),
     row(A::MergeRequestApprove, via(MAINTAINER, ViaToken::Approver, Assert::Approve), BOUND_MR, Allow),
@@ -418,12 +424,27 @@ pub(crate) const ACT_AS_ROWS: &[Row] = &[
     row(A::ProjectRead, via(DEV, ViaToken::NoActAs, Assert::None), BOUND_PROJECT, deny(E::InsufficientScope)),
     row(A::ProjectRead, via(DEV, ViaToken::Agent, Assert::None), BOUND_PROJECT, deny(E::Forbidden)),
     row(A::ProjectRead, W::ActAs(Via { person: DEV, token: ViaToken::Reader, assertion: Assert::None, enabled: false }), BOUND_PROJECT, deny(E::Forbidden)),
+    // The pipeline and deployment reads: unbound (404), invisible to the
+    // person or the service account (404), the min rule, an assertion,
+    // an agent's token.
+    row(A::PipelineRead, READER, scene(REPORTER, false, Target::Project, Drift::None), deny(E::NotFound)),
+    row(A::DeployRead, READER, scene(REPORTER, false, Target::Project, Drift::None), deny(E::NotFound)),
+    row(A::PipelineRead, via(None, ViaToken::Reader, Assert::None), BOUND_PROJECT, deny(E::NotFound)),
+    row(A::DeployRead, READER, scene(None, true, Target::Project, Drift::None), deny(E::NotFound)),
+    row(A::PipelineRead, via(MAINTAINER, ViaToken::Reader, Assert::None), scene(Some(Role::Guest), true, Target::Project, Drift::None), deny(E::Forbidden)),
+    row(A::DeployRead, via(Some(Role::Guest), ViaToken::Reader, Assert::None), BOUND_PROJECT, deny(E::Forbidden)),
+    row(A::PipelineRead, via(DEV, ViaToken::Reader, Assert::Approve), BOUND_PROJECT, deny(E::ActAsAssertionInvalid)),
+    row(A::DeployRead, via(DEV, ViaToken::Agent, Assert::None), BOUND_PROJECT, deny(E::Forbidden)),
     // Review (authz HIGH): a route whose loader adds no act-as facts
     // (approval rules, merge settings, integration bindings) is refused:
     // the plain resource is never decided as the person's.
     row(A::ProjectRead, READER, F::PrivateProject, deny(E::Forbidden)),
     row(A::MergeRequestList, READER, F::PrivateProject, deny(E::Forbidden)),
     row(A::MergeRequestRead, READER, F::Mr(crate::matrix_review::MrFixture::other()), deny(E::Forbidden)),
+    // Until L5-9 the pipeline and deployment routes' loaders add no act-as
+    // facts: refused, never decided as the person's.
+    row(A::PipelineRead, READER, F::PrivateProject, deny(E::Forbidden)),
+    row(A::DeployRead, READER, F::PrivateProject, deny(E::Forbidden)),
     // 5. the claim: the integration's own service account, `act_as`.
     row(A::ActAsAssertionClaim, W::ServiceAccountTokenActAs, F::IntegrationFeed { own: true, enabled: true, act_as: false }, Allow),
     row(A::ActAsAssertionClaim, W::ServiceAccountTokenActAs, F::IntegrationFeed { own: false, enabled: true, act_as: false }, deny(E::NotFound)),

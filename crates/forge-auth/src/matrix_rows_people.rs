@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 54] = [
+const GROUPS: [[Row; 2]; 59] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -148,6 +148,14 @@ const GROUPS: [[Row; 2]; 54] = [
     both!(A::PipelineScheduleManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // M4 C12 review: a protected pipeline's manual job is a Maintainer's.
     both!(A::PipelinePlayProtected, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    // Plan 19 §8.2: the vote on an advice, the rerun, `llm.review`
+    // (session only: the administrator's session is the twin) and the
+    // gateway's pause are a person's.
+    both!(A::AiAdviceFeedback, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    both!(A::AiReviewRerun, MAINTAINER.0, MAINTAINER.1, F::Mr(MF::other())),
+    both!(A::LlmSettingsManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::PrivateProject),
+    both!(A::LlmPause, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Instance),
+    both!(A::LlmResume, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Instance),
     both!(A::WebhookDeliver, MAINTAINER.0, MAINTAINER.1, F::ProjectEvents {
         class: forge_core::VisibilityClass::Integration,
         project: crate::matrix_review::MrProject::Private,

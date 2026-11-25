@@ -1689,6 +1689,63 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             need(Role::Maintainer, p.role)
         }
 
+        // --- the local LLM (M5, plan 19 §8.2, ADR-0039) ---
+        // A vote on an advice: whoever reads its subject (a merge request,
+        // a project's deployment), people only — an agent's vote would
+        // skew the measure of the advice (§4).
+        // (Visibility was decided above: a caller who cannot see the
+        // subject, an agent included, is 404 before this.)
+        (Action::AiAdviceFeedback, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Reporter, read_role(p))
+        }
+        // As `MergeRequestRead` decides the merge request (review LOW: the
+        // branch names too), then people only.
+        (
+            Action::AiAdviceFeedback,
+            Resource::MergeRequest {
+                project,
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            need(Role::Reporter, read_role(project))?;
+            branches(source_branch, target_branch).map_err(refused)?;
+            people_only()
+        }
+        // An incident diagnosis (and a vote on one) is an administrator's;
+        // anyone else is answered as if there were none, before any other
+        // refusal. An administrator's agent token reads it (the
+        // confidential ones are withheld: `llm::authorize_advice`), never
+        // votes.
+        (Action::OpsDiagnosisRead | Action::AiAdviceFeedback, Resource::Instance) => {
+            if !admin {
+                return Err(deny(ErrorCode::NotFound).with_context("reason", "admin_only"));
+            }
+            if action == Action::AiAdviceFeedback {
+                people_only()?;
+            }
+            Ok(())
+        }
+        // Asking the first-pass review again: a Developer's, people only
+        // (the route limits it to 3 an hour per merge request).
+        (Action::AiReviewRerun, Resource::MergeRequest { project, .. }) => {
+            people_only()?;
+            need(Role::Developer, project.role)
+        }
+        // `llm.review`: a Maintainer's in a session (`is_session_only`),
+        // people only; the auto-merge principal never reaches here.
+        (Action::LlmSettingsManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+        // The gateway's pause: an administrator, a person.
+        (Action::LlmPause | Action::LlmResume, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role, .. }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1841,6 +1898,12 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::RunnerLogAppend
             | Action::RunnerJobComplete
             | Action::PortalWidgetRead
+            | Action::AiAdviceFeedback
+            | Action::AiReviewRerun
+            | Action::LlmSettingsManage
+            | Action::OpsDiagnosisRead
+            | Action::LlmPause
+            | Action::LlmResume
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
