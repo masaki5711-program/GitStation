@@ -993,6 +993,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "notifications read",
             "activity",
             "search",
+            "wiki show",
             "wiki create",
             "wiki unlink",
             "admin service-account list",

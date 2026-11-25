@@ -7,6 +7,8 @@
 //!   failure after the creation `FG-KNOW-0004` (no link; runbook
 //!   knowledge).
 //! - `gstn wiki unlink <id> --yes`: `DELETE …/wiki`; the wiki project stays.
+//! - `gstn wiki show <id>`: `GET …/wiki` (plan 20 W4); `404 FG-REPO-0005`
+//!   when there is no wiki the caller may read.
 
 use serde_json::{json, Map, Value};
 
@@ -18,6 +20,24 @@ use crate::http::Method;
 
 pub fn wiki(cli: &Cli, command: &WikiCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     match command {
+        WikiCommand::Show { id } => {
+            let c = client(cli, env, io)?;
+            let out = call(
+                &c,
+                Method::Get,
+                &format!("/api/v1/projects/{id}/wiki"),
+                &[],
+                None,
+            )?;
+            let human = format!(
+                "Wiki {} (project {}, {}) on {}",
+                text(&out, "wiki_path"),
+                text(&out, "wiki_project_id"),
+                text(&out, "display_name"),
+                text(&out, "default_branch"),
+            );
+            emit(io, cli, out, &human)
+        }
         WikiCommand::Create {
             id,
             path,

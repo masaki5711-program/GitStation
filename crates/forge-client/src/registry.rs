@@ -1747,7 +1747,16 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["GET /api/v1/search"],
         output: r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["kind","project_id","project_path","title","iid","path","snippet","updated_at","truncated"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#,
     },
-    // ── plan 20 W2: a project's wiki ──
+    // ── plan 20 W2: a project's wiki; W4: show it ──
+    CommandSpec {
+        name: "wiki show",
+        summary: "Show a project's linked wiki (or, asked on a wiki, that wiki): its project id, path, display name and branch. 404 FG-REPO-0005 when there is none you may read (an unreadable wiki is never named).",
+        args: &[arg("id", "positional", true, "The project id.")],
+        examples: &["gstn wiki show 7", "gstn wiki show 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/wiki"],
+        output: r#"{"type":"object","required":["wiki_project_id","wiki_path","display_name","default_branch"],"properties":{"wiki_project_id":{"type":"integer"},"wiki_path":{"type":"string"},"display_name":{"type":"string"},"default_branch":{"type":"string"}}}"#,
+    },
     CommandSpec {
         name: "wiki create",
         summary: "Create a project's wiki and link it in one step: an ordinary project <project>-wiki in the same namespace with its first page WIKI-0001 on a protected main (Developer may push); the project's members get the same role on it. A person's action (Maintainer); 409 FG-KNOW-0003 when refused, 500 FG-KNOW-0004 when a step after the creation failed (no link).",

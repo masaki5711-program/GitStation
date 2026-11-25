@@ -3064,7 +3064,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** The project's linked wiki (or, asked on a wiki, that wiki) when the caller may also read the wiki project: {wiki_project_id, wiki_path, display_name, default_branch}; 404 FG-REPO-0005 without a wiki or when the wiki is not readable (never leaked) */
+        get: operations["get_api_v1_projects_id_wiki"];
         put?: never;
         /** Create the project's wiki and link it in one step ({"path"?, "display_name"?}): an ordinary project <path>-wiki in the same namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/wiki.page.yml, WIKI-0001.md), main protected (Developer may push, no force push), then the link; the owner project's members inherit their role on it (one way, one hop). People only, Maintainer of the owner; 409 FG-KNOW-0003 refused (already linked, chain, name taken), 500 FG-KNOW-0004 when a step after the creation failed (no link written) */
         post: operations["post_api_v1_projects_id_wiki"];
@@ -8989,6 +8990,20 @@ export interface components {
             /** @description The wiki project's full path. */
             wiki_path: string;
             /** Format: int64 */
+            wiki_project_id: number;
+        };
+        /** @description The project's linked wiki, as the caller may read it (`GET …/wiki`). */
+        WikiLinkBody: {
+            /** @description The branch the wiki's pages are read from and saved to (`main`). */
+            default_branch: string;
+            /** @description The wiki project's display name. */
+            display_name: string;
+            /** @description The wiki project's full path. */
+            wiki_path: string;
+            /**
+             * Format: int64
+             * @description The wiki project (the project itself when asked on the wiki).
+             */
             wiki_project_id: number;
         };
         /** @description The unlinked wiki (the project stays). */
@@ -16562,6 +16577,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RotatedWebhookSecret"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_wiki: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WikiLinkBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

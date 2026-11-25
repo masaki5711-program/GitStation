@@ -23,4 +23,5 @@ export const loaders = {
   compare: () => import('./repo/CompareScreen'),
   search: () => import('./search/SearchScreen'),
   activity: () => import('./Activity'),
+  wiki: () => import('./wiki/WikiScreen'),
 };

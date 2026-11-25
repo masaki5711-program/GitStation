@@ -88,6 +88,7 @@ export const PipelineScreen = screen(() => loaders.pipeline().then((m) => m.Pipe
 export const MergeQueueScreen = screen(() => loaders.mergeQueue().then((m) => m.MergeQueueScreen));
 export const SchedulesScreen = screen(() => loaders.schedules().then((m) => m.SchedulesScreen));
 export const EditorScreen = screen(() => loaders.editor().then((m) => m.EditorScreen));
+export const WikiScreen = screen(() => loaders.wiki().then((m) => m.WikiScreen));
 export const ActAsConfirm = screen(() => loaders.actAs().then((m) => m.ActAsConfirm));
 export const ActAsBindingConfirm = screen(() => loaders.actAsBinding().then((m) => m.ActAsBindingConfirm));
 
@@ -100,6 +101,7 @@ const BY_WORD: Record<string, (() => Promise<unknown>) | undefined> = {
   'merge-queue': loaders.mergeQueue,
   edit: loaders.editor,
   new: loaders.editor,
+  wiki: loaders.wiki,
 };
 
 /** Starts loading the chunk of a screen word ahead of the click. A failed

@@ -9433,6 +9433,52 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn wiki show 7",
+        "gstn wiki show 7 --json"
+      ],
+      "name": "wiki show",
+      "output": {
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "wiki_path": {
+            "type": "string"
+          },
+          "wiki_project_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "wiki_project_id",
+          "wiki_path",
+          "display_name",
+          "default_branch"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/wiki"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show a project's linked wiki (or, asked on a wiki, that wiki): its project id, path, display name and branch. 404 FG-REPO-0005 when there is none you may read (an unreadable wiki is never named)."
+    },
+    {
+      "args": [
+        {
           "description": "The owner project id.",
           "kind": "positional",
           "name": "id",
