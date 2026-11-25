@@ -87,3 +87,11 @@ M6（計画 20）は Wiki・個人ノート・横断検索（と最小の Issue�
 - **書き込みの順序**: 1 トランザクション（文の時間切れ 30 s、ロック待ち 5 s）。`search_index_state` の行をロックし、ジョブが読み始めた SHA と比べる（間に別のジョブが書いたら読み直す、3 回まで）。
 - **検索の結果**: `scope=document`。文書の行は `RepoBrowse`（文書の API と同じ Action）の通ったプロジェクトだけを候補にし、1 件ずつもう一度判定する。結果の `path` は先端のパス。行の `source_updated_at` は索引に入った時刻。
 - 新しい機能クレート `forge-search` はまだ作らない: 文書の読みと行の組み立ては `forge-checks::doc_search`（既に `read_tree` と `confidential_in` を持つ機能クレート）、書き込みは `forge-db`、ジョブは `forge-cli`。依存の向きは変わらない。
+
+## Amendment W4（2026-11-25、Wiki の画面）
+
+- **結び付けの読み**: `GET /api/v1/projects/{id}/wiki`（`ProjectRead` を主プロジェクトで判定。Wiki に聞いたときは Wiki 自身）。答えは `{wiki_project_id, wiki_path, display_name, default_branch}` だけで、主プロジェクトの情報は返さない（Wiki だけのメンバーは主プロジェクトを読めないことがある）。さらに Wiki のプロジェクトの `ProjectRead` を呼び出し側の資格情報で `prove` し、通らなければ「Wiki が無い」と同じ `404 FG-REPO-0005`（ログに `reason=wiki_unreadable` と拒否のコード）。読めない Wiki の id・パス・名前は出さない。`gstn wiki show` が同じ道。
+- **画面の語**: `/-/wiki` を `RouteWord::Wiki` として SPA の殻に足し、ADR-0015 の予約を解く（`{path}.wiki.git` は予約のまま）。
+- **画面**: ページは文書の API で読み、保存は簡単な編集の 1 つの書き込み（`main` への直接のコミット）。front matter はフォームが読み書きし、利用者に YAML を見せない。フォームで同じに戻せない front matter はファイルの編集画面へ案内する（推測しない）。lint が赤のときは先端の `forge/doc-lint` の注記（またはページ自身の解析の問題）から「どのページの何行目か」と「直す」を 1 行で出す。
+- **未了**: `forge/doc-lint` は今は MR の版の先端でだけ走る。Wiki の直接の push の後に走らせるのは別の項目（それまでは画面の 1 行はページ自身の解析の問題だけで出る）。
+- **受け入れた LOW（独立のセキュリティレビュー、2026-11-25）**: (1) `GET …/wiki` の「Wiki が無い」と「結び付いているが読めない」は同じ `404 FG-REPO-0005` だが、後者は Wiki のプロジェクトを読む分だけ応答が遅く、時間の差から「何かの Wiki がある」ことだけは分かり得る。id・パス・名前は出ないので受け入れる。(2) 主プロジェクトの Maintainer が Wiki を読めない場合、画面は「Wiki を作る」を出し、押すと `409 FG-KNOW-0003 reason=already_linked` になる。その Maintainer は結び付けを外せる（`ProjectWikiLink`）ので受け入れる。

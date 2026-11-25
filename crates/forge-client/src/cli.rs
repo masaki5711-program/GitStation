@@ -571,6 +571,14 @@ pub enum ProjectCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum WikiCommand {
+    /// Show the project's linked wiki (or, asked on a wiki, that wiki):
+    /// its project id, path, name and branch. Not found when there is none
+    /// you may read.
+    Show {
+        /// The project id.
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
     /// Create the project's wiki (an ordinary project in the same
     /// namespace, first page WIKI-0001) and link it; the project's members
     /// get the same role on it.

@@ -522,6 +522,9 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Webhooks,
     RouteWord::Edit,
     RouteWord::New,
+    // Plan 20 W4: the project's wiki (its data: `GET …/wiki` and the
+    // wiki project's document API).
+    RouteWord::Wiki,
 ];
 
 /// The words whose page is the SPA shell on a group (no merge request
@@ -676,10 +679,20 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
     wiki_routes(portal_widget_routes(all))
 }
 
-/// A project's wiki (plan 20 W2, ADR-0040 §5): create and link, unlink.
+/// A project's wiki (plan 20 W2, ADR-0040 §5): create and link, unlink;
+/// read the link (plan 20 W4).
 fn wiki_routes(registry: Registry<AppState>) -> Registry<AppState> {
     use routes::wiki as k;
     registry
+        .route_with(
+            Verb::Get,
+            k::ONE,
+            Action::ProjectRead,
+            "The project's linked wiki (or, asked on a wiki, that wiki) when the caller may also read the wiki project: {wiki_project_id, wiki_path, display_name, default_branch}; 404 FG-REPO-0005 without a wiki or when the wiki is not readable (never leaked)",
+            k::WikiOwner,
+            k::read,
+        )
+        .responds::<k::WikiLinkBody>(Verb::Get, k::ONE)
         .route_with_body(
             Verb::Post,
             k::ONE,

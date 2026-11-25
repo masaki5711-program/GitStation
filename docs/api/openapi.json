@@ -14218,6 +14218,37 @@
         ],
         "type": "object"
       },
+      "WikiLinkBody": {
+        "additionalProperties": false,
+        "description": "The project's linked wiki, as the caller may read it (`GET …/wiki`).",
+        "properties": {
+          "default_branch": {
+            "description": "The branch the wiki's pages are read from and saved to (`main`).",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "The wiki project's display name.",
+            "type": "string"
+          },
+          "wiki_path": {
+            "description": "The wiki project's full path.",
+            "type": "string"
+          },
+          "wiki_project_id": {
+            "description": "The wiki project (the project itself when asked on the wiki).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "wiki_project_id",
+          "wiki_path",
+          "display_name",
+          "default_branch"
+        ],
+        "type": "object"
+      },
       "WikiUnlinkedBody": {
         "additionalProperties": false,
         "description": "The unlinked wiki (the project stays).",
@@ -25734,6 +25765,45 @@
         },
         "summary": "Unlink the project's wiki: the wiki project and its history stay, the owner's members lose the inherited role (people only, Maintainer of the owner); 409 FG-KNOW-0003 reason=not_linked without a wiki",
         "x-forge-action": "ProjectWikiLink"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id_wiki",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiLinkBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The project's linked wiki (or, asked on a wiki, that wiki) when the caller may also read the wiki project: {wiki_project_id, wiki_path, display_name, default_branch}; 404 FG-REPO-0005 without a wiki or when the wiki is not readable (never leaked)",
+        "x-forge-action": "ProjectRead"
       },
       "post": {
         "operationId": "post_api_v1_projects_id_wiki",

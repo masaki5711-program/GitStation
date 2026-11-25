@@ -586,6 +586,10 @@ reason = "Resolving a discussion changes a merge condition (ADR-0024 #2): people
 gstn = "activity"
 reason = "A person's own activity feed (plan 15 MR 8): the server refuses an agent token (ActivityRead is people_only)."
 
+[[deferred]]
+gstn = "wiki show"
+reason = "Finding a project's wiki (plan 20 W4) joins the knowledge search tool (X1), which reads the wiki's pages for an agent; an agent token can call GET /api/v1/projects/{id}/wiki meanwhile."
+
 [[excluded]]
 gstn = "wiki create"
 reason = "Creating and linking a wiki is a person's decision (plan 20 W1, ADR-0040 §5): the owner project's members gain a role on it, so ProjectWikiLink is people_only and the server refuses an agent token."
