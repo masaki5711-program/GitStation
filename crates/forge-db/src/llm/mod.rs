@@ -12,6 +12,7 @@
 //! - **The arbitration**: [`interactive_active`] (the `gpu-eval` claim
 //!   waits for it, plan 19 §1.1), [`gpu_eval_running`] (batch work waits
 //!   for the bench).
+//! - **`forge doctor`**: [`queue_health`] (`llm.queue_age`, plan 19 §8.4).
 //! - **People**: [`record_feedback_decided`], [`advice_decided`] (one verdict per advice, finding and
 //!   person; changing it updates the row), [`review_mode`]. Reads and
 //!   votes are `*_decided`: the store loads the advice's own subject and
@@ -587,6 +588,67 @@ pub async fn gpu_eval_running(db: &Db) -> Result<bool, ForgeError> {
         .fetch_one(db.pool().executor())
         .await
         .map_err(|e| read_query_error(QUERY, e))
+    })
+    .await
+}
+
+/// How long ago a request that gave up in the queue counts for
+/// [`QueueHealth::deadline_misses`].
+pub const DEADLINE_MISS_WINDOW_SECS: i64 = 60 * 60;
+
+/// The live queue as the records show it (`forge doctor` `llm.queue_age`,
+/// plan 19 §8.4). The queue itself is in the worker's memory; its rows
+/// are written when a request is queued, starts and ends.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct QueueHealth {
+    /// Requests `queued` now.
+    pub queued: i64,
+    /// Requests `running` now.
+    pub running: i64,
+    /// Per tier (as submitted: its deadline is that tier's), how long the
+    /// oldest `queued` request has waited, in seconds. Tiers with nothing
+    /// queued are absent; highest tier first.
+    pub oldest_queued_s: Vec<(Priority, i64)>,
+    /// Requests that ended `FG-LLM-0004` (the deadline passed in the queue)
+    /// in the last [`DEADLINE_MISS_WINDOW_SECS`].
+    pub deadline_misses: i64,
+}
+
+/// Read [`QueueHealth`] (the read pool).
+pub async fn queue_health(db: &Db) -> Result<QueueHealth, ForgeError> {
+    const QUERY: &str = "llm.queue_health";
+    db.within(QUERY, async {
+        let tiers: Vec<(String, i64, i64, Option<i64>)> = sqlx::query_as(
+            "SELECT priority,                count(*) FILTER (WHERE state = 'queued'),                count(*) FILTER (WHERE state = 'running'),                floor(extract(epoch FROM now() - min(queued_at)                  FILTER (WHERE state = 'queued')))::bigint              FROM forge.llm_requests WHERE state IN ('queued', 'running')              GROUP BY priority",
+        )
+        .fetch_all(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
+        // A request that ended within the window was queued at most the
+        // stale bound before it: the queued_at index bounds the scan.
+        let deadline_misses: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM forge.llm_requests              WHERE queued_at > now() - make_interval(secs => $1)                AND state = 'abandoned' AND error_code = $2                AND finished_at > now() - make_interval(secs => $3)",
+        )
+        .bind((STALE_LIVE_SECS + DEADLINE_MISS_WINDOW_SECS) as f64)
+        .bind(ErrorCode::LlmQueueDeadline.id())
+        .bind(DEADLINE_MISS_WINDOW_SECS as f64)
+        .fetch_one(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
+        let mut health = QueueHealth {
+            deadline_misses,
+            ..QueueHealth::default()
+        };
+        for (priority, queued, running, oldest) in tiers {
+            let priority = Priority::parse(&priority).ok_or_else(|| stored_invalid("priority"))?;
+            health.queued += queued;
+            health.running += running;
+            if let Some(age) = oldest {
+                health.oldest_queued_s.push((priority, age.max(0)));
+            }
+        }
+        health.oldest_queued_s.sort_by_key(|(p, _)| p.rank());
+        Ok(health)
     })
     .await
 }

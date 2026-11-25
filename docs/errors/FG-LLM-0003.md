@@ -20,7 +20,7 @@ Plan 19 §8.1, plan 17 §6 (ADR-0039): the model Ollama serves under `llm.model`
 
 ## 調べ方 (diagnosis)
 
-The worker logs it once per streak with `task=llm_model_check`, `model`, `expected_digest` and `actual_digest` (or `reason=model_missing`); later requests carry `reason=stopped`. Check (read-only): `curl -s <llm.endpoint>/api/tags` and compare the model's `digest` with `llm.model` in the configuration; ask the Kanflow side whether they changed the model.
+The worker logs it once per streak with `task=llm_model_check`, `model`, `expected_digest` and `actual_digest` (or `reason=model_missing`); later requests carry `reason=stopped`. `forge doctor` shows the same comparison as `llm.model` (this code with `expected_digest` / `actual_digest`, or `reason=model_missing`). Check (read-only): `curl -s <llm.endpoint>/api/tags` and compare the model's `digest` with `llm.model` in the configuration; ask the Kanflow side whether they changed the model.
 
 ## 対処 (fix)
 

@@ -87,20 +87,28 @@ pub fn parse_busy(body: &[u8]) -> Kanflow {
     }
 }
 
+impl KanflowGate {
+    /// Ask Kanflow once. `Err` when no answer came (the error's `reason`:
+    /// `connect`, `timeout`, `status_<code>`, …; never its text);
+    /// `Ok(Kanflow::Unreachable)` when the answer was not understood.
+    /// `forge doctor`'s `llm.kanflow_gate` shows the reason; the gateway
+    /// treats both as unreachable.
+    pub async fn probe(&self) -> Result<Kanflow, ForgeError> {
+        let sent = self
+            .client
+            .get(&self.url)
+            .header("x-internal-token", self.token.expose())
+            .send()
+            .await;
+        read_body(sent, 64 * 1024)
+            .await
+            .map(|body| parse_busy(&body))
+    }
+}
+
 impl BusySource for KanflowGate {
     fn poll(&self) -> BusyFuture<'_> {
-        Box::pin(async move {
-            let sent = self
-                .client
-                .get(&self.url)
-                .header("x-internal-token", self.token.expose())
-                .send()
-                .await;
-            match read_body(sent, 64 * 1024).await {
-                Ok(body) => parse_busy(&body),
-                Err(_) => Kanflow::Unreachable,
-            }
-        })
+        Box::pin(async move { self.probe().await.unwrap_or(Kanflow::Unreachable) })
     }
 }
 

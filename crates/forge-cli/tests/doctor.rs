@@ -91,6 +91,10 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    repositories.stale_locks",
         // M3 S2: no key file and no act-as token.
         "ok    act_as.keys    not configured",
+        // Plan 19 L5-11: nothing asked the LLM; it is off by default.
+        "skip  llm.queue_age  llm.enabled is off",
+        "skip  llm.endpoint   llm.enabled is off",
+        "skip  llm.kanflow_gate llm.enabled is off",
         "ok    storage",
         "ok    git",
     ] {
@@ -683,6 +687,123 @@ fn doctor_reports_each_check_and_exits_1_on_failure() {
         }
     };
     assert!(text.contains(&ui), "missing {ui:?} in:\n{text}");
+}
+
+/// A local HTTP server answering each request whose path starts with a
+/// route's prefix with that route's JSON (404 otherwise); serves until the
+/// test process ends.
+fn fake_http(routes: Vec<(&'static str, &'static str)>) -> String {
+    use std::io::{BufRead as _, BufReader};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    std::thread::spawn(move || {
+        for sock in listener.incoming() {
+            let Ok(mut sock) = sock else { return };
+            let mut reader = BufReader::new(sock.try_clone().expect("clone"));
+            let mut request_line = String::new();
+            let _ = reader.read_line(&mut request_line);
+            loop {
+                let mut header = String::new();
+                match reader.read_line(&mut header) {
+                    Ok(n) if n > 2 => continue,
+                    _ => break,
+                }
+            }
+            let path = request_line.split_whitespace().nth(1).unwrap_or("");
+            let (status, body) = routes
+                .iter()
+                .find(|(prefix, _)| path.starts_with(prefix))
+                .map_or((404, ""), |(_, body)| (200, *body));
+            let _ = write!(
+                sock,
+                "HTTP/1.1 {status} X
+content-type: application/json
+content-length: {}
+connection: close
+
+{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// Plan 19 L5-11 (§8.4): with the gateway on, doctor names the endpoint,
+/// the pinned model, the loaded context and Kanflow's gate — a digest that
+/// is not the pinned one fails with the alert code, a context other than
+/// `llm.num_ctx` and an unanswering Kanflow only warn.
+#[test]
+fn doctor_reports_the_llm_endpoint_model_context_and_kanflow_gate() {
+    let pinned = "a".repeat(64);
+    let tags: &'static str = Box::leak(
+        format!(r#"{{"models":[{{"name":"qwen3:27b","model":"qwen3:27b","digest":"{pinned}"}}]}}"#)
+            .into_boxed_str(),
+    );
+    let ollama = fake_http(vec![
+        ("/api/tags", tags),
+        (
+            "/api/ps",
+            r#"{"models":[{"name":"qwen3:27b","model":"qwen3:27b","context_length":4096}]}"#,
+        ),
+    ]);
+    let kanflow = fake_http(vec![(
+        "/api/internal/ai-busy",
+        r#"{"busyHigh":1,"idleForMs":null}"#,
+    )]);
+    let mut token = tempfile::NamedTempFile::new().expect("token file");
+    token.write_all(b"synthetic-internal-token").expect("write");
+    let token_path = token.path().to_string_lossy().into_owned();
+    let busy_url = format!("{kanflow}/api/internal/ai-busy");
+    let model = format!("qwen3:27b@sha256:{pinned}");
+    let llm = |model: &str, busy: &str| {
+        let out = forge(
+            &["doctor"],
+            &[
+                ("FORGE_LLM_ENABLED", "true"),
+                ("FORGE_LLM_ENDPOINT", ollama.as_str()),
+                ("FORGE_LLM_MODEL", model),
+                ("FORGE_LLM_NUM_CTX", "8192"),
+                ("FORGE_LLM_KANFLOW_BUSY_URL", busy),
+                ("FORGE_LLM_KANFLOW_TOKEN_FILE", token_path.as_str()),
+            ],
+        );
+        stdout(&out)
+    };
+    let text = llm(&model, &busy_url);
+    for line in [
+        format!("ok    llm.endpoint   {ollama} answers"),
+        "ok    llm.model      qwen3:27b".to_owned(),
+        "warn  llm.num_ctx    qwen3:27b loaded with num_ctx 4096 but llm.num_ctx is 8192"
+            .to_owned(),
+        "ok    llm.kanflow_gate busy".to_owned(),
+        // No database configured: the queue is not read.
+        "skip  llm.queue_age".to_owned(),
+    ] {
+        assert!(
+            text.contains(&line),
+            "missing {line:?} in:
+{text}"
+        );
+    }
+    // Another digest than the pinned one: the alert code; a Kanflow that
+    // does not answer: a warning only.
+    let other = format!("qwen3:27b@sha256:{}", "b".repeat(64));
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        format!(
+            "http://{}/api/internal/ai-busy",
+            l.local_addr().expect("addr")
+        )
+    };
+    let text = llm(&other, &closed);
+    assert!(text.contains("FAIL  llm.model"), "{text}");
+    assert!(text.contains("FG-LLM-0003"), "{text}");
+    assert!(
+        text.contains("warn  llm.kanflow_gate no answer (reason=connect"),
+        "{text}"
+    );
+    assert!(!text.contains("synthetic-internal-token"), "{text}");
 }
 
 #[test]

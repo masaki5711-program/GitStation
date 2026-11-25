@@ -12,6 +12,8 @@ GPU は Kanflow の Ollama を共用し、Kanflow の利用者が待つ間は fo
 - 同じく `error_code=FG-LLM-0004`: 待ちの期限（対話 2 分・MR レビュー 30 分・一括 6 時間）を過ぎた。`priority`・`deadline_s`
 - `task=llm_model_check` の FG-LLM-0001: 定期のモデルの確かめで `/api/tags` を読めない（連続の最初の 1 回だけ記録）
 - `forge.llm.metrics`（5 分ごと）: `waiting` が増え続ける、`forge_llm_yield_total{reason="kanflow_busy"}` が増え続ける
+- `forge doctor`（下の「doctor の項目」）: `FAIL llm.endpoint`（FG-LLM-0001）、`FAIL llm.queue_age`（FG-LLM-0004 `reason=queued_past_deadline`）、
+  `warn llm.queue_age`（直近 1 時間に期限切れ）、`warn llm.num_ctx`、`warn llm.kanflow_gate`
 
 ## Impact
 
@@ -26,8 +28,22 @@ GPU は Kanflow の Ollama を共用し、Kanflow の利用者が待つ間は fo
 （Kanflow と同じ値。違うと Ollama がモデルを読み直す）、`llm.timeout_ms`、`llm.concurrency`（1〜2）、`llm.paused`、
 `llm.kanflow_busy_url` + `llm.kanflow_token_file`（Kanflow の `GET /api/internal/ai-busy`、`x-internal-token`）、`llm.kanflow_poll_ms`。
 
+## doctor の項目（計画 19 §8.4。`forge doctor` を worker のホストで。`llm.enabled = false` の間は `llm.queue_age` も含めてすべて `skip`）
+
+| 項目 | 見るもの | 失敗のとき |
+|---|---|---|
+| `llm.endpoint` | Ollama が `/api/tags` に 5 秒で答えるか（社内の行き先かは設定の読み込みで確かめ済み） | `FAIL` FG-LLM-0001 と `reason` → 下の Diagnose 3 |
+| `llm.model` | `llm.model` の `name:tag` が固定した digest であるか | `FAIL` FG-LLM-0003（alert）→ runbook `llm-model-update` |
+| `llm.num_ctx` | 読み込まれているモデルの `context_length`（`/api/ps`）が `llm.num_ctx` と同じか | `warn`: Kanflow と値が違う → 下の「Kanflow との取り合い」 |
+| `llm.kanflow_gate` | Kanflow の `ai-busy` が答えるか（`busy` / `idle`） | `warn` `no answer (reason=…)`: forge は Kanflow を空きとみなし 1 分に 1 件だけ始める（止まらない） |
+| `llm.queue_age` | `queued` の行の層ごとの最古の待ち、直近 1 時間の期限切れ（DB、読み取り。FG-LLM-0004 は warn の重さだが、`queued_past_deadline` は worker の停止を意味するので、助言を必須にしたプロジェクトがあれば SEV3 として扱う） | `FAIL` FG-LLM-0004 `reason=queued_past_deadline`: 期限 + 2 分を過ぎても `queued` = 列を処理するゲートウェイがいない（worker が止まった・固まった）。`warn`: 期限切れがあった → 混雑（下の Mitigate） |
+
+LLM は `/readyz` に入れない（助言なので、LLM の停止でサーバーを準備未了にしない）。
+
 ## Diagnose（読み取りのみ）
 
+0. `forge doctor`（上の表）。`llm.queue_age` が `queued_past_deadline` なら、まず `systemctl status forge-worker` とログの
+   `forge.llm.gateway_started` / `forge.llm.gateway_disabled`（worker が動いているか、ゲートウェイを有効にして起動したか）。
 1. ログを `request_id` か `llm_request_id` で読む: `forge.llm.request_finished`（`error_code`・`reason`・`purpose`・`model`・`prompt_version`）。
 2. 記録: `SELECT id, purpose, priority, state, error_code, attempts, queued_at, started_at, finished_at FROM forge.llm_requests WHERE id = <llm_request_id>;`
    直近の傾向: `SELECT priority, state, error_code, count(*) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1, 2, 3;`
@@ -39,20 +55,35 @@ GPU は Kanflow の Ollama を共用し、Kanflow の利用者が待つ間は fo
 5. worker が止まった後: 前のプロセスの待ち・実行中の行は 7 時間後に `abandoned`（`error_code=FG-LLM-0001`、ログ `forge.llm.abandoned_stale`）。
    依頼した機能がやり直す。
 
+## Kanflow との取り合い
+
+GPU と Ollama は Kanflow と共用する。forge は Kanflow の利用者を待たせない側に寄せてある:
+
+- Kanflow の `ai-busy` が `busy` の間、forge は対話（障害の診断・承認の要約）以外を始めない。`forge_llm_yield_total{reason="kanflow_busy"}` が増える。
+  昼に MR レビューが 30 分の期限（FG-LLM-0004）を超えるなら、利用の重なりが大きい。
+- `ai-busy` に届かない（`llm.kanflow_gate` が `warn`、ログ `forge.llm.kanflow_gate` が `Unreachable`）: forge は 1 分に 1 件だけ始める。
+  Kanflow の内部トークン（`llm.kanflow_token_file`）が Kanflow の側で変わったときにも起きる（`reason=status_401` / `status_403`）。
+- `num_ctx` が Kanflow と違う（`llm.num_ctx` が `warn`）: Ollama は同じモデルでも文脈の長さが変わると読み直す。forge と Kanflow が
+  交互に使うたびに VRAM の入れ替えが起き、どちらも遅くなる（FG-LLM-0001 `timeout` の原因にもなる）。Kanflow の値を聞いて
+  `llm.num_ctx` を合わせる（設定の変更と worker の再起動。本番は承認された手順）。
+
 ## Mitigate（承認のあと。本番は承認された手順だけ）
 
+- 列を処理するゲートウェイがいない（`llm.queue_age` の `queued_past_deadline`）: worker を起動・再起動する（`systemctl start forge-worker`）。
+  残った行は 7 時間で `abandoned` になり、依頼した機能がやり直す。
 - Ollama が落ちた・モデルが無い: Kanflow の側（Ollama の持ち主）に戻してもらう。forge からは Ollama を操作しない。
 - GPU のメモリ不足が夜間のベンチと重なる: ベンチの時間（夜間 01:00〜05:00）を確かめる。一括処理はベンチの間は始まらない。
 - 混雑が続く: `llm.concurrency` を 2 に上げるのは GPU に余裕があるときだけ。続くなら forge 専用の GPU のホスト（計画 19 §1.1 G3）を提案する。
 - 止めたい: `llm.paused = true` で worker を再起動する（新しい依頼は並ばず「一時停止中」。並んでいたものは続く）。戻すときは `false`。
-- 不正な答え（FG-LLM-0002）が続く: runbook `llm-model-update`（モデル・プロンプトの版を戻す）。
+- 不正な答え（FG-LLM-0002）が続く: runbook `llm-advice-quality`（プロンプトの版を戻す）か `llm-model-update`（モデルを戻す）。
 
 ## Verify
 
 - `forge.llm.request_finished` の `outcome=ok` が戻った。`forge_llm_requests_total{outcome="ok"}` が増える。
 - `SELECT state, count(*) FROM forge.llm_requests WHERE queued_at > now() - interval '15 minutes' GROUP BY 1;` に `succeeded` がある。
+- `forge doctor` の `llm.*` がすべて `ok`（`llm.num_ctx` は読み込まれていなければ `not loaded now` の `ok`）。
 
 ## 関連
 
 - ADR-0039、ADR-0017 §3（優先度・予約・昇格）、計画 19 §1.1・§8
-- runbook `llm-model-update`（FG-LLM-0003、モデルの変更）、`ai-eval-bench`（`gpu-eval` のベンチ）、`config-invalid`（FG-SYS-0002）
+- runbook `llm-model-update`（FG-LLM-0003、モデルの変更）、`llm-advice-quality`（FG-LLM-0002 / 0006、助言の質・プロンプトの版を戻す）、`ai-eval-bench`（`gpu-eval` のベンチ）、`config-invalid`（FG-SYS-0002）
