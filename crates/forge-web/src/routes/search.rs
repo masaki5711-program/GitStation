@@ -1,5 +1,6 @@
 //! `GET|HEAD /api/v1/search` (`SearchQuery`, plan 20 K3, ADR-0040): one
-//! search box over projects and merge requests, **showing only what the
+//! search box over projects, merge requests and documents (K4: the default
+//! branch's documents, Wiki pages and notes), **showing only what the
 //! caller may read**.
 //!
 //! - The search itself is decided on the instance by the registry (any
@@ -8,14 +9,16 @@
 //! - **Decided before the read** (review of K3, HIGH): every project is
 //!   decided with `authorize()` first, on the project list's access facts
 //!   (`ProjectPageLoader`): `ProjectRead` for a project's entry, also
-//!   `MergeRequestList` (Reporter) for its merge requests. The search
+//!   `MergeRequestList` (Reporter) for its merge requests and `RepoBrowse`
+//!   for its documents. The search
 //!   statement then ranks, pages and skips **only** rows of those
 //!   projects, so a short page, `has_more` or a `project=` filter can never
 //!   reveal how many hidden rows match (a private project's id answers
 //!   exactly like a missing one). Past [`MAX_READABLE_PROJECTS`] projects the
 //!   search is refused (`FG-KNOW-0001 reason=project_scan_limit`).
 //! - **And again per hit**: a hit shows only when `prove(ProjectRead)`
-//!   (and `MergeRequestList`) allow it on the same facts; nothing of a hit
+//!   (and `MergeRequestList` / `RepoBrowse`) allow it on the same facts;
+//!   nothing of a hit
 //!   (title, path, snippet) is built before that.
 //! - **No count**: the answer never says how many matched. A page scans
 //!   at most [`SCAN_BUDGET`] candidates.
@@ -32,7 +35,7 @@
 //!   HTML (the UI builds `<mark>` itself).
 //! - Parameters: `q` (required, 2 ..= 200 characters after normalization,
 //!   percent-encoded, `+` = space), `scope` (comma-separated `project`,
-//!   `merge_request`), `project` (a positive id), `limit` (1 ..= 50,
+//!   `merge_request`, `document`), `project` (a positive id), `limit` (1 ..= 50,
 //!   default 20), `cursor`. Anything else, or a repeated one, is
 //!   `FG-WEB-0006 reason=param_invalid` (`param=q rule=empty|too_short|too_many_terms|
 //!   too_long|missing|malformed`, …), decided before any lookup.
@@ -83,7 +86,7 @@ pub const QUERY: &[QueryParam] = &[
     },
     QueryParam {
         name: "scope",
-        description: "Comma-separated kinds to search: project, merge_request (default: every kind)",
+        description: "Comma-separated kinds to search: project, merge_request, document (default: every kind)",
         integer_range: None,
     },
     QueryParam {
@@ -129,7 +132,7 @@ pub struct SearchSnippet {
 #[derive(Debug, Serialize, utoipa::ToSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SearchHit {
-    /// `project` or `merge_request`.
+    /// `project`, `merge_request` or `document`.
     pub kind: String,
     #[schema(minimum = 1)]
     pub project_id: i64,
@@ -139,6 +142,10 @@ pub struct SearchHit {
     /// The merge request's number in its project (`null` for a project).
     #[schema(required = true, minimum = 1)]
     pub iid: Option<i64>,
+    /// The document's path at the default branch's tip (`null` for a
+    /// project or a merge request).
+    #[schema(required = true)]
+    pub path: Option<String>,
     pub snippet: SearchSnippet,
     /// The source's last change, UTC, RFC 3339.
     pub updated_at: String,
@@ -305,6 +312,7 @@ async fn bounded<T>(
 struct Allowed {
     project: bool,
     merge_requests: bool,
+    documents: bool,
 }
 
 /// A denial hides the hit; anything that is not a denial fails the page.
@@ -323,9 +331,12 @@ fn decide(principal: &Principal, record: &ProjectRecord) -> Result<Allowed, Forg
     // caller cannot read).
     let merge_requests =
         project && allowed(prove(principal, Action::MergeRequestList, ctx()).map(|_| ()))?;
+    // A document is the repository's content (the document API's action).
+    let documents = project && allowed(prove(principal, Action::RepoBrowse, ctx()).map(|_| ()))?;
     Ok(Allowed {
         project,
         merge_requests,
+        documents,
     })
 }
 
@@ -340,7 +351,11 @@ fn hit(candidate: &SearchCandidate, record: &ProjectRecord, query: &SearchQuery)
         title: candidate.title.clone(), // clone: the candidate is borrowed
         iid: match candidate.kind {
             SourceKind::MergeRequest => candidate.key.parse::<i64>().ok().filter(|n| *n > 0),
-            SourceKind::Project => None,
+            SourceKind::Project | SourceKind::Document => None,
+        },
+        path: match candidate.kind {
+            SourceKind::Document => Some(candidate.key.clone()), // clone: the candidate is borrowed
+            SourceKind::Project | SourceKind::MergeRequest => None,
         },
         snippet: SearchSnippet {
             text: s.text,
@@ -372,6 +387,7 @@ pub(crate) struct Decided {
 /// Walk `candidates` (best first, at most `budget + 1`), keeping what the
 /// caller may read, until `limit` are kept or `budget` are consumed. Pure
 /// apart from `authorize()`.
+#[cfg(test)]
 pub(crate) fn walk(
     principal: &Principal,
     candidates: &[SearchCandidate],
@@ -380,9 +396,25 @@ pub(crate) fn walk(
     limit: usize,
     budget: usize,
 ) -> Result<Decided, ForgeError> {
+    let agent = principal.is_agent_audience();
+    walk_for(principal, agent, candidates, records, query, limit, budget)
+}
+
+/// [`walk`] for an audience decided by the route (`context::audience`: an
+/// agent credential, or a person's credential with `Forge-Context-Audience:
+/// agent` — the document API's rule).
+pub(crate) fn walk_for(
+    principal: &Principal,
+    agent: bool,
+    candidates: &[SearchCandidate],
+    records: &[ProjectRecord],
+    query: &SearchQuery,
+    limit: usize,
+    budget: usize,
+) -> Result<Decided, ForgeError> {
+    let agent = agent || principal.is_agent_audience();
     let by_id: HashMap<ProjectId, &ProjectRecord> = records.iter().map(|r| (r.id, r)).collect();
     let mut decided: HashMap<ProjectId, Allowed> = HashMap::new();
-    let agent = principal.is_agent_audience();
     let mut out = Decided {
         items: Vec::with_capacity(limit),
         consumed: 0,
@@ -406,6 +438,7 @@ pub(crate) fn walk(
         let shown = match candidate.kind {
             SourceKind::Project => allow.project,
             SourceKind::MergeRequest => allow.merge_requests,
+            SourceKind::Document => allow.documents,
         } && !(agent && candidate.classification == "confidential");
         if !shown {
             out.hidden += 1;
@@ -434,6 +467,8 @@ pub(crate) struct Readable {
     pub(crate) projects: Vec<ProjectId>,
     /// Projects whose merge requests may show (also `MergeRequestList`).
     pub(crate) merge_requests: Vec<ProjectId>,
+    /// Projects whose documents may show (also `RepoBrowse`).
+    pub(crate) documents: Vec<ProjectId>,
     /// The allowed projects' records (paths for the hits).
     pub(crate) records: Vec<ProjectRecord>,
 }
@@ -508,6 +543,9 @@ fn admit(
     if allow.merge_requests {
         out.merge_requests.push(record.id);
     }
+    if allow.documents {
+        out.documents.push(record.id);
+    }
     out.records.push(record);
     Ok(())
 }
@@ -516,6 +554,7 @@ async fn page(
     state: &AppState,
     raw_query: Option<&str>,
     principal: &Principal,
+    audience_agent: bool,
     request_id: &str,
 ) -> Result<SearchPage, ForgeError> {
     let lists = state.lists.as_deref().ok_or_else(|| {
@@ -528,7 +567,7 @@ async fn page(
     let viewer = principal.user().ok_or_else(|| {
         ForgeError::new(ErrorCode::Internal).with_context("reason", "search_viewer_missing")
     })?;
-    let agent = principal.is_agent_audience();
+    let agent = audience_agent || principal.is_agent_audience();
     let purpose = purpose(viewer, &request, agent);
     let offset = open_cursor(lists, &purpose, request.cursor.as_deref())?;
     let _slot = lists.acquire_slot(viewer)?;
@@ -541,6 +580,7 @@ async fn page(
         exclude_confidential: agent,
         readable_projects: readable.projects,
         readable_merge_requests: readable.merge_requests,
+        readable_documents: readable.documents,
     };
     let candidates = if filter.readable_projects.is_empty() {
         // Nothing the caller may read: no read at all.
@@ -560,7 +600,7 @@ async fn page(
     let (who, query, limit) = (principal.clone(), request.query.clone(), request.limit);
     let records = readable.records;
     let (decided, candidates) = tokio::task::spawn_blocking(move || {
-        walk(&who, &candidates, &records, &query, limit, budget).map(|d| (d, candidates))
+        walk_for(&who, agent, &candidates, &records, &query, limit, budget).map(|d| (d, candidates))
     })
     .await
     .map_err(|e| {
@@ -608,7 +648,14 @@ pub async fn search(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
         request.principal().clone(),
         request.ctx().request_id.to_string(),
     );
-    let page = page(&state, query.as_deref(), &principal, &request_id).await;
+    // The document API's audience rule (a person's credential may ask to be
+    // answered as an agent): confidential rows are then neither shown nor
+    // counted.
+    let agent = match crate::routes::context::audience(&request) {
+        Ok(a) => a.is_agent(),
+        Err(e) => return request.ctx().fail(e).into_response(),
+    };
+    let page = page(&state, query.as_deref(), &principal, agent, &request_id).await;
     let page = match page {
         Ok(page) => page,
         Err(e) => {

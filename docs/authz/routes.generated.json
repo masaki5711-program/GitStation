@@ -2169,6 +2169,24 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectWikiLink",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/wiki",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectWikiLink",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/wiki",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RepositorySearch",
     "method": "GET",
     "path": "/api/v1/repositories",

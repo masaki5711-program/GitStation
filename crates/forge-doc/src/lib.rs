@@ -13,4 +13,6 @@ pub mod legacy;
 pub mod lint;
 pub mod render;
 pub mod spec_doc;
+// Plan 20 W2 (ADR-0040 §5): a project wiki's first commit.
+pub mod wiki;
 pub mod yaml;

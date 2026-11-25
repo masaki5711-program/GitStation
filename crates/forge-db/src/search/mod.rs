@@ -28,8 +28,15 @@ use sqlx::postgres::PgConnection;
 use crate::subscribers::{DerivedTx, HandleFuture, Ordering, SourceEvent, Subscriber};
 use crate::{query_error, Db};
 
+mod documents;
 mod read;
 
+pub use documents::{
+    apply_documents, documents_job, documents_payload, documents_repository, indexed_documents_sha,
+    record_documents_failed, Applied, DocumentEntry, DocumentScope, DocumentUpdate,
+    DocumentsRequest, DOCUMENTS_JOB, DOCUMENTS_JOB_ATTEMPTS, DOCUMENTS_JOB_TIMEOUT,
+    MAX_DOCUMENT_KEY_BYTES,
+};
 pub use read::{
     candidates, MAX_CANDIDATES, MAX_OFFSET, MAX_RANKED, SEARCH_STATEMENT_TIMEOUT,
     SNIPPET_SOURCE_CHARS,
@@ -89,6 +96,9 @@ struct Entry<'a> {
     title: &'a str,
     ids: String,
     body: &'a str,
+    /// `public`, `internal` or `confidential` (projects and merge requests
+    /// are `internal`; a document's is its classification at the tip).
+    classification: &'static str,
 }
 
 /// Log `FG-KNOW-0002` once for an entry that could not be stored whole.
@@ -150,7 +160,7 @@ async fn upsert(
     sqlx::query(
         "INSERT INTO forge.search_entries (source_kind, project_id, source_key, title, \
            body_text, tokens, classification, truncated, source_updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6::tsvector, 'internal', $7, $8::timestamptz) \
+         VALUES ($1, $2, $3, $4, $5, $6::tsvector, $9, $7, $8::timestamptz) \
          ON CONFLICT (source_kind, project_id, source_key) DO UPDATE SET \
            title = EXCLUDED.title, body_text = EXCLUDED.body_text, tokens = EXCLUDED.tokens, \
            classification = EXCLUDED.classification, truncated = EXCLUDED.truncated, \
@@ -169,6 +179,7 @@ async fn upsert(
     .bind(&vector.literal)
     .bind(truncated)
     .bind(updated_at)
+    .bind(entry.classification)
     .execute(&mut *conn)
     .await
     .map_err(|e| query_error("search.upsert", e))?;
@@ -207,6 +218,7 @@ pub(crate) async fn refresh_project(
             title: &name,
             ids: path,
             body: &description,
+            classification: "internal",
         },
         &updated,
     )
@@ -254,6 +266,7 @@ pub(crate) async fn refresh_merge_request(
             title: &title,
             ids: format!("!{iid}"),
             body: &description,
+            classification: "internal",
         },
         &updated,
     )
@@ -265,16 +278,19 @@ pub(crate) async fn delete_project(
     conn: &mut PgConnection,
     project: ProjectId,
 ) -> Result<(), ForgeError> {
-    sqlx::query("DELETE FROM forge.search_entries WHERE project_id = $1")
-        .bind(project.get())
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| query_error("search.project_delete", e))?;
+    // The state row first: it is the documents job's per-project lock
+    // (documents::apply_documents takes it before the entries), so both
+    // writers lock in the same order (review K4: no deadlock).
     sqlx::query("DELETE FROM forge.search_index_state WHERE project_id = $1")
         .bind(project.get())
         .execute(&mut *conn)
         .await
         .map_err(|e| query_error("search.state_delete", e))?;
+    sqlx::query("DELETE FROM forge.search_entries WHERE project_id = $1")
+        .bind(project.get())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error("search.project_delete", e))?;
     Ok(())
 }
 
@@ -400,6 +416,27 @@ impl SearchIndex {
             EventType::UserRenamed => {
                 refresh_subtree(conn, &origin, "user", event.aggregate_id).await
             }
+            // Plan 20 K4: a moved branch may be the default one (the job
+            // decides: the default branch is git's `HEAD`).
+            EventType::RepositoryPushed => {
+                let project = project_of(event)?;
+                if !documents::moved_a_branch(event).ok_or_else(|| bad_payload(event, "refs"))? {
+                    return Ok(());
+                }
+                let origin = event.request_id().unwrap_or_else(RequestId::generate);
+                let _enqueued = documents::enqueue_documents(
+                    conn,
+                    DocumentsRequest {
+                        project,
+                        full: false,
+                    },
+                    &format!("push:{}", event.seq),
+                    origin,
+                    Some(event.seq),
+                )
+                .await?;
+                Ok(())
+            }
             EventType::MergeRequestOpened
             | EventType::MergeRequestUpdated
             | EventType::MergeRequestDraftChanged
@@ -416,7 +453,6 @@ impl SearchIndex {
             | EventType::ProtectedRefCreated
             | EventType::ProtectedRefUpdated
             | EventType::ProtectedRefDeleted
-            | EventType::RepositoryPushed
             | EventType::MergeRequestPushed
             | EventType::MergeRequestConflictDetected
             | EventType::MergeRequestConflictResolved
@@ -511,6 +547,28 @@ async fn reindex_one(db: &Db, origin: &Origin, project: ProjectId) -> Result<u64
     .map_err(|e| query_error("search.reindex_merge_requests", e))?;
     for iid in &iids {
         refresh_merge_request(&mut tx, origin, project, *iid).await?;
+    }
+    // Plan 20 K4: the documents are read from git by the worker's job.
+    let has_repository: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM forge.repositories WHERE project_id = $1)",
+    )
+    .bind(project.get())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| query_error("search.reindex_repository", e))?;
+    if has_repository {
+        let origin = RequestId::parse(&origin.request_id).unwrap_or_else(RequestId::generate);
+        let _enqueued = documents::enqueue_documents(
+            &mut tx,
+            DocumentsRequest {
+                project,
+                full: true,
+            },
+            &format!("reindex:{origin}"),
+            origin.clone(), // clone: the job owns its request id
+            None,
+        )
+        .await?;
     }
     let keys: Vec<String> = iids.iter().map(i64::to_string).collect();
     sqlx::query(

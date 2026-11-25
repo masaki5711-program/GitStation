@@ -1182,6 +1182,15 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             .concat(),
         ),
         ("forge.project_llm", operational()),
+        // ── Plan 20 W1: the project wiki link (20270110100000) ──
+        (
+            "forge.project_wikis",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("project_wikis")?,
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -1441,6 +1450,8 @@ const LATER_TABLES: &[&str] = &[
     "llm_advice",
     "llm_advice_feedback",
     "project_llm",
+    // ── Plan 20 W1: the project wiki link (20270110100000) ──
+    "project_wikis",
 ];
 
 /// Every table the first migration creates.

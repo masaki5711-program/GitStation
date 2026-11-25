@@ -34,7 +34,8 @@ pub(crate) const CANDIDATES_SQL: &str = "WITH matched AS ( \
        SELECT e.id, e.tokens, e.source_updated_at FROM forge.search_entries e \
        WHERE e.tokens @@ $1::tsquery \
          AND ((e.source_kind = 'project' AND e.project_id = ANY ($7::bigint[])) \
-           OR (e.source_kind = 'merge_request' AND e.project_id = ANY ($8::bigint[]))) \
+           OR (e.source_kind = 'merge_request' AND e.project_id = ANY ($8::bigint[])) \
+           OR (e.source_kind = 'document' AND e.project_id = ANY ($9::bigint[]))) \
          AND (cardinality($2::text[]) = 0 OR e.source_kind = ANY ($2::text[])) \
          AND ($3::bigint IS NULL OR e.project_id = $3) \
          AND (NOT $4 OR e.classification <> 'confidential') \
@@ -64,8 +65,8 @@ fn ids(projects: &[ProjectId]) -> Vec<i64> {
     projects.iter().map(|p| p.get()).collect()
 }
 
-/// A stored kind this build does not know (K4's `document` written by a
-/// newer build) is left out, never guessed.
+/// A stored kind this build does not know (an `issue` written by a newer
+/// build) is left out, never guessed.
 fn candidate(row: Row) -> Option<SearchCandidate> {
     let kind = SourceKind::parse(&row.source_kind)?;
     (row.project_id > 0).then(|| SearchCandidate {
@@ -122,6 +123,7 @@ pub async fn candidates(
                 .bind(i64::from(max_rows))
                 .bind(ids(&filter.readable_projects))
                 .bind(ids(&filter.readable_merge_requests))
+                .bind(ids(&filter.readable_documents))
                 .fetch_all(&mut *tx)
                 .await
                 .map_err(|e| read_query_error("search.candidates", e))?;

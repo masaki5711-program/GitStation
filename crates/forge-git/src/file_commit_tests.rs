@@ -647,3 +647,71 @@ async fn a_path_git_refuses_is_path_invalid() {
         .collect();
     assert!(left.is_empty(), "{left:?}");
 }
+
+/// Plan 20 W2: a new repository's first commit holds exactly the files,
+/// has no parent, and creates the branch; a second one never overwrites.
+#[tokio::test]
+async fn root_files_make_the_first_commit_once() {
+    let f = fixture().await;
+    let main = RefName::parse("refs/heads/main").expect("ref");
+    let a = FilePath::parse(".forge/doctypes/wiki.page.yml").expect("path");
+    let b = FilePath::parse("WIKI-0001.md").expect("path");
+    let files = [(a, &b"name: wiki.page\n"[..]), (b, &b"# home\n"[..])];
+    let author = ident("Alice");
+    let root = RootFiles {
+        branch: &main,
+        files: &files,
+        message: "Create the wiki",
+        author: &author,
+    };
+    let commit = f
+        .git
+        .commit_root_files(&f.root, f.id, &root, T)
+        .await
+        .expect("root commit");
+    let head = f.git.read_ref(&f.root, f.id, &main, T).await.expect("read");
+    assert_eq!(head, Some(commit.clone()));
+    let parents = plumb(
+        &f.path,
+        &["rev-list", "--parents", "-n", "1", commit.as_str()],
+        None,
+    );
+    assert_eq!(
+        parents.split_whitespace().count(),
+        1,
+        "no parent: {parents}"
+    );
+    let listed = plumb(
+        &f.path,
+        &["ls-tree", "-r", "--name-only", commit.as_str()],
+        None,
+    );
+    assert_eq!(
+        listed.lines().collect::<Vec<_>>(),
+        vec![".forge/doctypes/wiki.page.yml", "WIKI-0001.md"]
+    );
+    // The branch exists now: a second root commit is refused, not forced.
+    let again = f.git.commit_root_files(&f.root, f.id, &root, T).await;
+    assert!(again.is_err());
+    let head = f.git.read_ref(&f.root, f.id, &main, T).await.expect("read");
+    assert_eq!(head, Some(commit));
+    let _ = &f.home;
+}
+
+#[tokio::test]
+async fn root_files_need_at_least_one_file() {
+    let f = fixture().await;
+    let main = RefName::parse("refs/heads/main").expect("ref");
+    let author = ident("Alice");
+    let root = RootFiles {
+        branch: &main,
+        files: &[],
+        message: "empty",
+        author: &author,
+    };
+    assert!(f
+        .git
+        .commit_root_files(&f.root, f.id, &root, T)
+        .await
+        .is_err());
+}

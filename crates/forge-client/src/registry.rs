@@ -1734,18 +1734,44 @@ pub const COMMANDS: &[CommandSpec] = &[
     // ── plan 20 K3: knowledge search ──
     CommandSpec {
         name: "search",
-        summary: "Search projects and merge requests you may read: only what you may read is shown, never a total; a page can be short (even empty) while has_more is true, and next_cursor continues it.",
+        summary: "Search projects, merge requests and documents (the default branch's, Wiki pages and notes too) you may read: only what you may read is shown, never a total; a page can be short (even empty) while has_more is true, and next_cursor continues it.",
         args: &[
             arg("WORDS", "positional", true, "The words to search for (2..=200 characters)."),
-            arg("--scope", "option", false, "Only these kinds: project, merge_request (comma-separated)."),
+            arg("--scope", "option", false, "Only these kinds: project, merge_request, document (comma-separated)."),
             arg("--project", "option", false, "Only hits of this project (its id)."),
             arg("--limit", "option", false, "Hits per page, 1..=50 (default 20)."),
             arg("--cursor", "option", false, "Continue from a previous page's next_cursor."),
         ],
-        examples: &["gstn search 設備 仕様 --json", "gstn search login --scope merge_request --project 7"],
+        examples: &["gstn search 設備 仕様 --json", "gstn search login --scope merge_request --project 7", "gstn search REQ-0012 --scope document"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/search"],
-        output: r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["kind","project_id","project_path","title","iid","snippet","updated_at","truncated"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#,
+        output: r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["kind","project_id","project_path","title","iid","path","snippet","updated_at","truncated"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#,
+    },
+    // ── plan 20 W2: a project's wiki ──
+    CommandSpec {
+        name: "wiki create",
+        summary: "Create a project's wiki and link it in one step: an ordinary project <project>-wiki in the same namespace with its first page WIKI-0001 on a protected main (Developer may push); the project's members get the same role on it. A person's action (Maintainer); 409 FG-KNOW-0003 when refused, 500 FG-KNOW-0004 when a step after the creation failed (no link).",
+        args: &[
+            arg("id", "positional", true, "The owner project id."),
+            arg("--path", "option", false, "The wiki project's path segment (default <project>-wiki)."),
+            arg("--display-name", "option", false, "The wiki's display name (default <project name> Wiki)."),
+        ],
+        examples: &["gstn wiki create 7", "gstn wiki create 7 --path handbook --display-name 手順書"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/wiki"],
+        output: r#"{"type":"object","required":["project_id","wiki_project_id","wiki_path","display_name","default_branch","commit","first_page"],"properties":{"project_id":{"type":"integer"},"wiki_project_id":{"type":"integer"},"wiki_path":{"type":"string"},"display_name":{"type":"string"},"default_branch":{"type":"string"},"commit":{"type":"string"},"first_page":{"type":"string"}}}"#,
+    },
+    CommandSpec {
+        name: "wiki unlink",
+        summary: "Unlink a project's wiki; the wiki project and its history stay, and the project's members lose the inherited role. Needs --yes.",
+        args: &[
+            arg("id", "positional", true, "The owner project id."),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn wiki unlink 7 --yes"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/projects/{id}/wiki"],
+        output: r#"{"type":"object","required":["project_id","wiki_project_id"],"properties":{"project_id":{"type":"integer"},"wiki_project_id":{"type":"integer"}}}"#,
     },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {

@@ -1255,6 +1255,9 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         // Simple editor E1: forge-git's file_commit / refs API only (the
         // commit, the compare-and-swap), decided like a push.
         "routes/file_commit.rs",
+        // Plan 20 W2: a new wiki — forge-git's storage (init_bare_or_adopt)
+        // and file_commit (commit_root_files) API only.
+        "routes/wiki.rs",
         "git_stream.rs",
     ];
     let mut used_in = Vec::new();
