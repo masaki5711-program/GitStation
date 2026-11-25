@@ -10,7 +10,7 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 
 import { RESOLVE_STALE_MS } from './cachePolicy';
-import { call, type ApiClient } from './client';
+import { ApiFailure, call, type ApiClient } from './client';
 import type { Resolution } from './types';
 
 export const resolveKeys = {
@@ -33,13 +33,27 @@ export const resolveQuery = (api: ApiClient, queryClient: QueryClient, path: str
   const otherKey = resolveKeys.one(path, !prefix);
   return queryOptions({
     queryKey: resolveKeys.one(path, prefix),
-    queryFn: ({ signal }) =>
-      call(() =>
-        api.GET('/api/v1/namespaces/resolve', {
-          signal,
-          params: { query: { path, ...(prefix ? { prefix: 'true' } : {}) } },
-        }),
-      ),
+    queryFn: async ({ signal }) => {
+      const ask = (top: boolean) =>
+        call(() =>
+          api.GET('/api/v1/namespaces/resolve', {
+            signal,
+            params: { query: { path, ...(top ? { prefix: 'true' } : {}) } },
+          }),
+        );
+      if (!prefix) return ask(false);
+      try {
+        return await ask(true);
+      } catch (e) {
+        // The top-page form answers with a project only (ADR-0015: a prefix
+        // answer never reveals a group or a user), so a 404 there may still
+        // be a group or a user page: the exact form decides.
+        if (e instanceof ApiFailure && e.failure.kind === 'api' && e.failure.status === 404) {
+          return ask(false);
+        }
+        throw e;
+      }
+    },
     staleTime: RESOLVE_STALE_MS,
     initialData: () => sameAnswer(queryClient.getQueryData<Resolution>(otherKey), path),
     initialDataUpdatedAt: () => queryClient.getQueryState(otherKey)?.dataUpdatedAt,

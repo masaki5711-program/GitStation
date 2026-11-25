@@ -279,6 +279,30 @@ describe('group page', () => {
     expect(screen.queryByText('Elsewhere')).toBeNull();
   });
 
+  it('opens like the real server: the top-page form never answers with a group', async () => {
+    // ADR-0015: `prefix=true` finds projects only; the exact form finds the group.
+    const server = mockServer({
+      ...group(),
+      'GET /api/v1/namespaces/resolve': (call) =>
+        call.query.get('prefix') === 'true' ? apiError(404, 'ありません。', 'req-404') : json(200, RESOLVE_GROUP),
+    });
+    await renderApp({ fetch: server.fetch, path: '/acme' });
+    expect(await screen.findByRole('heading', { level: 1, name: 'Acme Plant' })).toBeTruthy();
+    expect(screen.queryByText('ページが見つかりません')).toBeNull();
+    const asked = server.to('GET', '/api/v1/namespaces/resolve').map((c) => c.query.get('prefix'));
+    expect(asked).toEqual(['true', null]);
+  });
+
+  it('a path that is neither a project nor a group is still not found', async () => {
+    const server = mockServer({
+      ...signedIn(),
+      'GET /api/v1/namespaces/resolve': () => apiError(404, 'ありません。', 'req-404'),
+    });
+    await renderApp({ fetch: server.fetch, path: '/nothing-here' });
+    expect(await screen.findByText('ページが見つかりません')).toBeTruthy();
+    expect(server.to('GET', '/api/v1/namespaces/resolve')).toHaveLength(2);
+  });
+
   it('creating a subgroup posts to the group with the CSRF token', async () => {
     const created = { ...GROUP, id: 41, namespace_id: 410, parent_id: 3, path: 'acme/new', name: 'new', display_name: 'New' };
     const server = mockServer({
