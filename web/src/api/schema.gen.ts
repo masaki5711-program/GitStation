@@ -7571,8 +7571,13 @@ export interface components {
              * @description The merge request's number in its project (`null` for a project).
              */
             iid: number | null;
-            /** @description `project` or `merge_request`. */
+            /** @description `project`, `merge_request` or `document`. */
             kind: string;
+            /**
+             * @description The document's path at the default branch's tip (`null` for a
+             *     project or a merge request).
+             */
+            path: string | null;
             /** Format: int64 */
             project_id: number;
             /** @description The project's current full path. */
@@ -16414,7 +16419,7 @@ export interface operations {
             query?: {
                 /** @description The search words (2..=200 characters; Japanese is matched by 2-grams, other words by word, the last word as a prefix) */
                 q?: string;
-                /** @description Comma-separated kinds to search: project, merge_request (default: every kind) */
+                /** @description Comma-separated kinds to search: project, merge_request, document (default: every kind) */
                 scope?: string;
                 /** @description Only hits of this project (its id) */
                 project?: number;

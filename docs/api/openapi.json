@@ -10708,8 +10708,15 @@
             ]
           },
           "kind": {
-            "description": "`project` or `merge_request`.",
+            "description": "`project`, `merge_request` or `document`.",
             "type": "string"
+          },
+          "path": {
+            "description": "The document's path at the default branch's tip (`null` for a\nproject or a merge request).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "project_id": {
             "format": "int64",
@@ -10741,6 +10748,7 @@
           "project_path",
           "title",
           "iid",
+          "path",
           "snippet",
           "updated_at",
           "truncated"
@@ -25447,7 +25455,7 @@
             }
           },
           {
-            "description": "Comma-separated kinds to search: project, merge_request (default: every kind)",
+            "description": "Comma-separated kinds to search: project, merge_request, document (default: every kind)",
             "in": "query",
             "name": "scope",
             "required": false,

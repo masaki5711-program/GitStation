@@ -109,6 +109,8 @@ mod portal_news;
 mod org_master;
 // ── end M3 N1 ──
 mod seal;
+// Plan 20 K4: the `search.index_documents` job.
+mod search_documents;
 // ── M3 I1c: events retention ──
 mod events_retention;
 // ── end M3 I1c ──
