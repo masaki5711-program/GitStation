@@ -39,6 +39,11 @@ const fn deny(code: E) -> Expect {
 }
 
 const MR: F = F::Mr(MF::other());
+/// Another's merge request on an internal project.
+const INTERNAL_MR: F = F::Mr(MF {
+    project: crate::matrix_review::MrProject::Internal,
+    ..MF::other()
+});
 
 #[rustfmt::skip]
 pub(crate) const LLM_ROWS: &[Row] = &[
@@ -63,6 +68,11 @@ pub(crate) const LLM_ROWS: &[Row] = &[
     row(A::AiAdviceFeedback, W::MaintainerTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::AiAdviceFeedback, W::NonMember, F::PrivateProject, deny(E::NotFound)),
     row(A::AiAdviceFeedback, W::NonMember, MR, deny(E::NotFound)),
+    // An agent that cannot see the subject: 404 like anyone (visibility
+    // comes before the people-only refusal).
+    row(A::AiAdviceFeedback, W::BotNonMemberTokenReadApi, F::PrivateProject, deny(E::NotFound)),
+    row(A::AiAdviceFeedback, W::ServiceAccountNonMemberTokenReadApi, F::PrivateProject, deny(E::NotFound)),
+    row(A::AiAdviceFeedback, W::ServiceAccountNonMemberTokenReadApi, F::InternalProject, deny(E::NotFound)),
     // A diagnosis's vote: an administrator's; anyone else 404.
     row(A::AiAdviceFeedback, W::Owner, F::Instance, deny(E::NotFound)),
     row(A::AiAdviceFeedback, W::AdminTokenApi, F::Instance, deny(E::NotFound)),
@@ -83,6 +93,8 @@ pub(crate) const LLM_ROWS: &[Row] = &[
     row(A::AiReviewRerun, W::BotTokenApi, MR, deny(E::Forbidden)),
     row(A::AiReviewRerun, W::MaintainerTokenReadApi, MR, deny(E::InsufficientScope)),
     row(A::AiReviewRerun, W::NonMember, MR, deny(E::NotFound)),
+    // A visible merge request without a role: 403, not 404.
+    row(A::AiReviewRerun, W::NonMember, INTERNAL_MR, deny(E::Forbidden)),
     row(A::AiReviewRerun, W::Anonymous, MR, deny(E::Unauthenticated)),
     row(A::AiReviewRerun, W::Disabled, MR, deny(E::AccountDisabled)),
 

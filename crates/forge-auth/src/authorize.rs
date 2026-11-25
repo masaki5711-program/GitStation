@@ -1684,13 +1684,26 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // A vote on an advice: whoever reads its subject (a merge request,
         // a project's deployment), people only — an agent's vote would
         // skew the measure of the advice (§4).
+        // (Visibility was decided above: a caller who cannot see the
+        // subject, an agent included, is 404 before this.)
         (Action::AiAdviceFeedback, Resource::Project(p)) => {
             people_only()?;
             need(Role::Reporter, read_role(p))
         }
-        (Action::AiAdviceFeedback, Resource::MergeRequest { project, .. }) => {
-            people_only()?;
-            need(Role::Reporter, read_role(project))
+        // As `MergeRequestRead` decides the merge request (review LOW: the
+        // branch names too), then people only.
+        (
+            Action::AiAdviceFeedback,
+            Resource::MergeRequest {
+                project,
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            need(Role::Reporter, read_role(project))?;
+            branches(source_branch, target_branch).map_err(refused)?;
+            people_only()
         }
         // An incident diagnosis (and a vote on one) is an administrator's;
         // anyone else is answered as if there were none, before any other

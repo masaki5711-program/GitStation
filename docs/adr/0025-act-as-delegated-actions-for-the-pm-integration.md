@@ -520,3 +520,18 @@ Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 �
 5. 権限の表: `matrix_rows_act_as.rs` に `PipelineRead` / `DeployRead` の allow 3 行（本人のセッションの双子つき）と deny 10 行
    （結びつけていない・どちらかに見えない・min のロール・主張つき・エージェントのトークン・事実を読み込まない経路）。LLM の
    Action の代理の deny は `generated_denies` が作る。
+
+### L5-4 の独立レビュー（2026-11-25）で決めた点
+
+- （security MEDIUM、L5-9 への条件）代理の許可は Action ごとで、経路ごとではない。`DeployRead` は承認者の一覧・環境（対象の
+  ホストの指紋）も、`PipelineRead` は予定（`schedules`）も守っている。**L5-9 は代理の事実を、道具が要る状況の経路（パイプラインの
+  一覧と 1 件、デプロイの一覧）のローダーにだけ足す**。承認者・環境・予定の経路は代理の事実を読み込まず、`act_as_facts_missing`
+  のまま（人の名前と配備先の詳細を代理の道具に出さない）。L5-9 でその経路ごとの deny の行を足す。
+- （security MEDIUM、L5-5 への条件）`AiAdviceFeedback` のリソースは、経路が助言の **自身の** 対象から作る（forge-db の
+  `record_feedback_decided` が助言の行から `AdviceSubject` を読み、`decide` はそれだけを判定する）。要求の示すプロジェクトや MR
+  では判定しない。違う対象は同じ 404（L5-5 でテスト）。
+- （LOW、受け入れ）`OpsDiagnosisRead` で、`read_api` を持たないトークンと代理の要求は 404 ではなく 403
+  （スコープと代理の判定はリソースの前）。区別できるのは呼び手の種類だけで、診断の有無は分からない。
+- （LOW、直した）MR の助言への評価は `MergeRequestRead` と同じく枝の名前も確かめる。見えない主体（エージェントを含む）は
+  人だけの断りより先に 404（行を足した）。`DeployRead` の代理の min のロールの allow の行と、内部の MR の役の無い人の
+  `AiReviewRerun` の 403 の行を足した。

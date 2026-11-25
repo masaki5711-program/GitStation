@@ -383,6 +383,7 @@ pub(crate) const ACT_AS_ROWS: &[Row] = &[
     row(A::PipelineRead, READER, BOUND_PROJECT, Allow),
     row(A::DeployRead, READER, BOUND_PROJECT, Allow),
     row(A::PipelineRead, via(REPORTER, ViaToken::Reader, Assert::None), BOUND_PROJECT, Allow),
+    row(A::DeployRead, via(REPORTER, ViaToken::Reader, Assert::None), BOUND_PROJECT, Allow),
     // Approve / unapprove with the matching assertion.
     row(A::MergeRequestApprove, APPROVER, BOUND_MR, Allow),
     row(A::MergeRequestApprove, via(MAINTAINER, ViaToken::Approver, Assert::Approve), BOUND_MR, Allow),
