@@ -96,6 +96,12 @@ pub struct PlannedJob {
     /// under `artifacts: { paths }` (plan 17 P17-2, ADR-0034): forge's
     /// worker then writes `forge/ai-eval` from it.
     pub eval_report: bool,
+    /// Whether forge keeps its artifacts past the retention (plan 21 G1,
+    /// ADR-0029 amendment 2026-11-25): the job asks (`artifacts: { keep:
+    /// true }`) AND the trigger is a push to a protected branch
+    /// ([`Trigger::may_use_secrets`]). Asked elsewhere it is `false`: the
+    /// artifacts expire like any other (the runner says so in the job log).
+    pub keep_artifacts: bool,
 }
 
 /// The artifact path that declares the AI evaluation report (plan 17
@@ -239,6 +245,7 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
             services: job.services.iter().map(|s| s.name.clone()).collect(),
             manual: job.manual,
             eval_report: declares_eval_report(job),
+            keep_artifacts: job.artifacts_keep && trigger.may_use_secrets(),
         })
         .collect();
     let stage_of: BTreeMap<&str, usize> = chosen

@@ -1960,6 +1960,46 @@ fn a_successful_jobs_declared_artifacts_are_uploaded() {
     assert!(log.contains("artifact path not found: absent"), "{log}");
 }
 
+/// Plan 21 G1: a job that asks `artifacts: { keep: true }` is told in its
+/// log whether forge keeps them — never silently: kept only in a push
+/// pipeline of a protected branch (the claim's `secrets_allowed`).
+#[test]
+fn a_keep_request_is_named_in_the_job_log_on_both_kinds_of_pipeline() {
+    let def = artifact_definition().replace(
+        "      paths: [left-by-the-job, absent]
+",
+        "      paths: [left-by-the-job, absent]
+      keep: true
+",
+    );
+    for (protected_push, expected) in [
+        (false, "is not honoured here"),
+        (true, "artifacts kept: they do not expire"),
+    ] {
+        let fake = Fake::new(&def, Podman::Litter);
+        let s = setup(&fake);
+        let forge = Forge::default();
+        let mut job = claim(7, "fgj_7_secret", &def);
+        job.secrets_allowed = protected_push;
+        let out = run(&s, &job, &forge);
+        assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+        let log = forge.logs.lock().unwrap().concat();
+        assert!(log.contains(expected), "{protected_push}: {log}");
+    }
+    // A job that did not ask gets no line.
+    let def = artifact_definition();
+    let fake = Fake::new(&def, Podman::Litter);
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    let log = forge.logs.lock().unwrap().concat();
+    assert!(
+        !log.contains("artifacts kept") && !log.contains("keep: true"),
+        "{log}"
+    );
+}
+
 /// M4 C6: an upload that fails fails the job (FG-CI-0020): a later job
 /// must never run without what it needs.
 #[test]

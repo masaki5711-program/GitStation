@@ -122,6 +122,11 @@ pub struct Job {
     pub(crate) secrets: Vec<String>,
     pub(crate) rules: Rules,
     pub(crate) artifacts: Vec<String>,
+    /// `artifacts: { keep: true }` (plan 21 G1, ADR-0029 amendment
+    /// 2026-11-25): the job asks that its artifacts never expire. Only a
+    /// request: forge honours it only in a push pipeline of a protected
+    /// branch ([`crate::Trigger::may_use_secrets`]).
+    pub(crate) artifacts_keep: bool,
     /// Sidecar containers sharing the job's loopback (ADR-0029 amendment).
     pub(crate) services: Vec<Service>,
     /// `when: manual` (plan 14 C12): the job waits for a person to start
@@ -212,6 +217,10 @@ impl Job {
     }
     pub fn artifacts(&self) -> &[String] {
         &self.artifacts
+    }
+    /// `artifacts: { keep: true }`: asked, not granted (plan 21 G1).
+    pub fn artifacts_keep(&self) -> bool {
+        self.artifacts_keep
     }
     /// In file order.
     pub fn services(&self) -> &[Service] {
@@ -435,6 +444,7 @@ fn read_job(
     let mut secrets = Vec::new();
     let mut rules = Rules::default();
     let mut artifacts = Vec::new();
+    let mut artifacts_keep = false;
     let mut services = Vec::new();
     let mut manual = false;
     for f in &fields {
@@ -501,7 +511,7 @@ fn read_job(
                     rules = r;
                 }
             }
-            "artifacts" => artifacts = read_artifacts(value, line, problems),
+            "artifacts" => (artifacts, artifacts_keep) = read_artifacts(value, line, problems),
             "services" => services = read_services(value, line, name, problems),
             "when" => {
                 if let Some(s) = one_text(value, line, "when", problems) {
@@ -564,6 +574,7 @@ fn read_job(
         secrets,
         rules,
         artifacts,
+        artifacts_keep,
         services,
         manual,
     })
@@ -816,15 +827,19 @@ fn read_rules(node: &Node, at: usize, problems: &mut Vec<Problem>) -> Option<Rul
     (problems.len() == before).then_some(rules)
 }
 
-fn read_artifacts(node: &Node, at: usize, problems: &mut Vec<Problem>) -> Vec<String> {
+/// `artifacts:` - `{ paths?, keep? }`: the paths and whether the job asks
+/// to keep them (`keep` is only `true` / `false`, otherwise
+/// `artifacts_keep_invalid`; plan 21 G1).
+fn read_artifacts(node: &Node, at: usize, problems: &mut Vec<Problem>) -> (Vec<String>, bool) {
     let fields = match yaml::mapping(node, "field_invalid") {
         Ok(f) => f,
         Err(p) => {
             problems.push(Problem::about(p.line.max(at), p.reason, "artifacts"));
-            return Vec::new();
+            return (Vec::new(), false);
         }
     };
     let mut paths = Vec::new();
+    let mut keep = false;
     for f in &fields {
         match f.key {
             "paths" => {
@@ -838,10 +853,17 @@ fn read_artifacts(node: &Node, at: usize, problems: &mut Vec<Problem>) -> Vec<St
                     |p| (!is_artifact_path(p)).then_some("artifact_path_invalid"),
                 );
             }
+            "keep" => match &f.value.kind {
+                Kind::Text(v) if v == "true" => keep = true,
+                Kind::Text(v) if v == "false" => keep = false,
+                Kind::Text(_) | Kind::Null | Kind::List(_) | Kind::Map(_) => {
+                    problems.push(Problem::about(f.line, "artifacts_keep_invalid", "keep"));
+                }
+            },
             other => problems.push(Problem::about(f.line, "key_unknown", other)),
         }
     }
-    paths
+    (paths, keep)
 }
 
 /// A list of names, each checked by `bad` (its reason, or `None`), at most

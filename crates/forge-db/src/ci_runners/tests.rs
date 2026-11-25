@@ -66,6 +66,7 @@ fn job(name: &str, needs: &[&str], tags: &[&str], secrets: &[&str]) -> NewCiJob 
         tags: tags.iter().map(|n| (*n).to_owned()).collect(),
         secrets: secrets.iter().map(|n| (*n).to_owned()).collect(),
         manual: false,
+        artifacts_keep: false,
     }
 }
 

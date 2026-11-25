@@ -233,6 +233,7 @@ impl World {
                     tags: Vec::new(),
                     secrets: vec!["DEPLOY_KEY".to_owned()],
                     manual: false,
+                    artifacts_keep: false,
                 }]),
             },
         )

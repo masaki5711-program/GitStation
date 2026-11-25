@@ -283,6 +283,20 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
 - 読む: 人とエージェントは `GET /api/v1/projects/{id}/pipelines/{pid}/jobs/{jid}/artifacts[/{aid}]`（ログと同じく、AI には両方の印が
   `open` のときだけ。それ以外は FG-AUTH-0022 `route=ci_artifact`）、`gstn pipeline artifacts` / `artifact-download`。
 
+### 残す成果物（`keep`、計画 21 G1、ADR-0029 の追記 2026-11-25）
+
+- `keep` が立つのは 2 つだけ: デプロイした版（C11、デプロイの worker）と、ジョブが `artifacts: { keep: true }` を求め、パイプラインが
+  **保護ブランチの push**（`source = push` かつ作成のときに `protected`。シークレットの判定と同じ）のもの。計画のときに
+  `ci_jobs.artifacts_keep` に書き、送られてきたときの記録でパイプラインの行からもう一度決める。
+- それ以外（保護されていないブランチ、MR・手動・定期のパイプライン）では求めても 30 日で消える。黙って無視しない: ジョブのログに
+  `artifacts keep: true is not honoured here …`、残るときは `artifacts kept: they do not expire …` の 1 行、成果物の一覧の `keep` が見える。
+- `keep` の行も割り当て `ci.artifact_quota_bytes`（FG-CI-0022）に数える。割り当てが残す成果物で埋まったら、管理者が古いリリースの行を
+  確かめてから（承認のあと）`UPDATE forge.ci_artifacts SET keep = false WHERE id = …` にすると次の `ci_artifact_expiry` が消す。`keep` を外す
+  API・CLI は無い（計画 21 §4.1）。
+- 確かめる: `SELECT a.id, a.keep, j.artifacts_keep, p.source, p.protected FROM forge.ci_artifacts a JOIN forge.ci_jobs j ON j.id = a.job_id
+  JOIN forge.ci_pipelines p ON p.id = a.pipeline_id WHERE a.job_id = <job_id>;`（`keep` が偽で `artifacts_keep` が真なら保護された push ではない。
+  `artifacts_keep` も偽ならブランチが保護される前に作られたパイプラインか、ジョブが求めていない）。
+
 Diagnose（読み取りのみ）:
 
 1. ジョブのログの最後の行と Runner のホストのログの FG-CI-0020 の `reason`（`send` / `receive` / `collect` / `place` /
@@ -292,7 +306,7 @@ Diagnose（読み取りのみ）:
 3. サーバーの保存先: `df -h <storage.root>`、`ls <storage.root>/ci-artifacts/<project_id> | wc -l`。`*.part` は途中で失敗した送信
    （`forge.ci.artifact_remove_failed` が出たときだけ残る）。
 
-Mitigate（承認のあと）: 保存先の空きを作る（期限の過ぎた成果物は `ci_artifact_expiry` が消す。`keep` の行はデプロイした版なので消さない）、
+Mitigate（承認のあと）: 保存先の空きを作る（期限の過ぎた成果物は `ci_artifact_expiry` が消す。`keep` の行はデプロイした版か保護ブランチのリリースなので消さない）、
 Runner と forge の間のネットワークを直す、リポジトリのファイルと同じパスを成果物にしない。その後パイプラインをやり直す
 （`gstn pipeline retry`）。
 

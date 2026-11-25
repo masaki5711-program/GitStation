@@ -1323,3 +1323,53 @@ fn too_many_fixers_are_refused() {
     let text = with_fixers(&(0..=MAX_FIXERS).map(one).collect::<String>());
     assert!(reasons(&text).contains(&"too_many_fixers"));
 }
+
+// ── artifacts keep (plan 21 G1, ADR-0029 amendment 2026-11-25) ─────────
+
+/// `valid()` with the build job's artifacts given `keep: <value>`.
+fn with_keep(value: &str) -> String {
+    valid().replace(
+        "      paths: [target/release/app]\n",
+        &format!("      paths: [target/release/app]\n      keep: {value}\n"),
+    )
+}
+
+#[test]
+fn artifacts_keep_is_read_as_true_or_false_only() {
+    let def = check(with_keep("true").as_bytes(), &ctx()).expect("valid");
+    assert!(def.jobs[0].artifacts_keep());
+    let def = check(with_keep("false").as_bytes(), &ctx()).expect("valid");
+    assert!(!def.jobs[0].artifacts_keep());
+    let def = check(valid().as_bytes(), &ctx()).expect("valid");
+    assert!(!def.jobs[0].artifacts_keep(), "default: not kept");
+    for bad in ["yes", "1", "\"\"", "[true]", "{a: b}", ""] {
+        let text = with_keep(bad);
+        assert_eq!(reasons(&text), ["artifacts_keep_invalid"], "{bad:?}");
+        assert_eq!(problems(&text)[0].subject.as_deref(), Some("keep"));
+    }
+}
+
+#[test]
+fn keep_artifacts_is_planned_only_on_a_push_to_a_protected_branch() {
+    let text = with_keep("true");
+    let keep_of = |p: &Plan| {
+        p.jobs
+            .iter()
+            .find(|j| j.name == "build")
+            .map(|j| j.keep_artifacts)
+    };
+    let protected = plan_for(&text, Event::Push, "main").expect("plan");
+    assert_eq!(keep_of(&protected), Some(true));
+    // Every other job did not ask.
+    assert!(protected
+        .jobs
+        .iter()
+        .filter(|j| j.name != "build")
+        .all(|j| !j.keep_artifacts));
+    let unprotected = plan_for(&text, Event::Push, "dev").expect("plan");
+    assert_eq!(keep_of(&unprotected), Some(false), "an unprotected branch");
+    let mr = plan_for(&text, Event::MergeRequest, "main").expect("plan");
+    assert_eq!(keep_of(&mr), Some(false), "a merge request's pipeline");
+    let not_asked = plan_for(&valid(), Event::Push, "main").expect("plan");
+    assert_eq!(keep_of(&not_asked), Some(false), "not asked");
+}

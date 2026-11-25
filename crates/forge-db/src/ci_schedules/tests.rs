@@ -285,6 +285,7 @@ fn scheduled(w: &World, owner: UserId) -> NewPipeline {
             tags: Vec::new(),
             secrets: Vec::new(),
             manual: false,
+            artifacts_keep: false,
         }]),
         ai_eval_job: None,
     }
