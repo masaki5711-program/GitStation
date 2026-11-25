@@ -1683,18 +1683,18 @@ pub const COMMANDS: &[CommandSpec] = &[
     // ── plan 20 K3: knowledge search ──
     CommandSpec {
         name: "search",
-        summary: "Search projects and merge requests you may read: only what you may read is shown, never a total; a page can be short (even empty) while has_more is true, and next_cursor continues it.",
+        summary: "Search projects, merge requests and documents (the default branch's, Wiki pages and notes too) you may read: only what you may read is shown, never a total; a page can be short (even empty) while has_more is true, and next_cursor continues it.",
         args: &[
             arg("WORDS", "positional", true, "The words to search for (2..=200 characters)."),
-            arg("--scope", "option", false, "Only these kinds: project, merge_request (comma-separated)."),
+            arg("--scope", "option", false, "Only these kinds: project, merge_request, document (comma-separated)."),
             arg("--project", "option", false, "Only hits of this project (its id)."),
             arg("--limit", "option", false, "Hits per page, 1..=50 (default 20)."),
             arg("--cursor", "option", false, "Continue from a previous page's next_cursor."),
         ],
-        examples: &["gstn search 設備 仕様 --json", "gstn search login --scope merge_request --project 7"],
+        examples: &["gstn search 設備 仕様 --json", "gstn search login --scope merge_request --project 7", "gstn search REQ-0012 --scope document"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/search"],
-        output: r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["kind","project_id","project_path","title","iid","snippet","updated_at","truncated"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#,
+        output: r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["kind","project_id","project_path","title","iid","path","snippet","updated_at","truncated"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#,
     },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {
