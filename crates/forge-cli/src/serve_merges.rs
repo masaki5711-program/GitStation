@@ -412,12 +412,15 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::AgentLockMismatch
         | ErrorCode::McpEndpointNotAllowed
         // Plan 21 E1: edge releases are linted and verified by forge-edge
-        // (gstn, later forge-fleet and the device agent), never by a merge.
+        // (`gstn edge release verify` only), never by a merge.
         | ErrorCode::EdgeReleaseDefinitionInvalid
         | ErrorCode::EdgeManifestInvalid
         | ErrorCode::EdgeSigningKeyUnavailable
-        | ErrorCode::EdgeSignatureInvalid
-        | ErrorCode::EdgeRolloutPolicyInvalid => false,
+        | ErrorCode::EdgeSignatureInvalid => false,
+        // Plan 21 E1b: retired with the rollout waves and windows; nothing
+        // raises it, the variant stays because codes are never deleted.
+        #[allow(deprecated)]
+        ErrorCode::EdgeRolloutPolicyInvalid => false,
     }
 }
 
