@@ -43,6 +43,7 @@ export function ProjectSection({
     item(['compare'], 'compare', 'compare', t('repo.compare')),
     item(['pulls', 'pull'], 'pulls', 'pulls', t('repo.pulls')),
     item(['documents'], 'documents', 'documents', t('docs.title')),
+    item(['wiki'], 'wiki', 'wiki', t('wiki.title')),
     item(['pipelines'], 'pipelines', 'pipelines', t('pipelines.title')),
     item(['members'], 'members', 'members', t('members.title')),
     ...(canManage

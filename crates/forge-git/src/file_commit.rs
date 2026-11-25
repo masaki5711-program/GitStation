@@ -788,6 +788,132 @@ impl Git {
     }
 }
 
+/// The most files a root commit writes ([`Git::commit_root_files`]).
+pub const MAX_ROOT_FILES: usize = 16;
+
+/// A new repository's first commit (plan 20 W2: a wiki's page type and
+/// first page), on a branch that does not exist yet.
+#[derive(Debug, Clone)]
+pub struct RootFiles<'a> {
+    /// The branch to create (`refs/heads/main`).
+    pub branch: &'a RefName,
+    /// (path, content), at most [`MAX_ROOT_FILES`], each checked like the
+    /// editor's (`FilePath`, [`check_content`]).
+    pub files: &'a [(FilePath, &'a [u8])],
+    pub message: &'a str,
+    pub author: &'a CommitIdentity,
+}
+
+impl Git {
+    /// Write `root`'s files as one commit **without a parent** and create
+    /// its branch with ONE `update-ref` create (fails when the branch
+    /// exists: a repository that already has the branch is never
+    /// overwritten, `FG-GIT-0003`). The same plumbing as
+    /// [`Git::write_file_commit`] (blobs on stdin, a temporary index, the
+    /// entries on stdin, `write-tree`, the tree checked to hold exactly the
+    /// entries, `commit-tree`), every step bounded by `timeout`. The caller
+    /// decided the write (plan 20 W2: the creation of the wiki project).
+    pub async fn commit_root_files(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        root: &RootFiles<'_>,
+        timeout: Duration,
+    ) -> Result<ObjectId, ForgeError> {
+        if root.files.is_empty() || root.files.len() > MAX_ROOT_FILES {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "root_files_count")
+                .with_context("count", root.files.len()));
+        }
+        let mut lines = String::new();
+        let mut entries = Vec::with_capacity(root.files.len());
+        for (path, content) in root.files {
+            let text = std::str::from_utf8(content).map_err(|_| {
+                ForgeError::new(ErrorCode::Internal).with_context("reason", "root_file_not_utf8")
+            })?;
+            check_content(text, MAX_FILE_BYTES)?;
+            let blob = self.write_blob(storage, id, content, timeout).await?;
+            lines.push_str(&format!(
+                "100644 blob {}\t{}\n",
+                blob.as_str(),
+                path.as_str()
+            ));
+            entries.push((path, blob));
+        }
+        let repo = storage.existing(id)?;
+        let dir = self.config().home.join(INDEX_DIR);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            ForgeError::new(ErrorCode::StorageIoFailed)
+                .with_context("operation", "file_commit_index_dir")
+                .with_source(e)
+        })?;
+        sweep_stale_indexes(&dir, STALE_INDEX_AGE);
+        let index = TempIndex(dir.join(format!("{}.index", uuid::Uuid::new_v4())));
+        let index_env = OsString::from(index.0.as_os_str());
+        let with_index = |sub: &'static str| {
+            self.command(sub)
+                .config_override("core.protectNTFS", "true")
+                .config_override("core.protectHFS", "true")
+                .env("GIT_INDEX_FILE", index_env.clone()) // clone: each command owns its environment
+                .repo(&repo)
+                .timeout(timeout)
+        };
+        let fail = |e: ForgeError| e.with_context("repo_id", id.get());
+        // A new index starts empty: no `read-tree`.
+        with_index("update-index")
+            .arg("--add")
+            .arg("--index-info")
+            .stdin(lines.into_bytes())
+            .output()
+            .await
+            .map_err(fail)?;
+        let out = with_index("write-tree").output().await.map_err(fail)?;
+        let tree = ObjectId::parse(String::from_utf8_lossy(&out.stdout).trim())
+            .map_err(|_| unexpected("write-tree"))?;
+        drop(index);
+        // git skips a path it refuses and still exits 0: every entry must
+        // be in the tree.
+        for (path, blob) in &entries {
+            let written = self
+                .ls_tree(&repo, &tree, path.as_str(), false, timeout)
+                .await
+                .map_err(fail)?;
+            if !written
+                .iter()
+                .any(|e| e.name == path.as_str() && e.kind == "blob" && e.oid == blob.as_str())
+            {
+                return Err(path_invalid("refused_by_git").with_context("repo_id", id.get()));
+            }
+        }
+        let commit = self
+            .commit_tree(
+                storage,
+                id,
+                &NewCommit {
+                    tree: &tree,
+                    parents: &[],
+                    message: root.message,
+                    author: root.author,
+                    committer: root.author,
+                },
+                timeout,
+            )
+            .await?;
+        self.update_refs(
+            storage,
+            id,
+            &[RefChange::Create {
+                name: root.branch.clone(), // clone: the change owns its name
+                new: commit.clone(),       // clone: as above
+            }],
+            timeout,
+        )
+        .await
+        .map_err(fail)?;
+        Ok(commit)
+    }
+}
+
 #[cfg(test)]
 #[path = "file_commit_tests.rs"]
 mod tests;

@@ -1,5 +1,6 @@
-//! `gstn search` (plan 20 K3, ADR-0040): one page of the knowledge search
-//! over projects and merge requests — one REST call (`GET /api/v1/search`).
+//! `gstn search` (plan 20 K3 / K4, ADR-0040): one page of the knowledge
+//! search over projects, merge requests and documents — one REST call
+//! (`GET /api/v1/search`).
 //! The server decides what is shown (only what the caller may read, never a
 //! total); a page may be short, even empty, while `has_more` is true, and
 //! `next_cursor` continues it. Words are sent percent-encoded as `q`; the
@@ -64,10 +65,14 @@ fn human(out: &Value) -> String {
     lines.join("\n")
 }
 
-/// `<kind>  <project>[!iid]  <title>` and an indented snippet line.
+/// `<kind>  <project>[!iid | :path]  <title>` and an indented snippet
+/// line.
 fn hit_lines(h: &Value) -> String {
-    let subject = match h.get("iid") {
-        Some(Value::Number(iid)) => format!("{}!{iid}", text(h, "project_path")),
+    let subject = match (h.get("iid"), h.get("path")) {
+        (Some(Value::Number(iid)), _) => format!("{}!{iid}", text(h, "project_path")),
+        (_, Some(Value::String(_))) => {
+            format!("{}:{}", text(h, "project_path"), text(h, "path"))
+        }
         _ => text(h, "project_path"),
     };
     let snippet = h

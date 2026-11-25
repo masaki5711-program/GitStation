@@ -25,6 +25,7 @@ use crate::role::{Role, Visibility};
 use crate::scope::Scope;
 use crate::user_kind::UserKind;
 use crate::webhook::WebhookChange;
+use crate::wiki::WikiLinkChange;
 use crate::work_item::WorkItemChange;
 
 /// A field an update changed (`project.updated`, `group.updated`): the
@@ -473,6 +474,10 @@ pub enum AuditDetails {
     /// or off (resource the project, no event). Shape:
     /// [`AiAssetsChange::to_value`].
     AiAssets(AiAssetsChange),
+    /// Plan 20 W1/W2 (ADR-0040 §5): a wiki linked to or unlinked from its
+    /// owner project (resource the owner project, no event). Shape:
+    /// [`WikiLinkChange::to_value`].
+    WikiLink(WikiLinkChange),
     /// M4 C6: a Maintainer set or deleted a CI variable (resource the
     /// project, no event; never the value). Shapes:
     /// [`CiVariableChange::to_value`].
@@ -677,6 +682,7 @@ impl AuditDetails {
             Self::AutoMerge(change) => change.action(),
             Self::Autofix(change) => change.action(),
             Self::AiAssets(change) => change.action(),
+            Self::WikiLink(change) => change.action(),
             Self::CiVariable(change) => change.action(),
             Self::Deploy(change) => change.action(),
         }
@@ -750,6 +756,7 @@ impl AuditDetails {
             | Self::AutoMerge(_)
             | Self::Autofix(_)
             | Self::AiAssets(_)
+            | Self::WikiLink(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => None,
             // M4 C12: a published specification version is the one
@@ -1248,6 +1255,7 @@ impl AuditDetails {
             Self::AutoMerge(change) => change.to_value(),
             Self::Autofix(change) => change.to_value(),
             Self::AiAssets(change) => change.to_value(),
+            Self::WikiLink(change) => change.to_value(),
             Self::CiVariable(change) => change.to_value(),
             Self::Deploy(change) => change.to_value(),
         }
@@ -1361,6 +1369,7 @@ impl AuditDetails {
             | Self::AutoMerge(_)
             | Self::Autofix(_)
             | Self::AiAssets(_)
+            | Self::WikiLink(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => self.to_value(),
         }

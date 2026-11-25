@@ -348,6 +348,20 @@
       }
     },
     {
+      "name": "route word wiki (plan 20 W4)",
+      "path": "/g/p/-/wiki/WIKI-0002/edit",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "wiki",
+        "rest": [
+          "WIKI-0002",
+          "edit"
+        ]
+      }
+    },
+    {
       "name": "route word edit",
       "path": "/g/p/-/edit/main/docs/spec.md",
       "form": "both",
@@ -1378,12 +1392,6 @@
     {
       "name": "no merge_requests alias of pull (ADR-0015 amendment B0)",
       "path": "/acme/x/-/merge_requests/3",
-      "form": "both",
-      "reason": "unknown_route"
-    },
-    {
-      "name": "not yet routed: wiki (M6)",
-      "path": "/acme/x/-/wiki",
       "form": "both",
       "reason": "unknown_route"
     },

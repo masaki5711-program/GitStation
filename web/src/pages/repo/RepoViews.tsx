@@ -48,10 +48,11 @@ import {
   ProjectSettings,
   SchedulesScreen,
   WebhooksScreen,
+  WikiScreen,
 } from '../lazyScreens';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'merge-queue', 'edit', 'new'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'merge-queue', 'edit', 'new', 'wiki'];
 
 export function RepoViews({
   projectId,
@@ -187,6 +188,9 @@ export function RepoViews({
       screen =
         tail.length === 0 ? <MergeQueueScreen projectId={projectId} project={project} /> : <NotFound />;
       break;
+    case 'wiki':
+      screen = <WikiScreen projectId={projectId} project={project} role={role} view={tail} />;
+      break;
     case 'settings':
       screen = <ProjectSettings projectId={projectId} />;
       break;
@@ -223,6 +227,7 @@ export function RepoViews({
     { words: ['compare'], to: `${base}/-/compare`, label: t('repo.compare') },
     { words: ['pulls', 'pull'], to: `${base}/-/pulls`, label: t('repo.pulls') },
     { words: ['documents'], to: `${base}/-/documents`, label: t('docs.title') },
+    { words: ['wiki'], to: `${base}/-/wiki`, label: t('wiki.title') },
     { words: ['pipelines'], to: `${base}/-/pipelines`, label: t('pipelines.title') },
     { words: ['members'], to: `${base}/-/members`, label: t('members.title') },
     ...(canManageHooks

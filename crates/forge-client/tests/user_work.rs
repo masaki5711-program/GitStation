@@ -173,6 +173,13 @@ fn search_reads_one_page_with_encoded_words_and_filters() {
                 "snippet": {"text": "login service", "highlights": [],
                             "cut_before": false, "cut_after": true},
                 "updated_at": "2026-10-01T00:00:00Z", "truncated": false
+            },
+            {
+                "kind": "document", "project_id": 7, "project_path": "acme/web",
+                "title": "Login spec", "iid": null, "path": "docs/SPEC-1.md",
+                "snippet": {"text": "login rules", "highlights": [],
+                            "cut_before": false, "cut_after": false},
+                "updated_at": "2026-10-02T00:00:00Z", "truncated": false
             }
         ],
         "next_cursor": "c1",
@@ -210,6 +217,8 @@ fn search_reads_one_page_with_encoded_words_and_filters() {
         o.stdout
             .contains("merge_request  acme/web!3  Add the login form")
             && o.stdout.contains("project  acme/web  web")
+            && o.stdout
+                .contains("document  acme/web:docs/SPEC-1.md  Login spec")
             && o.stdout.contains("    the login form")
             && o.stdout.contains("more: --cursor c1"),
         "{}",
