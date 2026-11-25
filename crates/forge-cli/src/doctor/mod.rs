@@ -14,7 +14,8 @@
 //! S0), check reporters (`checks.reporters`, M3 C1), storage
 //! root, the git binary, the embedded web UI (`web.ui`) and the OIDC
 //! provider (`auth.oidc`, M2 MR4), the local LLM gateway (`llm.*`, plan
-//! 19 §8.4: never part of `/readyz`). One line
+//! 19 §8.4: never part of `/readyz`), the AI evaluation bench
+//! (`ai_eval.runner`, `ai_eval.baseline_age`, plan 17 P17-8). One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
 //! pool, except `audit.seal_verify`, which reads the sealed act-as columns
@@ -39,6 +40,8 @@ mod backup;
 // M3 C1: required checks have a reporter.
 // M3 S2: the act-as keys.
 mod act_as;
+// Plan 17 P17-8: the AI evaluation bench (FG-AIASSET-0002).
+mod ai_eval;
 // Plan 16 A3: the agent part signing keys (FG-AGENT-0003).
 mod agent;
 mod checks;
@@ -107,7 +110,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 47] = [
+const DB_CHECKS: [&str; 49] = [
     "db.bootstrap",
     "db.connections",
     // Plan 18 S2: FG-DB-0023 (the server's NOTIFY queue).
@@ -188,6 +191,10 @@ const DB_CHECKS: [&str; 47] = [
     agent::NAME,
     // Plan 19 L5-11: FG-LLM-0004 (a request queued past its deadline).
     llm::QUEUE_AGE,
+    // Plan 17 P17-8: FG-AIASSET-0002 (no live gpu-eval runner for a waiting
+    // bench job; no passing nightly bench in 48 h).
+    ai_eval::RUNNER,
+    ai_eval::BASELINE_AGE,
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -355,6 +362,8 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let org_master = org::master_check(db, cfg).await;
     let agent_keys = agent::signing_keys_check(db, cfg).await;
     let llm_queue = llm::queue_check(db, &cfg.llm).await;
+    let ai_eval_runner = ai_eval::runner_check(db).await;
+    let ai_eval_baseline = ai_eval::baseline_check(db).await;
     vec![
         bootstrap,
         connections,
@@ -406,6 +415,8 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         org_master,
         agent_keys,
         llm_queue,
+        ai_eval_runner,
+        ai_eval_baseline,
     ]
 }
 

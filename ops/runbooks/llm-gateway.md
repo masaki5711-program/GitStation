@@ -49,7 +49,7 @@ LLM は `/readyz` に入れない（助言なので、LLM の停止でサーバ�
    直近の傾向: `SELECT priority, state, error_code, count(*) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1, 2, 3;`
    （入力の本文は DB に無い。`input_sha256` と対象の ID・SHA で作り直す）
 3. Ollama（worker のホストから）: `curl -s <llm.endpoint>/api/tags`（モデルと digest）、`nvidia-smi`（GPU のメモリ）、
-   `gstn runner list`（`gpu-eval` の Runner がベンチを動かしているか）。
+   `forge admin runner list`（`gpu-eval` の Runner がベンチを動かしているか）。
 4. 混み具合: `forge.llm.metrics` の `waiting` / `running`、`forge_llm_queue_wait_seconds{priority}`、`forge_llm_yield_total{reason}`、
    `forge.llm.kanflow_gate` の状態の変化（`Busy` が長い = Kanflow の利用が多い、`Unreachable` = Kanflow に届かない: 1 分に 1 件に絞っている）。
 5. worker が止まった後: 前のプロセスの待ち・実行中の行は 7 時間後に `abandoned`（`error_code=FG-LLM-0001`、ログ `forge.llm.abandoned_stale`）。
