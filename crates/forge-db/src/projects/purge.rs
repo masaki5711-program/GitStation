@@ -454,6 +454,25 @@ async fn finish_steps(
         "projects.purge.finish.integration_bindings",
     )
     .await?;
+    // Plan 20 W1: the project's wiki link, as owner or as wiki; the other
+    // project stays (the project.purged row covers the delete). Under the
+    // links' exclusive lock, as an unlink: a write that decided on the
+    // inherited role commits first.
+    tx.step(|c| async move {
+        sqlx::query(crate::roles::LOCK_WIKI_LINKS)
+            .execute(c)
+            .await
+            .map_err(|e| query_error("projects.purge.finish.lock_wiki_links", e))
+            .map(drop)
+    })
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.project_wikis WHERE project_id = $1 OR wiki_project_id = $1",
+        project.get(),
+        "projects.purge.finish.project_wikis",
+    )
+    .await?;
     let members_removed = delete_rows(
         tx,
         "DELETE FROM forge.project_members WHERE project_id = $1",

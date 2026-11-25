@@ -672,8 +672,33 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             )))),
         ))),
     ))));
-    // ADR-0036: the PFS portal's home widgets.
-    portal_widget_routes(all)
+    // ADR-0036: the PFS portal's home widgets; plan 20 W2: the wiki.
+    wiki_routes(portal_widget_routes(all))
+}
+
+/// A project's wiki (plan 20 W2, ADR-0040 §5): create and link, unlink.
+fn wiki_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::wiki as k;
+    registry
+        .route_with_body(
+            Verb::Post,
+            k::ONE,
+            Action::ProjectWikiLink,
+            "Create the project's wiki and link it in one step ({\"path\"?, \"display_name\"?}): an ordinary project <path>-wiki in the same namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/wiki.page.yml, WIKI-0001.md), main protected (Developer may push, no force push), then the link; the owner project's members inherit their role on it (one way, one hop). People only, Maintainer of the owner; 409 FG-KNOW-0003 refused (already linked, chain, name taken), 500 FG-KNOW-0004 when a step after the creation failed (no link written)",
+            k::MAX_BODY,
+            k::WikiOwner,
+            k::create,
+        )
+        .responds_created::<k::WikiBody>(Verb::Post, k::ONE)
+        .route_with(
+            Verb::Delete,
+            k::ONE,
+            Action::ProjectWikiLink,
+            "Unlink the project's wiki: the wiki project and its history stay, the owner's members lose the inherited role (people only, Maintainer of the owner); 409 FG-KNOW-0003 reason=not_linked without a wiki",
+            k::WikiOwner,
+            k::unlink,
+        )
+        .responds::<k::WikiUnlinkedBody>(Verb::Delete, k::ONE)
 }
 
 /// The deterministic autofix (M4 C14, ADR-0017 Amendment C14): a

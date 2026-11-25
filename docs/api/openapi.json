@@ -3427,6 +3427,27 @@
         ],
         "type": "object"
       },
+      "CreateWiki": {
+        "additionalProperties": false,
+        "description": "`POST …/wiki` (both fields optional).",
+        "properties": {
+          "display_name": {
+            "description": "Default `<owner display name> Wiki`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The wiki project's path segment (ADR-0015 rules); default\n`<owner segment>-wiki`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "CreatedToken": {
         "additionalProperties": false,
         "description": "A created token: the secret, shown this once.",
@@ -14140,6 +14161,73 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "WikiBody": {
+        "additionalProperties": false,
+        "description": "The created wiki.",
+        "properties": {
+          "commit": {
+            "description": "The first commit (`.forge/doctypes/wiki.page.yml`, `WIKI-0001.md`).",
+            "type": "string"
+          },
+          "default_branch": {
+            "description": "`main`.",
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "first_page": {
+            "description": "`WIKI-0001.md`.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The owner project.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "wiki_path": {
+            "description": "The wiki project's full path.",
+            "type": "string"
+          },
+          "wiki_project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "wiki_project_id",
+          "wiki_path",
+          "display_name",
+          "default_branch",
+          "commit",
+          "first_page"
+        ],
+        "type": "object"
+      },
+      "WikiUnlinkedBody": {
+        "additionalProperties": false,
+        "description": "The unlinked wiki (the project stays).",
+        "properties": {
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "wiki_project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "wiki_project_id"
         ],
         "type": "object"
       },
@@ -25597,6 +25685,97 @@
         },
         "summary": "Replace a webhook's secret, shown once; the previous one still signs for 24 hours (people only; Maintainer)",
         "x-forge-action": "WebhookManage"
+      }
+    },
+    "/api/v1/projects/{id}/wiki": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_wiki",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiUnlinkedBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Unlink the project's wiki: the wiki project and its history stay, the owner's members lose the inherited role (people only, Maintainer of the owner); 409 FG-KNOW-0003 reason=not_linked without a wiki",
+        "x-forge-action": "ProjectWikiLink"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_wiki",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWiki"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create the project's wiki and link it in one step ({\"path\"?, \"display_name\"?}): an ordinary project <path>-wiki in the same namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/wiki.page.yml, WIKI-0001.md), main protected (Developer may push, no force push), then the link; the owner project's members inherit their role on it (one way, one hop). People only, Maintainer of the owner; 409 FG-KNOW-0003 refused (already linked, chain, name taken), 500 FG-KNOW-0004 when a step after the creation failed (no link written)",
+        "x-forge-action": "ProjectWikiLink",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/repositories": {

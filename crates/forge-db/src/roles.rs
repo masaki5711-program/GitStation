@@ -81,6 +81,21 @@ pub(crate) use chain_cte;
 /// §4) through `forge.org_role_max`. The function runs only for a group or
 /// project that has a binding at all (an index probe first). The user is
 /// written `= $2` here too, so `project_roles_on`'s rewrite reaches it.
+///
+/// Plan 20 W1 (ADR-0040 §5): **the one place the wiki inheritance is
+/// decided.** On a project that is some project's wiki
+/// (`forge.project_wikis.wiki_project_id`), the role is raised
+/// (`forge.role_max`) to the role the user holds on the owner project
+/// itself — its membership and its org bindings, computed exactly as
+/// above. One way (nothing flows from the wiki to the owner) and one hop
+/// (the owner's own inherited role is never read, and the table refuses
+/// chains). The ancestors' roles are not re-read for the owner: the wiki
+/// is created in the owner's namespace, so its chain already holds them
+/// (a wiki moved elsewhere inherits the owner's own role only — never
+/// more than the owner gives). Read per request like every other role:
+/// removing a member takes effect on the next request. The raised role
+/// counts as the anchor's `direct` role (step 1); nothing outside the fold
+/// reads `direct`.
 macro_rules! chain_role_columns {
     () => {
         "c.step, c.parent_id IS NOT NULL AND c.step >= $3 AS truncated, \
@@ -92,13 +107,22 @@ macro_rules! chain_role_columns {
                (SELECT forge.org_binding_role(u.id, 'group', c.owner_id) FROM forge.users u \
                 WHERE u.id = $2 AND EXISTS (SELECT 1 FROM forge.org_bindings b \
                   WHERE b.target_kind = 'group' AND b.target_id = c.owner_id))) \
-             WHEN 'project' THEN forge.org_role_max((SELECT m.role FROM forge.project_members m \
-               JOIN forge.users u ON u.id = m.user_id \
+             WHEN 'project' THEN forge.role_max(forge.org_role_max((SELECT m.role \
+               FROM forge.project_members m JOIN forge.users u ON u.id = m.user_id \
                WHERE m.project_id = c.owner_id AND m.user_id = $2 \
                  AND u.state = 'active'), \
                (SELECT forge.org_binding_role(u.id, 'project', c.owner_id) FROM forge.users u \
                 WHERE u.id = $2 AND EXISTS (SELECT 1 FROM forge.org_bindings b \
-                  WHERE b.target_kind = 'project' AND b.target_id = c.owner_id))) \
+                  WHERE b.target_kind = 'project' AND b.target_id = c.owner_id))), \
+               (SELECT forge.org_role_max((SELECT m.role FROM forge.project_members m \
+                  JOIN forge.users u ON u.id = m.user_id \
+                  WHERE m.project_id = w.project_id AND m.user_id = $2 \
+                    AND u.state = 'active'), \
+                  (SELECT forge.org_binding_role(u.id, 'project', w.project_id) \
+                   FROM forge.users u WHERE u.id = $2 AND EXISTS (SELECT 1 \
+                     FROM forge.org_bindings b WHERE b.target_kind = 'project' \
+                       AND b.target_id = w.project_id))) \
+                FROM forge.project_wikis w WHERE w.wiki_project_id = c.owner_id)) \
              WHEN 'user' THEN (SELECT 'owner' FROM forge.users u \
                WHERE c.step = 2 AND c.anchor_kind = 'project' \
                  AND c.owner_id = $2 AND u.id = $2 \
@@ -462,6 +486,27 @@ const LOCK_BY_PROJECT: &str = lock_group_members_sql!("kind = 'project' AND owne
 const LOCK_PROJECT_MEMBER: &str = "SELECT role FROM forge.project_members \
      WHERE project_id = $1 AND user_id = $2 FOR SHARE";
 
+/// Plan 20 W1: the owner project of a wiki (no row lock: forge_app holds
+/// no UPDATE on the table). Read again under [`LOCK_WIKI_LINKS_SHARED`].
+const WIKI_OWNER: &str = "SELECT project_id FROM forge.project_wikis WHERE wiki_project_id = $1";
+
+/// Plan 20 W1: the links' transaction lock, shared. A link (the trigger
+/// `project_wikis_no_chain`) and an unlink (`wikis::unlink_decided`) take
+/// it exclusively, so an unlink waits for a write that decided on the
+/// inherited role, and that write sees the link as it stays until COMMIT.
+pub(crate) const LOCK_WIKI_LINKS_SHARED: &str =
+    "SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtext('forge.project_wikis'))";
+
+/// The exclusive form of [`LOCK_WIKI_LINKS_SHARED`] (the same key as the
+/// trigger's).
+pub(crate) const LOCK_WIKI_LINKS: &str =
+    "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('forge.project_wikis'))";
+
+/// Plan 20 W1: the viewer's direct membership of the owner project whose
+/// role a wiki inherits, locked `FOR SHARE`.
+const LOCK_OWNER_MEMBER: &str =
+    "SELECT role FROM forge.project_members WHERE project_id = $1 AND user_id = $2 FOR SHARE";
+
 /// What a role is read for inside a write transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RoleAnchor {
@@ -504,6 +549,38 @@ pub(crate) async fn lock_roles(
             .fetch_optional(&mut *conn)
             .await
             .map_err(|e| query_error("roles.lock_project_member", e))?;
+        // Plan 20 W1: a wiki's inherited role comes from the link and the
+        // owner project's membership: the link is held by the links'
+        // shared lock (read again under it), the membership row FOR SHARE.
+        // A project that is no wiki takes no lock; a link written after
+        // this read only ever adds a role the decision did not use.
+        let owner: Option<i64> = sqlx::query_scalar(WIKI_OWNER)
+            .bind(p.get())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| query_error("roles.wiki_owner", e))?;
+        let owner: Option<i64> = match owner {
+            None => None,
+            Some(_) => {
+                sqlx::query(LOCK_WIKI_LINKS_SHARED)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(|e| query_error("roles.lock_wiki_links", e))?;
+                sqlx::query_scalar(WIKI_OWNER)
+                    .bind(p.get())
+                    .fetch_optional(&mut *conn)
+                    .await
+                    .map_err(|e| query_error("roles.wiki_owner_locked", e))?
+            }
+        };
+        if let Some(owner) = owner {
+            sqlx::query_scalar::<_, String>(LOCK_OWNER_MEMBER)
+                .bind(owner)
+                .bind(user.get())
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|e| query_error("roles.lock_wiki_owner_member", e))?;
+        }
     }
     let rows: Vec<(i32, bool, Option<String>)> = sqlx::query_as(read)
         .bind(id)
