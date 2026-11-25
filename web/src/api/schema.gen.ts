@@ -3074,6 +3074,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/wiki": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's linked wiki (or, asked on a wiki, that wiki) when the caller may also read the wiki project: {wiki_project_id, wiki_path, display_name, default_branch}; 404 FG-REPO-0005 without a wiki or when the wiki is not readable (never leaked) */
+        get: operations["get_api_v1_projects_id_wiki"];
+        put?: never;
+        /** Create the project's wiki and link it in one step ({"path"?, "display_name"?}): an ordinary project <path>-wiki in the same namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/wiki.page.yml, WIKI-0001.md), main protected (Developer may push, no force push), then the link; the owner project's members inherit their role on it (one way, one hop). People only, Maintainer of the owner; 409 FG-KNOW-0003 refused (already linked, chain, name taken), 500 FG-KNOW-0004 when a step after the creation failed (no link written) */
+        post: operations["post_api_v1_projects_id_wiki"];
+        /** Unlink the project's wiki: the wiki project and its history stay, the owner's members lose the inherited role (people only, Maintainer of the owner); 409 FG-KNOW-0003 reason=not_linked without a wiki */
+        delete: operations["delete_api_v1_projects_id_wiki"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repositories": {
         parameters: {
             query?: never;
@@ -4891,6 +4910,16 @@ export interface components {
              *     host and port the operator's allowlist names.
              */
             url: string;
+        };
+        /** @description `POST …/wiki` (both fields optional). */
+        CreateWiki: {
+            /** @description Default `<owner display name> Wiki`. */
+            display_name?: string | null;
+            /**
+             * @description The wiki project's path segment (ADR-0015 rules); default
+             *     `<owner segment>-wiki`.
+             */
+            path?: string | null;
         };
         /** @description A created token: the secret, shown this once. */
         CreatedToken: {
@@ -7820,8 +7849,13 @@ export interface components {
              * @description The merge request's number in its project (`null` for a project).
              */
             iid: number | null;
-            /** @description `project` or `merge_request`. */
+            /** @description `project`, `merge_request` or `document`. */
             kind: string;
+            /**
+             * @description The document's path at the default branch's tip (`null` for a
+             *     project or a merge request).
+             */
+            path: string | null;
             /** Format: int64 */
             project_id: number;
             /** @description The project's current full path. */
@@ -8945,6 +8979,46 @@ export interface components {
         /** @description A project's webhooks. */
         WebhookList: {
             items: components["schemas"]["WebhookBody"][];
+        };
+        /** @description The created wiki. */
+        WikiBody: {
+            /** @description The first commit (`.forge/doctypes/wiki.page.yml`, `WIKI-0001.md`). */
+            commit: string;
+            /** @description `main`. */
+            default_branch: string;
+            display_name: string;
+            /** @description `WIKI-0001.md`. */
+            first_page: string;
+            /**
+             * Format: int64
+             * @description The owner project.
+             */
+            project_id: number;
+            /** @description The wiki project's full path. */
+            wiki_path: string;
+            /** Format: int64 */
+            wiki_project_id: number;
+        };
+        /** @description The project's linked wiki, as the caller may read it (`GET …/wiki`). */
+        WikiLinkBody: {
+            /** @description The branch the wiki's pages are read from and saved to (`main`). */
+            default_branch: string;
+            /** @description The wiki project's display name. */
+            display_name: string;
+            /** @description The wiki project's full path. */
+            wiki_path: string;
+            /**
+             * Format: int64
+             * @description The wiki project (the project itself when asked on the wiki).
+             */
+            wiki_project_id: number;
+        };
+        /** @description The unlinked wiki (the project stays). */
+        WikiUnlinkedBody: {
+            /** Format: int64 */
+            project_id: number;
+            /** Format: int64 */
+            wiki_project_id: number;
         };
         /** @description A work item as kanflow names it (02 §5.7's `work_items` entry). */
         WorkItemBody: {
@@ -16552,6 +16626,103 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_wiki: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WikiLinkBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_wiki: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWiki"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WikiBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_wiki: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WikiUnlinkedBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_repositories: {
         parameters: {
             query?: {
@@ -16861,7 +17032,7 @@ export interface operations {
             query?: {
                 /** @description The search words (2..=200 characters; Japanese is matched by 2-grams, other words by word, the last word as a prefix) */
                 q?: string;
-                /** @description Comma-separated kinds to search: project, merge_request (default: every kind) */
+                /** @description Comma-separated kinds to search: project, merge_request, document (default: every kind) */
                 scope?: string;
                 /** @description Only hits of this project (its id) */
                 project?: number;

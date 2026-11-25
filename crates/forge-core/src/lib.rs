@@ -7,6 +7,7 @@ pub mod act_as;
 pub mod agent_signing;
 // Plan 17 P17-2 (ADR-0034): the AI evaluation report and its gates.
 pub mod ai_assets;
+// Plan 20 W1 (ADR-0040 §5): the project wiki link.
 pub mod ai_eval;
 pub mod approval;
 // ADR-0038 §3 (step C): approvers chosen by organisation, named people and delegation.
@@ -14,6 +15,7 @@ pub mod approver;
 pub mod audit_details;
 pub mod authenticator;
 pub mod auto_merge;
+pub mod wiki;
 // M4 C14: the deterministic autofix (ADR-0017 Amendment C14).
 pub mod autofix;
 pub mod checks;
@@ -37,6 +39,8 @@ pub mod history_import;
 pub mod ids;
 pub mod integration;
 pub mod list_page;
+// Plan 19 L5-1 (ADR-0039): the local LLM's contract (pure).
+pub mod llm;
 pub mod merge;
 pub mod merge_conditions;
 /// Plan 18 S4 (ADR-0037 (c)): changed-path sets and `may_interact`.

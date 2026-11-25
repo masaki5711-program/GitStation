@@ -31,6 +31,8 @@ forge-notify.workspace = true
 forge-pipelines.workspace = true
 # M4 C11: the deployment lane of forge worker and doctor deploy.known_hosts.
 forge-deploy.workspace = true
+# Plan 19 L5-3: the worker's local LLM gateway.
+forge-llm.workspace = true
 forge-oidc.workspace = true
 httpdate.workspace = true
 tokio.workspace = true

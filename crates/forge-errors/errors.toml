@@ -3861,9 +3861,9 @@ severity = "warn"
 user_message_ja = "検索の索引を更新できませんでした。管理者に問い合わせ番号を伝えてください。"
 user_message_en = "The search index could not be updated. Give the request ID to your administrator."
 user_message_id = "Indeks pencarian tidak dapat diperbarui. Berikan ID permintaan kepada administrator Anda."
-cause = "Plan 20 K2 (ADR-0040): one entry, or one project's entries, of the search index could not be written as asked, or not completely: `reason=truncated` (an entry's body is over 256 KB or its vector over 50 000 terms: the rest is not searchable, the row says `truncated`), `reason=subtree_too_large` (a group move or user rename touched more projects than one subscriber step refreshes: the rest keep their old path in the index until the rebuild and are recorded `failed` with this code in forge.search_index_state), `reason=write_failed` (the rebuild could not write one project's entries; the cause is chained). The index is derived: nothing a person wrote is lost."
-diagnosis = "The log event (`forge.search.index_item`) carries `reason`, `source_kind`, `project_id`, `source_key` (a project: empty; a merge request: its iid), `limit` and the source event's `request_id` / `seq` (subscriber) or the rebuild's request_id. forge.search_index_state holds the project's last `state` and `last_error_code` and `attempts`. A failed subscriber step itself is FG-DB-0008 (subscriber `search-index`, runbook subscriber-lag)."
-fix = "`truncated`: nothing to repair (the entry stays searchable by its title and first 256 KB); shorten the source if it matters. `subtree_too_large`: run `forge search reindex` (runbook search-index). `write_failed`: fix the chained cause, then `forge search reindex --project <id>`."
+cause = "Plan 20 K2 (ADR-0040): one entry, or one project's entries, of the search index could not be written as asked, or not completely: `reason=truncated` (an entry's body is over 256 KB or its vector over 50 000 terms: the rest is not searchable, the row says `truncated`), `reason=subtree_too_large` (a group move or user rename touched more projects than one subscriber step refreshes: the rest keep their old path in the index until the rebuild and are recorded `failed` with this code in forge.search_index_state), `reason=write_failed` (the rebuild could not write one project's entries; the cause is chained). Plan 20 K4 (documents of the default branch, the `search.index_documents` job): `reason=read_bound` (the tip's documents were read in part — a `forge_checks::doc_lint` bound `doc_tree` / `doc_files` / `doc_large_files` / `doc_bytes` / `doctype_files`, as the document API's `incomplete`: what was read is indexed, every other document row is left `confidential`), `reason=read_failed` (the job failed for good: git, storage or the database; the cause is chained), `reason=key_too_long` (a document path over 1024 bytes: not indexed). The index is derived: nothing a person wrote is lost."
+diagnosis = "The log event (`forge.search.index_item`) carries `reason`, `source_kind`, `project_id`, `source_key` (a project: empty; a merge request: its iid), `limit` and the source event's `request_id` / `seq` (subscriber) or the rebuild's request_id. forge.search_index_state holds the project's last `state` and `last_error_code` and `attempts`. A failed subscriber step itself is FG-DB-0008 (subscriber `search-index`, runbook subscriber-lag). Documents: the event carries `bound` (read_bound), `sha` and `cause_code` / `cause` (read_failed); the state row has `indexed_sha` NULL until a complete read, so the next push reads the whole tip again. The job's own runs are in forge.jobs (`kind = 'search.index_documents'`, payload `project_id`, `full`)."
+fix = "`truncated`: nothing to repair (the entry stays searchable by its title and first 256 KB); shorten the source if it matters. `subtree_too_large`: run `forge search reindex` (runbook search-index). `write_failed`: fix the chained cause, then `forge search reindex --project <id>`. `read_bound`: the repository holds more documents than one read takes (runbook search-index: split it, or raise the bound in a change); the unread ones stay withheld from AI and searchable only by their old text. `read_failed`: fix the chained cause (runbook of its code), then push again or `forge search reindex --project <id>` (it enqueues a full documents job)."
 runbook = "search-index"
 test = "oversized_description_is_truncated_and_logged"
 
@@ -3934,3 +3934,117 @@ cause = "Plan 21 §5.3–§5.6 (ADR-0041 §5–§7): forge-edge refused a wave p
 diagnosis = "The problem's `reason` and `subject` (the field, wave index, zone name or window) say which value. Nothing was stored."
 fix = "Correct the value: waves strictly increasing to 100 % (a canary wave only first), thresholds in range, IANA zone names such as `Asia/Jakarta`, windows as weekday + HH:MM + minutes."
 test = "wave_plan_must_end_at_100_percent"
+# ── Plan 19 L5-1 (ADR-0039): the local LLM gateway's contract ──
+
+[[error]]
+code = "FG-LLM-0002"
+name = "LlmOutputInvalid"
+http_status = 502
+severity = "warn"
+user_message_ja = "AI の助言を作れませんでした（AI の答えが決まった形になっていません）。助言なしで続けられます。"
+user_message_en = "The AI advice could not be made (the AI's answer was not in the required shape). You can continue without it."
+user_message_id = "Saran AI tidak dapat dibuat (jawaban AI tidak dalam bentuk yang diwajibkan). Anda dapat melanjutkan tanpanya."
+cause = "Plan 19 §2 (ADR-0039): the local model answered a request twice with something that is not the advice's JSON shape (`forge_core::llm::check_output`): not JSON, not an object, `summary` missing or not text, `findings` not a list or a finding with a bad `severity` / `path` / `line` / `quote` / `message` / `confidence`, a bad `deep_review`, or more than 100 findings. The first invalid answer is retried once with a note; the second is this code. The advice is not written: a check built on it is `error`, never success (ADR-0003), and the screens fall back to the view without AI."
+diagnosis = "The gateway logs `forge.llm.request_finished` with `error_code=FG-LLM-0002`, `purpose`, `llm_request_id`, `model`, `prompt_version`, `reason` (the second answer's) and `first_reason`, `attempts=2`; the metric `forge_llm_output_invalid_total{purpose}` counts them. Read the request row: SELECT purpose, model, prompt_id, prompt_version, input_tokens, output_tokens, state, error_code FROM forge.llm_requests WHERE id = <llm_request_id>. A run of them after a model or prompt change is the change's fault."
+fix = "Single failures need nothing (the next request runs normally). A run of them: roll the prompt version or the model back (runbook llm-advice-quality / llm-model-update), and add the failing shape to the purpose's eval set before changing the prompt again."
+test = "invalid_output_retried_once_then_error"
+
+[[error]]
+code = "FG-LLM-0005"
+name = "LlmInputRefused"
+http_status = 422
+severity = "info"
+user_message_ja = "この内容は AI に渡せないため、AI の助言はありません（秘密の情報を含むか、大きすぎます）。"
+user_message_en = "This content cannot be given to the AI, so there is no AI advice (it holds secrets or is too large)."
+user_message_id = "Konten ini tidak dapat diberikan ke AI, sehingga tidak ada saran AI (berisi rahasia atau terlalu besar)."
+cause = "Plan 19 §5 (06 D-5): the input of a request was refused before any model saw it (`forge_core::llm::prepare`). `reason`: `secret_unredactable` (a private key block whose end is missing: what follows its header cannot be told apart from the key), `too_many_secrets` (more secrets than the input may hold redacted, 64 by default), `too_many_assignments` (more than 256 secret-looking names on one line: the rest of the line cannot be shown to be clean), `too_large` (more characters than the purpose's bound after redaction), `empty` (no part: a bug of the input builder). Secrets that can be redacted are replaced by `[REDACTED:<kind>]` and the request goes on; this code is only for inputs that cannot be sent at all."
+diagnosis = "The caller logs it with `purpose`, `reason`, `label` (the part: `diff`, `log`, …) and, for `too_many_secrets`, `redactions`, `max_chars` for `too_large`. The input itself is never logged or stored; reproduce it from the request's keys (the merge request's head and base SHAs, the log's request_id)."
+fix = "`secret_unredactable` / `too_many_secrets`: the source holds credentials — rotate them (a committed secret is a leak) and remove them; `too_large`: the input builder must split or trim the input (a defect of the purpose's builder). `empty`: a builder bug, fix it."
+test = "secret_in_input_refused"
+
+[[error]]
+code = "FG-LLM-0006"
+name = "LlmEvidenceInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "AI の指摘の一部は、根拠が入力に見つからなかったため表示しません。"
+user_message_en = "Some AI findings are not shown because their evidence was not found in the input."
+user_message_id = "Beberapa temuan AI tidak ditampilkan karena buktinya tidak ditemukan dalam input."
+cause = "Plan 19 §3.1, §5 (ADR-0039): findings of a valid answer quoted text that is not in the input (in the parts of the finding's path when it names one, or anywhere otherwise), quoted fewer than 8 characters, named a path the input does not have, or had nothing left after mentions and links were stripped. Those findings alone were dropped; the advice keeps the rest and says how many were dropped. Typical of a model that invents code, or of injected text that tries to plant a finding."
+diagnosis = "The gateway logs it once per advice with `llm_request_id`, `purpose`, `dropped` and `kept`; `forge_llm_requests_total{purpose,outcome}` is unaffected (the advice is written). Many per advice for one model or prompt version: compare `SELECT prompt_version, count(*) FROM forge.llm_requests WHERE purpose = '<purpose>' GROUP BY 1`."
+fix = "Nothing for single advices. A rising share after a prompt or model change: roll it back (runbook llm-advice-quality) and add the cases to the eval set."
+test = "evidence_outside_input_dropped"
+
+# ── Plan 19 L5-3 (ADR-0039): the gateway (forge-llm) ──
+
+[[error]]
+code = "FG-LLM-0001"
+name = "LlmUnavailable"
+http_status = 503
+severity = "warn"
+user_message_ja = "AI（ローカル LLM）に今つながりません。AI の助言なしで続けられます。"
+user_message_en = "The AI (local LLM) cannot be reached right now. You can continue without the AI advice."
+user_message_id = "AI (LLM lokal) tidak dapat dihubungi saat ini. Anda dapat melanjutkan tanpa saran AI."
+cause = "Plan 19 §8.1 (ADR-0039): the gateway could not get an answer from the in-house Ollama (`llm.endpoint`): `reason` = `connect` / `connect_timeout` (nothing listens, the host is down), `timeout` (no answer within `llm.timeout_ms`), `gateway_timeout` (the whole checked call, two attempts, took longer than twice the timeout plus 5 s), `status_<code>` (Ollama answered an error — 500 is typically out of GPU memory, e.g. while the `gpu-eval` bench holds the GPU; 404 the model is not pulled), `body_too_large`, `body_invalid`, `redirect`, `request`. Also raised by the background model check when `/api/tags` cannot be read. The request is recorded `failed`; nothing else stops — the advice screens fall back to the view without AI and a check built on it is `error`, never success (ADR-0003)."
+diagnosis = "The worker logs `forge.llm.request_finished` with `error_code=FG-LLM-0001`, `reason`, `purpose`, `llm_request_id`, `model`; the model check logs it with `task=llm_model_check` once per streak. Metrics: `forge_llm_requests_total{outcome=\"FG-LLM-0001\"}`. From the worker host (read-only): `curl -s <llm.endpoint>/api/tags`, `nvidia-smi` (GPU memory), Kanflow's own Ollama status. `SELECT state, error_code, count(*) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1, 2`."
+fix = "Runbook llm-gateway: bring Ollama back (the Kanflow side owns the process), free the GPU (the bench runs at night), or pull the pinned model. Requests are not retried by the gateway; the feature that asked retries on its own schedule. If it lasts, pause the gateway (`llm.paused = true`, an approved runbook step in production)."
+runbook = "llm-gateway"
+test = "llm_unavailable_is_an_error_never_a_success"
+
+[[error]]
+code = "FG-LLM-0003"
+name = "LlmModelDigestMismatch"
+http_status = 503
+severity = "alert"
+user_message_ja = "AI のモデルが決められたものと違うため、AI の助言を止めています。管理者が確認します。"
+user_message_en = "The AI advice is stopped because the AI model is not the pinned one. An administrator will check it."
+user_message_id = "Saran AI dihentikan karena model AI bukan model yang ditetapkan. Administrator akan memeriksanya."
+cause = "Plan 19 §8.1, plan 17 §6 (ADR-0039): the model Ollama serves under `llm.model`'s `name:tag` has a digest other than the pinned `sha256:…` (someone pulled a new version, or the shared Ollama was updated for Kanflow), or the model is not there (`reason=model_missing`). The gateway stops all inference until the digest matches again: waiting requests are failed with this code (`reason=stopped`, recorded `abandoned`), new ones are refused. A model must never change silently — its advice would no longer be the evaluated one."
+diagnosis = "The worker logs it once per streak with `task=llm_model_check`, `model`, `expected_digest` and `actual_digest` (or `reason=model_missing`); later requests carry `reason=stopped`. Check (read-only): `curl -s <llm.endpoint>/api/tags` and compare the model's `digest` with `llm.model` in the configuration; ask the Kanflow side whether they changed the model."
+fix = "Runbook llm-model-update: either put the pinned model back on Ollama (`ollama pull name:tag` of the evaluated version, agreed with Kanflow), or change `llm.model` to the new digest in a reviewed MR after the eval set passed with it. The gateway checks again every 10 minutes and resumes on its own when the digests match."
+runbook = "llm-model-update"
+test = "model_digest_mismatch_stops_gateway"
+
+[[error]]
+code = "FG-LLM-0004"
+name = "LlmQueueDeadline"
+http_status = 503
+severity = "warn"
+user_message_ja = "AI が混んでいて時間内に助言を作れませんでした。AI の助言なしで続けられます。"
+user_message_en = "The AI was too busy to make the advice in time. You can continue without it."
+user_message_id = "AI terlalu sibuk untuk membuat saran tepat waktu. Anda dapat melanjutkan tanpanya."
+cause = "Plan 19 §8.1 (ADR-0017 §3): a request waited in the gateway's queue past its tier's deadline — interactive (a diagnosis, an approval summary) 2 minutes, a review or an autofix 30 minutes, batch 6 hours — without getting a turn: the slot (`llm.concurrency`, default 1) was held by long requests, Kanflow's users kept the shared GPU busy (`ai-busy`: only interactive work starts then), or Kanflow could not be asked (one start per minute). The request is recorded `abandoned`; nothing else stops."
+diagnosis = "The worker logs `forge.llm.request_finished` with `error_code=FG-LLM-0004`, `priority`, `deadline_s`, `purpose`, `llm_request_id`. Look at `forge.llm.metrics` (`waiting`, `running`, `forge_llm_queue_wait_seconds{priority}`, `forge_llm_yield_total{reason}`) and `forge.llm.kanflow_gate` state changes around the time; `SELECT priority, state, count(*), max(finished_at - queued_at) FROM forge.llm_requests WHERE queued_at > now() - interval '1 hour' GROUP BY 1, 2`."
+fix = "Runbook llm-gateway: a burst passes by itself; a lasting backlog means the shared GPU is too small for both users — raise `llm.concurrency` to 2 only if the GPU has room, move batch work to the night, or give forge its own GPU host (plan 19 §1.1 G3)."
+runbook = "llm-gateway"
+test = "a_request_waiting_past_its_deadline_is_abandoned"
+
+# ── Plan 20 W1/W2 (ADR-0040 §5): the project wiki link ──
+
+[[error]]
+code = "FG-KNOW-0003"
+name = "WikiLinkRefused"
+http_status = 409
+severity = "info"
+user_message_ja = "このプロジェクトには Wiki を結び付けられません。"
+user_message_en = "A wiki cannot be linked to this project."
+user_message_id = "Wiki tidak dapat ditautkan ke proyek ini."
+cause = "Plan 20 W1/W2 (ADR-0040 §5): a wiki link (forge.project_wikis) was refused. `reason=already_linked` (the owner project already has a wiki), `reason=wiki_already_linked` (the wiki project is already some project's wiki), `reason=chain` (the owner is itself a wiki, or the wiki already owns a wiki: inheritance is one hop only, enforced by the CHECK `project_wikis_not_self` and the trigger `project_wikis_no_chain`), `reason=self` (a project as its own wiki), `reason=name_taken` (the wiki project's path `<owner>-wiki` or the one asked for is already used in the namespace), `reason=not_linked` (unlinking a project that has no wiki). Not a fault: nothing was written."
+diagnosis = "The log event carries `reason`, `project_id` (the owner) and, when known, `wiki_project_id`, and the request_id. `SELECT * FROM forge.project_wikis WHERE project_id = <id> OR wiki_project_id = <id>` shows the existing link."
+fix = "`already_linked` / `wiki_already_linked`: use the existing wiki, or unlink it first (`gstn wiki unlink`). `name_taken`: choose another path (`gstn wiki create --path <segment>`) or rename the project that holds it. `chain` / `self`: link the wiki to the owner project itself, never to another wiki. See runbook knowledge."
+runbook = "knowledge"
+test = "inheritance_not_transitive"
+
+[[error]]
+code = "FG-KNOW-0004"
+name = "WikiProvisionFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "Wiki を作れませんでした。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The wiki could not be created. Give the request ID to your administrator."
+user_message_id = "Wiki tidak dapat dibuat. Berikan ID permintaan kepada administrator Anda."
+cause = "Plan 20 W2 (ADR-0040 §5): `POST /api/v1/projects/{id}/wiki` created the wiki project, but a later step failed, so the wiki was NOT linked (nobody inherits a role on it): `step=provision` (the repository could not be created or marked ready), `step=seed` (the first commit with `.forge/doctypes/wiki.page.yml` and `WIKI-0001.md` could not be written, or `main` already existed), `step=protect` (the default protection of `main` could not be set), `step=link` (the link could not be written — also when a concurrent request linked another wiki first, chained FG-KNOW-0003). The cause is chained (FG-GIT-*, FG-REPO-*, FG-DB-*)."
+diagnosis = "The log event carries `step`, `project_id` (the owner), `wiki_project_id` (the half-made project), `repo_id` and the chained code, with the request_id. The project exists and is unlinked: `SELECT * FROM forge.project_wikis WHERE wiki_project_id = <id>` returns nothing."
+fix = "Fix the chained cause (runbooks repository-provisioning, git-process-failed, db-unavailable). Then the person deletes the half-made project and runs `gstn wiki create` again, or creates the wiki under another path (`--path`). Runbook knowledge, 「A half-made wiki project」."
+runbook = "knowledge"
+test = "provision_failure_leaves_no_link"

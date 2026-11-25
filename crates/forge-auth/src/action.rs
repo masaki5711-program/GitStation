@@ -78,6 +78,16 @@ actions! {
     /// Move or rename a project (`Resource::Transfer`, ADR-0015).
     ProjectTransfer,
     ProjectDelete,
+    /// `POST` / `DELETE /api/v1/projects/{id}/wiki` (plan 20 W1/W2,
+    /// ADR-0040 §5): create the project's wiki (an ordinary project in the
+    /// same namespace) and link it, or unlink it. Decided on the owner
+    /// project: a Maintainer, people only (never an agent, a service
+    /// account, a bot, acting for a person or CI), `api`. Creating the wiki
+    /// is also `ProjectCreate` on the owner's namespace, decided again by
+    /// the command. Reading and writing the wiki itself are the existing
+    /// actions on the wiki project (`RepoBrowse`, `RepoPush`), whose role
+    /// the owner project's members inherit (`forge_db::roles`).
+    ProjectWikiLink,
     ProjectRestore,
     ProtectedRefManage,
     MemberManage,
@@ -788,6 +798,8 @@ impl Action {
                 | Action::NamespaceTombstoneRelease
                 | Action::ProjectDelete
                 | Action::ProjectRestore
+                // Plan 20 W1: a wiki is linked by a person.
+                | Action::ProjectWikiLink
                 | Action::MemberManage
                 | Action::UserDisable
                 // ADR-0021 amendment 2026-11-20: another person's positions
@@ -965,6 +977,7 @@ impl Action {
             | Action::ProjectTransfer
             | Action::ProjectDelete
             | Action::ProjectRestore
+            | Action::ProjectWikiLink
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::GroupCreateTopLevel
@@ -1069,6 +1082,7 @@ impl Action {
             | Action::ProjectTransfer
             | Action::ProjectDelete
             | Action::ProjectRestore
+            | Action::ProjectWikiLink
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::MemberList
@@ -1244,6 +1258,7 @@ impl Action {
             | Action::ProjectTransfer
             | Action::ProjectDelete
             | Action::ProjectRestore
+            | Action::ProjectWikiLink
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::MemberList

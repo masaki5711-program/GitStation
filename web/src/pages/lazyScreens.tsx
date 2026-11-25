@@ -3,53 +3,71 @@
 // first load of the app carries only the browsing screens. Each one waits
 // behind a skeleton the first time; a link that prefetches its screen
 // (features/prefetch.ts) also starts loading its chunk (`preloadScreen`).
-import { lazy, Suspense, useState, type ComponentProps, type ComponentType } from 'react';
+import {
+  lazy,
+  Suspense,
+  use,
+  useState,
+  type ComponentProps,
+  type ComponentType,
+  type ReactNode,
+} from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { useCheckRuns } from '../api/checks';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { AI_EVAL_CHECK } from '../features/mr/aiEval';
 import { SkeletonList } from '../components/Skeleton';
+import { forgetFailedJaRest, hasJaRest, loadJaRest, preloadJaRest } from '../i18n';
+import { loaders } from './screenLoaders';
 
-const loaders = {
-  settings: () => import('./settings/ProjectSettings'),
-  members: () => import('./settings/Members'),
-  groupSettings: () => import('./settings/GroupSettings'),
-  account: () => import('./settings/Account'),
-  webhooks: () => import('./webhooks/WebhooksScreen'),
-  deliveries: () => import('./webhooks/DeliveriesScreen'),
-  pipelines: () => import('./repo/pipelines/PipelinesScreen'),
-  pipeline: () => import('./repo/pipelines/PipelineScreen'),
-  mergeQueue: () => import('./repo/mr/MergeQueueScreen'),
-  schedules: () => import('./repo/pipelines/SchedulesScreen'),
-  editor: () => import('./repo/editor/EditorScreen'),
-  actAs: () => import('./confirm/ActAsConfirm'),
-  actAsBinding: () => import('./confirm/ActAsBindingConfirm'),
-  adminRedirect: () => import('./AdminRedirect'),
-  blame: () => import('./repo/BlameScreen'),
-  compare: () => import('./repo/CompareScreen'),
-  search: () => import('./search/SearchScreen'),
-  activity: () => import('./Activity'),
-};
+/** Renders its children once the ja strings only the lazy screens use are
+ * loaded (they are not in the main chunk, scripts/i18n-split.mjs): a lazy
+ * screen never shows a raw key. A failed load reaches the ErrorBoundary.
+ * Already loaded (usual: it starts with the screen chunk) is checked first:
+ * `use` would suspend once even on a settled promise. */
+function JaRest({ children }: { children: ReactNode }) {
+  const { i18n } = useTranslation();
+  if (!hasJaRest(i18n)) use(loadJaRest(i18n));
+  return children;
+}
 
-/** A lazy component with a skeleton while its chunk loads. React.lazy
- * keeps a failed load for good, so a failure (offline, a file replaced by a
- * deploy) shows the error with a retry that builds a new lazy component and
- * asks for the chunk again. */
+/** A lazy component with a skeleton while its chunk and the ja strings it
+ * needs (`JaRest`) load; both start together. React.lazy keeps a failed
+ * load for good, so a failure (offline, a file replaced by a deploy) shows
+ * the error with a retry that builds a new lazy component and asks for the
+ * chunks again. */
 export function lazyScreen<P extends object>(load: () => Promise<ComponentType<P>>) {
-  const make = () => lazy(() => load().then((c) => ({ default: c })));
+  const make = () =>
+    lazy(() =>
+      load().then((Screen) => ({
+        default: function WithJaRest(props: P) {
+          return (
+            <JaRest>
+              <Screen {...props} />
+            </JaRest>
+          );
+        },
+      })),
+    );
   let Lazy = make();
   return function LazyScreen(props: P) {
+    const { i18n } = useTranslation();
     const [attempt, setAttempt] = useState(0);
+    // The strings start loading with the chunk (the same promise JaRest
+    // waits on; its failure is shown there).
+    loadJaRest(i18n).catch(() => undefined);
     return (
       <ErrorBoundary
         key={attempt}
         onRetry={() => {
+          forgetFailedJaRest(i18n);
           Lazy = make();
           setAttempt((a) => a + 1);
         }}
       >
         <Suspense fallback={<SkeletonList />}>
-          <Lazy {...(props as ComponentProps<typeof Lazy>)} />
+          <Lazy {...props} />
         </Suspense>
       </ErrorBoundary>
     );
@@ -70,6 +88,7 @@ export const PipelineScreen = screen(() => loaders.pipeline().then((m) => m.Pipe
 export const MergeQueueScreen = screen(() => loaders.mergeQueue().then((m) => m.MergeQueueScreen));
 export const SchedulesScreen = screen(() => loaders.schedules().then((m) => m.SchedulesScreen));
 export const EditorScreen = screen(() => loaders.editor().then((m) => m.EditorScreen));
+export const WikiScreen = screen(() => loaders.wiki().then((m) => m.WikiScreen));
 export const ActAsConfirm = screen(() => loaders.actAs().then((m) => m.ActAsConfirm));
 export const ActAsBindingConfirm = screen(() => loaders.actAsBinding().then((m) => m.ActAsBindingConfirm));
 
@@ -82,6 +101,7 @@ const BY_WORD: Record<string, (() => Promise<unknown>) | undefined> = {
   'merge-queue': loaders.mergeQueue,
   edit: loaders.editor,
   new: loaders.editor,
+  wiki: loaders.wiki,
 };
 
 /** Starts loading the chunk of a screen word ahead of the click. A failed
@@ -92,9 +112,10 @@ export function preloadScreen(word: string): void {
   if (load !== undefined) void load().catch(() => undefined);
 }
 
-/** Every lazy chunk (tests load them up front, as setup.ts does Markdown). */
+/** Every lazy chunk and the ja strings they use (tests load them up
+ * front, as setup.ts does Markdown). */
 export function loadAllScreens(): Promise<unknown[]> {
-  return Promise.all(Object.values(loaders).map((l) => l()));
+  return Promise.all([...Object.values(loaders).map((l) => l()), preloadJaRest()]);
 }
 export const BlameScreen = screen(() => loaders.blame().then((m) => m.BlameScreen));
 export const CompareScreen = screen(() => loaders.compare().then((m) => m.CompareScreen));

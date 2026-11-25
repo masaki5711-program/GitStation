@@ -183,6 +183,10 @@ pub mod ci_ai_eval;
 pub mod ai_assets;
 // Plan 16 A3 (ADR-0032): the agent marketplace's tables and guards.
 pub mod agent_marketplace;
+// Plan 19 L5-2 (ADR-0039): the local LLM's requests, advice and feedback.
+pub mod llm;
+// Plan 20 W1 (ADR-0040 §5): a project's wiki link.
+pub mod wikis;
 // ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

@@ -1,0 +1,31 @@
+[package]
+name = "forge-llm"
+description = "forge local LLM gateway: the Ollama provider, the priority queue and its arbitration, model digest check, records and metrics (plan 19 L5-3)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A feature crate (plan 19 §2.1, ADR-0039): forge-cli → forge-llm →
+# forge-db → forge-core → forge-errors. It runs no SQL of its own (the SQL
+# is `forge_db::llm`) and never depends on another feature crate: the
+# features that build inputs (forge-review, forge-deploy) use
+# `forge_core::llm` types and are wired to the gateway by forge-cli.
+[dependencies]
+forge-core.workspace = true
+forge-db.workspace = true
+forge-errors.workspace = true
+# The Ollama HTTP API and Kanflow's ai-busy: rustls with only llm.ca_file's
+# roots, no proxy, no redirect, a timeout on every call (the same 0.12 as
+# forge-oidc / forge-integ). MIT OR Apache-2.0.
+reqwest.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

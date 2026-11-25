@@ -270,13 +270,14 @@ pub enum Command {
         #[arg(long, value_parser = parse_limit, value_name = "N")]
         limit: Option<u32>,
     },
-    /// Search projects and merge requests you may read (plan 20 K3).
+    /// Search projects, merge requests and documents you may read (plan 20
+    /// K3, K4).
     Search {
         /// The words to search for (2..=200 characters in all).
         #[arg(required = true, value_parser = parse_text, value_name = "WORDS")]
         words: Vec<String>,
         /// Only these kinds (default: every kind).
-        #[arg(long, value_delimiter = ',', value_parser = ["project", "merge_request"], value_name = "A,B")]
+        #[arg(long, value_delimiter = ',', value_parser = ["project", "merge_request", "document"], value_name = "A,B")]
         scope: Vec<String>,
         /// Only hits of this project (its id).
         #[arg(long, value_parser = parse_id, value_name = "ID")]
@@ -287,6 +288,12 @@ pub enum Command {
         /// Continue from a previous page's `next_cursor`.
         #[arg(long, value_parser = parse_text, value_name = "CURSOR")]
         cursor: Option<String>,
+    },
+    /// A project's wiki: create and link it, or unlink it (plan 20 W2).
+    #[command(disable_help_subcommand = true)]
+    Wiki {
+        #[command(subcommand)]
+        command: WikiCommand,
     },
     /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
@@ -560,6 +567,41 @@ pub enum ProjectCommand {
     },
     /// Restore a deleted project within its grace period.
     Restore(IdArg),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WikiCommand {
+    /// Show the project's linked wiki (or, asked on a wiki, that wiki):
+    /// its project id, path, name and branch. Not found when there is none
+    /// you may read.
+    Show {
+        /// The project id.
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
+    /// Create the project's wiki (an ordinary project in the same
+    /// namespace, first page WIKI-0001) and link it; the project's members
+    /// get the same role on it.
+    Create {
+        /// The owner project id.
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The wiki project's path segment (default `<project>-wiki`).
+        #[arg(long, value_parser = parse_text, value_name = "SEGMENT")]
+        path: Option<String>,
+        /// The wiki's display name (default `<project name> Wiki`).
+        #[arg(long, value_parser = parse_text, value_name = "NAME")]
+        display_name: Option<String>,
+    },
+    /// Unlink the project's wiki; the wiki project stays.
+    Unlink {
+        /// The owner project id.
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

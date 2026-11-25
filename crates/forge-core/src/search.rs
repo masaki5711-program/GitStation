@@ -9,11 +9,19 @@ pub enum SourceKind {
     Project,
     /// A merge request: its title and description (never the diff).
     MergeRequest,
+    /// A document (plan 13) at the default branch's tip (plan 20 K4): its
+    /// title, id, headings, block ids and text. Wiki pages and notes are
+    /// documents too. Keyed by its path.
+    Document,
 }
 
 impl SourceKind {
     /// Every kind, in the order the API documents them.
-    pub const ALL: [SourceKind; 2] = [SourceKind::Project, SourceKind::MergeRequest];
+    pub const ALL: [SourceKind; 3] = [
+        SourceKind::Project,
+        SourceKind::MergeRequest,
+        SourceKind::Document,
+    ];
 
     /// The stored and the API name.
     #[must_use]
@@ -21,6 +29,7 @@ impl SourceKind {
         match self {
             Self::Project => "project",
             Self::MergeRequest => "merge_request",
+            Self::Document => "document",
         }
     }
 
@@ -51,6 +60,9 @@ pub struct CandidateFilter {
     /// The projects whose merge requests the caller may read (`ProjectRead`
     /// and `MergeRequestList`). Empty: no merge request matches.
     pub readable_merge_requests: Vec<crate::ProjectId>,
+    /// The projects whose documents the caller may read (`ProjectRead` and
+    /// `RepoBrowse`). Empty: no document matches.
+    pub readable_documents: Vec<crate::ProjectId>,
 }
 
 /// One ranked candidate of a query, as stored: shown only after
@@ -59,7 +71,8 @@ pub struct CandidateFilter {
 pub struct SearchCandidate {
     pub kind: SourceKind,
     pub project: crate::ProjectId,
-    /// `''` for a project; a merge request's iid (decimal).
+    /// `''` for a project; a merge request's iid (decimal); a document's
+    /// path.
     pub key: String,
     pub title: String,
     /// The stored body (the snippet's source).

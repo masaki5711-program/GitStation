@@ -71,6 +71,12 @@ npm run dev                  # Vite。/api と /-/auth を FORGE_DEV_SERVER（�
 - **分割**（`pages/lazyScreens.tsx`）: 設定・メンバー・Webhook・パイプライン・編集・代理承認のポップアップは別チャンク。
   初回は `SkeletonList` を出す。Markdown と構文の言語は前から別チャンク。文言は ja だけ本体に入れ、en / id は選んだときに
   読む別チャンク（`i18n/index.ts`。読めなければ起動を失敗させる）。本体は 910 kB → 645 kB（gzip 268 kB → 199 kB）。
+- **ja の分割**（`scripts/i18n-split.mjs`、Vite プラグインは `vite.config.ts`）: ja のうち初回ロードで使う文言（core）だけを
+  本体に入れ、遅延画面だけが使う文言（rest）は別チャンク `ja-rest`。どちらに入るかはビルドが機械的に決める:
+  `main.tsx` から静的 import と（`pages/screenLoaders.ts` 以外の）動的 import でたどれるファイルの `t('…')` が core、
+  残りが rest。手で振り分けない。遅延画面は `lazyScreen` が rest を読み終えてから描く（生のキーを出さない。読めなければ
+  「もう一度」）。新しい遅延画面は `pages/screenLoaders.ts` に足す（他の場所の動的 import は初回ロード扱い）。
+  `npm run dev` は分割しない（ja 全部が core）。ゲートは `tests/i18n-split.test.tsx`。
 
 ### 測りかた
 

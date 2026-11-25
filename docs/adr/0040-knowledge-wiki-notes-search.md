@@ -69,3 +69,29 @@ M6（計画 20）は Wiki・個人ノート・横断検索（と最小の Issue�
 
 - **受け入れた残りの経路（時間）**: GIN の `tokens @@ q` はインスタンス全体の一致を集めてから `project_id = ANY(読める集合)` で絞る。だから文の時間と 2 s の時間切れ（`FG-KNOW-0001`）は、読めない行の一致の数でも伸びる。拡張（`btree_gin` など）を足さない条件（§決定 1）では、索引の中でプロジェクトと語を一緒に引けない。**時間の差だけが残る経路として受け入れる**。抑え: 語は 32 まで（`FG-WEB-0006 rule=too_many_terms`）、前方一致は 1 つまで、順位付けは新しい 5000 件まで、同時実行の上限（一覧と同じ `FG-WEB-0008`）、文の時間切れ 2 s、結果・件数・`has_more` には出ない。問い合わせの語はログに出さない。拡張を足せる日が来たら、`(project_id, tokens)` の GIN で閉じる。
 - **読める集合の上限は読める物だけを数える**: 読めないプロジェクトの数では断らない。`project=` が付いたら 1 件だけ読む（走査しない）。2 万件ちょうどは答え、2 万 1 件目から断る。
+
+## Amendment W1/W2（2026-11-24、Wiki の結び付けと作成）
+
+- **継承を決める 1 か所**: `forge-auth` は純粋（DB を読まない）で、`authorize()` は役割を入力として受け取るだけ。役割を計算する唯一の場所は `forge-db` の `roles::chain_role_columns!`（ADR-0038 §2 の組織の結び付けと同じ場所）なので、継承はそこに置いた。Wiki のプロジェクトの段で、主プロジェクトの **自分の** 役割（直接の所属と組織の結び付け）を `forge.role_max` で足す。主プロジェクトの継承した役割は読まない（1 段）。祖先のグループの役割は、Wiki が同じ名前空間にあるので Wiki 自身の鎖に既に入っている（移動した Wiki は主プロジェクト自身の役割だけを継ぐ — 主プロジェクトが与える以上にはならない）。読み込み・一覧・書き込みの中の読み直し（`lock_roles`、結び付けと主プロジェクトの所属も `FOR SHARE`）がすべてこの式を通る。毎回のリクエストで計算するので、外したメンバーは次のリクエストから失う。
+- **表**: `forge.project_wikis`（`project_id` PK、`wiki_project_id` UNIQUE、自分自身を禁止する CHECK、連鎖を禁止するトリガ `project_wikis_no_chain` はトランザクションの advisory lock で直列化）。台帳の種類は `derived`（`org_bindings` と同じ）: 結び付けと外しのコマンドが主プロジェクトに監査の行（`project.wiki_linked` / `project.wiki_unlinked`）を書く。どちらかのプロジェクトの完全削除は行を消し、もう片方は残る。主プロジェクトの削除の猶予の間は、Wiki も結び付けも残る（戻せば元どおり）。
+- **Action**: `ProjectWikiLink`（主プロジェクト、Maintainer 以上、人だけ、`api`、代理・CI は不可）。作成はさらに名前空間での `ProjectCreate` を呼び出し側の資格情報で `prove` し、作成のトランザクションの中でもう一度決める。保護の既定（`refs/heads/main`、Developer、強制 push と削除は不可）も同じく `ProtectedRefManage` を呼び出し側で決める。
+- **作成の手順（W2）**: 作成 → リポジトリをその場で作る（キューの `repository.provision` は準備済みを見て何もしない。同じトークンの同時の作成は採用で吸収）→ 最初のコミット（親なし、`main` の作成だけで上書きしない、push と同じ記録）→ 保護 → **最後に** 結び付け。作成の後の失敗は `FG-KNOW-0004`（`step`、`wiki_project_id`）で、結び付けは書かない。途中のプロジェクトは消さずに残し、利用者が消すか別のパスで作り直す（runbook `knowledge`）。拒否は `FG-KNOW-0003`（`already_linked`・`chain`・`name_taken`・`not_linked` など）。
+- **最初のコミットに別の `RepoPush` の判定を置かない**: 最初のコミットは Wiki のプロジェクトの作成の一部（作成者は Owner、`ProjectWikiLink` と `ProjectCreate` で決めた）で、`api` のトークンには `write_repository` が無いことがあるため。途中で降格された Maintainer は結び付けの直前の決め直し（`link_decided` の reconfirm）で止まり、結び付けの無い途中のプロジェクトだけが残る（`FG-KNOW-0004`、runbook `knowledge`）。
+
+## Amendment K4（2026-11-24、文書の索引）
+
+- **きっかけと決める場所**: 購読者 `search-index` は、ブランチを動かした `repository.pushed` ごとにジョブ `search.index_documents`（イベントごとに重複を除く）を入れる。既定ブランチは git の `HEAD` なので、どのブランチかはジョブが決める: 既定ブランチの先端を読み（このプロセスの ref のキャッシュは捨てる）、索引済みの SHA と同じなら何もしない（他のブランチへの push）。`forge search reindex` はプロジェクトごとに全体のジョブを入れる。
+- **変わったパスだけ**: 先端の一覧と索引済みの SHA の一覧を、パスとブロブの id で比べる。全体を読み直すのは、索引が無い・作り直し・古い SHA が読めない（強制 push と gc）・一覧が切れた・型の定義が変わった（全文書の区分が変わりうる）・読みの上限に当たったとき。原文が変わったら翻訳も書き直す（区分が原文に従うため）。区分の計算は常に先端の全体の読み（`forge_checks::doc_lint::read_tree` の上限、文書の API と同じ）で行う。
+- **区分は先端で**: 文書自身の区分と型の既定、そしてエージェントの読みと同じ `confidential_in`（型が読めない、機密の原文の翻訳、読めない front matter）。
+- **閉じる側**: 上限に当たった読みは `FG-KNOW-0002 reason=read_bound`（warn）。読めた分だけ書き、読めなかった文書の行は `confidential` に倒し、完全な一覧に無いパスの行だけ消す。状態は `failed`・SHA なし（次の push で全体を読む）。ジョブが最後の試行でも失敗したら `reason=read_failed` で状態に `failed` を残す。
+- **書き込みの順序**: 1 トランザクション（文の時間切れ 30 s、ロック待ち 5 s）。`search_index_state` の行をロックし、ジョブが読み始めた SHA と比べる（間に別のジョブが書いたら読み直す、3 回まで）。
+- **検索の結果**: `scope=document`。文書の行は `RepoBrowse`（文書の API と同じ Action）の通ったプロジェクトだけを候補にし、1 件ずつもう一度判定する。結果の `path` は先端のパス。行の `source_updated_at` は索引に入った時刻。
+- 新しい機能クレート `forge-search` はまだ作らない: 文書の読みと行の組み立ては `forge-checks::doc_search`（既に `read_tree` と `confidential_in` を持つ機能クレート）、書き込みは `forge-db`、ジョブは `forge-cli`。依存の向きは変わらない。
+
+## Amendment W4（2026-11-25、Wiki の画面）
+
+- **結び付けの読み**: `GET /api/v1/projects/{id}/wiki`（`ProjectRead` を主プロジェクトで判定。Wiki に聞いたときは Wiki 自身）。答えは `{wiki_project_id, wiki_path, display_name, default_branch}` だけで、主プロジェクトの情報は返さない（Wiki だけのメンバーは主プロジェクトを読めないことがある）。さらに Wiki のプロジェクトの `ProjectRead` を呼び出し側の資格情報で `prove` し、通らなければ「Wiki が無い」と同じ `404 FG-REPO-0005`（ログに `reason=wiki_unreadable` と拒否のコード）。読めない Wiki の id・パス・名前は出さない。`gstn wiki show` が同じ道。
+- **画面の語**: `/-/wiki` を `RouteWord::Wiki` として SPA の殻に足し、ADR-0015 の予約を解く（`{path}.wiki.git` は予約のまま）。
+- **画面**: ページは文書の API で読み、保存は簡単な編集の 1 つの書き込み（`main` への直接のコミット）。front matter はフォームが読み書きし、利用者に YAML を見せない。フォームで同じに戻せない front matter はファイルの編集画面へ案内する（推測しない）。lint が赤のときは先端の `forge/doc-lint` の注記（またはページ自身の解析の問題）から「どのページの何行目か」と「直す」を 1 行で出す。
+- **未了**: `forge/doc-lint` は今は MR の版の先端でだけ走る。Wiki の直接の push の後に走らせるのは別の項目（それまでは画面の 1 行はページ自身の解析の問題だけで出る）。
+- **受け入れた LOW（独立のセキュリティレビュー、2026-11-25）**: (1) `GET …/wiki` の「Wiki が無い」と「結び付いているが読めない」は同じ `404 FG-REPO-0005` だが、後者は Wiki のプロジェクトを読む分だけ応答が遅く、時間の差から「何かの Wiki がある」ことだけは分かり得る。id・パス・名前は出ないので受け入れる。(2) 主プロジェクトの Maintainer が Wiki を読めない場合、画面は「Wiki を作る」を出し、押すと `409 FG-KNOW-0003 reason=already_linked` になる。その Maintainer は結び付けを外せる（`ProjectWikiLink`）ので受け入れる。

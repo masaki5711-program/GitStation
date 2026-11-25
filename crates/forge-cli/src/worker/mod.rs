@@ -107,8 +107,12 @@ mod notify_lane;
 mod portal_news;
 // ADR-0038 §1: the copy of the PFS org master.
 mod org_master;
+// Plan 19 L5-3: the local LLM gateway and its records' upkeep.
+mod llm;
 // ── end M3 N1 ──
 mod seal;
+// Plan 20 K4: the `search.index_documents` job.
+mod search_documents;
 // ── M3 I1c: events retention ──
 mod events_retention;
 // ── end M3 I1c ──
@@ -223,6 +227,9 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
                 stopped.clone(), // clone: the task waits on its own receiver
             )
         });
+        // Plan 19 L5-3: the LLM gateway (enabled only by llm.enabled) and the
+        // records' upkeep (always).
+        let llm = llm::start(&cfg.llm, &db, &stopped)?;
         let purger = purge::Purger::new(&db, storage.root.clone()); // clone: the purge's own handle
         let purge = Some(PurgeTask {
             purger,
@@ -256,6 +263,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
         if let Some(task) = org_master {
             task.abort();
         }
+        llm.abort();
         signal.abort();
         crate::wake::stop(&wake_hub).await;
         db.close().await;

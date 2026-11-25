@@ -52,6 +52,7 @@ export const VIEW_WORDS = [
   'docs',
   'pipelines',
   'merge-queue',
+  'wiki',
 ] as const;
 
 export function isViewWord(word: string | undefined): boolean {

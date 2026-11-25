@@ -132,7 +132,8 @@ async fn readable_all(t: &FreshDb) -> CandidateFilter {
         .collect();
     CandidateFilter {
         readable_projects: ids.clone(),
-        readable_merge_requests: ids,
+        readable_merge_requests: ids.clone(),
+        readable_documents: ids,
         ..CandidateFilter::default()
     }
 }
@@ -322,6 +323,7 @@ async fn oversized_description_is_truncated_and_logged() {
         title: "Web",
         ids: String::new(),
         body: &long,
+        classification: "internal",
     };
     upsert(&mut conn, &origin, &entry, "2026-11-23T00:00:00Z")
         .await
@@ -476,6 +478,7 @@ async fn a_candidate_carries_at_most_the_snippet_source() {
         title: "Web",
         ids: String::new(),
         body: &long,
+        classification: "internal",
     };
     upsert(&mut conn, &origin, &entry, "2026-11-23T00:00:00Z")
         .await
@@ -566,4 +569,162 @@ fn the_statement_bounds_match_their_constants() {
         usize::try_from(SNIPPET_SOURCE_CHARS).expect("fits"),
         forge_core::search_text::SNIPPET_SCAN_CHARS
     );
+}
+
+async fn document_jobs(t: &FreshDb) -> Vec<serde_json::Value> {
+    t.json_rows(
+        "SELECT payload, dedup_key FROM forge.jobs WHERE kind = 'search.index_documents' \
+         ORDER BY id",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_branch_push_enqueues_the_documents_job_and_a_tag_push_does_not() {
+    let t = FreshDb::migrated().await;
+    register(&t).await;
+    let (_, p) = project(&t, "alice", "docs", "Docs").await;
+    drain(&t).await;
+    raw_event(
+        &t,
+        "repository.pushed",
+        p.project_id,
+        r#"{"refs": [{"ref": "refs/tags/v1"}]}"#,
+    )
+    .await;
+    drain(&t).await;
+    assert!(document_jobs(&t).await.is_empty(), "a tag is no branch");
+    raw_event(
+        &t,
+        "repository.pushed",
+        p.project_id,
+        r#"{"refs": [{"ref": "refs/heads/feature"}]}"#,
+    )
+    .await;
+    drain(&t).await;
+    let jobs = document_jobs(&t).await;
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    assert_eq!(jobs[0]["payload"]["project_id"], p.project_id.get());
+    assert_eq!(jobs[0]["payload"]["full"], false);
+    let request = documents_payload(&jobs[0]["payload"]).expect("payload");
+    assert_eq!(request.project, p.project_id);
+    assert!(!request.full);
+    // The rebuild asks for the whole tip.
+    reindex(
+        &t.db,
+        &RequestId::parse("req-reindex").expect("request id"),
+        Some(p.project_id),
+    )
+    .await
+    .expect("reindex");
+    let jobs = document_jobs(&t).await;
+    assert_eq!(jobs.len(), 2, "{jobs:?}");
+    assert_eq!(jobs[1]["payload"]["full"], true);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_push_without_refs_is_an_invalid_payload() {
+    let t = FreshDb::migrated().await;
+    register(&t).await;
+    let (_, p) = project(&t, "alice", "docs", "Docs").await;
+    drain(&t).await;
+    raw_event(&t, "repository.pushed", p.project_id, r#"{"refs": 1}"#).await;
+    match subscribers::run_once(&t.db, &SearchIndex)
+        .await
+        .expect("step")
+    {
+        Progress::Failed(_) => {}
+        other @ (Progress::Busy
+        | Progress::Disabled
+        | Progress::CaughtUp
+        | Progress::Handled { .. }
+        | Progress::Stuck(_)
+        | Progress::Quarantined(_)) => panic!("expected a counted failure, got {other:?}"),
+    }
+    t.drop_now().await;
+}
+
+#[test]
+fn a_malformed_documents_payload_is_refused() {
+    for bad in [
+        serde_json::json!({}),
+        serde_json::json!({"project_id": 0}),
+        serde_json::json!({"project_id": 3, "full": "yes"}),
+    ] {
+        assert!(documents_payload(&bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn the_document_write_bounds_are_the_rebuilds() {
+    assert_eq!(documents::WRITE_BOUNDS.join("; "), REINDEX_TIMEOUTS_SQL);
+}
+
+#[tokio::test]
+async fn a_stale_documents_write_is_moved_and_a_failure_withholds_the_rows() {
+    let t = FreshDb::migrated().await;
+    let (_, p) = project(&t, "alice", "docs", "Docs").await;
+    let rid = RequestId::parse("req-docs").expect("request id");
+    let entry = DocumentEntry {
+        path: "A.md".to_owned(),
+        title: "Pump".to_owned(),
+        ids: "A".to_owned(),
+        body: "pump body".to_owned(),
+        classification: "internal",
+    };
+    let first = DocumentUpdate {
+        tip: "a".repeat(40),
+        base: None,
+        entries: vec![entry.clone()],
+        scope: DocumentScope::Full { listed: None },
+        incomplete: None,
+    };
+    let applied = apply_documents(&t.db, &rid, p.project_id, &first)
+        .await
+        .expect("write");
+    assert_eq!(
+        applied,
+        Applied::Written {
+            entries: 1,
+            removed: 0
+        }
+    );
+    // Another job indexed in between: nothing is written from a stale base.
+    let stale = DocumentUpdate {
+        tip: "b".repeat(40),
+        entries: Vec::new(),
+        ..first.clone()
+    };
+    assert_eq!(
+        apply_documents(&t.db, &rid, p.project_id, &stale)
+            .await
+            .expect("moved"),
+        Applied::Moved
+    );
+    let classes = |rows: Vec<serde_json::Value>| -> Vec<String> {
+        rows.iter()
+            .map(|r| r["classification"].as_str().expect("class").to_owned())
+            .collect()
+    };
+    let sql = format!(
+        "SELECT classification FROM forge.search_entries          WHERE source_kind = 'document' AND project_id = {}",
+        p.project_id.get()
+    );
+    assert_eq!(classes(t.json_rows(&sql).await), vec!["internal"]);
+    // A job that failed for good: failed, no SHA, the rows withheld.
+    record_documents_failed(&t.db, p.project_id)
+        .await
+        .expect("recorded");
+    assert_eq!(classes(t.json_rows(&sql).await), vec!["confidential"]);
+    let state = t
+        .json_rows(&format!(
+            "SELECT indexed_sha, state, last_error_code FROM forge.search_index_state              WHERE project_id = {}",
+            p.project_id.get()
+        ))
+        .await;
+    assert!(state[0]["indexed_sha"].is_null());
+    assert_eq!(state[0]["state"], "failed");
+    assert_eq!(state[0]["last_error_code"], "FG-KNOW-0002");
+    t.drop_now().await;
 }

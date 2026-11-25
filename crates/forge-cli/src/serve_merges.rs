@@ -225,6 +225,16 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // Plan 20 (ADR-0040): search (never a merge's).
         | ErrorCode::SearchUnavailable
         | ErrorCode::SearchIndexItemFailed
+        // Plan 19 L5-1: the local LLM's (advice only, never a merge's).
+        | ErrorCode::LlmOutputInvalid
+        | ErrorCode::LlmInputRefused
+        | ErrorCode::LlmEvidenceInvalid
+        | ErrorCode::LlmUnavailable
+        | ErrorCode::LlmModelDigestMismatch
+        | ErrorCode::LlmQueueDeadline
+        // Plan 20 W1/W2: the wiki link (never a merge's).
+        | ErrorCode::WikiLinkRefused
+        | ErrorCode::WikiProvisionFailed
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

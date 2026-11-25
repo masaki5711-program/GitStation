@@ -43,6 +43,8 @@ unicode-normalization.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Plan 19 L5-1: the checked LLM call is async (a stand-in provider in tests).
+tokio.workspace = true
 proptest.workspace = true
 
 [features]

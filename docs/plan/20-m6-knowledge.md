@@ -1,6 +1,8 @@
-# 20 M6 の計画 — Issue とナレッジ（Wiki、個人ノート、横断検索）
+# 20 M6 の計画 — ナレッジ（Wiki、個人ノート、横断検索）。Issue は取りやめ（2026-11-25）
 
 作成: 2026-11-23（planner）。状態: **決定済み（2026-11-23）** — 利用者が 2026-11-23 に「計画 19・20・21 の未決の問いはすべて推奨の既定で」と決めた。§3 の推奨（I-1・W-C・N-B・S-b）と §10 の Q1〜Q8 の既定を採る（§10 の「決定」の列）。Q1・Q8 も事実を待たず既定で進める。
+
+> **変更（2026-11-25、利用者の決定）**: GitStation に Issue は **作らない**。課題は Kanflow で管理する。Q1 は「作らない」（I-0）に変わり、I1〜I4 は **取りやめ**。Kanflow に結んだプロジェクトの「課題」は Kanflow へのリンクの 1 行だけ（§11 の文言のまま）。K・W・N の項目は変わらない。検索の `source_kind = issue` は作らない（K2 の値の一覧から外す）。
 参照: 01 §3.5・§5（拡張点 1・5）・§8（M6）・§9、00 §1・§6、02 §4（作業項目プロバイダ）・F-12、08 §1、09 §1、13 §0・§3〜§5・§8.2、15（自分の作業のサイドバー）、18 S7（文書の速い経路）、ADR-0010・0015・0021・0023・0026・0027、CLAUDE.md §3。
 
 ## 0. 前提の点検
@@ -35,7 +37,7 @@
 
 | 01 の項目 | Kanflow と計画 13 の後でも要るか | 結論 |
 |---|---|---|
-| 軽量な Issue | Kanflow に結んだプロジェクトでは **要らない**（二重の課題管理になる）。Kanflow を使わないプロジェクト（社外との小さな共同作業、PFS の試験のリポジトリなど）があるかは事実が要る | 最小の形（§3.1）で **最後に**。既定は無効。Q1 |
+| 軽量な Issue | Kanflow に結んだプロジェクトでは **要らない**（二重の課題管理になる）。Kanflow を使わないプロジェクト（社外との小さな共同作業、PFS の試験のリポジトリなど）があるかは事実が要る | ~~最小の形（§3.1）で最後に~~ → **作らない**（2026-11-25、Kanflow で管理）。Q1 |
 | Wiki | 要る。計画 13 の文書は「統制された文書」（版・承認・型）で、手順メモ・はじめての人向けの説明・会議の決めごとのような **軽い説明の置き場** が無い。ただし書式と描画は計画 13 を使う | 作る（§3.2） |
 | 個人ノート | 要る（自分の作業のメモ、下書き）。ただし新しい保存の仕組みは要らない | 普通の非公開プロジェクトの便利な入口として作る（§3.3） |
 | 横断検索 | 要る。今はプロジェクトの名前の一覧と、要件 ID の検索しかない。文書の数が増えると探せない | 作る。**最初に**（他の 3 つも検索に載るため） |
@@ -48,7 +50,7 @@
 | 横断検索（プロジェクト・MR・文書・Wiki・ノート。日本語） | 必須 | 01 §3.5 |
 | Wiki（プロジェクトごと、内部は Git、計画 13 の文書） | 必須 | 01 §3.5 |
 | 個人ノート | 必須 | 01 §3.5 |
-| 軽量な Issue | Q1 の答え次第。最後 | 01 §3.5 |
+| ~~軽量な Issue~~ | **取りやめ**（2026-11-25、Q1 = 作らない。課題は Kanflow） | 01 §3.5 |
 | AI の文脈 API・MCP からの検索 | M6 の後半（任意） | 01 §3.6、02 §6 |
 | コード検索 | M8 のまま（`git grep`） | 01 §3.5 |
 
@@ -60,7 +62,7 @@ K0[root] ─ ADR ─ K1 tokenizer ─ K2 index(DB sources) ─ K3 search API ─
 W1 wiki の結び付けと役割 ─ W2 Wiki を作る ─┬─ W3 [[wiki:…]] ──────────────────────┤
                                        ├─ W4 Wiki の画面 ─────────────────────┤
                                        └─ N1 ノート ─ N2 ノートの画面 ───────────┘
-（Q1 が「作る」のときだけ）I1 ─ I2 ─ I3 ─ I4
+（取りやめ 2026-11-25: I1 ─ I2 ─ I3 ─ I4。課題は Kanflow で管理）
 ```
 
 W1 は K1〜K3 と並行できる（触るファイルが別）。検索に Wiki とノートが載るのは K4 の後（どちらも普通のプロジェクトの文書なので、K4 がそのまま索引する）。
@@ -71,11 +73,11 @@ W1 は K1〜K3 と並行できる（触るファイルが別）。検索に Wiki
 
 | 案 | 中身 | 長所 | 短所 |
 |---|---|---|---|
-| I-0 作らない | Kanflow に結んだプロジェクトの「課題」の欄は Kanflow へのリンクだけ | 二重の管理がない。保守が増えない | Kanflow を使わないプロジェクトに課題の置き場が無い |
-| **I-1 最小の Issue（推奨、Q1 の既定）** | 題名・本文（計画 13 の描画、`[[…]]` が使える）・開閉・ラベル・担当・コメント・`#n` の参照、`Closes #n` の MR のマージで閉じる。**マイルストーン・見積・スプリント・ボードは作らない**（Kanflow の領分）。プロジェクトの設定 `issues.enabled`（既定 `false`）。**Kanflow に結んだプロジェクトでは有効にできない**。後から Kanflow に結ぶときは、開いている Issue を Kanflow の Icebox に送り（02 F-12 の `POST /icebox`）、Issue は読み取りだけにする | 「Kanflow を使わない」場合の受け皿で、Kanflow へ移る道がある | 表と画面が 1 組増える |
+| **I-0 作らない（採用、2026-11-25）** | Kanflow に結んだプロジェクトの「課題」の欄は Kanflow へのリンクだけ | 二重の管理がない。保守が増えない | Kanflow を使わないプロジェクトに課題の置き場が無い |
+| I-1 最小の Issue（2026-11-23 の推奨。2026-11-25 に取りやめ） | 題名・本文（計画 13 の描画、`[[…]]` が使える）・開閉・ラベル・担当・コメント・`#n` の参照、`Closes #n` の MR のマージで閉じる。**マイルストーン・見積・スプリント・ボードは作らない**（Kanflow の領分）。プロジェクトの設定 `issues.enabled`（既定 `false`）。**Kanflow に結んだプロジェクトでは有効にできない**。後から Kanflow に結ぶときは、開いている Issue を Kanflow の Icebox に送り（02 F-12 の `POST /icebox`）、Issue は読み取りだけにする | 「Kanflow を使わない」場合の受け皿で、Kanflow へ移る道がある | 表と画面が 1 組増える |
 | I-2 GitLab 並みの Issue | マイルストーン・ボード・重み・期限 | 移行元と同じ | Kanflow と真っ向から重なる。08 §1 の「入口は 1 つ」に反する |
 
-**推奨: I-1 を最後に作る（Q1 が「要らない」なら I-0）。** 01 のラベル・マイルストーン・コミットからの参照のうち、マイルストーンは Kanflow のスプリントと重なるので落とす。`work_items` には入れない（`PBI-` だけで連携に結び付く表なので）。マージの条件「作業項目のリンク」は、Issue が有効なプロジェクトでは `#n` も数える（I2 で 1 行の拡張）。
+**決定（2026-11-25）: I-0。** 以下は 2026-11-23 の推奨の記録（I-1 を最後に作る）。 01 のラベル・マイルストーン・コミットからの参照のうち、マイルストーンは Kanflow のスプリントと重なるので落とす。`work_items` には入れない（`PBI-` だけで連携に結び付く表なので）。マージの条件「作業項目のリンク」は、Issue が有効なプロジェクトでは `#n` も数える（I2 で 1 行の拡張）。
 
 ### 3.2 Wiki の置き場所
 
@@ -119,7 +121,7 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 | プロジェクト | パス・名前・説明 | プロジェクトのイベント（作成・名前の変更・削除） |
 | MR | 題名・説明（差分は入れない） | MR のイベント |
 | 文書（計画 13） | 既定ブランチの先端の文書: 題名・ID・見出し・ブロックの ID と本文。Wiki とノートもこれ | `repository.pushed`（既定ブランチだけ、変わったパスだけ。最初は全体） |
-| Issue（I-1 のとき） | 題名・本文・コメント | Issue のイベント |
+| ~~Issue（I-1 のとき）~~ | 取りやめ（2026-11-25、Issue は作らない） | — |
 
 - 既定ブランチ以外は索引しない（Q5）。コードは索引しない（M8）。
 - 1 件の本文は 256 KB まで。超えた分は索引せず `truncated` の印を付け、ログに理由を残す（黙って切らない）。読みの上限に当たったリポジトリは文書の API と同じく `incomplete`。
@@ -141,7 +143,7 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 - 索引の表と問い合わせ: `forge-db`。
 - 新しい機能クレート `forge-search`: 問い合わせの組み立て・順位・抜粋・結果の判定の手順（`forge-auth` と `forge-db` に依存。他の機能クレートには依存しない）。
 - 文書の索引の worker は `forge-cli`（`forge_checks::doc_lint::read_tree` で読み、`forge_search` で書く — 機能クレート同士をつながない）。
-- Wiki・ノートの作成は、プロジェクトの作成の既存の場所（`forge-hosting`）。Issue は I-1 のとき新しい機能クレート `forge-issues`。
+- Wiki・ノートの作成は、プロジェクトの作成の既存の場所（`forge-hosting`）。~~Issue は I-1 のとき新しい機能クレート `forge-issues`~~（取りやめ 2026-11-25）。
 
 ## 4. 設計の要点
 
@@ -149,24 +151,24 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 
 | MR | 表 |
 |---|---|
-| K2 | `search_entries`（`source_kind` = project / merge_request / document / issue、`project_id`、`source_key`、`title`、`body_text`、`tokens tsvector`、`classification`、`truncated`、`source_updated_at`、`indexed_at`。`UNIQUE (source_kind, project_id, source_key)`、`tokens` に GIN）、`search_index_state`（プロジェクトごと: 索引した SHA、状態、最後のエラーコード、試行の数） |
+| K2 | `search_entries`（`source_kind` = project / merge_request / document（`issue` は取りやめ 2026-11-25）、`project_id`、`source_key`、`title`、`body_text`、`tokens tsvector`、`classification`、`truncated`、`source_updated_at`、`indexed_at`。`UNIQUE (source_kind, project_id, source_key)`、`tokens` に GIN）、`search_index_state`（プロジェクトごと: 索引した SHA、状態、最後のエラーコード、試行の数） |
 | W1 | `project_wikis`（`project_id` PK、`wiki_project_id` UNIQUE、自分自身・連鎖を禁止する CHECK とトリガ、`linked_by`・`linked_at`、監査の行あり） |
 | N1 | `user_notes`（`user_id` PK、`project_id` UNIQUE） |
-| I1 | `issues`（`project_id`・`iid`・題名・本文・状態・作成者・担当・`closed_by_merge_request_id`・版）、`issue_counters`、`issue_labels`、`issue_label_links`、`issue_notes`、`merge_settings` か専用の表に `issues_enabled` |
+| ~~I1~~（取りやめ 2026-11-25） | ~~`issues`（`project_id`・`iid`・題名・本文・状態・作成者・担当・`closed_by_merge_request_id`・版）、`issue_counters`、`issue_labels`、`issue_label_links`、`issue_notes`、`merge_settings` か専用の表に `issues_enabled`~~ |
 
 ### 4.2 Action と権限の表（どれも allow と deny の行。`authz-matrix-auditor` が確かめる）
 
 | Action | allow | deny（代表） |
 |---|---|---|
 | SearchQuery | サインインした有効な利用者、`read_api` のトークン、エージェント（機密は除いて） | 匿名、無効な利用者、Runner・Job、ポータルの資格情報 |
-| （結果の 1 件） | 既存の `ProjectRead` / `RepoBrowse` / MR の読み / `IssueRead` | 読めないプロジェクトの行は題名もパスも出さない（行の deny のテスト） |
+| （結果の 1 件） | 既存の `ProjectRead` / `RepoBrowse` / MR の読み（`IssueRead` は取りやめ） | 読めないプロジェクトの行は題名もパスも出さない（行の deny のテスト） |
 | ProjectWikiLink（作成と結び付け・外す） | 主プロジェクトの Maintainer 以上かつ名前空間で `ProjectCreate` できる **人**（Web のセッションまたは `api` のトークン） | Developer、エージェント、サービスアカウント、代理、Job |
 | （役割の継承） | 主プロジェクトの役割を Wiki に同じ強さで継ぐ。Wiki 自身の所属と大きい方 | Wiki のメンバーは主プロジェクトに何も継がない。継承は 1 段だけ（Wiki の Wiki は無い）。主プロジェクトから外れたら次のリクエストから Wiki も失う |
 | PersonalNotesCreate | 本人だけ（自分の名前空間）、人 | 他人の名前空間、サービスアカウント、代理、Job |
-| IssueRead / IssueCreate / IssueComment | `issues.enabled` のとき、`ProjectRead` / Reporter 以上 / Reporter 以上 | 無効のとき（存在しないものとして答える）、Runner・Job |
-| IssueUpdate / IssueClose | 作成者、または Developer 以上 | 他人の Issue の Reporter |
-| IssueLabelManage | Developer 以上 | Reporter、エージェント |
-| IssuesSettingManage | Maintainer 以上の人 | エージェント、サービスアカウント、Kanflow に結んだプロジェクトでの有効化（理由 `kanflow_bound`） |
+| ~~IssueRead / IssueCreate / IssueComment~~ | 取りやめ（2026-11-25、Issue は作らない） | — |
+| ~~IssueUpdate / IssueClose~~ | 取りやめ（2026-11-25、Issue は作らない） | — |
+| ~~IssueLabelManage~~ | 取りやめ（2026-11-25、Issue は作らない） | — |
+| ~~IssuesSettingManage~~ | 取りやめ（2026-11-25、Issue は作らない） | — |
 
 ノートの読み書き・Wiki の読み書きは **既存の Action**（`RepoBrowse`、`RepoPush`、簡単な編集のコミット）で、新しい Action は要らない。
 
@@ -180,8 +182,8 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 | KNOW-d WikiLinkRefused | 結び付けの拒否（別の名前空間、既に結んである、連鎖、名前の衝突） | info | `knowledge` |
 | KNOW-e WikiProvisionFailed | Wiki のプロジェクトの作成・初期のコミットの失敗（結び付けは作らない。途中のプロジェクトは既存の作成の失敗の後始末） | warn | `knowledge` |
 | KNOW-f NotesProjectMissing | ノートの指す先が削除・移動された（作り直しの案内） | info | `knowledge` |
-| KNOW-g IssuesDisabled | 無効・Kanflow に結んだプロジェクトでの Issue の操作 | info | — |
-| KNOW-h IssueVersionConflict | 同時の更新（版の不一致） | info | — |
+| ~~KNOW-g IssuesDisabled~~ | 取りやめ（2026-11-25、Issue は作らない） | — | — |
+| ~~KNOW-h IssueVersionConflict~~ | 取りやめ（2026-11-25、Issue は作らない） | — | — |
 | DOC-next WikiReferenceBroken | `[[wiki:…]]` が解決できない（lint の警告） | info | — |
 
 問い合わせの形の誤り（空、2 文字未満、長すぎ、不明な `scope`）は既存の `FG-WEB-0006 reason=param_invalid`、同時実行の上限は `FG-WEB-0008`、読めない物は `FG-REPO-0005`（存在を明かさない）。
@@ -193,7 +195,7 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 | MR | ブランチ | 中身 | 先に書くテスト（例） | 評価役（≤2） | 前提 |
 |---|---|---|---|---|---|
 | **K0 [root]** | `chore/harness-m6-knowledge-area` | 領域 `KNOW` を `forge-error-contract.md`・`validate-error-registry.js` に。`security-reviewer` に「検索の結果・件数・抜粋から読めない物が漏れないか」、`database-reviewer` に「派生の索引の表、`tsvector` の大きさ、文の時間切れ」の観点。changelog | eval `search-leaks-invisible-title`、`search-count-oracle` | `harness-optimizer` | 今すぐ |
-| **ADR** | `docs/docs-adr-knowledge-wiki-search` | ADR（新規、番号は着手時の次）: Wiki = 結び付けた普通のプロジェクトと役割の継承、ノート = 自分の非公開プロジェクト、検索 = アプリ側の 2-gram + `tsvector`、ADR-0015 の `/-/wiki` の予約の解除。Issue は Q1 の答えの後に Amendment | — | `security-reviewer` | K0 |
+| **ADR** | `docs/docs-adr-knowledge-wiki-search` | ADR（新規、番号は着手時の次）: Wiki = 結び付けた普通のプロジェクトと役割の継承、ノート = 自分の非公開プロジェクト、検索 = アプリ側の 2-gram + `tsvector`、ADR-0015 の `/-/wiki` の予約の解除。Issue は作らない（Q1、2026-11-25） | — | `security-reviewer` | K0 |
 | **K1** | `feat/core-search-tokenizer` | `forge-core::search_text`（NFKC、小文字、和文 2-gram、ラテン語の語、問い合わせの組み立て）、`forge-errors` の AREAS に `KNOW` | `query_tokens_subset_of_text_tokens_when_substring`（性質）、`fullwidth_and_halfwidth_match`、`two_char_japanese_word_found`、`indonesian_words_split_on_spaces`、`tokenize_is_deterministic` | `rust-reviewer` | ADR |
 | **K2** | `feat/db-search-index` | `search_entries`・`search_index_state`、プロジェクトと MR のイベントの購読者（outbox）、作り直し `forge search reindex [--project]`、doctor `search.index_lag` | `mr_title_edit_reindexed`、`deleted_project_rows_removed`、`subscriber_failure_is_retried_not_dropped`、`statement_timeout_is_know_a`、`reindex_is_idempotent` | `database-reviewer`、`silent-failure-hunter` | K1 |
 | **K3** | `feat/web-search-api` | `GET /api/v1/search?q=&scope=&project=&cursor=`、1 件ずつ `authorize()`、走査の上限・封印したカーソル・同時実行の上限、AI の利用者の機密の除外、抜粋の文字の範囲、`gstn search`、権限の表 | `invisible_project_title_never_returned`、`guest_on_private_project_gets_no_hits`、`no_total_count_in_response`、`agent_never_sees_confidential_hit`、`cursor_of_other_user_rejected`、`denied_for_runner_and_job` | `security-reviewer`、`authz-matrix-auditor` | K2 |
@@ -206,10 +208,10 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 | **N1** | `feat/web-personal-notes` | `user_notes`、`POST /api/v1/user/notes`（`<user>/notes` を非公開で作成、doctype `note`、`owner_kind: user` を `forge-doc` に）、すばやいメモ（直接のコミット）、`gstn note new` | `other_user_cannot_read_notes`、`notes_create_denied_for_service_account_and_act_as`、`notes_not_in_others_search`、`owner_kind_user_lint`、`moved_notes_project_is_know_f` | `security-reviewer`、`authz-matrix-auditor` | W2 |
 | **N2** | `feat/ui-notes` | 自分の作業のサイドバー（計画 15）に「ノート」、すばやいメモの入力、一覧と検索 | E2E: `quick_note_saved_and_found` | `design-reviewer`、`i18n-sync-auditor` | N1、K4 |
 | **R** | `docs/ops-knowledge-runbooks` | runbook `search-index`・`knowledge`（§6）、crate の README | — | `error-contract-auditor` | K2 と同時に始め、W2 で足す |
-| I1 | `feat/db-issues` | §4.1 の表、`issues.enabled`（Kanflow に結んだら有効にできない） | `enable_refused_when_kanflow_bound`、`iid_per_project_gapless_under_concurrency` | `database-reviewer`、`authz-matrix-auditor` | **Q1 が「作る」**、K3 |
-| I2 | `feat/web-issues` | API・`#n` の参照（コミット・MR）、`Closes #n` のマージで閉じる、イベント（Webhook・検索の索引）、マージの条件で `#n` を作業項目のリンクに数える、`gstn issue` | `closes_on_merge_to_default_only`、`ref_to_other_project_ignored`、`version_conflict_is_know_h`、`disabled_project_answers_not_found` | `security-reviewer`、`rust-reviewer` | I1 |
-| I3 | `feat/ui-issues` | 「課題」タブ。Kanflow に結んだプロジェクトでは「課題は Kanflow で管理しています — 開く」の 1 行だけ | E2E: `kanflow_bound_shows_link_only` | `design-reviewer`、`i18n-sync-auditor` | I2 |
-| I4 | `feat/cross-issues-to-kanflow` | Kanflow に結ぶときに開いている Issue を Icebox へ送る（冪等キー）、送った後は読み取りだけ | `export_is_idempotent`、`kanflow_down_keeps_issues_writable_and_logs` | `silent-failure-hunter`、`security-reviewer` | I2、02 F-12 |
+| ~~I1~~ **取りやめ**（2026-11-25、課題は Kanflow） | `feat/db-issues` | §4.1 の表、`issues.enabled`（Kanflow に結んだら有効にできない） | `enable_refused_when_kanflow_bound`、`iid_per_project_gapless_under_concurrency` | `database-reviewer`、`authz-matrix-auditor` | **Q1 が「作る」**、K3 |
+| ~~I2~~ **取りやめ**（2026-11-25、課題は Kanflow） | `feat/web-issues` | API・`#n` の参照（コミット・MR）、`Closes #n` のマージで閉じる、イベント（Webhook・検索の索引）、マージの条件で `#n` を作業項目のリンクに数える、`gstn issue` | `closes_on_merge_to_default_only`、`ref_to_other_project_ignored`、`version_conflict_is_know_h`、`disabled_project_answers_not_found` | `security-reviewer`、`rust-reviewer` | I1 |
+| ~~I3~~ **取りやめ**（2026-11-25、課題は Kanflow） | `feat/ui-issues` | 「課題」タブ。Kanflow に結んだプロジェクトでは「課題は Kanflow で管理しています — 開く」の 1 行だけ | E2E: `kanflow_bound_shows_link_only` | `design-reviewer`、`i18n-sync-auditor` | I2 |
+| ~~I4~~ **取りやめ**（2026-11-25、課題は Kanflow） | `feat/cross-issues-to-kanflow` | Kanflow に結ぶときに開いている Issue を Icebox へ送る（冪等キー）、送った後は読み取りだけ | `export_is_idempotent`、`kanflow_down_keeps_issues_writable_and_logs` | `silent-failure-hunter`、`security-reviewer` | I2、02 F-12 |
 | X1（任意） | `feat/web-context-search` | AI の文脈 API・MCP に検索の道具（AI の利用者の規則のまま） | `agent_search_withholds_confidential` | `security-reviewer` | K4 |
 
 並行の目安: 1 本目の worktree で K1→K2→K3→K4、2 本目で W1→W2→W3、UI（K5・W4・N2）は API の後に 3 本目。Rust のビルドは同時に 2 つまで。
@@ -231,7 +233,7 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 | 役割の継承が広がりすぎる | 片方向・1 段だけ・`forge-auth` の 1 か所。外したら次のリクエストから効く。行の deny のテスト |
 | 2-gram の偽陽性で探しにくい | 題名・ID の重み、新しさ、利用者の評価で目立てば本文の位置の確かめを足す（計測してから） |
 | 索引が黙って古くなる | 状態の表・KNOW-b の alert・doctor。失敗した行は残し、次でやり直す |
-| Issue が Kanflow と二重になる | 既定は無効、Kanflow に結んだら有効にできない、移す道（I4） |
+| Issue が Kanflow と二重になる | Issue を作らない（2026-11-25、Q1）。課題は Kanflow だけ |
 | Wiki の直接の保存で壊れた参照が入る | push の後の `forge/doc-lint` と画面の 1 行。参照は ID なのでファイルの移動では切れない |
 
 ## 8. 完了の条件
@@ -240,7 +242,7 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 2. あるプロジェクトで「Wiki を作る」から、非エンジニアが YAML を見ずにページを作り、主リポジトリの文書から `[[wiki:…]]` で参照できる。主プロジェクトから外れたメンバーは次のリクエストから Wiki を読めない。
 3. 個人ノートを作り、すばやいメモが 60 秒以内に検索に出て、他人には出ない。
 4. 新しいルートと Action はすべて権限の表にあり、カタログ・runbook・ADR がそろう。10 万件で p95 ≤ 300 ms を測って記録。
-5. （Q1 が「作る」のとき）Kanflow に結んでいないプロジェクトで Issue を `Closes #n` で閉じられ、結ぶと Icebox へ移る。
+5. ~~（Q1 が「作る」のとき）Issue を `Closes #n` で閉じられ、結ぶと Icebox へ移る~~ — 取りやめ（2026-11-25、Q1 = 作らない）。
 
 **確かめのコマンド**: 計画 14 §8 と同じ（fmt・clippy `-D warnings`・nextest・`gen-catalog` / `gen-authz` の差分なし・`node scripts/self-heal.js --check`）。
 
@@ -264,7 +266,7 @@ Wiki のページの形（`.forge/doctypes/wiki.page.yml`、Wiki を作るとき
 
 | # | 問い | 推奨の既定 | 決定 |
 |---|---|---|---|
-| Q1 | **Kanflow を使わないプロジェクトはあるか**（あるなら Issue を作る） | I-1 を作るが **既定は無効で最後に**。該当が無ければ I-0（作らず、Kanflow へのリンクだけ） | 決定: I-1 を作る。既定は無効で M6 の最後に（2026-11-23） |
+| Q1 | **Kanflow を使わないプロジェクトはあるか**（あるなら Issue を作る） | I-1 を作るが **既定は無効で最後に**。該当が無ければ I-0（作らず、Kanflow へのリンクだけ） | **決定: 作らない（I-0）。課題は Kanflow で管理する（2026-11-25、利用者の決定）。** 2026-11-23 の「I-1 を既定は無効で最後に」を置き換える |
 | Q2 | Wiki のメンバーは主プロジェクトの役割を継ぐか | **継ぐ**（片方向・1 段）。Wiki だけのメンバーも足せる | 決定: 継ぐ（片方向・1 段）。Wiki だけのメンバーも足せる（2026-11-23） |
 | Q3 | Wiki の保存は直接のコミットか、MR か | **直接のコミット**（Developer 以上）。lint は保存の後。統制が要る文書は Wiki ではなく主リポジトリの文書（承認のフェーズ付き）に置く | 決定: 直接のコミット（Developer 以上）、lint は保存の後（2026-11-23） |
 | Q4 | ノートの既定の機密の区分と、管理者が読めるか | 区分は **`internal`**（本人が `confidential` に変えられる）。管理者は既存の規則のまま（読むと監査に残る） | 決定: `internal`（本人が `confidential` に変えられる）、管理者は既存の規則のまま（2026-11-23） |
