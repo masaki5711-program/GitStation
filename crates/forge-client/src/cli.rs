@@ -275,6 +275,12 @@ pub enum Command {
         #[arg(long, value_parser = parse_text, value_name = "CURSOR")]
         cursor: Option<String>,
     },
+    /// A project's wiki: create and link it, or unlink it (plan 20 W2).
+    #[command(disable_help_subcommand = true)]
+    Wiki {
+        #[command(subcommand)]
+        command: WikiCommand,
+    },
     /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
     Admin {
@@ -536,6 +542,33 @@ pub enum ProjectCommand {
     },
     /// Restore a deleted project within its grace period.
     Restore(IdArg),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WikiCommand {
+    /// Create the project's wiki (an ordinary project in the same
+    /// namespace, first page WIKI-0001) and link it; the project's members
+    /// get the same role on it.
+    Create {
+        /// The owner project id.
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The wiki project's path segment (default `<project>-wiki`).
+        #[arg(long, value_parser = parse_text, value_name = "SEGMENT")]
+        path: Option<String>,
+        /// The wiki's display name (default `<project name> Wiki`).
+        #[arg(long, value_parser = parse_text, value_name = "NAME")]
+        display_name: Option<String>,
+    },
+    /// Unlink the project's wiki; the wiki project stays.
+    Unlink {
+        /// The owner project id.
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

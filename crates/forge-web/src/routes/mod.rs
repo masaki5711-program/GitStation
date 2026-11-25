@@ -38,6 +38,8 @@ pub mod merge_requests;
 pub mod moves;
 pub mod repo_copy;
 pub mod search;
+// Plan 20 W2 (ADR-0040 §5): a project's wiki.
+pub mod wiki;
 // M3 N1: the caller's notification settings.
 pub mod in_app_notifications;
 pub mod namespaces;

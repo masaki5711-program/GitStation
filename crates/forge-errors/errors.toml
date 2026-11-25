@@ -3841,3 +3841,17 @@ diagnosis = "The log event carries `reason`, `project_id` (the owner) and, when 
 fix = "`already_linked` / `wiki_already_linked`: use the existing wiki, or unlink it first (`gstn wiki unlink`). `name_taken`: choose another path (`gstn wiki create --path <segment>`) or rename the project that holds it. `chain` / `self`: link the wiki to the owner project itself, never to another wiki. See runbook knowledge."
 runbook = "knowledge"
 test = "inheritance_not_transitive"
+
+[[error]]
+code = "FG-KNOW-0004"
+name = "WikiProvisionFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "Wiki を作れませんでした。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The wiki could not be created. Give the request ID to your administrator."
+user_message_id = "Wiki tidak dapat dibuat. Berikan ID permintaan kepada administrator Anda."
+cause = "Plan 20 W2 (ADR-0040 §5): `POST /api/v1/projects/{id}/wiki` created the wiki project, but a later step failed, so the wiki was NOT linked (nobody inherits a role on it): `step=provision` (the repository could not be created or marked ready), `step=seed` (the first commit with `.forge/doctypes/wiki.page.yml` and `WIKI-0001.md` could not be written, or `main` already existed), `step=protect` (the default protection of `main` could not be set), `step=link` (the link could not be written — also when a concurrent request linked another wiki first, chained FG-KNOW-0003). The cause is chained (FG-GIT-*, FG-REPO-*, FG-DB-*)."
+diagnosis = "The log event carries `step`, `project_id` (the owner), `wiki_project_id` (the half-made project), `repo_id` and the chained code, with the request_id. The project exists and is unlinked: `SELECT * FROM forge.project_wikis WHERE wiki_project_id = <id>` returns nothing."
+fix = "Fix the chained cause (runbooks repository-provisioning, git-process-failed, db-unavailable). Then the person deletes the half-made project and runs `gstn wiki create` again, or creates the wiki under another path (`--path`). Runbook knowledge, 「A half-made wiki project」."
+runbook = "knowledge"
+test = "provision_failure_leaves_no_link"
