@@ -65,6 +65,9 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    - FG-CI-0009: `step=fetch` で `git_stderr` が 401 なら、ジョブがもう終わっていた（トークンは終わりで失効する）。404 は
      他のプロジェクト・他のコミットのジョブの経路（Runner の不具合）。接続の失敗は Runner のホストから
      `curl -sS https://<forge>/healthz`。forge の側のログは同じ `job_id` で `route=job_info_refs|job_upload_pack`
+     `step=deepen`（計画 21 G2）は `fetch_depth` が 2 以上のジョブの 2 回目の取得（`--depth=<n>`、最大 50）。1 回目と同じ原因に加え、
+     深い履歴で `limits.fetch` の時間を超えた（`reason=timeout`）なら `fetch_depth` を下げる。ジョブのログに
+     `fetching <n> commit(s) of history (fetch_depth)` がある。
    - FG-CI-0011: `context` の `image` が設定の `image_registries` のどの接頭辞でも始まらない。git も pull もコンテナも動いていない。
      イメージを社内のミラーに入れて `.forge-ci.yml` の `image` をミラーのもの（ダイジェストで固定）に直す。レジストリを足すのは
      レビューの後（設定を変えて `systemctl restart forge-runner`）

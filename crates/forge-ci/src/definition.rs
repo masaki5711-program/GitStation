@@ -28,6 +28,10 @@ pub const MAX_SECRETS: usize = 16;
 pub const MAX_ARTIFACT_PATHS: usize = 16;
 /// At most this many branch patterns in one job's rules (`too_many_branches`).
 pub const MAX_BRANCHES: usize = 16;
+/// The deepest `fetch_depth` a job may ask for (plan 21 G2,
+/// `fetch_depth_out_of_range`): the runner fetches at most this many
+/// commits of the pipeline's history.
+pub const MAX_FETCH_DEPTH: u32 = 50;
 /// The longest `timeout` a job may ask for: 4 hours (`timeout_too_long`).
 pub const MAX_TIMEOUT_SECS: u32 = 4 * 60 * 60;
 /// The longest script line in bytes (`script_line_too_long`).
@@ -132,6 +136,10 @@ pub struct Job {
     /// `when: manual` (plan 14 C12): the job waits for a person to start
     /// it; nothing else waits for it.
     pub(crate) manual: bool,
+    /// `fetch_depth` (plan 21 G2, ADR-0029 amendment 2026-11-25): how many
+    /// commits of the pipeline's history the runner fetches, 1 to
+    /// [`MAX_FETCH_DEPTH`] (default 1: the pinned commit only).
+    pub(crate) fetch_depth: u32,
 }
 
 /// A sidecar container of a job (plan 14 C5s): it runs in the job's pod,
@@ -229,6 +237,11 @@ impl Job {
     /// `when: manual`: started by a person, never on its own (plan 14 C12).
     pub fn manual(&self) -> bool {
         self.manual
+    }
+    /// How many commits the runner fetches: 1 to [`MAX_FETCH_DEPTH`]
+    /// (plan 21 G2).
+    pub fn fetch_depth(&self) -> u32 {
+        self.fetch_depth
     }
 }
 
@@ -447,6 +460,7 @@ fn read_job(
     let mut artifacts_keep = false;
     let mut services = Vec::new();
     let mut manual = false;
+    let mut fetch_depth = 1;
     for f in &fields {
         let (line, value) = (f.line, f.value);
         match f.key {
@@ -522,6 +536,14 @@ fn read_job(
                     }
                 }
             }
+            "fetch_depth" => {
+                if let Some(s) = one_text(value, line, "fetch_depth", problems) {
+                    match read_fetch_depth(&s) {
+                        Ok(n) => fetch_depth = n,
+                        Err(reason) => problems.push(Problem::about(line, reason, s)),
+                    }
+                }
+            }
             other => problems.push(Problem::about(line, "key_unknown", other)),
         }
     }
@@ -577,7 +599,22 @@ fn read_job(
         artifacts_keep,
         services,
         manual,
+        fetch_depth,
     })
+}
+
+/// `fetch_depth`: a decimal integer 1 to [`MAX_FETCH_DEPTH`]
+/// (`fetch_depth_out_of_range` otherwise, also for a value that is not a
+/// plain number: `0`, `-1`, `51`, `2.5`, `two`, `+2`, `02`).
+fn read_fetch_depth(s: &str) -> Result<u32, &'static str> {
+    let plain = !s.is_empty()
+        && s.len() <= 2
+        && s.bytes().all(|b| b.is_ascii_digit())
+        && !s.starts_with('0');
+    match s.parse::<u32>() {
+        Ok(n) if plain && (1..=MAX_FETCH_DEPTH).contains(&n) => Ok(n),
+        _ => Err("fetch_depth_out_of_range"),
+    }
 }
 
 /// `services:` - a list of at most [`MAX_SERVICES`] mappings `{ name,

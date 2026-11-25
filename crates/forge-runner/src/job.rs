@@ -500,6 +500,37 @@ impl Executor {
         if spec.timeout_secs() != timeout_s {
             return Err(mismatch("timeout_mismatch"));
         }
+        // Plan 21 G2: a job that asks for more history (`fetch_depth`, read
+        // from the pinned definition just checked against the claim's hash)
+        // fetches its pipeline ref again with that depth; the ref must
+        // still be the pinned commit.
+        if spec.fetch_depth() > 1 {
+            sink.line(&format!(
+                "fetching {} commit(s) of history (fetch_depth)",
+                spec.fetch_depth()
+            ));
+            let deepen = self
+                .git
+                .deepen(
+                    &dirs.work,
+                    &url,
+                    job.pipeline_id,
+                    &job.job_token,
+                    spec.fetch_depth(),
+                )
+                .ok_or_else(|| mismatch("fetch_depth_invalid"))?;
+            self.git_step("deepen", &deepen, limits.fetch, stop, sink)?;
+            let fetched = self.git_step(
+                "verify",
+                &self.git.fetched(&dirs.work),
+                limits.local,
+                stop,
+                sink,
+            )?;
+            if String::from_utf8_lossy(&fetched.stdout).trim() != sha.as_str() {
+                return Err(fetch_failed("verify", "sha_mismatch"));
+            }
+        }
         // The services' images: the same registries as the job's.
         for s in spec.services() {
             if !self.podman.image_allowed(s.image()) {
