@@ -28,7 +28,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     // forge-ci; shared with gstn (`gstn agent verify`).
     ("forge-agent", &["forge-errors"]),
     // Plan 21 E1 (contract 9, ADR-0041): the pure edge manifest / digest /
-    // signature, release lint, waves, halt decision and install windows,
+    // signature and release lint (E1b retired waves, halt and windows),
     // between forge-core and forge-agent (it signs through forge-agent's
     // domain signer); shared with gstn (`gstn edge release verify`).
     ("forge-edge", &["forge-agent", "forge-errors"]),
