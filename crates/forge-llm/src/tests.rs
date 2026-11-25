@@ -136,7 +136,7 @@ fn submission(purpose: Purpose, class: InputClass) -> Submission {
     Submission {
         purpose,
         priority: None,
-        subject_kind: "merge_request".to_owned(),
+        subject_kind: forge_core::llm::SubjectKind::MergeRequest,
         subject_id: Some(7),
         project: None,
         requested_by: None,

@@ -1,6 +1,8 @@
 //! The LLM records against a migrated database (plan 19 L5-2).
 
+use forge_core::llm::SubjectKind;
 use forge_core::RequestId;
+use forge_errors::ForgeError;
 
 use super::*;
 use crate::change::{Actor, ChangeContext};
@@ -54,7 +56,7 @@ fn request(w: &World, class: InputClass) -> NewRequest {
     NewRequest {
         purpose: Purpose::MrReview,
         priority: Priority::Review,
-        subject_kind: "merge_request".to_owned(),
+        subject_kind: SubjectKind::MergeRequest,
         subject_id: Some(7),
         project: Some(w.web.project_id),
         requested_by: Some(w.alice),
@@ -72,7 +74,7 @@ fn advice(w: &World, request: Option<i64>, class: InputClass) -> NewAdvice {
     NewAdvice {
         llm_request_id: request,
         purpose: Purpose::MrReview,
-        subject_kind: "merge_request".to_owned(),
+        subject_kind: SubjectKind::MergeRequest,
         subject_id: Some(7),
         project: Some(w.web.project_id),
         head_sha: Some("c".repeat(40)),
@@ -90,66 +92,117 @@ fn advice(w: &World, request: Option<i64>, class: InputClass) -> NewAdvice {
     }
 }
 
-const PERSON: Reader = Reader {
-    is_agent: false,
-    can_read_subject: true,
-};
-const MR7: Subject<'static> = Subject {
-    kind: "merge_request",
-    id: Some(7),
-};
-const MR8: Subject<'static> = Subject {
-    kind: "merge_request",
-    id: Some(8),
-};
+type Allowed = (SubjectKind, Option<i64>);
 
-/// A decision on one subject never opens another subject's advice: a
-/// reader of merge request 5 asking for advice of (confidential) merge
-/// request 7 gets "none", for the read and for the vote alike.
+const PERSON: ReaderKind = ReaderKind::Person;
+const AGENT: ReaderKind = ReaderKind::Agent;
+const MR7: Allowed = (SubjectKind::MergeRequest, Some(7));
+const MR8: Allowed = (SubjectKind::MergeRequest, Some(8));
+
+/// A route's decision as L5-4 will make it: `authorize()` on the subject
+/// the store loaded; the reader may see `allowed` only, anything else is
+/// "not found" (FG-AUTH-0003 stands in for the route's denial).
+fn decide(
+    allowed: Allowed,
+    reader: ReaderKind,
+) -> impl FnOnce(&AdviceSubject) -> Result<ReaderKind, ForgeError> {
+    move |s| {
+        if (s.kind, s.id) == allowed {
+            Ok(reader)
+        } else {
+            Err(ForgeError::new(ErrorCode::Forbidden).with_context("reason", "subject_not_visible"))
+        }
+    }
+}
+
+async fn read(
+    db: &Db,
+    id: i64,
+    allowed: Allowed,
+    reader: ReaderKind,
+) -> Result<Option<AdviceView>, ForgeError> {
+    advice_decided(db, id, decide(allowed, reader)).await
+}
+
+async fn record_feedback(
+    db: &Db,
+    id: i64,
+    allowed: Allowed,
+    finding: Option<u8>,
+    user: UserId,
+    reader: ReaderKind,
+    verdict: Verdict,
+) -> Result<FeedbackOutcome, ForgeError> {
+    record_feedback_decided(db, id, finding, user, verdict, decide(allowed, reader)).await
+}
+
+/// A decision is always made on the advice's own subject: a reader allowed
+/// on merge request 5 (or on deployment 7) who asks for advice of
+/// (confidential) merge request 7 is refused by the decision on MR 7 — the
+/// store never pairs one subject's decision with another's advice — for
+/// the read and for the vote alike.
 #[tokio::test]
 async fn another_subjects_advice_is_not_found() {
     let w = world().await;
     let id = insert_advice(&w.t.db, &advice(&w, None, InputClass::Confidential))
         .await
         .expect("advice of MR 7");
-    let mr5 = Subject {
-        kind: "merge_request",
-        id: Some(5),
-    };
-    let deployment7 = Subject {
-        kind: "deployment",
-        id: Some(7),
-    };
-    for subject in [mr5, deployment7] {
-        assert_eq!(
-            super::advice(&w.t.db, id, subject, PERSON)
-                .await
-                .expect("read"),
-            None
-        );
-        assert_eq!(
-            record_feedback(
-                &w.t.db,
-                id,
-                subject,
-                Some(0),
-                w.alice,
-                PERSON,
-                Verdict::Wrong
-            )
+    let mut seen = Vec::new();
+    let got = advice_decided(&w.t.db, id, |s: &AdviceSubject| {
+        seen.push(*s);
+        Ok(PERSON)
+    })
+    .await
+    .expect("read");
+    assert!(got.is_some());
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        (seen[0].kind, seen[0].id),
+        MR7,
+        "decided on its own subject"
+    );
+    assert_eq!(seen[0].project, Some(w.web.project_id));
+    assert_eq!(seen[0].input_class, InputClass::Confidential);
+    for allowed in [
+        (SubjectKind::MergeRequest, Some(5)),
+        (SubjectKind::Deployment, Some(7)),
+    ] {
+        let err = read(&w.t.db, id, allowed, PERSON)
             .await
-            .expect("vote"),
-            FeedbackOutcome::NoAdvice
-        );
+            .expect_err("refused");
+        assert_eq!(err.code(), ErrorCode::Forbidden);
+        let err = record_feedback(
+            &w.t.db,
+            id,
+            allowed,
+            Some(0),
+            w.alice,
+            PERSON,
+            Verdict::Wrong,
+        )
+        .await
+        .expect_err("refused");
+        assert_eq!(err.code(), ErrorCode::Forbidden);
     }
     let rows =
         w.t.json_rows("SELECT count(*) AS n FROM forge.llm_advice_feedback")
             .await;
     assert_eq!(rows[0]["n"], 0, "no vote landed");
-    assert!(super::advice(&w.t.db, id, MR7, PERSON)
+    assert!(read(&w.t.db, id, MR7, PERSON)
         .await
         .expect("read")
         .is_some());
+    // The table takes the three kinds only.
+    let mut bad = advice(&w, None, InputClass::Internal);
+    bad.subject_id = Some(9);
+    insert_advice(&w.t.db, &bad).await.expect("a known kind");
+    let refused = sqlx::query(
+        "INSERT INTO forge.llm_advice (purpose, subject_kind, subject_id, summary, input_class, \
+           model, prompt_version) VALUES ('mr_review', 'wiki_page', 1, 's', 'internal', 'm', 1)",
+    )
+    .execute(&mut w.t.superuser().await)
+    .await;
+    assert!(refused.is_err(), "an unknown subject kind is refused");
 }
 
 /// Two votes of one person at once: one row, and exactly one of them is
@@ -184,11 +237,6 @@ async fn concurrent_votes_record_one_row() {
         .await;
     assert_eq!(rows[0]["n"], 1);
 }
-
-const AGENT: Reader = Reader {
-    is_agent: true,
-    can_read_subject: true,
-};
 
 /// A request queued `age` ago, in `state` (as written then).
 async fn old_request(w: &World, age: &str, state: &str) -> i64 {
@@ -318,25 +366,30 @@ async fn advice_keeps_input_class() {
     let id = insert_advice(&w.t.db, &advice(&w, Some(req), InputClass::Confidential))
         .await
         .expect("kept");
-    let stored = shown(super::advice(&w.t.db, id, MR7, PERSON).await.expect("read"));
+    let stored = shown(read(&w.t.db, id, MR7, PERSON).await.expect("read"));
     assert_eq!(stored.input_class, InputClass::Confidential);
     // An agent learns only that it exists; a reader of another subject
     // learns nothing; an agent cannot vote.
     assert_eq!(
-        super::advice(&w.t.db, id, MR7, AGENT).await.expect("read"),
+        read(&w.t.db, id, MR7, AGENT).await.expect("read"),
         Some(AdviceView::Withheld {
             id,
             input_class: InputClass::Confidential
         })
     );
-    let outsider = Reader {
-        is_agent: false,
-        can_read_subject: false,
-    };
+    // A refused decision ends the read: the words never leave the store.
+    let refused = advice_decided(&w.t.db, id, |_| {
+        Err::<ReaderKind, _>(ForgeError::new(ErrorCode::Forbidden))
+    })
+    .await;
+    assert!(refused.is_err());
+    // No such advice: none, and nothing is decided.
     assert_eq!(
-        super::advice(&w.t.db, id, MR7, outsider)
-            .await
-            .expect("read"),
+        advice_decided(&w.t.db, id + 1000, |_| -> Result<ReaderKind, ForgeError> {
+            panic!("no decision without an advice")
+        })
+        .await
+        .expect("read"),
         None
     );
     assert_eq!(
@@ -356,7 +409,7 @@ async fn advice_keeps_input_class() {
     let newer = insert_advice(&w.t.db, &advice(&w, None, InputClass::Confidential))
         .await
         .expect("newer");
-    let stored = shown(super::advice(&w.t.db, id, MR7, PERSON).await.expect("read"));
+    let stored = shown(read(&w.t.db, id, MR7, PERSON).await.expect("read"));
     assert_eq!(stored.superseded_by, Some(newer));
     // Superseded once, by a newer advice of its subject only.
     let mut su = w.t.superuser().await;
@@ -531,11 +584,11 @@ async fn retention_sweep_keeps_feedback() {
             requests: 1
         }
     );
-    assert!(super::advice(&w.t.db, old, MR7, PERSON)
+    assert!(read(&w.t.db, old, MR7, PERSON)
         .await
         .expect("read")
         .is_none());
-    assert!(super::advice(&w.t.db, fresh, MR8, PERSON)
+    assert!(read(&w.t.db, fresh, MR8, PERSON)
         .await
         .expect("read")
         .is_some());

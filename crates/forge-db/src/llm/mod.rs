@@ -12,14 +12,17 @@
 //! - **The arbitration**: [`interactive_active`] (the `gpu-eval` claim
 //!   waits for it, plan 19 §1.1), [`gpu_eval_running`] (batch work waits
 //!   for the bench).
-//! - **People**: [`record_feedback`] (one verdict per advice, finding and
-//!   person; changing it updates the row), [`review_mode`].
+//! - **People**: [`record_feedback_decided`], [`advice_decided`] (one verdict per advice, finding and
+//!   person; changing it updates the row), [`review_mode`]. Reads and
+//!   votes are `*_decided`: the store loads the advice's own subject and
+//!   the caller's `decide` (its `authorize()`) runs on exactly that, so a
+//!   decision on one subject can never open another subject's advice.
 //!
 //! The input is never stored: a request row has its SHA-256 and class
 //! only. The advice's class is at least the request's and never lowered
 //! (the table's trigger `llm_advice_guarded`).
 
-use forge_core::llm::{InputClass, Priority, Purpose, ReviewMode, Verdict};
+use forge_core::llm::{InputClass, Priority, Purpose, ReviewMode, SubjectKind, Verdict};
 use forge_core::{ProjectId, RequestId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -41,8 +44,7 @@ pub const INTERACTIVE_STALE_SECS: i64 = 15 * 60;
 pub struct NewRequest {
     pub purpose: Purpose,
     pub priority: Priority,
-    /// `merge_request`, `deployment`, `incident`.
-    pub subject_kind: String,
+    pub subject_kind: SubjectKind,
     pub subject_id: Option<i64>,
     pub project: Option<ProjectId>,
     pub requested_by: Option<UserId>,
@@ -69,7 +71,7 @@ pub async fn insert_request(db: &Db, r: &NewRequest) -> Result<i64, ForgeError> 
         )
         .bind(r.purpose.as_str())
         .bind(r.priority.as_str())
-        .bind(&r.subject_kind)
+        .bind(r.subject_kind.as_str())
         .bind(r.subject_id)
         .bind(r.project.map(ProjectId::get))
         .bind(r.requested_by.map(UserId::get))
@@ -198,7 +200,7 @@ pub async fn abandon_stale(
 pub struct NewAdvice {
     pub llm_request_id: Option<i64>,
     pub purpose: Purpose,
-    pub subject_kind: String,
+    pub subject_kind: SubjectKind,
     pub subject_id: Option<i64>,
     pub project: Option<ProjectId>,
     /// The head the advice is about (a merge request, an approval).
@@ -230,7 +232,7 @@ pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
             "SELECT pg_advisory_xact_lock(hashtextextended( \
                'llm_advice:' || $1 || ':' || coalesce($2::text, '') || ':' || $3, 0))",
         )
-        .bind(&a.subject_kind)
+        .bind(a.subject_kind.as_str())
         .bind(a.subject_id)
         .bind(a.purpose.as_str())
         .execute(&mut *tx)
@@ -244,7 +246,7 @@ pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
         )
         .bind(a.llm_request_id)
         .bind(a.purpose.as_str())
-        .bind(&a.subject_kind)
+        .bind(a.subject_kind.as_str())
         .bind(a.subject_id)
         .bind(a.project.map(ProjectId::get))
         .bind(&a.head_sha)
@@ -265,7 +267,7 @@ pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
                AND id < $1 AND superseded_by IS NULL",
         )
         .bind(id)
-        .bind(&a.subject_kind)
+        .bind(a.subject_kind.as_str())
         .bind(a.subject_id)
         .bind(a.purpose.as_str())
         .execute(&mut *tx)
@@ -277,25 +279,28 @@ pub async fn insert_advice(db: &Db, a: &NewAdvice) -> Result<i64, ForgeError> {
     .await
 }
 
-/// Who reads an advice, as the caller decided it (the route's
-/// `authorize()` decision; L5-4 builds it). The store applies the data
-/// boundary itself so no caller can forget it (plan 19 §5).
+/// What a reader of an advice turned out to be, as the caller's decision
+/// on the advice's own subject says (L5-4: the route's `authorize()`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Reader {
-    /// An agent token or a delegated (act-as) tool, not a person.
-    pub is_agent: bool,
-    /// The reader may read the advice's subject (its merge request,
-    /// deployment, incident).
-    pub can_read_subject: bool,
+pub enum ReaderKind {
+    /// A person (a web session or a person's token).
+    Person,
+    /// An agent token or a delegated (act-as) tool.
+    Agent,
 }
 
-/// The subject the caller decided the reader may read (its merge request,
-/// deployment, incident). The store answers only for advice of this
-/// subject: a decision on one subject never opens another's advice.
+/// The subject of a stored advice, as the store loaded it: what the
+/// caller's `decide` closure authorizes. The store builds it from the row
+/// itself, so a decision is always about this advice's own subject — a
+/// caller cannot pair a decision on one subject with another's advice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Subject<'a> {
-    pub kind: &'a str,
+pub struct AdviceSubject {
+    pub advice_id: i64,
+    pub kind: SubjectKind,
+    /// `None` for an incident diagnosis (no row of its own).
     pub id: Option<i64>,
+    pub project: Option<ProjectId>,
+    pub input_class: InputClass,
 }
 
 /// A stored advice (read pool).
@@ -304,7 +309,7 @@ pub struct StoredAdvice {
     pub id: i64,
     pub llm_request_id: Option<i64>,
     pub purpose: Purpose,
-    pub subject_kind: String,
+    pub subject_kind: SubjectKind,
     pub subject_id: Option<i64>,
     pub head_sha: Option<String>,
     pub summary: String,
@@ -333,6 +338,7 @@ type AdviceRow = (
     String,
     String,
     Option<i64>,
+    Option<i64>,
     Option<String>,
     String,
     serde_json::Value,
@@ -348,31 +354,42 @@ fn stored_invalid(column: &'static str) -> ForgeError {
         .with_context("column", column)
 }
 
-/// The advice `id` of `subject` for `reader` (`None`: none, swept, of
-/// another subject, or the reader may not read the subject — the same
-/// answer, so existence does not leak). A confidential advice is
-/// [`AdviceView::Withheld`] from an agent.
-pub async fn advice(
+fn subject_of(
+    id: i64,
+    kind: &str,
+    subject: Option<i64>,
+    project: Option<i64>,
+    class: &str,
+) -> Result<AdviceSubject, ForgeError> {
+    Ok(AdviceSubject {
+        advice_id: id,
+        kind: SubjectKind::parse(kind).ok_or_else(|| stored_invalid("subject_kind"))?,
+        id: subject,
+        project: project.map(ProjectId::new),
+        input_class: InputClass::parse(class).ok_or_else(|| stored_invalid("input_class"))?,
+    })
+}
+
+/// The advice `id`, read only after `decide` allowed the reader on the
+/// advice's own subject ([`AdviceSubject`], loaded by the store). `None`:
+/// no such advice (or swept). `decide`'s error is returned as it is (the
+/// route's "not found" for a subject the reader cannot see, so existence
+/// does not leak). A confidential advice is [`AdviceView::Withheld`] from
+/// an agent.
+pub async fn advice_decided(
     db: &Db,
     id: i64,
-    subject: Subject<'_>,
-    reader: Reader,
+    decide: impl FnOnce(&AdviceSubject) -> Result<ReaderKind, ForgeError>,
 ) -> Result<Option<AdviceView>, ForgeError> {
     const QUERY: &str = "llm.advice";
-    if !reader.can_read_subject {
-        return Ok(None);
-    }
     let row: Option<AdviceRow> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "SELECT id, llm_request_id, purpose, subject_kind, subject_id, head_sha, summary, \
-                   findings, deep_review, degraded, input_class, superseded_by \
-                 FROM forge.llm_advice \
-                 WHERE id = $1 AND subject_kind = $2 AND subject_id IS NOT DISTINCT FROM $3",
+                "SELECT id, llm_request_id, purpose, subject_kind, subject_id, project_id, \
+                   head_sha, summary, findings, deep_review, degraded, input_class, superseded_by \
+                 FROM forge.llm_advice WHERE id = $1",
             )
             .bind(id)
-            .bind(subject.kind)
-            .bind(subject.id)
             .fetch_optional(db.pool().executor())
             .await
             .map_err(|e| read_query_error(QUERY, e))
@@ -384,6 +401,7 @@ pub async fn advice(
         purpose,
         kind,
         subject,
+        project,
         head,
         summary,
         findings,
@@ -395,27 +413,31 @@ pub async fn advice(
     else {
         return Ok(None);
     };
-    let input_class = InputClass::parse(&class).ok_or_else(|| stored_invalid("input_class"))?;
-    if reader.is_agent && !input_class.shown_to_agents() {
-        return Ok(Some(AdviceView::Withheld { id, input_class }));
+    let decided = subject_of(id, &kind, subject, project, &class)?;
+    let reader = decide(&decided)?;
+    if reader == ReaderKind::Agent && !decided.input_class.shown_to_agents() {
+        return Ok(Some(AdviceView::Withheld {
+            id,
+            input_class: decided.input_class,
+        }));
     }
     Ok(Some(AdviceView::Shown(Box::new(StoredAdvice {
         id,
         llm_request_id: req,
         purpose: Purpose::parse(&purpose).ok_or_else(|| stored_invalid("purpose"))?,
-        subject_kind: kind,
+        subject_kind: decided.kind,
         subject_id: subject,
         head_sha: head,
         summary,
         findings,
         deep_review: deep,
         degraded,
-        input_class,
+        input_class: decided.input_class,
         superseded_by: sup,
     }))))
 }
 
-/// What [`record_feedback`] did.
+/// What [`record_feedback_decided`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedbackOutcome {
     Recorded,
@@ -423,8 +445,7 @@ pub enum FeedbackOutcome {
     Changed,
     /// The same verdict was already there.
     Unchanged,
-    /// No such advice (or swept), no such finding, or a reader who may not
-    /// read its subject.
+    /// No such advice (or swept), or no such finding.
     NoAdvice,
     /// An agent token or a delegated tool: feedback is people's only (it
     /// is the measure of the advice; plan 19 §4).
@@ -432,32 +453,47 @@ pub enum FeedbackOutcome {
 }
 
 /// A person's verdict on `finding` (`None`: the advice as a whole) of an
-/// advice. One statement decides it, so a concurrent vote of the same
-/// person is never reported as recorded twice: a new row is `Recorded`, a
-/// changed verdict `Changed`, the same verdict `Unchanged`.
-pub async fn record_feedback(
+/// advice, written only after `decide` allowed the voter on the advice's
+/// own subject ([`AdviceSubject`], loaded by the store; its error is
+/// returned as it is). One statement writes it, so a concurrent vote of
+/// the same person is never reported as recorded twice: a new row is
+/// `Recorded`, a changed verdict `Changed`, the same verdict `Unchanged`.
+pub async fn record_feedback_decided(
     db: &Db,
     advice_id: i64,
-    subject: Subject<'_>,
     finding: Option<u8>,
     user: UserId,
-    reader: Reader,
     verdict: Verdict,
+    decide: impl FnOnce(&AdviceSubject) -> Result<ReaderKind, ForgeError>,
 ) -> Result<FeedbackOutcome, ForgeError> {
     const QUERY: &str = "llm.record_feedback";
-    if reader.is_agent {
+    let index: i16 = finding.map_or(-1, i16::from);
+    let found: Option<(String, Option<i64>, Option<i64>, String)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT subject_kind, subject_id, project_id, input_class \
+                 FROM forge.llm_advice WHERE id = $1",
+            )
+            .bind(advice_id)
+            .fetch_optional(db.write_pool())
+            .await
+            .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
+    let Some((kind, subject, project, class)) = found else {
+        return Ok(FeedbackOutcome::NoAdvice);
+    };
+    let decided = subject_of(advice_id, &kind, subject, project, &class)?;
+    if decide(&decided)? == ReaderKind::Agent {
         return Ok(FeedbackOutcome::NotAllowed);
     }
-    if !reader.can_read_subject {
-        return Ok(FeedbackOutcome::NoAdvice);
-    }
-    let index: i16 = finding.map_or(-1, i16::from);
     db.within(QUERY, async {
         // `RETURNING (xmax = 0)`: PostgreSQL leaves xmax 0 on a row this
         // statement inserted and sets it (to this transaction) on a row the
         // ON CONFLICT branch updated — true = Recorded, false = Changed. No
-        // row: the advice (of this subject) or the finding is not there, or
-        // the verdict was already this one (the DO UPDATE's WHERE).
+        // row: the advice (still of the decided subject) or the finding is
+        // not there, or the verdict was already this one (the DO UPDATE's
+        // WHERE).
         let written: Option<bool> = sqlx::query_scalar(
             "INSERT INTO forge.llm_advice_feedback (advice_id, purpose, input_class, \
                finding_index, user_id, verdict) \
@@ -473,8 +509,8 @@ pub async fn record_feedback(
         .bind(index)
         .bind(user.get())
         .bind(verdict.as_str())
-        .bind(subject.kind)
-        .bind(subject.id)
+        .bind(decided.kind.as_str())
+        .bind(decided.id)
         .fetch_optional(db.write_pool())
         .await
         .map_err(|e| query_error(QUERY, e))?;
@@ -483,16 +519,12 @@ pub async fn record_feedback(
             Some(false) => Ok(FeedbackOutcome::Changed),
             None => {
                 let exists: bool = sqlx::query_scalar(
-                    "SELECT EXISTS (SELECT 1 FROM forge.llm_advice_feedback f \
-                     JOIN forge.llm_advice a ON a.id = f.advice_id \
-                     WHERE f.advice_id = $1 AND f.finding_index = $2 AND f.user_id = $3 \
-                       AND a.subject_kind = $4 AND a.subject_id IS NOT DISTINCT FROM $5)",
+                    "SELECT EXISTS (SELECT 1 FROM forge.llm_advice_feedback \
+                     WHERE advice_id = $1 AND finding_index = $2 AND user_id = $3)",
                 )
                 .bind(advice_id)
                 .bind(index)
                 .bind(user.get())
-                .bind(subject.kind)
-                .bind(subject.id)
                 .fetch_one(db.write_pool())
                 .await
                 .map_err(|e| query_error(QUERY, e))?;

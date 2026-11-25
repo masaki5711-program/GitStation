@@ -154,8 +154,26 @@ pub const VERDICT_REMOVED: &str = "[verdict removed]";
 /// zero-width, soft hyphen, word joiners, BOM and bidi controls.
 pub(crate) fn is_invisible(c: char) -> bool {
     matches!(c,
-        '\u{00AD}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
-        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+        '\u{00AD}' | '\u{034F}' | '\u{115F}' | '\u{1160}' | '\u{180B}'..='\u{180F}'
+        | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{2069}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}'
+        | '\u{FFA0}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// Whether the phrase that follows `before` is negated: the word right
+/// before it (spaces only between) is a negation. A clause boundary
+/// (`.,;:!?-`, a newline) in between ends the look-back, so "No, LGTM",
+/// "No. Approved" and "Never mind - ship it" are verdicts.
+fn negated(before: &str) -> bool {
+    let tail = before.trim_end_matches([' ', '\t']);
+    if tail.ends_with(|c: char| !c.is_alphanumeric()) {
+        return false; // a clause boundary, or nothing at all
+    }
+    let word = tail
+        .rsplit(|c: char| !c.is_alphanumeric())
+        .next()
+        .unwrap_or("");
+    NEGATIONS.contains(&word)
 }
 
 /// NFKC (full-width and compatibility forms fold to their plain letters)
@@ -199,12 +217,7 @@ fn verdict_spans(text: &str) -> Vec<(usize, usize)> {
             {
                 continue;
             }
-            let previous_word = before
-                .trim_end_matches(|c: char| !c.is_alphanumeric())
-                .rsplit(|c: char| !c.is_alphanumeric())
-                .next()
-                .unwrap_or("");
-            if NEGATIONS.contains(&previous_word) {
+            if negated(before) {
                 continue;
             }
             spans.push((start, end));
@@ -534,49 +547,65 @@ fn is_slash_command(word: &str) -> bool {
 /// how many were removed.
 fn clean(text: &str, max: usize) -> (String, usize) {
     let mut n = 0usize;
-    let mut out: Vec<String> = Vec::new();
+    // (word, a line break before it): whitespace runs become one space,
+    // line breaks stay one line break (a clause boundary for the verdict
+    // check, see `negated`).
+    let mut out: Vec<(String, bool)> = Vec::new();
     // NFKC without invisible characters first, so a full-width `／ｍｅｒｇｅ`
     // or a zero-width split `L\u{200B}GTM` is seen as what it shows.
     let text = normalized(text);
-    let words: Vec<&str> = text.split_whitespace().collect();
+    let words: Vec<(&str, bool)> = text
+        .lines()
+        .flat_map(|line| {
+            line.split_whitespace()
+                .enumerate()
+                .map(|(k, w)| (w, k == 0))
+        })
+        .collect();
+    let mut pending_break = false;
     let mut i = 0;
-    while let Some(&word) = words.get(i) {
+    while let Some(&(word, line_start)) = words.get(i) {
         i += 1;
+        pending_break |= line_start;
         let lower = word.to_ascii_lowercase();
         let bare = lower.trim_end_matches([':', ',', '.']);
-        if CLOSING.contains(&bare)
+        let kept = if CLOSING.contains(&bare)
             && words
                 .get(i)
-                .is_some_and(|next| next.trim_start_matches(['(', '[']).contains('#'))
+                .is_some_and(|(next, _)| next.trim_start_matches(['(', '[']).contains('#'))
         {
             // `closes #12`, `fixes group/project#3`: both words go.
             i += 1;
             n += 1;
-            continue;
-        }
-        if is_slash_command(word) {
+            None
+        } else if is_slash_command(word) {
             n += 1;
-            continue;
-        }
-        if lower.contains("://") || lower.starts_with("www.") || lower.starts_with("data:") {
-            out.push("[link removed]".to_owned());
+            None
+        } else if lower.contains("://") || lower.starts_with("www.") || lower.starts_with("data:") {
             n += 1;
-            continue;
-        }
-        if word.contains("![") || lower.contains("<img") {
-            out.push("[image removed]".to_owned());
+            Some("[link removed]".to_owned())
+        } else if word.contains("![") || lower.contains("<img") {
             n += 1;
-            continue;
-        }
-        if word.contains('@') {
+            Some("[image removed]".to_owned())
+        } else if word.contains('@') {
             // `@alice` → `alice`; an e-mail address keeps no `@` either.
             n += 1;
-            out.push(word.replace('@', ""));
-            continue;
+            Some(word.replace('@', ""))
+        } else {
+            Some(word.to_owned())
+        };
+        if let Some(w) = kept {
+            out.push((w, pending_break && !out.is_empty()));
+            pending_break = false;
         }
-        out.push(word.to_owned());
     }
-    let joined = out.join(" ");
+    let mut joined = String::new();
+    for (k, (w, line_break)) in out.iter().enumerate() {
+        if k > 0 {
+            joined.push(if *line_break { '\n' } else { ' ' });
+        }
+        joined.push_str(w);
+    }
     let cut: String = joined.chars().take(max).collect();
     (cut.trim().to_owned(), n)
 }

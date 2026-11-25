@@ -537,6 +537,15 @@ fn verdict_phrases_match_whole_words_and_not_after_a_negation() {
         ("Not safe to merge: the retry loops forever.", false),
         ("ＬＧＴＭ", true),
         ("L\u{200B}GTM", true),
+        // A negation reaches only the phrase right after it, in its clause.
+        ("No, LGTM", true),
+        ("No. LGTM.", true),
+        ("Never mind - ship it", true),
+        ("Not\nLGTM", true),
+        ("Never ship it", false),
+        // Other invisible characters do not split a phrase either.
+        ("L\u{034F}G\u{FE0F}T\u{3164}M", true),
+        ("LG\u{115F}TM", true),
     ] {
         let raw = serde_json::json!({"summary": summary}).to_string();
         let advice = check_output(&raw, &input, &OutputPolicy::default()).expect("valid");

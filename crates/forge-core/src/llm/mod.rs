@@ -265,6 +265,32 @@ impl fmt::Display for ModelRef {
     }
 }
 
+/// What an advice is about. Who may read it is decided on this subject
+/// (its merge request, deployment or incident), never on another one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SubjectKind {
+    MergeRequest,
+    Deployment,
+    /// A diagnosis of an error code or request (no row of its own).
+    Incident,
+}
+
+impl SubjectKind {
+    pub const ALL: [Self; 3] = [Self::MergeRequest, Self::Deployment, Self::Incident];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MergeRequest => "merge_request",
+            Self::Deployment => "deployment",
+            Self::Incident => "incident",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == text)
+    }
+}
+
 /// A project's `llm.review` (plan 19 §3.1; no setting = `Off`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ReviewMode {

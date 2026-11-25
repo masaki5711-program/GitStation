@@ -45,7 +45,7 @@ CREATE TABLE forge.llm_requests (
     priority       text NOT NULL CONSTRAINT llm_requests_priority
         CHECK (priority IN ('interactive', 'review', 'autofix', 'batch')),
     subject_kind   text NOT NULL CONSTRAINT llm_requests_subject_kind
-        CHECK (subject_kind ~ '^[a-z][a-z_]{0,31}$'),
+        CHECK (subject_kind IN ('merge_request', 'deployment', 'incident')),
     subject_id     bigint,
     project_id     bigint REFERENCES forge.projects (id),
     requested_by   bigint REFERENCES forge.users (id),
@@ -95,7 +95,7 @@ CREATE TABLE forge.llm_advice (
     purpose          text NOT NULL CONSTRAINT llm_advice_purpose
         CHECK (purpose IN ('mr_review', 'incident_diagnosis', 'approval_summary')),
     subject_kind     text NOT NULL CONSTRAINT llm_advice_subject_kind
-        CHECK (subject_kind ~ '^[a-z][a-z_]{0,31}$'),
+        CHECK (subject_kind IN ('merge_request', 'deployment', 'incident')),
     subject_id       bigint,
     project_id       bigint REFERENCES forge.projects (id),
     head_sha         text CONSTRAINT llm_advice_head_sha

@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use forge_core::llm::{
     generate_checked, Advice, ChatRequest, FindingSeverity, LlmProvider, ModelRef, OutputPolicy,
-    PreparedInput, Priority, Purpose,
+    PreparedInput, Priority, Purpose, SubjectKind,
 };
 use forge_core::{telemetry, ProjectId, RequestId, UserId};
 use forge_db::llm::{Ending, NewAdvice, NewRequest, Usage};
@@ -86,7 +86,7 @@ pub struct Submission {
     pub purpose: Purpose,
     /// `None`: the purpose's tier.
     pub priority: Option<Priority>,
-    pub subject_kind: String,
+    pub subject_kind: SubjectKind,
     pub subject_id: Option<i64>,
     pub project: Option<ProjectId>,
     pub requested_by: Option<UserId>,
@@ -390,7 +390,7 @@ impl Gateway {
         let record = NewRequest {
             purpose: s.purpose,
             priority,
-            subject_kind: s.subject_kind.clone(),
+            subject_kind: s.subject_kind,
             subject_id: s.subject_id,
             project: s.project,
             requested_by: s.requested_by,
@@ -559,7 +559,7 @@ impl Gateway {
         let row = NewAdvice {
             llm_request_id: Some(id),
             purpose: s.purpose,
-            subject_kind: s.subject_kind.clone(),
+            subject_kind: s.subject_kind,
             subject_id: s.subject_id,
             project: s.project,
             head_sha: s.head_sha.clone(),
