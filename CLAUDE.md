@@ -56,23 +56,24 @@ optimises for diagnosing failures from artifacts alone (logs with
 8. **On-prem.** No runtime dependency on external services; no secrets in
    source; synthetic data only in tests.
 9. **Dependency direction is one-way:** `forge-web / forge-cli → feature crates
-   (review, checks, pipelines, deploy, llm, integ, marketplace, fleet, …) →
+   (review, checks, pipelines, deploy, llm, integ, marketplace, …) →
    forge-auth / forge-git / forge-db → forge-core → forge-edge → forge-agent →
    forge-ci → forge-doc → forge-errors`. No reverse edges; feature crates never
    depend on each other. `forge-doc` (document parsing / fmt / lint),
    `forge-ci` (`.forge-ci.yml` parse / lint / plan), `forge-agent` (agent
    part / lock parse, digest, Ed25519 verify, static scan) and `forge-edge`
-   (edge manifest / digest / signature verify, `edge-release.toml` lint, wave
-   assignment, halt decision, install window; time is an argument) are pure
-   (no I/O, no DB); the edge fleet's registry, release blobs and rollout state
-   machine live in the feature crate `forge-fleet`. The client `forge-client`
+   (edge manifest / digest / signature verify, `edge-release.toml` lint; its
+   wave assignment, halt decision and install window are slated for retirement,
+   plan 21 §5) are pure (no I/O, no DB). Edge firmware and the I/O meaning
+   dictionary are released with standard repositories and CI (plan 21,
+   2026-11-25); devices and their mapping to firmware belong to the user's
+   central config tool, so there is no edge feature crate, no `forge-fleet`
+   and no `forge-edge-agent` (ADR-0041 amendment). The client `forge-client`
    (`gstn`) is outside this graph: it depends on `forge-errors`, `forge-doc`,
    `forge-ci`, `forge-agent` and `forge-edge` only and nothing depends on it
    (ADR-0020, ADR-0026, ADR-0029, ADR-0032, ADR-0041). The runner binary
    `forge-runner` depends on `forge-core`, `forge-errors` and `forge-client`
-   only (ADR-0029); the device daemon `forge-edge-agent` will depend on
-   `forge-errors`, `forge-edge` and `forge-client` only (ADR-0041); nothing
-   depends on either.
+   only (ADR-0029); nothing depends on it.
 
 ## How to work (the gates the local hooks would enforce)
 
