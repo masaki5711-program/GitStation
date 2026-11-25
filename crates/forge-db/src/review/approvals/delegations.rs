@@ -159,7 +159,14 @@ pub async fn active_delegation(
 ) -> Result<bool, ForgeError> {
     const QUERY: &str = "review.delegation_active";
     db.within(QUERY, async {
-        let mut conn = db.acquire().await?;
+        // The write pool: `active_on` reads `FOR SHARE`, which a read-pool
+        // (read-only) connection refuses (`25006`, `FG-DB-0001`) — the
+        // delegated deployment approval failed on it (widget design P2b).
+        let mut conn = db
+            .write_pool()
+            .acquire()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
         active_on(&mut conn, delegator, delegate).await
     })
     .await

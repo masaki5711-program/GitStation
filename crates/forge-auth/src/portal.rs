@@ -218,6 +218,54 @@ mod tests {
         assert_eq!(person.credential(), &Credential::Session);
     }
 
+    /// Widget design P2b: the `deploy-approvals` trial is `DeployApprove`
+    /// for the reader — a session without administrator rights — so an
+    /// administrator's account never sees a deployment through the
+    /// administrator bypass, and the portal's credential itself never
+    /// approves.
+    #[test]
+    fn the_deploy_approval_trial_has_no_administrator_rights() {
+        use crate::model::{ApproverGate, DeploymentView, ProjectView};
+        let deployment = |role| {
+            Resource::Deployment(DeploymentView {
+                project: ProjectView {
+                    visibility: Visibility::Private,
+                    role,
+                    pending_deletion: false,
+                },
+                tier: forge_core::deploy::DeployTier::Prod,
+                requested_by: Some(UserId::new(9)),
+                change_authors: Vec::new(),
+                approvers: ApproverGate::Unrestricted,
+                on_behalf_of: None,
+                delegator_role: None,
+                delegation_refused: None,
+            })
+        };
+        let admin = portal_of(true, true, true);
+        let proof =
+            prove(&admin, Action::PortalWidgetRead, PortalWidgetCtx::new(ME)).expect("allowed");
+        let reader = portal_reader(&proof).expect("reader");
+        assert!(
+            crate::authorize::authorize(&reader, Action::DeployApprove, &deployment(None)).is_err(),
+            "no administrator bypass through the portal"
+        );
+        assert!(crate::authorize::authorize(
+            &reader,
+            Action::DeployApprove,
+            &deployment(Some(crate::Role::Maintainer))
+        )
+        .is_ok());
+        let Err(own) = crate::authorize::authorize(
+            &admin,
+            Action::DeployApprove,
+            &deployment(Some(crate::Role::Maintainer)),
+        ) else {
+            panic!("the portal's credential must never approve");
+        };
+        assert_eq!(own.code(), ErrorCode::Forbidden);
+    }
+
     #[test]
     fn a_project_is_read_like_the_person_would() {
         let private = |role| {

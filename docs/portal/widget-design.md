@@ -149,7 +149,7 @@ S は 4 つで 1 行（12 列）、M は 2 つで 1 行。
 | # | 不足 | 対応 |
 |---|---|---|
 | 1 | ウィジェットの新しい経路（`menu`、`attention-count`、`deploy-approvals`、`merge-queue`、`spec-status`、`inbox`、`my-reviews` の新しい `kind`） | `portal-widgets/v1/*` に追加。`PortalWidgetRead` と権限表の行、エラーコードは既存（`FG-WEB-0011` など） |
-| 2 | 配備の承認待ちを **人ごと** に引く API と、配備の画面のパス | forge-deploy に「自分が承認できる待ち」の問い合わせ、SPA に配備の画面 |
+| 2 | 配備の承認待ちを **人ごと** に引く API と、配備の画面のパス | forge-deploy に「自分が承認できる待ち」の問い合わせ（P2b で済み: `Deploy::portal_approvals`）、SPA に配備の画面（残り） |
 | 3 | 仕様のリンクの食い違い（新着は `/-/tags`、画面は `documents`） | 新着の href を `documents` にそろえる |
 | 4 | 新着の穴（「レビューを頼まれた」「承認待ちの仕様」） | 出来事を足して `approval` の新着を送る（ADR-0036 の追記） |
 | 5 | PFS 台帳 | `gitstation.yaml` に新しいウィジェットと設定、`widget_status: pilot`、ボードの更新（PFS の MR） |
@@ -170,6 +170,10 @@ S は 4 つで 1 行（12 列）、M は 2 つで 1 行。
      （ADR-0023）ので、既定は「仕様の版を公開したことのあるプロジェクト」、`project` の選択肢は他と同じすべてのプロジェクト
      （まだ公開していない仕様も選べる）。href は `undecided` だけ仕様書 `/<path>/-/documents`、`approval` / `lint` は
      承認待ちの変更 `/<path>/-/pulls?state=open`（指摘は変更の画面で見るため）。§3.6 の href はブランチごと（`?target=<ブランチ>`）。
-   - **P2b** 残り: `deploy-approvals`、`attention-count?scope=deploy`（ADR-0038 の段 C の後。それまで `scope=deploy` は 422）。
+   - **P2b** 実装済み: `deploy-approvals`、`attention-count?scope=deploy`（契約は [widgets.md](widgets.md)）。「承認できる」は
+     ADR-0038 の段 C の承認の経路と同じ判断（承認者・セレクタ・代理を本人について読み、`DeployApprove` を管理者の権限なしの
+     セッションとして試す。forge-deploy `portal`）。§3.5 との違い: 環境は `dev` / `stg` / `prod`（`staging` ではない）で、
+     固定の選択肢（`options_from` は使わない）。`sub` は MR の番号ではなく短い SHA（配備は SHA を持ち、MR は持たない）と待ち時間。
+     href はプロジェクト `/<path>`（SPA に配備の画面がまだ無い。§6 の不足 2 の画面の側は残り）。
 3. **P3**: 新着の穴（不足 4）、`agent-sessions` と `setup-health` の検討。
 4. 各段の終わりに PFS セッションへ台帳とボードの更新を依頼する（PFS のリポジトリはこちらでは変えない）。

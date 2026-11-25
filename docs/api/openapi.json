@@ -15102,7 +15102,7 @@
         "operationId": "get_api_portal_widgets_v1_attention_count",
         "parameters": [
           {
-            "description": "reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval) or failed (projects whose main build or test failed); deploy is not available yet (422)",
+            "description": "reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval), failed (projects whose main build or test failed) or deploy (deployments I can approve now)",
             "in": "query",
             "name": "scope",
             "required": false,
@@ -15152,7 +15152,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0; scope=deploy is 422 until P2)",
+        "summary": "Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0), or the deployments the person can approve now (scope=deploy)",
         "x-forge-action": "PortalWidgetRead"
       }
     },
@@ -15172,6 +15172,65 @@
           }
         },
         "summary": "Portal widget attention-count: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/deploy-approvals": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_deploy_approvals",
+        "parameters": [
+          {
+            "description": "Environments, repeated: dev, stg or prod; none: every environment the person can approve in",
+            "in": "query",
+            "name": "env",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items, 3..=10 (default 5)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 10,
+              "minimum": 3,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget deploy-approvals (list): the deployments waiting for an approval the person can give now (decided as the approval route decides: approvers, selectors, delegation), oldest first, with an active freeze shown",
         "x-forge-action": "PortalWidgetRead"
       }
     },

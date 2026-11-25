@@ -541,6 +541,7 @@ pub async fn put_target_decided(
 
 mod approvers;
 mod deployments;
+mod pending;
 mod worker;
 
 pub use approvers::{
@@ -551,6 +552,7 @@ pub use deployments::{
     approve_decided, auto_request, get_deployment, list_deployments, request_decided, CommitInput,
     DeployApprovalInput, StoredDeployment, MAX_LIST,
 };
+pub use pending::{pending_approvals, PendingDeployment, MAX_PENDING};
 pub use worker::{
     abandon_stale, block_unapproved, claim_next, finish, heartbeat, stuck_running, Claim, Claimed,
     Finish, RunTarget,

@@ -945,7 +945,7 @@ fn portal_widget_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             p::ATTENTION_COUNT,
             Action::PortalWidgetRead,
-            "Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0; scope=deploy is 422 until P2)",
+            "Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0), or the deployments the person can approve now (scope=deploy)",
             p::PortalWidgets,
             p::attention_count,
         )
@@ -1018,6 +1018,15 @@ fn portal_widget_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::PortalWidgets,
             p::project_options,
         )
+        .route_with(
+            Verb::Get,
+            p::DEPLOY_APPROVALS,
+            Action::PortalWidgetRead,
+            "Portal widget deploy-approvals (list): the deployments waiting for an approval the person can give now (decided as the approval route decides: approvers, selectors, delegation), oldest first, with an active freeze shown",
+            p::PortalWidgets,
+            p::deploy_approvals,
+        )
+        .queries(Verb::Get, p::DEPLOY_APPROVALS, p::DEPLOY_APPROVALS_QUERY)
 }
 
 /// The merge requests of the caller's own work across projects (plan 15

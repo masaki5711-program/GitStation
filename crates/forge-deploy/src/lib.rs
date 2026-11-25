@@ -6,6 +6,8 @@
 //!   (`DeployTargetManage`), request a deployment (`DeployCreate`) and
 //!   approve one (`DeployApprove`). Every change is decided again inside
 //!   its transaction (`Authorized::reconfirm`) and audited there.
+//! - [`portal`]: the PFS portal's deployments awaiting the person's
+//!   approval (widget design P2b), decided by the approval's own rules.
 //! - [`run`]: the worker side (`forge worker`'s `deploy_runner`).
 //! - [`transport`]: ssh as an argument vector, behind a trait.
 //!
@@ -32,6 +34,7 @@ pub use forge_db::deploy::{StoredDeployment, StoredEnvironment, StoredTarget};
 
 pub mod approvers;
 pub mod commits;
+pub mod portal;
 pub mod run;
 pub mod transport;
 

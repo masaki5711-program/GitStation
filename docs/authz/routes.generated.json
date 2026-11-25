@@ -290,6 +290,15 @@
   {
     "action": "PortalWidgetRead",
     "method": "GET",
+    "path": "/api/portal-widgets/v1/deploy-approvals",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
     "path": "/api/portal-widgets/v1/inbox",
     "people_only": false,
     "public": false,

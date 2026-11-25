@@ -122,6 +122,9 @@ fn the_p1_settings_are_read_and_checked() {
     ] {
         assert_eq!(attention_query(Some(raw)).expect(raw).scope, scope);
     }
+    // P2b: `deploy` is a scope (no longer 422).
+    let d = attention_query(Some("scope=deploy")).expect("deploy");
+    assert_eq!(d.scope, AttentionScope::Deploy);
     let a = attention_query(Some("scope=stopped&project=4&project=2&project=4")).expect("multi");
     assert_eq!(a.projects, Some(vec![ProjectId::new(4), ProjectId::new(2)]));
     let m = menu_query(None).expect("defaults");
@@ -143,10 +146,6 @@ fn the_p1_settings_are_read_and_checked() {
         (
             pipelines_query(Some("only_problems=yes")).map(drop),
             ("only_problems", "not_boolean"),
-        ),
-        (
-            attention_query(Some("scope=deploy")).map(drop),
-            ("scope", "not_available"),
         ),
         (
             attention_query(Some("scope=all")).map(drop),
