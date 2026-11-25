@@ -1,0 +1,39 @@
+# 試験の入力（合成）。tests/run-cases.py が scripts/check-config-schema.py に渡す。
+
+schema_version = 3
+
+# 派生のときだけ: 元のプロジェクトと分かれた版（記録だけ。一度書いたら変えない）。
+# lineage = { from = "edge-fw/s3-io8", at = "fw-1.4.0" }
+
+[[setting]]
+key = "net.ip"
+type = "ipv4"
+default = "0.0.0.0"
+description = "モジュールの IP アドレス（0.0.0.0 は DHCP）"
+since = 1
+
+[[setting]]
+key = "net.central_host"
+type = "string"
+max_len = 253
+default = "central.internal"
+description = "中央の受け口のホスト名"
+since = 1
+
+[[setting]]
+key = "sampling.interval_ms"
+type = "int"
+min = 10
+max = 60000
+default = 1000
+description = "入力を読む間隔（ミリ秒）"
+since = 1
+
+[[setting]]
+key = "sampling.decimation"
+type = "int"
+min = 1
+max = 1000
+default = 1
+description = "間引き: N 回に 1 回だけ送る"
+since = 1
