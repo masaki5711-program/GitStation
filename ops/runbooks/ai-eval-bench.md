@@ -24,6 +24,8 @@
 - MR の画面・`gstn mr status` で `forge/ai-eval` が `error` のまま、または `required_check_missing`（行が現れない）
 - `forge.ai_eval.read_failed`（info）が続く: 報告・基準を読めず、間をあけてやり直している（`error_code` が原因: FG-REPO-0016 / FG-GIT-* / FG-REPO-0003 保存先の I/O）。
   5 回で `read_failed` の `error` になる。`forge.ai_eval.check_failed`（warn）は DB に書けなかった（FG-DB-*、runbook `db-unavailable`）
+- `forge doctor`（下の「doctor の項目」）: `FAIL ai_eval.runner`（FG-AIASSET-0002 `reason=gpu_runner_unavailable`）、
+  `FAIL ai_eval.baseline_age`（FG-AIASSET-0002 `reason=nightly_not_passing`）、`warn ai_eval.runner` / `warn ai_eval.baseline_age`
 
 ## Impact
 
@@ -31,8 +33,23 @@
   本番は変わらない（本番を変えるのはリリースの承認）。AI の誤りは品質の事故なので通常は SEV4。夜間のベンチが 2 晩続けて動かないなら SEV3。
 - 宣言の無いリポジトリには影響しない（チェックの行そのものが無い）。
 
+## doctor の項目（計画 17 P17-8。`forge doctor` をサーバーのホストで。DB の読み取りのプールだけ、件数と id だけ）
+
+| 項目 | 見るもの | 失敗のとき |
+|---|---|---|
+| `ai_eval.runner` | タグ `gpu-eval` の有効な Runner（5 分以内に連絡があれば生きている）、10 分を越えて `pending` のタグ `gpu-eval` のジョブ、7 日以内に `eval-report.json` を宣言したパイプラインの数 | `FAIL` FG-AIASSET-0002 `reason=gpu_runner_unavailable`: ジョブが待ち、生きた `gpu-eval` の Runner が無い（`oldest_job_id`・`waiting`・`gpu_runners`・`live_gpu_runners`）→ 下の Diagnose 4 と runbook `ci-runner`。`warn`（生きた Runner があるのに待つ）: Runner が別のベンチで塞がっている（同時 1）か、プロジェクトが `ci.gpu_eval_projects` に無い（`ci.gpu_eval_max_running` に達している）。`warn`（宣言があり生きた Runner が無い、まだ待ちは無い）: 次のベンチが待つ前に Runner を戻す |
+| `ai_eval.baseline_age` | 有効な定期（C12）を持ち、30 日以内に定期のパイプラインが報告を宣言したプロジェクトごとの、最後に `succeeded` になった定期のパイプライン。開いている基準の候補の MR（ブランチ `ai-eval/baseline-*`）の最古。`ai_assets.enabled` なのに夜間のベンチが無いプロジェクト | `FAIL` FG-AIASSET-0002 `reason=nightly_not_passing`: 48 時間（2 晩）通った夜間のベンチが無い（`project_ids`。最初の定期のパイプラインから 48 時間は数えない）→ 基準の候補が出ず、基準が古くなる。SEV3（上の Impact）。`warn`: 候補の MR が 14 日を越えて開いたまま（週 1 回の確認を 2 回逃した。MR の判定が古い基準と比べている）→ approver に差分を読んでもらい、マージか閉じる。`warn`: `ai_assets.enabled` のプロジェクトに 30 日夜間のベンチが無い → 定期を作る（上の「夜間の基準の候補」） |
+
+`forge/ai-eval` は `/readyz` に入れない（ベンチが動かなくてもサーバーは動く。MR が待つだけ）。
+
 ## Diagnose（読み取りのみ）
 
+0. `forge doctor`（上の表）。`ai_eval.runner` の `FAIL` は `forge admin runner list` でタグ `gpu-eval` の Runner の最後の連絡を、
+   `ai_eval.baseline_age` の `FAIL` は `project_ids` ごとに
+   `SELECT id, status, error_code, created_at FROM forge.ci_pipelines WHERE project_id = <id> AND source = 'schedule' AND ai_eval_job IS NOT NULL ORDER BY id DESC LIMIT 5;`
+   と定期の最後の結果 `SELECT id, active, last_run_at, last_outcome, last_error_code FROM forge.ci_pipeline_schedules WHERE project_id = <id>;`
+   （`refused`（FG-CI-0026）は持ち主の権限、`busy` は前の夜のパイプラインがまだ動いている、`capped` は FG-CI-0028）。
+   失敗した夜のパイプラインは下の 2〜4 で読む。
 1. ログを `pipeline_id` で読む: `forge.ai_eval.check_written`（`error_code`・`reason`・`detail`・`job`）、`forge.ai_eval.check_failed`。
 2. パイプラインと宣言したジョブ:
    `SELECT p.id, p.status, p.ai_eval_job, p.ai_eval_status, j.id AS job_id, j.status AS job_status, j.attempt, j.error_code, j.tags FROM forge.ci_pipelines p JOIN forge.ci_jobs j ON j.pipeline_id = p.id AND j.name = p.ai_eval_job WHERE p.id = <pipeline_id>;`
@@ -41,7 +58,7 @@
    今の `attempt` の `eval-report.json` が無ければ `report_missing`。ジョブの `artifacts: { paths }` に **ちょうど `eval-report.json`**（ルート）が
    あるか、ベンチがそのパスに書いたかを確かめる（`out/eval-report.json` は宣言にならない）。
 4. ジョブの失敗: `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>`、ログは `gstn pipeline log`。
-   GPU の Runner: `gstn runner list`（タグ `gpu-eval` の Runner が `online` か）、runbook `ci-runner`。
+   GPU の Runner: `forge admin runner list`（タグ `gpu-eval` の Runner が `online` か）、runbook `ci-runner`。
    ジョブが FG-CI-0029（GPU の無い Runner がタグ `gpu-eval` を持つ）・FG-CI-0030（モデル置き場がマニフェストと合わない、**alert**）で
    終わったなら、runbook `ci-runner`（GPU の Runner とモデル置き場）と、モデルを入れ替えている途中なら runbook `ai-model-update`。
 5. `forge.ai_eval.check_written` の他のコード:
@@ -64,9 +81,13 @@
 - 基準が無い: 夜間の結果から基準の MR を作り、**先にマージする**（`evals/baselines/` は保護パス: 承認者の人の承認）。その後でベンチの MR を再実行する。
 - 読めない失敗が続く: `cause` のコードの runbook（`repo-storage`・`git-unavailable`・`repository-provisioning`）で直してから再実行する。
 - 保存先の事故（`report_file_missing` が多数・`stored_digest_mismatch`）: runbook `repo-storage`。
+- 夜間のベンチが 2 晩通らない（doctor `nightly_not_passing`）: 定期が止まった（`active = false`、FG-CI-0026 `refused`）なら持ち主を
+  権限のある人（Maintainer）に替えて再開する（定期の変更は監査に残る）。パイプラインの失敗は上の手順で直し、次の夜を待つか `gstn pipeline retry`。
+- 基準の候補の MR が古い（doctor `warn`）: approver が差分を読み、マージする（保護パスの承認）。要らない候補は閉じる（ブランチを消すと次の夜に新しい候補）。
 
 ## Verify
 
+- `forge doctor` の `ai_eval.runner`・`ai_eval.baseline_age` が `ok`（夜間のベンチが次に通るまで、最大 24 時間 `baseline_age` は `FAIL` のまま）。
 - `SELECT ai_eval_status, status FROM forge.ci_pipelines WHERE id = <pipeline_id>;` が同じになり、MR の `forge/ai-eval` が `success` か、
   理由の分かる `failure` になった。
 - `forge.ai_eval.check_failed` が止まった。

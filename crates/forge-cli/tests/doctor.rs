@@ -95,6 +95,9 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "skip  llm.queue_age  llm.enabled is off",
         "skip  llm.endpoint   llm.enabled is off",
         "skip  llm.kanflow_gate llm.enabled is off",
+        // Plan 17 P17-8: nothing uses the AI evaluation bench yet.
+        "ok    ai_eval.runner not in use",
+        "ok    ai_eval.baseline_age no nightly bench",
         "ok    storage",
         "ok    git",
     ] {
