@@ -2071,5 +2071,52 @@
       "save": "Save the delegate",
       "saved": "{{name}} is now your delegate."
     }
+  },
+  "wiki": {
+    "title": "Wiki",
+    "subtitle": "Procedures, decisions and explanations that anyone can write and fix.",
+    "pages": "Pages",
+    "noPages": "There are no pages yet.",
+    "newPage": "New page",
+    "edit": "Edit",
+    "history": "History",
+    "backToPages": "← All pages",
+    "newTitle": "New page",
+    "editTitle": "Edit page",
+    "historyTitle": "History of {{page}}",
+    "more": "Show more",
+    "notForForm": "This page is written in a way the form cannot edit. Edit it in the file editor.",
+    "empty": {
+      "reason": "This project has no wiki yet.",
+      "hint": "In a wiki, anyone can write procedures and decisions — no Git knowledge needed.",
+      "whoCreates": "A Maintainer or above can create the wiki.",
+      "create": "Create the wiki",
+      "creating": "Creating the wiki…"
+    },
+    "lint": {
+      "red": "A wiki page needs a fix.",
+      "redAt": "\"{{page}}\" needs a fix on line {{line}}: {{message}}",
+      "pageAt": "This page needs a fix on line {{line}}.",
+      "fix": "Fix it"
+    },
+    "form": {
+      "subtitle": "Saving puts it on the wiki right away.",
+      "title": "Title",
+      "titleRequired": "Enter a title.",
+      "classification": "Classification",
+      "folder": "Folder (optional)",
+      "folderHelp": "For example: procedures/equipment. The page is listed under this folder.",
+      "folderInvalid": "The folder name has characters that cannot be used (\"..\", \"\\\", \":\" or a name starting with a dot).",
+      "body": "Text",
+      "bodyHelp": "Markdown works here. Start a heading with \"## \" and a list item with \"- \".",
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel",
+      "conflict": "Someone else changed this page after you opened it. Open the page again, then make your change again."
+    },
+    "commit": {
+      "create": "Wiki: create {{id}} {{title}}",
+      "update": "Wiki: update {{id}} {{title}}"
+    }
   }
 }

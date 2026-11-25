@@ -2071,5 +2071,52 @@
       "save": "Simpan delegasi",
       "saved": "{{name}} sekarang menjadi delegasi Anda."
     }
+  },
+  "wiki": {
+    "title": "Wiki",
+    "subtitle": "Prosedur, keputusan, dan penjelasan yang dapat ditulis dan diperbaiki siapa saja.",
+    "pages": "Halaman",
+    "noPages": "Belum ada halaman.",
+    "newPage": "Halaman baru",
+    "edit": "Ubah",
+    "history": "Riwayat",
+    "backToPages": "← Semua halaman",
+    "newTitle": "Halaman baru",
+    "editTitle": "Ubah halaman",
+    "historyTitle": "Riwayat {{page}}",
+    "more": "Tampilkan lagi",
+    "notForForm": "Halaman ini ditulis dengan cara yang tidak dapat diubah lewat formulir. Ubah di editor berkas.",
+    "empty": {
+      "reason": "Proyek ini belum memiliki wiki.",
+      "hint": "Di wiki, siapa saja dapat menulis prosedur dan keputusan — tanpa perlu paham Git.",
+      "whoCreates": "Wiki dapat dibuat oleh Maintainer ke atas.",
+      "create": "Buat wiki",
+      "creating": "Membuat wiki…"
+    },
+    "lint": {
+      "red": "Ada halaman wiki yang perlu diperbaiki.",
+      "redAt": "\"{{page}}\" perlu diperbaiki di baris {{line}}: {{message}}",
+      "pageAt": "Halaman ini perlu diperbaiki di baris {{line}}.",
+      "fix": "Perbaiki"
+    },
+    "form": {
+      "subtitle": "Setelah disimpan, langsung tampil di wiki.",
+      "title": "Judul",
+      "titleRequired": "Isi judulnya.",
+      "classification": "Klasifikasi",
+      "folder": "Folder (opsional)",
+      "folderHelp": "Contoh: prosedur/peralatan. Halaman ditampilkan di bawah folder ini.",
+      "folderInvalid": "Nama folder berisi karakter yang tidak dapat dipakai (\"..\", \"\\\", \":\" atau nama yang diawali titik).",
+      "body": "Isi",
+      "bodyHelp": "Bisa memakai Markdown. Awali judul bagian dengan \"## \" dan butir daftar dengan \"- \".",
+      "save": "Simpan",
+      "saving": "Menyimpan…",
+      "cancel": "Batal",
+      "conflict": "Orang lain mengubah halaman ini setelah Anda membukanya. Buka lagi halamannya, lalu ubah lagi."
+    },
+    "commit": {
+      "create": "Wiki: buat {{id}} {{title}}",
+      "update": "Wiki: ubah {{id}} {{title}}"
+    }
   }
 }

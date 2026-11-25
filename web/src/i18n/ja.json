@@ -2071,5 +2071,52 @@
       "save": "代理を保存",
       "saved": "{{name}} を代理にしました。"
     }
+  },
+  "wiki": {
+    "title": "Wiki",
+    "subtitle": "手順・決めごと・説明を、だれでも書いて直せる場所です。",
+    "pages": "ページ",
+    "noPages": "まだページがありません。",
+    "newPage": "ページを作る",
+    "edit": "編集する",
+    "history": "履歴",
+    "backToPages": "← ページの一覧へ",
+    "newTitle": "新しいページ",
+    "editTitle": "ページを直す",
+    "historyTitle": "{{page}} の履歴",
+    "more": "もっと見る",
+    "notForForm": "このページはフォームで直せない書き方になっています。ファイルの編集画面で直してください。",
+    "empty": {
+      "reason": "このプロジェクトにはまだ Wiki がありません。",
+      "hint": "Wiki には手順や決めごとを、Git を知らない人でも書けます。",
+      "whoCreates": "Wiki はメンテナー以上の人が作れます。",
+      "create": "Wiki を作る",
+      "creating": "Wiki を作っています…"
+    },
+    "lint": {
+      "red": "Wiki のページに直すところがあります。",
+      "redAt": "「{{page}}」の {{line}} 行目に直すところがあります: {{message}}",
+      "pageAt": "このページの {{line}} 行目に直すところがあります。",
+      "fix": "直す"
+    },
+    "form": {
+      "subtitle": "保存するとすぐに Wiki に載ります。",
+      "title": "タイトル",
+      "titleRequired": "タイトルを入れてください。",
+      "classification": "情報の区分",
+      "folder": "フォルダ（なくてもかまいません）",
+      "folderHelp": "例: 手順/設備。ページの一覧でこのフォルダの下に並びます。",
+      "folderInvalid": "フォルダの名前に使えない文字があります（「..」「\\」「:」や、点で始まる名前）。",
+      "body": "本文",
+      "bodyHelp": "Markdown で書けます。見出しは「## 」、箇条書きは「- 」で始めます。",
+      "save": "保存する",
+      "saving": "保存しています…",
+      "cancel": "やめる",
+      "conflict": "このページは開いた後にほかの人が直しました。ページを開き直してから、もう一度直してください。"
+    },
+    "commit": {
+      "create": "Wiki: {{id}} {{title}} を作る",
+      "update": "Wiki: {{id}} {{title}} を直す"
+    }
   }
 }
