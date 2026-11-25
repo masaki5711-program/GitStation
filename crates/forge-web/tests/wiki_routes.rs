@@ -478,3 +478,112 @@ async fn maintainer_without_project_create_gets_nothing() {
     assert_eq!(w.project_by_path("web-wiki").await, None, "nothing created");
     assert_eq!(w.links().await, 0);
 }
+
+impl World {
+    async fn read(&self, project: i64, who: &Principal) -> (StatusCode, Value) {
+        send(
+            self.router.clone(),
+            "GET",
+            &format!("/api/v1/projects/{project}/wiki"),
+            who.clone(),
+            None,
+        )
+        .await
+    }
+
+    async fn set_visibility(&self, project: i64, visibility: &str) {
+        self.t
+            .commit_audited(
+                ("project", project),
+                &[format!(
+                    "UPDATE forge.projects SET visibility = '{visibility}' WHERE id = {project}"
+                )],
+            )
+            .await;
+    }
+
+    async fn user(&self, name: &str) -> Principal {
+        let u = users::create(
+            &self.t.db,
+            &ctx(&format!("req-{name}")),
+            &NewUser::human(name, name, &format!("{name}@example.test")),
+        )
+        .await
+        .expect("user");
+        token(u.user_id, &[Scope::Api])
+    }
+}
+
+/// W4's entry: `GET …/wiki` names the linked wiki to whoever may read the
+/// owner project AND the wiki; 404 `FG-REPO-0005` without one.
+#[tokio::test]
+async fn read_wiki_link_for_members() {
+    let w = world().await;
+    // No wiki yet: 404, the invisible project's code.
+    let (status, body) = w.read(w.project.get(), &w.dave).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(code(&body), "FG-REPO-0005");
+    let (status, created) = w.create(&w.olga, json!({})).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let wiki = created["wiki_project_id"].as_i64().expect("id");
+    for who in [&w.olga, &w.dave] {
+        let (status, body) = w.read(w.project.get(), who).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body,
+            json!({
+                "wiki_project_id": wiki,
+                "wiki_path": "olga/web-wiki",
+                "display_name": "Web Wiki",
+                "default_branch": "main",
+            })
+        );
+    }
+    // Asked on the wiki itself: the same wiki (never the owner project).
+    let (status, body) = w.read(wiki, &w.dave).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["wiki_project_id"], wiki);
+    assert_eq!(body["wiki_path"], "olga/web-wiki");
+    // Unlinked: 404 again.
+    let (status, body) = w.unlink(&w.olga).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = w.read(w.project.get(), &w.dave).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+/// Denied: a non-member of the private owner gets the invisible project's
+/// 404; a reader of an internal owner whose wiki is private gets the same
+/// 404 as "no wiki" — the wiki's id, path and name never leak.
+#[tokio::test]
+async fn read_wiki_link_never_leaks_an_unreadable_wiki() {
+    let w = world().await;
+    let rita = w.user("rita").await;
+    let anonymous = Principal::anonymous();
+    let (status, created) = w.create(&w.olga, json!({})).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let wiki = created["wiki_project_id"].as_i64().expect("id");
+    let (status, body) = w.read(w.project.get(), &rita).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(code(&body), "FG-REPO-0005");
+    let (status, body) = w.read(w.project.get(), &anonymous).await;
+    assert!(
+        status == StatusCode::NOT_FOUND || status == StatusCode::UNAUTHORIZED,
+        "{status} {body}"
+    );
+    // The owner is internal (Rita reads it), the wiki private.
+    w.set_visibility(w.project.get(), "internal").await;
+    w.set_visibility(wiki, "private").await;
+    let (status, body) = w.read(w.project.get(), &rita).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(code(&body), "FG-REPO-0005");
+    let text = body.to_string();
+    assert!(
+        !text.contains("web-wiki") && !text.contains("Web Wiki"),
+        "{text}"
+    );
+    // Both internal: Rita sees it.
+    w.set_visibility(wiki, "internal").await;
+    let (status, body) = w.read(w.project.get(), &rita).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["wiki_project_id"], wiki);
+}

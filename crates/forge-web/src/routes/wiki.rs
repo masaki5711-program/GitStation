@@ -15,6 +15,13 @@
 //!   half-made project (runbook knowledge).
 //! - `DELETE …/wiki` (`ProjectWikiLink`): unlink; the wiki project stays.
 //!   `200`; `FG-KNOW-0003 reason=not_linked` without a wiki.
+//! - `GET …/wiki` (`ProjectRead` on the project; plan 20 W4, the web
+//!   "Wiki" tab): the linked wiki — or, asked on the wiki itself, that
+//!   wiki — when the caller may ALSO read the wiki project (`ProjectRead`
+//!   proved on it with the caller's own principal). Otherwise `404
+//!   FG-REPO-0005`, the same answer as "no wiki", so an unreadable wiki's
+//!   id, path and name never leak. Never the owner project when asked on
+//!   the wiki (a wiki-only member may not read the owner).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +29,7 @@ use std::time::Duration;
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use forge_auth::ProjectCtx;
+use forge_auth::{prove, Action, ProjectCtx};
 use forge_core::{
     parse_positive_id, ObjectId, ProjectId, PushApplied, PushRecord, PushUpdateKind, PushedCommits,
     PushedRef, Pusher, RefName, RepoId, RepositoryState, UserId,
@@ -84,6 +91,21 @@ pub struct WikiBody {
     pub commit: String,
     /// `WIKI-0001.md`.
     pub first_page: String,
+}
+
+/// The project's linked wiki, as the caller may read it (`GET …/wiki`).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WikiLinkBody {
+    /// The wiki project (the project itself when asked on the wiki).
+    #[schema(minimum = 1)]
+    pub wiki_project_id: i64,
+    /// The wiki project's full path.
+    pub wiki_path: String,
+    /// The wiki project's display name.
+    pub display_name: String,
+    /// The branch the wiki's pages are read from and saved to (`main`).
+    pub default_branch: String,
 }
 
 /// The unlinked wiki (the project stays).
@@ -397,6 +419,57 @@ async fn create_steps(
         commit: commit.as_str().to_owned(),
         first_page: forge_doc::wiki::FIRST_PAGE_PATH.to_owned(),
     })
+}
+
+/// No readable wiki: the invisible project's `404`, with why in the log.
+fn no_wiki(why: &'static str, project: ProjectId) -> ForgeError {
+    ForgeError::new(ErrorCode::NotFound)
+        .with_context("reason", why)
+        .with_context("project_id", project.get())
+}
+
+/// `GET …/wiki` → `200` the wiki the caller may read, else `404`.
+pub async fn read(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let w = request.into_write();
+    let built = async {
+        let project = *w.proof.id();
+        let link = hosting(&state)?
+            .wiki_link(project)
+            .await?
+            .ok_or_else(|| no_wiki("not_linked", project))?;
+        let viewer = w.proof.principal().user();
+        let record = projects::load_bounded(&state, link.wiki, viewer)
+            .await?
+            .ok_or_else(|| no_wiki("wiki_absent", project))?;
+        if record.id != link.wiki {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "loaded_another_project")
+                .with_context("project_id", link.wiki.get())
+                .with_context("loaded_project_id", record.id.get()));
+        }
+        // The caller's own principal on the wiki project: a refusal is the
+        // same 404 as "no wiki" (its code stays in the log only).
+        if let Err(denied) = prove(
+            w.proof.principal(),
+            Action::ProjectRead,
+            ProjectCtx::new(projects::loaded(&record)),
+        ) {
+            return Err(no_wiki("wiki_unreadable", project)
+                .with_context("wiki_project_id", link.wiki.get())
+                .with_context("denied_code", denied.code().id()));
+        }
+        json(WikiLinkBody {
+            wiki_project_id: record.id.get(),
+            wiki_path: record.path.full_path(),
+            display_name: record.display_name,
+            default_branch: WIKI_BRANCH
+                .strip_prefix("refs/heads/")
+                .unwrap_or(WIKI_BRANCH)
+                .to_owned(),
+        })
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
 }
 
 /// `DELETE …/wiki` → `200` the unlinked wiki.
