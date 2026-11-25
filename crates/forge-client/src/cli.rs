@@ -270,13 +270,14 @@ pub enum Command {
         #[arg(long, value_parser = parse_limit, value_name = "N")]
         limit: Option<u32>,
     },
-    /// Search projects and merge requests you may read (plan 20 K3).
+    /// Search projects, merge requests and documents you may read (plan 20
+    /// K3, K4).
     Search {
         /// The words to search for (2..=200 characters in all).
         #[arg(required = true, value_parser = parse_text, value_name = "WORDS")]
         words: Vec<String>,
         /// Only these kinds (default: every kind).
-        #[arg(long, value_delimiter = ',', value_parser = ["project", "merge_request"], value_name = "A,B")]
+        #[arg(long, value_delimiter = ',', value_parser = ["project", "merge_request", "document"], value_name = "A,B")]
         scope: Vec<String>,
         /// Only hits of this project (its id).
         #[arg(long, value_parser = parse_id, value_name = "ID")]

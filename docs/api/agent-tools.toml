@@ -596,7 +596,7 @@ reason = "Unlinking a wiki removes the members' inherited role (plan 20 W1): Pro
 
 [[deferred]]
 gstn = "search"
-reason = "The knowledge search tool (plan 20 K3) waits for the wiki and document sources of the M6 W track, so an agent gets one search over all of them; an agent token can call GET /api/v1/search meanwhile (confidential rows are left out for it)."
+reason = "The knowledge search tool (plan 20 X1) waits for the wiki sources of the M6 W track (documents arrived with K4), so an agent gets one search over all of them; an agent token can call GET /api/v1/search meanwhile (confidential rows are left out for it)."
 
 [[excluded]]
 action = "DeployApprove"
