@@ -86,7 +86,10 @@ fn every_unasserted_act_as_action_is_a_read() {
         .iter()
         .filter_map(|a| match a.act_as_rule() {
             ActAsRule::RequiresAssertion(i) => Some(i),
-            ActAsRule::ReadWithoutAssertion | ActAsRule::ListAsPerson | ActAsRule::Denied => None,
+            ActAsRule::ReadWithoutAssertion
+            | ActAsRule::ListAsPerson
+            | ActAsRule::ProposeWithoutAssertion
+            | ActAsRule::Denied => None,
         })
         .collect();
     let mut sorted = intents.clone(); // clone: compared with the original order

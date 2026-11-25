@@ -43,8 +43,9 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::{ActAsRule, Action};
 use crate::authorize::authorize;
 use crate::model::{
-    AccountKind, ActAsCredential, ActAsSubject, ActAsView, AssertionFacts, AssertionSubject,
-    BindingSubject, Credential, Principal, ProjectView, Resource, Role, Scope, Visibility,
+    AccountKind, ActAsCredential, ActAsSubject, ActAsView, AgentResource, AssertionFacts,
+    AssertionSubject, BindingSubject, Credential, Principal, ProjectView, Resource, Role, Scope,
+    Visibility,
 };
 use forge_core::act_as::{assertion_invalid, Intent};
 
@@ -80,7 +81,8 @@ pub fn act_as_route(action: Action) -> Result<(), ForgeError> {
             .with_context("act_as_rule", ActAsRule::Denied.as_str())),
         ActAsRule::ReadWithoutAssertion
         | ActAsRule::RequiresAssertion(_)
-        | ActAsRule::ListAsPerson => Ok(()),
+        | ActAsRule::ListAsPerson
+        | ActAsRule::ProposeWithoutAssertion => Ok(()),
     }
 }
 
@@ -154,7 +156,9 @@ fn decide_rule(
     }
     let intent = match rule {
         ActAsRule::Denied => return Err(refused("act_as_not_allowed")),
-        ActAsRule::ReadWithoutAssertion | ActAsRule::ListAsPerson => None,
+        ActAsRule::ReadWithoutAssertion
+        | ActAsRule::ListAsPerson
+        | ActAsRule::ProposeWithoutAssertion => None,
         ActAsRule::RequiresAssertion(intent) => Some(intent),
     };
     let assertion = match (intent, credential.assertion.as_ref()) {
@@ -214,7 +218,8 @@ fn decide_rule(
             | Resource::ActAsConfirm(_)
             | Resource::NotificationPreferences { .. }
             | Resource::UserMergeRequests { .. }
-            | Resource::UserActivity { .. } => Err(refused("act_as_facts_missing")),
+            | Resource::UserActivity { .. }
+            | Resource::Agent(_) => Err(refused("act_as_facts_missing")),
         };
     }
     let view: &ActAsView = match resource {
@@ -259,7 +264,8 @@ fn decide_rule(
         | Resource::ActAsConfirm(_)
         | Resource::NotificationPreferences { .. }
         | Resource::UserMergeRequests { .. }
-        | Resource::UserActivity { .. } => return Err(refused("act_as_facts_missing")),
+        | Resource::UserActivity { .. }
+        | Resource::Agent(_) => return Err(refused("act_as_facts_missing")),
     };
     // M3 X3: a binding intent's scope is the request's own integration and
     // the assertion's binding, not `via_bound` (the project may not be
@@ -278,6 +284,22 @@ fn decide_rule(
     }
     if !view.via.bound {
         return Err(not_found("act_as_unbound"));
+    }
+    // Plan 16 §4 (ADR-0025 Amendment A4): a proposal the person confirmed
+    // in kanflow (a lesson) — no assertion, the person's own role on a
+    // bound project, the lesson marked as acted for (the normal arm
+    // refuses it otherwise). Any other resource lacks the facts.
+    if rule == ActAsRule::ProposeWithoutAssertion {
+        let Resource::Agent(AgentResource::Lesson(lesson)) = &view.inner else {
+            return Err(refused("act_as_facts_missing"));
+        };
+        // Review of A4: the integration's service account is a member of
+        // the project too (the binding makes it a Reporter), as for a read.
+        if view.via.role.is_none() {
+            return Err(not_found("act_as_not_visible"));
+        }
+        let acted = Resource::Agent(AgentResource::Lesson(lesson.acted_for()));
+        return authorize(&as_person, action, &acted);
     }
     match (intent, assertion) {
         (Some(intent), Some(assertion)) => {
@@ -410,7 +432,8 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::ActAsConfirm(_)
         | Resource::NotificationPreferences { .. }
         | Resource::UserMergeRequests { .. }
-        | Resource::UserActivity { .. } => None,
+        | Resource::UserActivity { .. }
+        | Resource::Agent(_) => None,
     }
 }
 
@@ -504,6 +527,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::ActAsConfirm(_)
         | Resource::NotificationPreferences { .. }
         | Resource::UserMergeRequests { .. }
-        | Resource::UserActivity { .. } => Resource::Project(view),
+        | Resource::UserActivity { .. }
+        | Resource::Agent(_) => Resource::Project(view),
     })
 }

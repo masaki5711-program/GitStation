@@ -481,6 +481,18 @@ pub const PLANNED: &[Action] = &[
     Action::OpsDiagnosisRead,
     Action::LlmPause,
     Action::LlmResume,
+    // Plan 16 §4 (A4): the marketplace's and the builder's routes land
+    // with A5, A7 and A10.
+    Action::AgentPartRead,
+    Action::AgentPartList,
+    Action::AgentPartPublish,
+    Action::AgentPartPromote,
+    Action::AgentPartRevoke,
+    Action::AgentKeyRead,
+    Action::AgentBuilderRecommend,
+    Action::AgentBuilderDryRun,
+    Action::AgentBuilderCompile,
+    Action::RuleInjectLesson,
 ];
 
 /// Actions decided inside another route's handler, never a route's own
