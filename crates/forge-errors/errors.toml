@@ -3117,6 +3117,32 @@ fix = "Undo the hand edit (git restore); for line endings set `core.autocrlf=fal
 test = "verify_flags_hand_edited_file"
 
 [[error]]
+code = "FG-AGENT-0009"
+name = "PublishSelfApproval"
+http_status = 403
+severity = "info"
+user_message_ja = "自分が作った・tag を付けた・push した部品の版は、自分では公開できません。マーケットプレイスの別の Maintainer に公開を頼んでください。"
+user_message_en = "You cannot publish a part version you authored, tagged or pushed yourself. Ask another marketplace Maintainer to publish it."
+user_message_id = "Anda tidak dapat menerbitkan versi bagian yang Anda buat, beri tag, atau push sendiri. Minta Maintainer marketplace lain untuk menerbitkannya."
+cause = "Plan 16 §4 (ADR-0032 Amendment A4, two-person rule): `authorize()` refused `AgentPartPublish` or `AgentPartPromote` because the caller is one of the people behind the tag — the tag's pusher from the push audit (`AgentPartView::tag_pusher`), or its tagger, or the tagged commit's author or committer, as accounts (`tag_authors`), loaded by the publishing route. A tag whose pusher is unknown is refused as `FG-AUTH-0003 reason=tag_pusher_unknown` (fails closed). Administrators included. `reason`: `tag_author`. Nothing was published or changed."
+diagnosis = "The log event carries `action`, `reason` and `request_id`; the route's own event names the part (`slug`, `version`, `tag`). `git for-each-ref refs/tags/<slug>/<version> --format='%(taggername) %(*authorname) %(*committername)'` on the parts repository shows the identities behind the tag."
+fix = "Nothing on the server: another Maintainer of the publishing group (or an administrator) who did not author the tag publishes or promotes it."
+test = "publish_denied_for_tag_author"
+
+[[error]]
+code = "FG-AGENT-0010"
+name = "LessonNotConfirmed"
+http_status = 409
+severity = "info"
+user_message_ja = "この教訓はまだ確認されていません。Kanflow で教訓を確認してから、もう一度規則に入れてください。"
+user_message_en = "This lesson has not been confirmed yet. Confirm the lesson in Kanflow, then inject it into the rules again."
+user_message_id = "Pelajaran ini belum dikonfirmasi. Konfirmasikan pelajaran di Kanflow, lalu masukkan lagi ke aturan."
+cause = "Plan 16 §4 (ADR-0032 Amendment A4, ADR-0025 Amendment A4): `authorize()` refused `RuleInjectLesson` because the lesson Kanflow asked to inject (acting for a person) is not in the confirmed state (`LessonView::confirmed` is false). Checked after the binding, the person's visibility and the Developer role. `reason`: `lesson_not_confirmed`. No merge request was opened."
+diagnosis = "The log event carries `action`, `reason`, `act_as_rule` and `request_id`; the route's own event names the Kanflow lesson id. Look at the lesson's state in Kanflow."
+fix = "Confirm the lesson in Kanflow, then ask again. Only confirmed lessons are injected, and only as a merge request a person reviews."
+test = "unconfirmed_lesson_refused"
+
+[[error]]
 code = "FG-AGENT-0013"
 name = "McpEndpointNotAllowed"
 http_status = 422
