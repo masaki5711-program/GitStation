@@ -1,7 +1,9 @@
 //! forge edge distribution (plan 21 E1, ADR-0041), pure: reads bytes and
 //! values, returns values. No file, network, clock, DB or async runtime —
-//! the caller (`gstn edge release verify`; from E4/E5 forge-fleet and the
-//! device agent `forge-edge-agent`) reads the files and passes `now`.
+//! the caller (`gstn edge release verify`) reads the files. The 2026-11-25
+//! re-scope (ADR-0041 Amendment, plan 21 E1b) retired the waves, the halt
+//! decision and the install windows: devices and rollouts belong to the
+//! user's own configuration tool, not to GitStation.
 //!
 //! - [`Manifest`] / [`parse_release`]: the signed release file
 //!   (`{manifest, digest, key_id, signature}`) and its manifest's rules.
@@ -12,27 +14,16 @@
 //!   [`KeyRing`] (the forge-agent signer, generalized with a domain, so an
 //!   agent part signature never verifies as an edge manifest).
 //! - [`lint_release_definition`]: a repository's `edge-release.toml`.
-//! - [`WavePlan`] / [`wave_bucket`] / [`first_wave`]: who is in which wave;
-//!   membership is monotonic.
-//! - [`decide`]: halt / advance / wait for one wave from its counts.
-//! - [`Schedule`] / [`install_window`]: the maintenance window containing
-//!   or following `now` (IANA zones, across DST and midnight).
 //!
 //! Every finding is a [`Problem`]: a registered `FG-EDGE-*` code, a stable
 //! `reason` and an optional subject (a field, a path, a kid — never file
 //! content).
 
-mod decide;
 mod digest;
 mod manifest;
 mod release_def;
 mod sign;
-mod wave;
-mod window;
 
-pub use decide::{
-    decide, Decision, Halt, HaltPolicy, HaltPolicySpec, HaltReason, WaitReason, WaveStats,
-};
 pub use digest::manifest_digest;
 pub use forge_agent::{Digest, KeyRing, PublicKey};
 pub use manifest::{
@@ -45,10 +36,6 @@ pub use release_def::{
 };
 pub use sign::{
     parse_edge_keys, sign_manifest, verify_release, VerifiedRelease, EDGE_MANIFEST_DOMAIN,
-};
-pub use wave::{first_wave, in_wave, wave_bucket, BasisPoints, Wave, WaveKind, WavePlan};
-pub use window::{
-    install_window, may_start_install, Blackout, InstallWindow, Schedule, WeeklyWindow,
 };
 
 use forge_errors::ErrorCode;
@@ -78,12 +65,11 @@ impl Problem {
     /// How serious the finding is when several are reported together:
     /// tampering before keys before form (a lower rank is more serious).
     pub fn rank(&self) -> usize {
-        const ORDER: [ErrorCode; 5] = [
+        const ORDER: [ErrorCode; 4] = [
             ErrorCode::EdgeSignatureInvalid,
             ErrorCode::EdgeSigningKeyUnavailable,
             ErrorCode::EdgeManifestInvalid,
             ErrorCode::EdgeReleaseDefinitionInvalid,
-            ErrorCode::EdgeRolloutPolicyInvalid,
         ];
         ORDER
             .iter()

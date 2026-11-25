@@ -238,9 +238,12 @@ fn read_fixer(name: &str, at: usize, node: &Node, problems: &mut Vec<Problem>) -
             secrets: Vec::new(),
             rules: Rules::default(),
             artifacts: Vec::new(),
+            artifacts_keep: false,
             services: Vec::new(),
             // A fixer always runs when the autofix worker starts it.
             manual: false,
+            // A fixer edits the pinned commit's tree only.
+            fetch_depth: 1,
         },
     })
 }

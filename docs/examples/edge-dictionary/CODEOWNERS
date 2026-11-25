@@ -1,0 +1,8 @@
+# 辞書の持ち主（合成の例: グループの全パスに置き換える）。最後に一致した行が効く（ADR-0024 §9）。
+# 辞書・確かめのスクリプト・CI の定義・この CODEOWNERS 自体の変更は、持ち主の承認が要る（計画 21 §9）。
+*                    @edge-fw/dictionary-owners
+/io-dictionary.toml  @edge-fw/dictionary-owners
+/scripts/            @edge-fw/dictionary-owners
+/tests/              @edge-fw/dictionary-owners
+/.forge-ci.yml       @edge-fw/dictionary-owners
+/CODEOWNERS          @edge-fw/dictionary-owners

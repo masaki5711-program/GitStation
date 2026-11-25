@@ -518,3 +518,106 @@ fn a_translation_needs_its_original() {
         .expect("report");
     assert!(rules(&r.problems).contains(&"translation_invalid"), "{r:?}");
 }
+
+// ── plan 20 W3: references to the linked wiki ──────────────────────────
+
+const T_NOTE: &str = "name: note\nversion: 1\nlabel: { ja: メモ, en: Note, id: Catatan }\nid_pattern: '^N-[0-9]+$'\n";
+const N1: &str = "---\ndoctype: note\nid: N-1\ntitle: 合成のメモ\nowner: qa\n---\n\n\
+見る [[wiki:WIKI-0001]]。\n\
+ブロック [[wiki:WIKI-0001#S-1]] と [[wiki:WIKI-0001#S-9]]。\n\
+無い [[wiki:WIKI-0099]]。\n";
+const WIKI_1: &str = "---\ndoctype: wiki.page\nid: WIKI-0001\ntitle: \"合成\"\nowner: \"olga\"\n---\n\n::: step S-1\n手順。\n:::\n";
+
+fn lint_note(wiki: &super::WikiRefs) -> Vec<FileReport> {
+    super::lint_with_wiki(
+        &[Source {
+            path: ".forge/doctypes/note.yml",
+            bytes: T_NOTE.as_bytes(),
+        }],
+        &[Source {
+            path: "N-1.md",
+            bytes: N1.as_bytes(),
+        }],
+        wiki,
+    )
+}
+
+fn wiki_index() -> super::WikiIndex {
+    super::WikiIndex::build(&[
+        Source {
+            path: "WIKI-0001.md",
+            bytes: WIKI_1.as_bytes(),
+        },
+        // Not named after its id: no page (the repository index's rule).
+        Source {
+            path: "other.md",
+            bytes: b"---\ndoctype: wiki.page\nid: WIKI-0099\ntitle: x\nowner: o\n---\n",
+        },
+    ])
+}
+
+#[test]
+fn broken_wiki_ref_is_warning_not_error() {
+    let wiki = super::WikiRefs::Linked(wiki_index());
+    let reports = lint_note(&wiki);
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert_eq!(
+        reports[0].problems,
+        vec![
+            p(line_of(N1, "S-9", 0), "wiki_ref_broken", "WIKI-0001#S-9"),
+            p(line_of(N1, "WIKI-0099", 0), "wiki_ref_broken", "WIKI-0099"),
+        ]
+    );
+    // Warnings only: nothing the lint reports here is an error.
+    assert!(reports[0]
+        .problems
+        .iter()
+        .all(|p| super::is_warning(p.rule)));
+    assert!(!super::is_warning("ref_broken"));
+}
+
+#[test]
+fn no_wiki_linked_is_warning() {
+    let reports = lint_note(&super::WikiRefs::NotLinked);
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    let rules: Vec<(&str, Option<&str>)> = reports[0]
+        .problems
+        .iter()
+        .map(|p| (p.rule, p.subject.as_deref()))
+        .collect();
+    assert_eq!(
+        rules,
+        vec![
+            ("wiki_not_linked", Some("WIKI-0001")),
+            ("wiki_not_linked", Some("WIKI-0001#S-1")),
+            ("wiki_not_linked", Some("WIKI-0001#S-9")),
+            ("wiki_not_linked", Some("WIKI-0099")),
+        ]
+    );
+    assert!(reports[0]
+        .problems
+        .iter()
+        .all(|p| super::is_warning(p.rule)));
+}
+
+#[test]
+fn wiki_refs_unchecked_by_the_plain_lint_and_never_local_broken() {
+    // `lint` (gstn on a working tree) cannot know the wiki: no problem, and
+    // a wiki reference is never this repository's `ref_broken`.
+    assert!(lint_note(&super::WikiRefs::Unchecked).is_empty());
+    let plain = lint(
+        &[Source {
+            path: ".forge/doctypes/note.yml",
+            bytes: T_NOTE.as_bytes(),
+        }],
+        &[Source {
+            path: "N-1.md",
+            bytes: N1.as_bytes(),
+        }],
+    );
+    assert!(plain.is_empty(), "{plain:?}");
+    let index = wiki_index();
+    assert_eq!(index.len(), 1);
+    assert!(index.resolves("WIKI-0001", Some("S-1")));
+    assert!(!index.resolves("WIKI-0099", None));
+}

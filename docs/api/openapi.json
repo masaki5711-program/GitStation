@@ -5126,7 +5126,7 @@
             ]
           },
           "target": {
-            "description": "`found` (a document of this repository the reader may be shown),\n`hidden` (more confidential than this document: its id only — plan\n13 Q14), `broken` (no such document or block) or `external` (another\nrepository's; not resolved here).",
+            "description": "`found` (a document of this repository the reader may be shown),\n`hidden` (more confidential than this document: its id only — plan\n13 Q14), `broken` (no such document or block) or `external` (another\nrepository's; not resolved here). A wiki reference may also be\n`unreadable` (the reader may not read the linked wiki: its id only)\nor `no_wiki` (the project has no linked wiki).",
             "type": "string"
           },
           "title": {
@@ -5135,10 +5135,24 @@
               "string",
               "null"
             ]
+          },
+          "wiki": {
+            "description": "`[[wiki:ID]]`: a page of the project's linked wiki (plan 20 W3).",
+            "type": "boolean"
+          },
+          "wiki_project_id": {
+            "description": "The wiki project, for a `found` wiki reference only (its pages are\n`GET /api/v1/projects/{wiki_project_id}/documents/{doc}`).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
           "repo",
+          "wiki",
+          "wiki_project_id",
           "doc",
           "block",
           "line",

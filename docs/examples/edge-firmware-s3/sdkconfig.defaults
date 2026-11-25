@@ -1,0 +1,13 @@
+# 合成の例。target は esp32s3 だけ（計画 21 §11 問い 2）。
+CONFIG_IDF_TARGET="esp32s3"
+# 同じソースから同じ app.bin（パスや日時を埋め込まない）。
+CONFIG_APP_REPRODUCIBLE_BUILD=y
+# OTA: 2 つのアプリのパーティションとロールバック。
+CONFIG_PARTITION_TABLE_TWO_OTA=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# Secure Boot V2（ESP32-S3 は RSA-3072）。モジュールは起動と OTA のときに署名を確かめる。
+# ただし署名は CI でしない（prod の鍵はオフライン。手引きの「署名」）: ビルドは署名の無い app.bin を作り、
+# 鍵を持つ側が `espsecure.py sign_data --version 2 --keyfile <オフラインの鍵> --output app-signed.bin app.bin` で署名してから配る。
+CONFIG_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_V2_ENABLED=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=n

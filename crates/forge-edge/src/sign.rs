@@ -79,9 +79,9 @@ pub fn verify_release(bytes: &[u8], keys: &KeyRing) -> Result<VerifiedRelease, P
 }
 
 /// Sign a manifest digest in the edge domain with the Ed25519 seed (base64
-/// of the 64-byte signature). Only forge-fleet's release builder signs
-/// (E4; `clippy.toml` refuses every other caller); tests sign with a
-/// synthetic seed.
+/// of the 64-byte signature). No production caller since the 2026-11-25
+/// re-scope: only the optional E4 release builder may sign (`clippy.toml`
+/// refuses every other caller); tests sign with a synthetic seed.
 // The signed kind's own wrapper of the domain signer (clippy.toml).
 #[allow(clippy::disallowed_methods)]
 pub fn sign_manifest(seed: &[u8; 32], digest: &Digest) -> Result<String, Problem> {

@@ -299,6 +299,7 @@ async fn an_attempt_runs_its_own_pipeline_and_ends_once_with_its_event() {
             tags: Vec::new(),
             secrets: Vec::new(),
             manual: false,
+            artifacts_keep: false,
         }]),
         ai_eval_job: None,
     };

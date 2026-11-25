@@ -29,13 +29,19 @@
 //! `migrating: until YYYY-MM-DD`. The date is the database's to compare
 //! (`forge_db::checks::doc_lint_migration`); past it, they are errors again
 //! with nothing written.
+//!
+//! **Wiki references** (plan 20 W3): `[[wiki:ID]]` is checked against the
+//! linked wiki's tip ([`crate::doc_wiki`], [`assess_doc_lint_wiki`]);
+//! `wiki_ref_broken` and `wiki_not_linked` are always warnings
+//! (`forge_doc::lint::is_warning`, `FG-DOC-0008`) — a run whose only
+//! problems they are concludes `success`.
 
 use forge_core::checks::{CheckAnnotationLevel, CheckConclusion, DOC_LINT_CHECK};
 use forge_core::doc_lint_migration::LOWERED_RULE;
 use forge_core::RepoId;
 use forge_doc::doctype::MAX_DOCTYPE_BYTES;
 use forge_doc::document::MAX_DOCUMENT_BYTES;
-use forge_doc::lint::{lint, FileReport, Source, DOCTYPES_DIR};
+use forge_doc::lint::{is_warning, lint_with_wiki, FileReport, Source, WikiRefs, DOCTYPES_DIR};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{BlobListing, Browser, ListedBlob};
 
@@ -266,6 +272,8 @@ pub async fn read_listed(
 fn code_of(path: &str, rule: &str) -> ErrorCode {
     if is_doctype_file(path) || rule == "doctype_invalid" {
         ErrorCode::DoctypeDefinitionInvalid
+    } else if is_warning(rule) {
+        ErrorCode::WikiReferenceBroken
     } else {
         ErrorCode::DocLintProblem
     }
@@ -273,15 +281,24 @@ fn code_of(path: &str, rule: &str) -> ErrorCode {
 
 fn problem_line(path: &str, p: &forge_doc::document::Problem, warning: bool) -> String {
     let code = code_of(path, p.rule).id();
-    let level = if warning { " (warning: migrating)" } else { "" };
+    let level = match (warning, is_warning(p.rule)) {
+        (true, true) => " (warning)",
+        (true, false) => " (warning: migrating)",
+        (false, _) => "",
+    };
     match &p.subject {
         Some(s) => format!("{path}:{} {}{level} — {s} [{code}]", p.line, p.rule),
         None => format!("{path}:{} {}{level} [{code}]", p.line, p.rule),
     }
 }
 
-/// The lint of `tree` (module docs).
+/// The lint of `tree` (module docs), wiki references unchecked.
 pub fn lint_tree(tree: &DocTree) -> Vec<FileReport> {
+    lint_tree_with(tree, &WikiRefs::Unchecked)
+}
+
+/// The lint of `tree`, wiki references checked against `wiki`.
+pub fn lint_tree_with(tree: &DocTree, wiki: &WikiRefs) -> Vec<FileReport> {
     let doctypes: Vec<Source<'_>> = tree
         .doctypes
         .iter()
@@ -292,7 +309,7 @@ pub fn lint_tree(tree: &DocTree) -> Vec<FileReport> {
         .iter()
         .map(|(path, bytes)| Source { path, bytes })
         .collect();
-    lint(&doctypes, &documents)
+    lint_with_wiki(&doctypes, &documents, wiki)
 }
 
 /// The `forge/doc-lint` run of the head's documents (module docs), with
@@ -301,9 +318,10 @@ pub fn assess_doc_lint(tree: &DocTree) -> Result<forge_db::checks::NewCheckRun, 
     assess_doc_lint_with(tree, None)
 }
 
-/// Whether `rule` is lowered to a warning while `migration` is in force.
+/// Whether `rule` is a warning: always for the wiki references (plan 20
+/// W3), and broken references while `migration` is in force.
 pub(crate) fn lowered(migration: Option<&str>, rule: &str) -> bool {
-    migration.is_some() && rule == LOWERED_RULE
+    is_warning(rule) || (migration.is_some() && rule == LOWERED_RULE)
 }
 
 /// The `forge/doc-lint` run of the head's documents (module docs).
@@ -318,6 +336,22 @@ pub fn assess_doc_lint_with(
     migration: Option<&str>,
 ) -> Result<forge_db::checks::NewCheckRun, ForgeError> {
     assess_doc_lint_reports(tree.shape(), &lint_tree(tree), migration, None)
+}
+
+/// [`assess_doc_lint_with`], wiki references checked against what
+/// [`crate::doc_wiki::read_wiki`] read (its note, when it left them
+/// unchecked, is a line of the summary).
+pub fn assess_doc_lint_wiki(
+    tree: &DocTree,
+    migration: Option<&str>,
+    wiki: &crate::doc_wiki::WikiRead,
+) -> Result<forge_db::checks::NewCheckRun, ForgeError> {
+    assess_doc_lint_reports(
+        tree.shape(),
+        &lint_tree_with(tree, &wiki.refs),
+        migration,
+        wiki.note.clone(), // clone: the summary owns its lines
+    )
 }
 
 /// [`assess_doc_lint_with`] on `reports`, the lint of `tree` already run
@@ -369,12 +403,17 @@ pub(crate) fn assess_doc_lint_reports(
                 .iter()
                 .any(|p| code_of(&r.path, p.rule) == ErrorCode::DoctypeDefinitionInvalid)
         });
+        let only_wiki = reports
+            .iter()
+            .all(|r| r.problems_dropped == 0 && r.problems.iter().all(|p| is_warning(p.rule)));
         let code = if definitions {
             ErrorCode::DoctypeDefinitionInvalid.id()
+        } else if only_wiki {
+            ErrorCode::WikiReferenceBroken.id()
         } else {
             ErrorCode::DocLintProblem.id()
         };
-        if migration.is_some() {
+        if migration.is_some() || warnings > 0 {
             lines.push(format!(
                 "{errors} error(s) and {warnings} warning(s) in {} file(s) [{code}]:",
                 reports.len()
