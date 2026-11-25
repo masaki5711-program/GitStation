@@ -51,7 +51,7 @@
   `deprecated` を付けるだけ。辞書の通し番号 `dictionary_version` を上げたかも確かめる。
 - **必須にする**: `main` と `release` を保護ブランチにし、MR 必須・承認 1・必須のチェック `ci/pipeline`。`.forge-ci.yml` とスクリプト自体の変更も MR とレビューを通る
   （CODEOWNERS で辞書の持ち主を承認者にする）。
-- GitStation が出すもの: 手引き（`docs/guides/edge-dictionary.md`）と例のリポジトリ一式（`docs/examples/edge-dictionary/`、スクリプトと試験の入力）。
+- GitStation が出すもの: 手引き（P1 で `docs/guides/edge-release-pattern.md` に辞書とファームウェアをまとめた）と例のリポジトリ一式（`docs/examples/edge-dictionary/`・`docs/examples/edge-firmware-s3/`、スクリプトと試験の入力）。
 
 ### 2.2 ファームウェアのリポジトリ（ハードウェアごと・派生ごとに 1 つ）
 
