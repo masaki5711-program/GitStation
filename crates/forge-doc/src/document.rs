@@ -35,7 +35,9 @@
 //!   refused (`block_nested`). Nothing inside a code fence is a block.
 //! - **References**: `[[ID]]`, `[[ID#BLOCK]]`, `[[repo/path:ID]]` and
 //!   `[[repo/path:ID#BLOCK]]`, outside code fences, code spans and HTML
-//!   comments.
+//!   comments. `[[wiki:ID]]` / `[[wiki:ID#BLOCK]]` name a page of the
+//!   project's linked wiki (plan 20 W3, ADR-0040 §5): `wiki` is reserved
+//!   and never a repository path.
 //! - **HTML**: comments (`<!-- … -->`, also over several lines) are allowed
 //!   and hidden; any other raw HTML is refused (`html_not_allowed`, plan 13
 //!   §4.1). Autolinks (`<https://…>`) are links, not HTML.
@@ -201,10 +203,33 @@ pub struct Reference {
     /// `[[repo/path:ID]]`: another repository (resolved through
     /// `.forge/repo.yml`, not here).
     pub repo: Option<String>,
+    /// `[[wiki:ID]]`: a page of the project's linked wiki (plan 20 W3;
+    /// resolved by the caller against the wiki's default-branch tip, never
+    /// here). `repo` is `None` then.
+    pub wiki: bool,
     pub doc: String,
     pub block: Option<String>,
     pub line: usize,
 }
+
+impl Reference {
+    /// A reference to this repository (neither `[[repo:…]]` nor
+    /// `[[wiki:…]]`).
+    pub fn is_local(&self) -> bool {
+        self.repo.is_none() && !self.wiki
+    }
+
+    /// `ID` or `ID#BLOCK`, as written after any prefix.
+    pub fn target(&self) -> String {
+        match &self.block {
+            Some(b) => format!("{}#{b}", self.doc),
+            None => self.doc.clone(), // clone: the caller owns the string
+        }
+    }
+}
+
+/// The prefix of a reference to the linked wiki (`[[wiki:ID]]`).
+pub const WIKI_PREFIX: &str = "wiki";
 
 /// A rule the text breaks: its 1-based line (0 for the whole file), the
 /// rule's name and, when it helps the reader, what it is about (the
@@ -864,7 +889,8 @@ fn scan_inline(visible: &str, line: usize, doc: &mut Document) {
     }
 }
 
-/// `[repo/path:]ID[#BLOCK]` (`None`: not a reference's shape).
+/// `[repo/path:]ID[#BLOCK]` or `wiki:ID[#BLOCK]` (`None`: not a
+/// reference's shape).
 pub fn reference_of(inner: &str, line: usize) -> Option<Reference> {
     let (target, block) = match inner.split_once('#') {
         Some((t, b)) => (t, Some(b)),
@@ -877,6 +903,8 @@ pub fn reference_of(inner: &str, line: usize) -> Option<Reference> {
     if !ref_id_ok(doc) || block.is_some_and(|b| !ref_id_ok(b)) {
         return None;
     }
+    let wiki = repo == Some(WIKI_PREFIX);
+    let repo = repo.filter(|_| !wiki);
     if let Some(r) = repo {
         let ok = !r.is_empty()
             && r.len() <= 512
@@ -892,6 +920,7 @@ pub fn reference_of(inner: &str, line: usize) -> Option<Reference> {
     }
     Some(Reference {
         repo: repo.map(str::to_owned),
+        wiki,
         doc: doc.to_owned(),
         block: block.map(str::to_owned),
         line,

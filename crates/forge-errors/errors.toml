@@ -669,6 +669,19 @@ diagnosis = "The log event carries `doc_id`, `holder_id` (the person holding the
 fix = "Wait until the claim lapses, ask its holder to release it, or ask a Maintainer to revoke it (gstn doc release <doc_id> --project <id> --revoke)."
 test = "a_claim_held_by_another_person_is_refused"
 
+[[error]]
+code = "FG-DOC-0008"
+name = "WikiReferenceBroken"
+http_status = 422
+severity = "info"
+user_message_ja = "Wiki への参照（[[wiki:…]]）が見つかりません。ページの ID を直すか、Wiki を結び付けてください（警告で、マージは止めません）。"
+user_message_en = "A wiki reference ([[wiki:…]]) does not resolve. Fix the page id or link a wiki (a warning; it does not block merging)."
+user_message_id = "Referensi wiki ([[wiki:…]]) tidak ditemukan. Perbaiki ID halaman atau tautkan wiki (peringatan; tidak menghalangi merge)."
+cause = "Plan 20 W3 (ADR-0040 §5): a document names a page of the project's linked wiki with `[[wiki:ID]]` or `[[wiki:ID#BLOCK]]`, and the document lint (`forge/doc-lint`, written by the `check.spec_index` job) could not resolve it against the wiki project's default-branch tip: `wiki_ref_broken` (no page with that id — a page is a `.md` named after its `id` whose front matter names a `doctype` — or no such block in it; also when the wiki's default branch is not born) or `wiki_not_linked` (the project has no linked wiki: `POST /api/v1/projects/{id}/wiki` was never run, or the wiki was unlinked). Both are WARNINGS (annotations of level `warning`): the wiki is edited on its own, so a page renamed there never blocks this project's merges; a run whose only problems they are concludes `success`. The wiki's tip is read only when a document of the head contains `[[wiki:`; when that read hits a bound (FG-DOC-0002 bounds) or the wiki repository is not ready, wiki references are left unchecked and the summary says so. `gstn doc lint` on a working tree does not check them (it cannot read the wiki). The document API shows such a reference as `broken` or `no_wiki`; a reader who may not read the wiki sees `unreadable` (the id only, nothing looked up). Not a server fault: the files are the repositories' content."
+diagnosis = "gstn checks list --project <id> --sha <head> (forge/doc-lint): the summary and the warning annotations list `path:line wiki_ref_broken — WIKI-0001#S-1` or `wiki_not_linked`. The project's wiki: SELECT project_id, wiki_project_id FROM forge.project_wikis WHERE project_id = <id>. The wiki's pages: gstn doc list --project <wiki project id> (or GET /api/v1/projects/<wiki project id>/documents). The job's log event `forge.spec_index.recorded` carries `request_id`, `project_id`, `head_sha`, `doc_lint_conclusion` and `doc_wiki` (`unchecked`, `not_linked`, `linked`, `bounded`, `not_ready`)."
+fix = "Correct the page id or block in the document, create the page in the wiki, or link a wiki (gstn wiki create). Nothing to change on the server."
+test = "broken_wiki_ref_is_warning_not_error"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]

@@ -31,6 +31,10 @@
 //! view's `Resolver`): a target more confidential than the document shown
 //! is `hidden` — its id only, never its title or text (plan 13 Q14) — one
 //! not in the index is `broken`, another repository's is `external`.
+//! `[[wiki:ID]]` (plan 20 W3) resolves against the linked wiki's tip,
+//! decided per viewer ([`crate::routes::doc_wiki`]): `found` / `hidden` /
+//! `broken` as above, `unreadable` (the viewer may not read the wiki: the
+//! id only) or `no_wiki`.
 //!
 //! **Plan 06 D-5**: for an agent audience
 //! ([`crate::routes::context::audience`]) a `confidential` document is
@@ -66,7 +70,7 @@ use forge_doc::document::{
 };
 use forge_doc::render::{
     display_markdown, referrers, view_with_body, DocumentView, Piece, Referrer, Resolver,
-    Target as RefTarget, TargetDoc, VIEW_VERSION,
+    Target as RefTarget, TargetDoc, WikiLookup, VIEW_VERSION,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::ResolvedRev;
@@ -79,6 +83,7 @@ use crate::routes::browse::{
     load_project_lookup, query, rev_body, take, RepositoryOf, RevBody, Target,
 };
 use crate::routes::context::{audience, withheld, Audience, ContextWithheldBody};
+use crate::routes::doc_wiki::{wiki_side, ViewResolver};
 use crate::routes::projects::PREFIX as PROJECT_PREFIX;
 use crate::routes::specs::{caller_of, charge, respond, revision};
 
@@ -321,6 +326,12 @@ pub struct DocumentRefBody {
     /// Another repository's (`[[repo:ID]]`); `null` for this one.
     #[schema(required = true)]
     pub repo: Option<String>,
+    /// `[[wiki:ID]]`: a page of the project's linked wiki (plan 20 W3).
+    pub wiki: bool,
+    /// The wiki project, for a `found` wiki reference only (its pages are
+    /// `GET /api/v1/projects/{wiki_project_id}/documents/{doc}`).
+    #[schema(required = true)]
+    pub wiki_project_id: Option<i64>,
     pub doc: String,
     #[schema(required = true)]
     pub block: Option<String>,
@@ -328,7 +339,9 @@ pub struct DocumentRefBody {
     /// `found` (a document of this repository the reader may be shown),
     /// `hidden` (more confidential than this document: its id only — plan
     /// 13 Q14), `broken` (no such document or block) or `external` (another
-    /// repository's; not resolved here).
+    /// repository's; not resolved here). A wiki reference may also be
+    /// `unreadable` (the reader may not read the linked wiki: its id only)
+    /// or `no_wiki` (the project has no linked wiki).
     pub target: String,
     /// `found` only.
     #[schema(required = true)]
@@ -622,6 +635,12 @@ impl DocIndex {
 }
 
 impl Resolver for DocIndex {
+    /// The index alone knows no wiki: the handlers wrap it in a
+    /// [`ViewResolver`] with the wiki read for the viewer.
+    fn wiki(&self, _: &str) -> WikiLookup {
+        WikiLookup::NotLinked
+    }
+
     /// Every document of the repository is one the reader may see (the
     /// repository's permission decided the request); absent ones are
     /// `None` (broken). The view hides the more confidential ones.
@@ -662,12 +681,16 @@ pub(crate) fn target_word(t: &RefTarget) -> &'static str {
         RefTarget::Hidden => "hidden",
         RefTarget::Broken => "broken",
         RefTarget::External => "external",
+        RefTarget::Unreadable => "unreadable",
+        RefTarget::NoWiki => "no_wiki",
     }
 }
 
-/// The view's fields, sections and references as the answer carries them.
+/// The view's fields, sections and references as the answer carries them
+/// (`wiki`: the linked wiki project when its pages may be shown).
 pub(crate) fn view_parts(
     view: &DocumentView,
+    wiki: Option<ProjectId>,
 ) -> (
     Vec<DocumentFieldBody>,
     Vec<DocumentSectionBody>,
@@ -729,11 +752,18 @@ pub(crate) fn view_parts(
         .map(|r| {
             let (title, block_kind) = match &r.target {
                 RefTarget::Found { title, block_kind } => (Some(title.clone()), block_kind.clone()), // clone: as above
-                RefTarget::Hidden | RefTarget::Broken | RefTarget::External => (None, None),
+                RefTarget::Hidden
+                | RefTarget::Broken
+                | RefTarget::External
+                | RefTarget::Unreadable
+                | RefTarget::NoWiki => (None, None),
             };
+            let found = matches!(r.target, RefTarget::Found { .. });
             DocumentRefBody {
                 repo: r.repo.clone(), // clone: as above
-                doc: r.doc.clone(),   // clone: as above
+                wiki: r.wiki,
+                wiki_project_id: wiki.filter(|_| r.wiki && found).map(ProjectId::get),
+                doc: r.doc.clone(), // clone: as above
                 block: r.block.clone(),
                 line: r.line,
                 target: target_word(&r.target).to_owned(),
@@ -751,7 +781,7 @@ pub(crate) fn view_parts(
 /// `_`, `-`; at most 128 bytes) — `FG-WEB-0006 param=<name>`.
 pub(crate) fn ref_id(name: &'static str, raw: &str) -> Result<String, ForgeError> {
     match reference_of(raw, 0) {
-        Some(r) if r.repo.is_none() && r.block.is_none() && r.doc == raw => Ok(r.doc),
+        Some(r) if r.is_local() && r.block.is_none() && r.doc == raw => Ok(r.doc),
         _ => Err(param_invalid(name, "invalid")),
     }
 }
@@ -877,7 +907,7 @@ pub(crate) async fn tip_marks(
 /// by id, and by the path of its file(s) here (review stage 3 LOW: a file
 /// whose front matter cannot be read at the tip has no id to compare) —
 /// or there is no tip ([`TipMarks::NoTip`]). Always `false` for a person.
-fn secret(index: &DocIndex, tip: &TipMarks, id: &str, lang: Option<&str>) -> bool {
+pub(crate) fn secret(index: &DocIndex, tip: &TipMarks, id: &str, lang: Option<&str>) -> bool {
     match tip {
         TipMarks::Person => return false,
         TipMarks::NoTip => return true,
@@ -910,6 +940,11 @@ struct AgentResolver<'a> {
 }
 
 impl Resolver for AgentResolver<'_> {
+    /// As the index: the handlers wrap it in a [`ViewResolver`].
+    fn wiki(&self, id: &str) -> WikiLookup {
+        self.index.wiki(id)
+    }
+
     fn document(&self, id: &str) -> Option<TargetDoc> {
         let mut target = self.index.document(id)?;
         if secret(self.index, self.tip, id, None) {
@@ -1057,12 +1092,19 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
                 index: &index,
                 tip: &tip,
             };
-            let resolver: &dyn Resolver = if who.is_agent() { &agent_view } else { &index };
-            let view = match index.text(shown) {
-                Some(text) => view_with_body(text, &shown.doc, shown.ty, resolver),
-                None => forge_doc::render::view(&shown.doc, shown.ty, resolver),
+            let principal = request.proof().principal();
+            let wiki = wiki_side(&state, principal, &t, caller, &shown.doc).await?;
+            let here: &dyn Resolver = if who.is_agent() { &agent_view } else { &index };
+            let resolver = ViewResolver {
+                here,
+                wiki: &wiki,
+                agent: who.is_agent(),
             };
-            let (fields, sections, refs) = view_parts(&view);
+            let view = match index.text(shown) {
+                Some(text) => view_with_body(text, &shown.doc, shown.ty, &resolver),
+                None => forge_doc::render::view(&shown.doc, shown.ty, &resolver),
+            };
+            let (fields, sections, refs) = view_parts(&view, wiki.project());
             let classification = view.classification.max(original.classification);
             Ok(DocumentBody {
                 version: VIEW_VERSION,
@@ -1309,9 +1351,16 @@ pub async fn block(state: AppState, request: Dispatched<ProjectCtx>) -> Response
             index: &index,
             tip: &tip,
         };
-        let resolver: &dyn Resolver = if who.is_agent() { &agent_view } else { &index };
-        let view = forge_doc::render::view(&shown.doc, shown.ty, resolver);
-        let (_, _, refs) = view_parts(&view);
+        let principal = request.proof().principal();
+        let wiki = wiki_side(&state, principal, &t, caller, &shown.doc).await?;
+        let here: &dyn Resolver = if who.is_agent() { &agent_view } else { &index };
+        let resolver = ViewResolver {
+            here,
+            wiki: &wiki,
+            agent: who.is_agent(),
+        };
+        let view = forge_doc::render::view(&shown.doc, shown.ty, &resolver);
+        let (_, _, refs) = view_parts(&view, wiki.project());
         let lines = b.line..=b.end_line.max(b.line);
         let refs = refs
             .into_iter()

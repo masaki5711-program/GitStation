@@ -87,3 +87,9 @@ M6（計画 20）は Wiki・個人ノート・横断検索（と最小の Issue�
 - **書き込みの順序**: 1 トランザクション（文の時間切れ 30 s、ロック待ち 5 s）。`search_index_state` の行をロックし、ジョブが読み始めた SHA と比べる（間に別のジョブが書いたら読み直す、3 回まで）。
 - **検索の結果**: `scope=document`。文書の行は `RepoBrowse`（文書の API と同じ Action）の通ったプロジェクトだけを候補にし、1 件ずつもう一度判定する。結果の `path` は先端のパス。行の `source_updated_at` は索引に入った時刻。
 - 新しい機能クレート `forge-search` はまだ作らない: 文書の読みと行の組み立ては `forge-checks::doc_search`（既に `read_tree` と `confidential_in` を持つ機能クレート）、書き込みは `forge-db`、ジョブは `forge-cli`。依存の向きは変わらない。
+
+## Amendment W3（2026-11-25、Wiki への参照）
+
+- **書き方と置き場所**: `[[wiki:<id>]]` / `[[wiki:<id>#<block>]]`。`forge-doc` は純粋なまま（`Reference::wiki`、`wiki` はリポジトリのパスに使えない予約語）。lint は呼び出し側が読んだ Wiki の索引（`WikiRefs::Linked` / `NotLinked` / `Unchecked`）を受け取るだけ。
+- **lint は警告だけ**: 壊れた参照は `wiki_ref_broken`、Wiki の無いプロジェクトでは `wiki_not_linked`。どちらも常に警告（`FG-DOC-0008`）で、`forge/doc-lint` を失敗にしない（Wiki は別に編集されるので、主プロジェクトのマージを止めない）。`check.spec_index` ジョブは、文書に `[[wiki:` があるときだけ結び付けた Wiki の既定ブランチの先端を lint の上限で読む。上限に当たった・リポジトリが準備中なら確かめずに、要約にその 1 行を書く（黙って通さない）。`gstn doc lint`・差分の lint・マージキューの列車の lint は確かめない（Wiki を読めない・止める理由にしない）。
+- **描画は閲覧者ごと**: 文書の API は、文書に Wiki への参照があるときだけ、結び付け（主プロジェクトの側だけ）→ Wiki のプロジェクトを閲覧者で読み込み → `prove(RepoBrowse)` で決める。拒否・無い・準備中なら `unreadable`（ID だけ、Wiki は何も読まないのでページの有無も分からない）。許されたら先端を 1 回読み（閲覧者の予算に数える）、`found` / `hidden`（この文書より機密）/ `broken`。エージェントには先端で機密のページを `hidden` にする。結び付けが無ければ `no_wiki`。

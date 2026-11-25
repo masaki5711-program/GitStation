@@ -140,6 +140,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DocLintMigrationUntilInvalid
         | ErrorCode::DocRevisionOpen
         | ErrorCode::DocEditClaimHeld
+        // Plan 20 W3: a lint warning of the wiki references (never a merge's).
+        | ErrorCode::WikiReferenceBroken
         // M3 X5: answers of the context API (never a merge's).
         | ErrorCode::RequirementNotFound
         | ErrorCode::VisibilityAboveParent

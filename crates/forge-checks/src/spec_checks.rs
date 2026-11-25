@@ -62,7 +62,8 @@ use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{Browser, RefLookup};
 
 use crate::ci_lint::{assess_ci_lint, read_input as read_ci_input, CiLintInput};
-use crate::doc_lint::{assess_doc_lint_with, DocLimits, DocTree};
+use crate::doc_lint::{assess_doc_lint_wiki, DocLimits, DocTree};
+use crate::doc_wiki::{read_wiki, WikiRead};
 use crate::spec_index::{index_commit, index_head, IndexLimits, Indexed, Tags};
 use crate::spec_refs::RepoConfigRead;
 
@@ -451,6 +452,9 @@ async fn record(
 struct Evaluated {
     head: Indexed,
     docs: DocTree,
+    /// The linked wiki the document lint checks `[[wiki:…]]` against
+    /// (plan 20 W3).
+    wiki: WikiRead,
     /// The document lint's migration date in force (plan 13 Q13).
     migration: Option<String>,
     /// `.forge-ci.yml` and the protected branches (plan 14 C1).
@@ -511,7 +515,7 @@ impl SpecChecks {
         };
         let lint_run = assess_lint(&e.head)?;
         let trace_run = assess_trace(&e.trace, &e.compared, e.links_truncated)?;
-        let doc_run = assess_doc_lint_with(&e.docs, e.migration.as_deref())?;
+        let doc_run = assess_doc_lint_wiki(&e.docs, e.migration.as_deref(), &e.wiki)?;
         let ci = assess_ci_lint(&e.ci)?;
         if let Some(invalid) = &ci.invalid {
             // The repository's content, not a fault: logged once at info
@@ -545,6 +549,7 @@ impl SpecChecks {
             doc_files = e.docs.markdown.len(),
             doc_incomplete = e.docs.incomplete,
             doc_migration_until = e.migration.as_deref(),
+            doc_wiki = e.wiki.state,
             ci_lint_conclusion = ci.run.conclusion.map(CheckConclusion::as_str),
             documents = e.head.index.documents.len(),
             tags = e.head.index.tags.len(),
@@ -647,6 +652,16 @@ impl SpecChecks {
             &self.doc_limits,
         )
         .await?;
+        // Plan 20 W3: the linked wiki's tip, only when a document names it.
+        let wiki = read_wiki(
+            &self.db,
+            &self.browse,
+            self.projects.as_ref(),
+            project,
+            &docs,
+            (&self.doc_limits, LOOKUP_TIMEOUT),
+        )
+        .await?;
         let compared = match self.browse.find_ref(repo.id, &mr.target_branch).await? {
             RefLookup::Commit(tip) => {
                 let tip = ObjectId::parse(&tip.commit).map_err(|_| {
@@ -697,6 +712,7 @@ impl SpecChecks {
         Ok(Some(Evaluated {
             head,
             docs,
+            wiki,
             migration,
             ci,
             trace,
