@@ -5503,11 +5503,21 @@ export interface components {
              * @description `found` (a document of this repository the reader may be shown),
              *     `hidden` (more confidential than this document: its id only — plan
              *     13 Q14), `broken` (no such document or block) or `external` (another
-             *     repository's; not resolved here).
+             *     repository's; not resolved here). A wiki reference may also be
+             *     `unreadable` (the reader may not read the linked wiki: its id only)
+             *     or `no_wiki` (the project has no linked wiki).
              */
             target: string;
             /** @description `found` only. */
             title: string | null;
+            /** @description `[[wiki:ID]]`: a page of the project's linked wiki (plan 20 W3). */
+            wiki: boolean;
+            /**
+             * Format: int64
+             * @description The wiki project, for a `found` wiki reference only (its pages are
+             *     `GET /api/v1/projects/{wiki_project_id}/documents/{doc}`).
+             */
+            wiki_project_id: number | null;
         };
         /** @description An open merge request revising the document. */
         DocumentRevisionBody: {

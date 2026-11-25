@@ -40,6 +40,8 @@ pub mod confidential;
 pub mod doc_lint;
 pub mod doc_migration;
 pub mod doc_search;
+// Plan 20 W3: the linked wiki the document lint checks `[[wiki:…]]` against.
+pub mod doc_wiki;
 // Plan 13 stage 4 part A: document revisions and edit claims.
 pub mod doc_revision;
 pub mod risk;
