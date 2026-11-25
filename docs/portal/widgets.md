@@ -17,8 +17,9 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 | `menu` | links | **1x2**、2x2 | 3600 秒 | `/api/portal-widgets/v1/menu`（P1） |
 | `merge-queue` | status | 1x2、**2x2**、4x2 | 60 秒 | `/api/portal-widgets/v1/merge-queue`（P2a） |
 | `spec-status` | status | 1x2、**2x2**、4x2 | 300 秒 | `/api/portal-widgets/v1/spec-status`（P2a） |
+| `deploy-approvals` | list | 1x2、**2x2**、4x2 | 60 秒 | `/api/portal-widgets/v1/deploy-approvals`（P2b） |
 
-P1 と P2a は設計（[widget-design.md](widget-design.md) §8）の段。PFS の台帳に載せる形は末尾の「台帳の写し」。
+P1・P2a・P2b は設計（[widget-design.md](widget-design.md) §8）の段。PFS の台帳に載せる形は末尾の「台帳の写し」。
 
 ### 大きさ（2026-11-23、PFS のセル方式）
 
@@ -94,12 +95,13 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
 | | | `stopped` | | 自動マージが止まった自分の変更。差は `stop` |
 | | | `spec` | | 承認待ちの仕様書。差は `warn` |
 | | | `failed` | | `main` の最新のパイプラインが失敗しているプロジェクトの数（単位は「件 / projects」）。差は `stop` |
-| | | `deploy` | | **P2 まで使えない**: 422（`FG-WEB-0011 param=scope rule=not_available`） |
+| | | `deploy` | | 自分が今承認できる配備（`deploy-approvals` の件数、すべての環境。P2b）。単位は「件 / deployments」。差は `warn` |
 | `project` | multi（`options_from: options/project`） | プロジェクトの id（繰り返す、最大 24） | なし | 数えるプロジェクトを絞る。見られないプロジェクトは数えない |
 
 `value` = 件数、`reference` = 標準 0。件数は 100 で頭打ち（`100+`）。`failed` を `project` なしで数えるときは自分がロールを持つ
 プロジェクト（最大 200）から失敗しているものを 24 件まで数える（24 件あれば `n+` と出す）。カードの `href`: `reviews` / `spec` → `/-/merge-requests?scope=approvable`、
-`stopped` → `/-/merge-requests`、`failed` → `/-/projects?tab=member`。
+`stopped` → `/-/merge-requests`、`failed` / `deploy` → `/-/projects?tab=member`。`deploy` は待っている配備を 100 件まで読み、
+それより多ければ `n+` と出す。
 
 ### inbox（kpi、P1）
 
@@ -170,6 +172,31 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
 - `href`: `approval` / `lint` → 承認待ちの変更 `/<path>/-/pulls?state=open`、`undecided` → 仕様書 `/<path>/-/documents`。
   言葉は「MR」と言わず「変更」（plan 08）。見られないプロジェクトは指定しても出ない。
 
+### deploy-approvals（list、P2b）
+
+| キー | 型 | 値 | 既定 | 意味 |
+|---|---|---|---|---|
+| `env` | multi（固定の選択肢） | `dev` / `stg` / `prod`（繰り返す） | なし = すべての環境 | 出す環境 |
+| `limit` | number | 3〜10 | 5 | 件数。`total` は自分が今承認できる件数（本人が要求したもの・もう承認したものを除き、待っている配備を古い順に 100 件まで読む） |
+
+- 出すのは、承認待ち（`pending_approval`）で承認の期限（環境の `approval_ttl_minutes`）の内にある配備のうち、**本人が今
+  承認できるもの**。決めるのは承認の経路（`POST …/deployments/{id}/approve`）と同じ判断で、ウィジェットだけの規則は無い
+  （ADR-0038 の段 C）: 環境の承認者（名前を挙げた人・グループ・組織のセレクタ）を本人について読み、`authorize()` の
+  `DeployApprove` を、管理者の権限なしの GitStation のセッションとして試す。承認者を決めていない環境は Maintainer 以上、
+  名前を挙げた人は Reporter 以上、グループ・セレクタで当たった人は Maintainer 以上。要求した人と、その SHA の作者・push した人は
+  出ない。
+- 代理（ADR-0038 §3.5）: 本人に今有効な代理の依頼があり、環境が代理を許すときは、依頼した人の代わりに承認できる配備も出す
+  （`sub` に「代理で承認」）。依頼した人も同じ判断（要求した人・作者でないこと、ロール）を通る。代理を試すのは依頼した人 10 人まで。
+- 本人がもう承認した配備（だれの代わりでも）と、承認がもう数えられている人の代わりの承認は出さない（経路は
+  `FG-DEPLOY-0010 already_approved` で断るため）。
+- 項目: `id`（`<path>#<配備の番号>`）、`label`（`<path> → <環境>`）、`sub`（短い SHA・待ち時間（分 → 時間 → 2 日から日）、
+  代理なら「代理で承認」、凍結中なら「凍結中（<終わり> UTC まで）」）、`badge`（凍結中 → `stop`「凍結中」、ほか → `warn`
+  「承認待ち」）、`href`（プロジェクト `/<path>`。SPA に配備の画面ができたらそちらに替える）。古い順（待たせている順）。
+- 凍結中: 環境の凍結期間が今にかかっているとき。凍結中でも承認はできる（実行は凍結が明けてから。承認の期限が先に切れると
+  実行されない）。
+- 出さないもの: コミットの題・作者の名前やメール、承認した人の名前。カードの `href` は無い。
+- 見られないプロジェクトの配備は、件数にも入らない（プロジェクトを先に `PortalWidgetRead` で決める）。
+
 ### 選択肢
 
 `GET /api/portal-widgets/v1/my-reviews/options/project`、`…/pipelines/options/project`、`…/attention-count/options/project`、
@@ -193,6 +220,9 @@ P1 からは `attention-count?scope=stopped` が同じものを数える（`stop
   件数だけのウィジェット（`stopped-count`、`attention-count`）は表示しない事実（衝突・検査）を読まない。
 - `merge-queue` / `spec-status` はプロジェクトごとに、本人が読めるか（`PortalWidgetRead`、管理者の権限なしのセッションと同じ）を
   先に決めてから、そのプロジェクトの列・変更・検査を読む（どれもプロジェクトを読める人が画面で見られるもの）。
+- `deploy-approvals` / `attention-count?scope=deploy` も同じくプロジェクトを先に決め、配備ごとに承認の経路と同じ
+  `DeployApprove` を本人（管理者の権限なしのセッション）について試す。ポータルのトークンが `DeployApprove` を持つことは無い
+  （ポータルのトークンは `PortalWidgetRead` だけ。承認は GitStation の画面か `gstn` で、本人のセッションで行う）。
 
 ## 新着（ポータルへ送る）
 
@@ -262,7 +292,7 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
   - id: attention-count
     type: kpi
     name:        { ja: 対応が必要な件数, en: Needs my attention, id: Perlu perhatian saya }
-    description: { ja: "レビュー待ち・止まった変更・承認待ちの仕様書・失敗しているプロジェクトのどれかを数えます。0 が標準です。", en: "Counts reviews waiting for you, stopped changes, specs awaiting approval or failing projects. The standard is 0.", id: "Menghitung tinjauan yang menunggu Anda, perubahan yang berhenti, spesifikasi yang menunggu persetujuan atau proyek yang gagal. Standarnya 0." }
+    description: { ja: "レビュー待ち・止まった変更・承認待ちの仕様書・失敗しているプロジェクト・自分が承認できる配備のどれかを数えます。0 が標準です。", en: "Counts reviews waiting for you, stopped changes, specs awaiting approval, failing projects or deployments you can approve. The standard is 0.", id: "Menghitung tinjauan yang menunggu Anda, perubahan yang berhenti, spesifikasi yang menunggu persetujuan, proyek yang gagal atau deployment yang dapat Anda setujui. Standarnya 0." }
     sizes: [1x1, 2x1]
     default_size: 1x1
     endpoint: /api/portal-widgets/v1/attention-count
@@ -277,6 +307,7 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
           - { value: stopped, label: { ja: 止まっている自分の変更, en: My stopped changes, id: Perubahan saya yang berhenti } }
           - { value: spec,    label: { ja: 承認待ちの仕様書, en: Specs awaiting my approval, id: Spesifikasi menunggu persetujuan saya } }
           - { value: failed,  label: { ja: 失敗しているプロジェクト, en: Failing projects, id: Proyek yang gagal } }
+          - { value: deploy,  label: { ja: 自分が承認できる配備, en: Deployments I can approve, id: Deployment yang dapat saya setujui } }
         default: reviews
       - key: project
         type: multi
@@ -334,6 +365,31 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
           - { value: lint,      label: { ja: 検査の指摘, en: Check findings, id: Temuan pemeriksaan } }
         default: approval
 
+  - id: deploy-approvals
+    type: list
+    name:        { ja: 承認待ちの配備, en: Deployments awaiting my approval, id: Deployment menunggu persetujuan saya }
+    description: { ja: "自分が今承認できる配備の一覧です。凍結中の環境はそう示します。承認は GitStation の画面で行います。", en: "Deployments you can approve now; a frozen environment is shown. Approve them on GitStation.", id: "Deployment yang dapat Anda setujui sekarang; lingkungan yang dibekukan ditandai. Setujui di GitStation." }
+    sizes: [1x2, 2x2, 4x2]
+    default_size: 2x2
+    endpoint: /api/portal-widgets/v1/deploy-approvals
+    refresh_sec: 60
+    required_role: access
+    settings:
+      - key: env
+        type: multi
+        label: { ja: 環境, en: Environments, id: Lingkungan }
+        options:
+          - { value: prod, label: { ja: 本番, en: Production, id: Produksi } }
+          - { value: stg,  label: { ja: ステージング, en: Staging, id: Staging } }
+          - { value: dev,  label: { ja: 開発, en: Development, id: Pengembangan } }
+        default: null
+      - key: limit
+        type: number
+        label: { ja: 件数, en: Items, id: Jumlah }
+        min: 3
+        max: 10
+        default: 5
+
   - id: menu
     type: links
     name:        { ja: GitStation のメニュー, en: GitStation menu, id: Menu GitStation }
@@ -361,6 +417,8 @@ PFS の `catalog/apps/gitstation.yaml` の `widgets:` に足す P1 の分（PFS 
         default: null
 ```
 
-`merge-queue` と `spec-status` は P2a で足した（PFS 側の MR で上の 2 つを入れる）。
-`widget_status` は P1 の受け入れ後に `pilot`。ボード（`catalog/boards/`）の更新は設計 §5 のとおり（`attention-count?scope=deploy` と
-`deploy-approvals` / `merge-queue` / `spec-status` は P2 で足す）。
+`merge-queue` と `spec-status` は P2a で足した（PFS 側の MR で上の 2 つを入れる）。P2b で `deploy-approvals` を足し、
+`attention-count` の `scope` に `deploy` を足した（PFS 側の MR で入れる）。`env` は環境が 3 つに決まっているので
+`options_from` ではなく固定の `options`（設計 §3.5 との違い）。`limit` の形は `my-reviews` の既存の宣言に合わせる。
+`widget_status` は P1 の受け入れ後に `pilot`。ボード（`catalog/boards/`）の更新は設計 §5 のとおり（`gitstation-operations` の
+`attention-count S（deploy）` と `deploy-approvals M` は P2b で使えるようになった）。

@@ -118,7 +118,7 @@
   { "action": "DeployEnvironmentManage", "allow": 4, "deny": 21, "public": false, "git_operation": false },
   { "action": "DeployTargetManage", "allow": 2, "deny": 18, "public": false, "git_operation": false },
   { "action": "DeployCreate", "allow": 5, "deny": 16, "public": false, "git_operation": false },
-  { "action": "DeployApprove", "allow": 11, "deny": 56, "public": false, "git_operation": false },
+  { "action": "DeployApprove", "allow": 11, "deny": 60, "public": false, "git_operation": false },
   { "action": "DeployApproversManage", "allow": 3, "deny": 19, "public": false, "git_operation": false },
   { "action": "PipelineScheduleManage", "allow": 5, "deny": 22, "public": false, "git_operation": false },
   { "action": "PipelinePlayProtected", "allow": 4, "deny": 21, "public": false, "git_operation": false },

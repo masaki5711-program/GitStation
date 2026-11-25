@@ -820,7 +820,7 @@ async fn the_inbox_counts_only_what_the_person_may_see_without_admin_rights() {
 }
 
 #[tokio::test]
-async fn attention_count_counts_each_scope_and_refuses_deploy_for_now() {
+async fn attention_count_counts_each_scope() {
     let w = World::new().await;
     // reviews (default): dave reviews olga's change.
     let a = w.as_token(ATTENTION, "t-dave").await;
@@ -894,9 +894,9 @@ async fn attention_count_counts_each_scope_and_refuses_deploy_for_now() {
         "status",
     );
     assert_eq!(none["items"], Value::Array(Vec::new()));
-    // deploy waits for P2: 422 with the setting named.
+    // A bad setting: 422 with the setting named (`deploy` is a scope from
+    // P2b: tests/portal_deploy_widgets.rs).
     for uri in [
-        format!("{ATTENTION}?scope=deploy"),
         format!("{ATTENTION}?scope=everything"),
         format!("{ATTENTION}?project=0"),
         format!("{PIPELINES}?only_problems=1"),
@@ -1624,8 +1624,6 @@ async fn the_p2a_routes_are_decided_by_authorize_and_checked() {
         format!("{SPECS}?project=0"),
         format!("{QUEUES}?project=abc"),
         format!("{QUEUES}?locale=xx"),
-        // deploy still waits for ADR-0038 step C.
-        format!("{ATTENTION}?scope=deploy"),
     ] {
         let a = w.as_token_with_headers(&uri, "t-dave").await;
         assert_eq!(

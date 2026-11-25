@@ -249,10 +249,20 @@ pub enum Word {
     SpecChecking,
     // ADR-0021 amendment 2026-11-24: the administrator link of the menu.
     MenuAdmin,
+    // Widget design P2b: `deploy-approvals`, `attention-count?scope=deploy`.
+    TitleDeployApprovals,
+    BadgeDeployAwaiting,
+    BadgeDeployFrozen,
+    DeployFrozenUntil,
+    DeployWaitMinutes,
+    DeployWaitHours,
+    DeployWaitDays,
+    DeployOnBehalf,
+    UnitDeployments,
 }
 
 impl Word {
-    pub const ALL: [Word; 71] = [
+    pub const ALL: [Word; 80] = [
         Self::TitleReview,
         Self::TitleMine,
         Self::TitleStopped,
@@ -324,6 +334,15 @@ impl Word {
         Self::SpecNoFindings,
         Self::SpecChecking,
         Self::MenuAdmin,
+        Self::TitleDeployApprovals,
+        Self::BadgeDeployAwaiting,
+        Self::BadgeDeployFrozen,
+        Self::DeployFrozenUntil,
+        Self::DeployWaitMinutes,
+        Self::DeployWaitHours,
+        Self::DeployWaitDays,
+        Self::DeployOnBehalf,
+        Self::UnitDeployments,
     ];
 
     /// `[ja, en, id]`.
@@ -508,6 +527,23 @@ impl Word {
             Self::SpecNoFindings => ["指摘なし", "No findings", "Tidak ada temuan"],
             Self::SpecChecking => ["確認中", "Being checked", "Sedang diperiksa"],
             Self::MenuAdmin => ["管理者の設定", "Administration", "Administrasi"],
+            Self::TitleDeployApprovals => [
+                "承認待ちの配備",
+                "Deployments awaiting my approval",
+                "Deployment menunggu persetujuan saya",
+            ],
+            Self::BadgeDeployAwaiting => ["承認待ち", "Awaiting approval", "Menunggu persetujuan"],
+            Self::BadgeDeployFrozen => ["凍結中", "Frozen", "Dibekukan"],
+            Self::DeployFrozenUntil => [
+                "凍結中（{t} まで）",
+                "Frozen until {t}",
+                "Dibekukan sampai {t}",
+            ],
+            Self::DeployWaitMinutes => ["{n} 分待ち", "waiting {n} min", "menunggu {n} menit"],
+            Self::DeployWaitHours => ["{n} 時間待ち", "waiting {n} h", "menunggu {n} jam"],
+            Self::DeployWaitDays => ["{n} 日待ち", "waiting {n} d", "menunggu {n} hari"],
+            Self::DeployOnBehalf => ["代理で承認", "as a delegate", "sebagai wakil"],
+            Self::UnitDeployments => ["件", "deployments", "deployment"],
         }
     }
 

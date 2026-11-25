@@ -2,8 +2,9 @@
 //! `docs/portal/widgets.md`, widget design P1): the data of the widgets
 //! GitStation declares (`my-reviews`, `pipelines`, `stopped-count`, and
 //! from P1 `attention-count`, `inbox`, `menu`, from P2a `merge-queue`,
-//! `spec-status`) and the project options of those with a `project`
-//! setting.
+//! `spec-status`, from P2b `deploy-approvals` and `attention-count`'s
+//! `deploy` scope: [`deploy`]) and the project options of those with a
+//! `project` setting.
 //!
 //! - Only the portal's credential reaches them (`crate::auth`: the portal's
 //!   Bearer token, `azp = portal`, decided by `authorize()` as
@@ -153,7 +154,7 @@ pub const STOPPED_COUNT_QUERY: &[QueryParam] = &[
 pub const ATTENTION_COUNT_QUERY: &[QueryParam] = &[
     QueryParam {
         name: "scope",
-        description: "reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval) or failed (projects whose main build or test failed); deploy is not available yet (422)",
+        description: "reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval), failed (projects whose main build or test failed) or deploy (deployments I can approve now)",
         integer_range: None,
     },
     QueryParam {
@@ -510,6 +511,8 @@ pub(crate) enum AttentionScope {
     Spec,
     /// Projects whose newest `main` pipeline failed.
     Failed,
+    /// Deployments the person can approve now (P2b).
+    Deploy,
 }
 
 /// `attention-count`'s settings.
@@ -528,8 +531,7 @@ pub(crate) fn attention_query(raw: Option<&str>) -> Result<AttentionQuery, Forge
         Some("stopped") => AttentionScope::Stopped,
         Some("spec") => AttentionScope::Spec,
         Some("failed") => AttentionScope::Failed,
-        // The design's `deploy` needs the per-person approval query (P2).
-        Some("deploy") => return Err(invalid("scope", "not_available")),
+        Some("deploy") => AttentionScope::Deploy,
         Some(_) => return Err(invalid("scope", "unknown_value")),
     };
     Ok(AttentionQuery {
@@ -968,6 +970,9 @@ pub async fn attention_count(state: AppState, request: Dispatched<PortalWidgetCt
         let q = query?;
         let projects = q.projects.as_deref();
         let (title, href, body) = match q.scope {
+            AttentionScope::Deploy => {
+                deploy::deploy_count(&state, &w.proof, projects, q.lang).await?
+            }
             AttentionScope::Failed => {
                 let pipelines = state
                     .pipelines
@@ -1006,7 +1011,7 @@ pub async fn attention_count(state: AppState, request: Dispatched<PortalWidgetCt
                         APPROVABLE_HREF,
                         Tone::Warn,
                     ),
-                    AttentionScope::Reviews | AttentionScope::Failed => (
+                    AttentionScope::Reviews | AttentionScope::Failed | AttentionScope::Deploy => (
                         WidgetList::Review,
                         Word::TitleReview,
                         APPROVABLE_HREF,
@@ -1416,6 +1421,10 @@ pub(crate) async fn envelope_errors(req: Request, next: Next) -> Response {
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     Response::from_parts(parts, Body::from(wrapped.to_string()))
 }
+
+#[path = "portal_widgets_deploy.rs"]
+pub mod deploy;
+pub use deploy::{deploy_approvals, DEPLOY_APPROVALS, DEPLOY_APPROVALS_QUERY};
 
 #[cfg(test)]
 #[path = "portal_widgets_tests.rs"]

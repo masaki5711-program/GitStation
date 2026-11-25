@@ -293,7 +293,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0; scope=deploy is 422 until P2) */
+        /** Portal widget attention-count (kpi): what waits for the person - reviews, stopped changes, specs awaiting approval, or projects whose main build failed (the standard is 0), or the deployments the person can approve now (scope=deploy) */
         get: operations["get_api_portal_widgets_v1_attention_count"];
         put?: never;
         post?: never;
@@ -312,6 +312,23 @@ export interface paths {
         };
         /** Portal widget attention-count: the project options (projects the person holds a role on and may read, at most 200) */
         get: operations["get_api_portal_widgets_v1_attention_count_options_project"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/deploy-approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget deploy-approvals (list): the deployments waiting for an approval the person can give now (decided as the approval route decides: approvers, selectors, delegation), oldest first, with an active freeze shown */
+        get: operations["get_api_portal_widgets_v1_deploy_approvals"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9574,7 +9591,7 @@ export interface operations {
     get_api_portal_widgets_v1_attention_count: {
         parameters: {
             query?: {
-                /** @description reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval) or failed (projects whose main build or test failed); deploy is not available yet (422) */
+                /** @description reviews (waiting for my review, default), stopped (my stopped changes), spec (specs awaiting my approval), failed (projects whose main build or test failed) or deploy (deployments I can approve now) */
                 scope?: string;
                 /** @description Project ids, repeated (at most 24); none: every project the person may see (failed: the projects they hold a role on) */
                 project?: number;
@@ -9603,6 +9620,35 @@ export interface operations {
     get_api_portal_widgets_v1_attention_count_options_project: {
         parameters: {
             query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_deploy_approvals: {
+        parameters: {
+            query?: {
+                /** @description Environments, repeated: dev, stg or prod; none: every environment the person can approve in */
+                env?: string;
+                /** @description Items, 3..=10 (default 5) */
+                limit?: number;
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

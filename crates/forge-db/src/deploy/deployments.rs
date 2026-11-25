@@ -59,7 +59,7 @@ pub struct CommitInput {
 }
 
 #[derive(sqlx::FromRow)]
-struct DeploymentRow {
+pub(super) struct DeploymentRow {
     id: i64,
     project_id: i64,
     tier: String,
@@ -197,7 +197,7 @@ async fn counted_approvals_on(
     Ok(counted)
 }
 
-fn deployment_of(r: DeploymentRow) -> Result<StoredDeployment, ForgeError> {
+pub(super) fn deployment_of(r: DeploymentRow) -> Result<StoredDeployment, ForgeError> {
     Ok(StoredDeployment {
         id: r.id,
         project_id: r.project_id,

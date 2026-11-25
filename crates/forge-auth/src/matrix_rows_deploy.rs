@@ -12,6 +12,7 @@ use forge_errors::ErrorCode as E;
 use crate::action::Action as A;
 use crate::matrix::{Actor as W, DeployBehalf as B, Expect, Fixture as F, Row};
 use crate::matrix_review::MrProject as P;
+use crate::matrix_rows_portal::Case as PC;
 use crate::model::ApproverGate as G;
 use crate::model::Role as R;
 
@@ -215,6 +216,13 @@ pub(crate) const DEPLOY_ROWS: &[Row] = &[
     row(A::DeployApprove, W::Guest, refused(B::NoDelegation), deny(E::Forbidden)),
     row(A::DeployApprove, W::Guest, refused(B::UnknownDelegator), deny(E::Forbidden)),
     row(A::DeployApprove, W::MaintainerTokenApi, refused(B::NoDelegation), deny(E::InsufficientScope)),
+    // Widget design P2b: the PFS portal's credential never approves — the
+    // `deploy-approvals` widget only shows what the person could approve
+    // in a session (`portal_not_allowed`, an administrator's account too).
+    row(A::DeployApprove, W::Portal(PC::Reporter), PROD, deny(E::Forbidden)),
+    row(A::DeployApprove, W::Portal(PC::Reporter), STG, deny(E::Forbidden)),
+    row(A::DeployApprove, W::Portal(PC::Reporter), NAMED, deny(E::Forbidden)),
+    row(A::DeployApprove, W::Portal(PC::Admin), PROD, deny(E::Forbidden)),
     // --- DeployApproversManage: Owner, people only ---
     row(A::DeployApproversManage, W::Owner, F::PrivateProject, Allow),
     row(A::DeployApproversManage, W::OwnerTokenApi, F::PrivateProject, Allow),
