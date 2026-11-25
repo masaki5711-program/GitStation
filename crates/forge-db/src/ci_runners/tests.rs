@@ -392,6 +392,82 @@ async fn a_gpu_eval_job_needs_its_project_listed_and_a_free_slot() {
     w.t.drop_now().await;
 }
 
+/// Plan 19 §1.1: while interactive LLM inference is queued or running, a
+/// `gpu-eval` job's claim waits — at most `GPU_EVAL_MAX_DELAY` (under the
+/// 10 minutes of FG-CI-0005) — and a stale interactive row (a dead
+/// worker's) holds nothing.
+#[tokio::test]
+async fn gpu_eval_claim_waits_at_most_10_min() {
+    let w = world().await;
+    let project = w.web.project_id.get();
+    let policy = gpu_policy(project);
+    let (gpu, _) = w.runner("gpu", &["gpu-eval"]).await;
+    let (plain, _) = w.runner("plain", &[]).await;
+    w.pipeline(
+        'b',
+        false,
+        vec![
+            job("bench", &[], &["gpu-eval"], &[]),
+            job("build", &[], &[], &[]),
+        ],
+    )
+    .await;
+    let interactive = |age: &str| {
+        format!(
+            "INSERT INTO forge.llm_requests (purpose, priority, subject_kind, model, prompt_id, \
+               prompt_version, input_sha256, input_class, request_id, queued_at) \
+             VALUES ('approval_summary', 'interactive', 'deployment', 'qwen3:27b', 'approval', \
+               1, repeat('a', 64), 'internal', 'req-llm', now() - interval '{age}') RETURNING id"
+        )
+    };
+    let live: i64 = sqlx::query_scalar(&interactive("10 seconds"))
+        .fetch_one(&mut w.t.superuser().await)
+        .await
+        .expect("interactive row");
+    assert!(
+        lease::claim_with(&w.t.db, gpu, &policy)
+            .await
+            .expect("claim")
+            .is_none(),
+        "the bench waits for the interactive inference"
+    );
+    // Other jobs are not held.
+    assert!(lease::claim(&w.t.db, plain).await.expect("claim").is_some());
+    // Pending for the longest delay: handed out anyway.
+    let delay = forge_core::llm::GPU_EVAL_MAX_DELAY.as_secs();
+    assert!(delay <= 600);
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.ci_jobs SET updated_at = now() - make_interval(secs => {delay}) \
+         WHERE name = 'bench'"
+    ))
+    .await;
+    let c = lease::claim_with(&w.t.db, gpu, &policy)
+        .await
+        .expect("claim")
+        .expect("the bench after the delay");
+    assert_eq!(c.name, "bench");
+    lease::complete(&w.t.db, gpu, c.job_id, c.attempt, JobResult::Succeeded)
+        .await
+        .expect("complete");
+    // A second bench: a stale interactive row (a dead worker's) holds nothing.
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.llm_requests SET state = 'abandoned', error_code = 'FG-SYS-0001', \
+           finished_at = now() WHERE id = {live}"
+    ))
+    .await;
+    sqlx::query_scalar::<_, i64>(&interactive("20 minutes"))
+        .fetch_one(&mut w.t.superuser().await)
+        .await
+        .expect("a stale interactive row");
+    w.pipeline('c', false, vec![job("bench", &[], &["gpu-eval"], &[])])
+        .await;
+    assert!(lease::claim_with(&w.t.db, gpu, &policy)
+        .await
+        .expect("claim")
+        .is_some());
+    w.t.drop_now().await;
+}
+
 #[tokio::test]
 async fn a_job_token_lives_with_its_job_and_the_pipeline_follows_its_jobs() {
     let w = world().await;

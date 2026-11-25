@@ -75,12 +75,36 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.agent_parts_guard()",
     "forge.agent_part_versions_guard()",
     "forge.agent_part_files_guard()",
+    // ── Plan 19 L5-2: an advice keeps its class; only superseded_by changes (20270108100000) ──
+    "forge.llm_advice_guard()",
+    "forge.llm_requests_guard()",
+    "forge.llm_advice_feedback_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
 /// each must exist with this exact definition, enabled ALWAYS. Unlike
 /// `GUARDED_TRIGGERS`, the table may have other triggers.
 const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
+    // ── Plan 19 L5-2: an advice keeps its class (20270108100000) ──
+    (
+        "llm_advice",
+        "llm_advice_guarded",
+        "CREATE TRIGGER llm_advice_guarded BEFORE INSERT OR UPDATE ON forge.llm_advice \
+         FOR EACH ROW EXECUTE FUNCTION forge.llm_advice_guard()",
+    ),
+    (
+        "llm_requests",
+        "llm_requests_forward",
+        "CREATE TRIGGER llm_requests_forward BEFORE UPDATE ON forge.llm_requests \
+         FOR EACH ROW EXECUTE FUNCTION forge.llm_requests_guard()",
+    ),
+    (
+        "llm_advice_feedback",
+        "llm_advice_feedback_identity",
+        "CREATE TRIGGER llm_advice_feedback_identity BEFORE UPDATE ON \
+         forge.llm_advice_feedback FOR EACH ROW EXECUTE FUNCTION \
+         forge.llm_advice_feedback_guard()",
+    ),
     // ── Plan 16 A3: published agent parts never change (20270103100000) ──
     (
         "agent_signing_keys",
@@ -1146,6 +1170,18 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             "forge.search_index_state",
             [dml("forge_app"), ro("search_index_state")?].concat(),
         ),
+        // ── Plan 19 L5-2: the local LLM's records (20270108100000) ──
+        ("forge.llm_requests", operational()),
+        ("forge.llm_advice", operational()),
+        (
+            "forge.llm_advice_feedback",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:UPDATE"]),
+                ro("llm_advice_feedback")?,
+            ]
+            .concat(),
+        ),
+        ("forge.project_llm", operational()),
     ])
 }
 
@@ -1400,6 +1436,11 @@ const LATER_TABLES: &[&str] = &[
     // ── Plan 20 K2: the search index (20270107100000) ──
     "search_entries",
     "search_index_state",
+    // ── Plan 19 L5-2: the local LLM's records (20270108100000) ──
+    "llm_requests",
+    "llm_advice",
+    "llm_advice_feedback",
+    "project_llm",
 ];
 
 /// Every table the first migration creates.

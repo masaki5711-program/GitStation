@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-doc", "crates/forge-ci", "crates/forge-agent", "crates/forge-edge", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-pipelines", "crates/forge-deploy", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client", "crates/forge-runner"]
+members = ["crates/forge-errors", "crates/forge-doc", "crates/forge-ci", "crates/forge-agent", "crates/forge-edge", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-pipelines", "crates/forge-deploy", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client", "crates/forge-runner", "crates/forge-llm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -28,6 +28,8 @@ forge-pipelines = { path = "crates/forge-pipelines" }
 forge-deploy = { path = "crates/forge-deploy" }
 forge-oidc = { path = "crates/forge-oidc" }
 forge-web = { path = "crates/forge-web" }
+# Plan 19 L5-3: the local LLM gateway (a feature crate).
+forge-llm = { path = "crates/forge-llm" }
 serde = { version = "1", features = ["derive"] }
 url = "2"
 percent-encoding = "2"

@@ -33,6 +33,8 @@ pub mod git_ssh;
 mod git_pack;
 mod hosting;
 mod keys;
+// Plan 19 L5-3: `llm.*` (the local LLM gateway, ADR-0039).
+pub mod llm;
 mod maintenance;
 // Plan 18 S3: `auto_merge.*` (the auto-merge worker's safety-net period).
 mod auto_merge;
@@ -79,6 +81,7 @@ pub use git_ssh::GitSshConfig;
 pub use hosting::HostingConfig;
 pub use jobs::JobsConfig;
 pub use keys::{Key, Kind, KEYS};
+pub use llm::LlmConfig;
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
 pub use merge_queue::MergeQueueConfig;
 pub use mirror::{CredentialProblem, MirrorConfig};
@@ -131,6 +134,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_DEPLOY_",
     // Plan 16 A3: `agent.*`.
     "FORGE_AGENT_",
+    // Plan 19 L5-3: `llm.*`.
+    "FORGE_LLM_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -256,6 +261,8 @@ pub struct Config {
     pub org: OrgConfig,
     /// `agent.*` (the agent marketplace's signing keys, plan 16 A3).
     pub agent: AgentConfig,
+    /// `llm.*` (the local LLM gateway, plan 19 L5-3, ADR-0039).
+    pub llm: LlmConfig,
 }
 
 impl Config {
@@ -535,6 +542,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         portal: PortalConfig::load(get)?,
         org: OrgConfig::load(get)?,
         agent: AgentConfig::load(get)?,
+        llm: LlmConfig::load(get)?,
     }
     .validate_across()
 }

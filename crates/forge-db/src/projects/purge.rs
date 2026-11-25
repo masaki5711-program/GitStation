@@ -741,6 +741,29 @@ async fn finish_steps(
         "projects.purge.finish.project_ai_assets",
     )
     .await?;
+    // Plan 19 L5-2: the project's LLM advice (its feedback keeps its
+    // verdicts, advice_id set NULL), requests and `llm.review` setting.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.llm_advice WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.llm_advice",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.llm_requests WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.llm_requests",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.project_llm WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.project_llm",
+    )
+    .await?;
     // ADR-0038 §2: the project's org bindings.
     delete_rows(
         tx,
