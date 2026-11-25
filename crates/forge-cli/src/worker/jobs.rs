@@ -61,6 +61,7 @@ use super::prepare::PrepareHandler;
 use super::provision::{ProvisionHandler, Storage};
 use super::review::{ConflictScanHandler, MergeabilityHandler, RefreshHandler};
 use super::risk::RiskHandler;
+use super::search_documents::SearchDocumentsHandler;
 use super::spec_drift::SpecDriftHandler;
 use super::spec_index::SpecIndexHandler;
 use super::spec_publish::SpecPublishHandler;
@@ -119,7 +120,8 @@ pub(crate) fn main_runner(db: &Db, storage: &Storage) -> Result<JobRunner, Forge
 /// `forge/risk`) and `check.spec_index` (M3 X4: `forge/spec-lint` and
 /// `forge/spec-trace`; plan 13 stage 2: `forge/doc-lint`; plan 14 C1:
 /// `forge/ci-lint`) and `work_items.relink` (ADR-0016 Amendment
-/// 2026-11-12: work items of existing merge requests after a binding).
+/// 2026-11-12: work items of existing merge requests after a binding) and
+/// `search.index_documents` (plan 20 K4: documents into the search).
 pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHandler>>, ForgeError> {
     // clone: the handler owns its storage handles (paths and an Arc)
     let provision = ProvisionHandler::new(db, storage.clone())?;
@@ -140,6 +142,8 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
     let spec_publish = SpecPublishHandler::new(db, storage)?;
     // ADR-0016 Amendment 2026-11-12: detect merge requests again after a binding.
     let relink = RelinkHandler::new(db)?;
+    // Plan 20 K4: `search.index_documents` (the default branch's documents).
+    let search_documents = SearchDocumentsHandler::new(db, storage)?;
     Ok(vec![
         Arc::new(provision),
         Arc::new(refresh),
@@ -153,6 +157,7 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
         Arc::new(schedules),
         Arc::new(spec_publish),
         Arc::new(relink),
+        Arc::new(search_documents),
     ])
 }
 

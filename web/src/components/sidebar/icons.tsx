@@ -101,6 +101,12 @@ export const ICONS = {
       <path d="M9 9h6M9 13h6M9 17h3" />
     </Icon>
   ),
+  wiki: (
+    <Icon>
+      <path d="M4 5a1 1 0 0 1 1-1h5a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H5a1 1 0 0 1-1-1Z" />
+      <path d="M20 5a1 1 0 0 0-1-1h-5a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h5a1 1 0 0 0 1-1Z" />
+    </Icon>
+  ),
   pipelines: (
     <Icon>
       <circle cx="5" cy="12" r="2.5" />

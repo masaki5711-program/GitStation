@@ -80,6 +80,7 @@ describe('sidebar in a project', () => {
       ['比較', '/acme/forge-web/-/compare'],
       ['MR', '/acme/forge-web/-/pulls'],
       ['文書', '/acme/forge-web/-/documents'],
+      ['Wiki', '/acme/forge-web/-/wiki'],
       ['パイプライン', '/acme/forge-web/-/pipelines'],
       ['メンバー', '/acme/forge-web/-/members'],
     ]);
@@ -427,7 +428,7 @@ describe('project top page: latest commit and info panel', () => {
     const server = mockServer(repoRoutes());
     await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });
     const info = within(await screen.findByRole('complementary', { name: 'プロジェクト情報' }));
-    expect(info.getByText('main')).toBeTruthy();
+    expect(await info.findByText('main')).toBeTruthy();
     expect(info.getByRole('link', { name: '2' }).getAttribute('href')).toBe('/acme/forge-web/-/branches');
     expect(info.getByRole('link', { name: '1' }).getAttribute('href')).toBe('/acme/forge-web/-/tags');
     expect((await info.findByRole('link', { name: 'README' })).getAttribute('href')).toBe(

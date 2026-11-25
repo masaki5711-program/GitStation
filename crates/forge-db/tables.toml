@@ -1118,3 +1118,12 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── Plan 20 W1 (20270110100000, ADR-0040 §5): a project's wiki link — the
+# link and the unlink write their own audit rows on the owner project
+# (`project.wiki_linked` / `project.wiki_unlinked`), the purge of either
+# project removes it under `project.purged` ──
+[tables.project_wikis]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]

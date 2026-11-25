@@ -337,7 +337,9 @@ impl SearchReader for Fake {
             .filter(|c| match c.kind {
                 SourceKind::Project => filter.readable_projects.contains(&c.project),
                 SourceKind::MergeRequest => filter.readable_merge_requests.contains(&c.project),
+                SourceKind::Document => filter.readable_documents.contains(&c.project),
             })
+            .filter(|c| filter.kinds.is_empty() || filter.kinds.contains(&c.kind))
             .filter(|c| filter.project.is_none_or(|p| p == c.project))
             .skip(usize::try_from(offset).expect("fits"))
             .take(usize::try_from(max_rows).expect("fits"))
@@ -704,4 +706,115 @@ fn too_many_terms_is_a_request_error() {
             "too_many_terms".to_owned()
         )
     );
+}
+
+/// A document in each project, then its confidential sibling.
+fn documents() -> Vec<SearchCandidate> {
+    let mut out = Vec::new();
+    for p in [HIDDEN, READABLE, GUEST, DELETED, GONE] {
+        out.push(candidate(
+            SourceKind::Document,
+            p,
+            &format!("docs/SPEC-{p}.md"),
+            &format!("spec {p}"),
+        ));
+        let mut secret = candidate(
+            SourceKind::Document,
+            p,
+            &format!("docs/HR-{p}.md"),
+            &format!("hr {p}"),
+        );
+        secret.classification = "confidential".to_owned();
+        out.push(secret);
+    }
+    out
+}
+
+#[test]
+fn document_hits_need_repo_browse_and_carry_their_path() {
+    let decided = walk(&person(), &documents(), &records(), &query(), 50, 200).expect("walk");
+    let shown: Vec<(&str, i64, Option<&str>)> = decided
+        .items
+        .iter()
+        .map(|h| (h.kind.as_str(), h.project_id, h.path.as_deref()))
+        .collect();
+    assert_eq!(
+        shown,
+        vec![
+            ("document", READABLE, Some("docs/SPEC-1.md")),
+            ("document", READABLE, Some("docs/HR-1.md")),
+        ],
+        "a person reads both; a Guest, a stranger or a gone project nothing"
+    );
+    assert!(decided.items.iter().all(|h| h.iid.is_none()));
+    let agent = walk(&agent(), &documents(), &records(), &query(), 50, 200).expect("walk");
+    let paths: Vec<Option<&str>> = agent.items.iter().map(|h| h.path.as_deref()).collect();
+    assert_eq!(
+        paths,
+        vec![Some("docs/SPEC-1.md")],
+        "never the confidential one"
+    );
+}
+
+#[tokio::test]
+async fn the_document_scope_reads_only_readable_documents() {
+    let mut all = candidates();
+    all.extend(documents());
+    let fake = Arc::new(Fake {
+        candidates: all,
+        ..Fake::default()
+    });
+    let (status, body) = get(
+        &fake,
+        "/api/v1/search?q=%E8%A8%AD%E5%82%99&scope=document",
+        Some(person()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = body["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "{body}");
+    assert!(items.iter().all(|h| h["kind"] == "document"));
+    assert_eq!(items[0]["path"], "docs/SPEC-1.md");
+    assert!(items[0]["iid"].is_null());
+    let filters = fake.filters.lock().expect("lock").clone();
+    assert_eq!(filters[0].0.kinds, vec![SourceKind::Document]);
+    assert_eq!(
+        filters[0].0.readable_documents,
+        vec![ProjectId::new(READABLE)]
+    );
+    // An AI audience: the confidential row is left out by the read itself.
+    let (status, body) = get(
+        &fake,
+        "/api/v1/search?q=%E8%A8%AD%E5%82%99&scope=document",
+        Some(agent()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = body["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "{body}");
+    assert_eq!(items[0]["path"], "docs/SPEC-1.md");
+}
+
+#[tokio::test]
+async fn the_agent_audience_header_withholds_confidential_documents() {
+    let fake = Arc::new(Fake {
+        candidates: documents(),
+        ..Fake::default()
+    });
+    let mut req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/search?q=%E8%A8%AD%E5%82%99&scope=document")
+        .header("Forge-Context-Audience", "agent")
+        .body(Body::empty())
+        .expect("request");
+    req.extensions_mut().insert(person());
+    let res = app(&fake).oneshot(req).await.expect("infallible");
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.expect("body").to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).expect("json");
+    let items = body["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "{body}");
+    assert_eq!(items[0]["path"], "docs/SPEC-1.md");
+    let filters = fake.filters.lock().expect("lock").clone();
+    assert!(filters[0].0.exclude_confidential, "left out by the read");
 }

@@ -9345,7 +9345,7 @@
           "required": true
         },
         {
-          "description": "Only these kinds: project, merge_request (comma-separated).",
+          "description": "Only these kinds: project, merge_request, document (comma-separated).",
           "kind": "option",
           "name": "--scope",
           "repeatable": false,
@@ -9375,7 +9375,8 @@
       ],
       "examples": [
         "gstn search 設備 仕様 --json",
-        "gstn search login --scope merge_request --project 7"
+        "gstn search login --scope merge_request --project 7",
+        "gstn search REQ-0012 --scope document"
       ],
       "name": "search",
       "output": {
@@ -9391,6 +9392,7 @@
                 "project_path",
                 "title",
                 "iid",
+                "path",
                 "snippet",
                 "updated_at",
                 "truncated"
@@ -9419,7 +9421,169 @@
       "scopes": [
         "read_api"
       ],
-      "summary": "Search projects and merge requests you may read: only what you may read is shown, never a total; a page can be short (even empty) while has_more is true, and next_cursor continues it."
+      "summary": "Search projects, merge requests and documents (the default branch's, Wiki pages and notes too) you may read: only what you may read is shown, never a total; a page can be short (even empty) while has_more is true, and next_cursor continues it."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn wiki show 7",
+        "gstn wiki show 7 --json"
+      ],
+      "name": "wiki show",
+      "output": {
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "wiki_path": {
+            "type": "string"
+          },
+          "wiki_project_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "wiki_project_id",
+          "wiki_path",
+          "display_name",
+          "default_branch"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/wiki"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show a project's linked wiki (or, asked on a wiki, that wiki): its project id, path, display name and branch. 404 FG-REPO-0005 when there is none you may read (an unreadable wiki is never named)."
+    },
+    {
+      "args": [
+        {
+          "description": "The owner project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The wiki project's path segment (default <project>-wiki).",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The wiki's display name (default <project name> Wiki).",
+          "kind": "option",
+          "name": "--display-name",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn wiki create 7",
+        "gstn wiki create 7 --path handbook --display-name 手順書"
+      ],
+      "name": "wiki create",
+      "output": {
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "first_page": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "wiki_path": {
+            "type": "string"
+          },
+          "wiki_project_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "wiki_project_id",
+          "wiki_path",
+          "display_name",
+          "default_branch",
+          "commit",
+          "first_page"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/wiki"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create a project's wiki and link it in one step: an ordinary project <project>-wiki in the same namespace with its first page WIKI-0001 on a protected main (Developer may push); the project's members get the same role on it. A person's action (Maintainer); 409 FG-KNOW-0003 when refused, 500 FG-KNOW-0004 when a step after the creation failed (no link)."
+    },
+    {
+      "args": [
+        {
+          "description": "The owner project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn wiki unlink 7 --yes"
+      ],
+      "name": "wiki unlink",
+      "output": {
+        "properties": {
+          "project_id": {
+            "type": "integer"
+          },
+          "wiki_project_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "wiki_project_id"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/wiki"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Unlink a project's wiki; the wiki project and its history stay, and the project's members lose the inherited role. Needs --yes."
     },
     {
       "args": [],

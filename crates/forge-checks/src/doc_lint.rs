@@ -226,12 +226,24 @@ pub async fn read_tree(
     commit: &str,
     limits: &DocLimits,
 ) -> Result<DocTree, ForgeError> {
-    let with_commit = |e: ForgeError| e.with_context("commit", commit.to_owned());
     let listing = browse
         .blobs_in_tree(repo, commit, limits.max_tree_entries)
         .await
-        .map_err(with_commit)?;
-    let (chosen, mut tree) = select(&listing, limits);
+        .map_err(|e| e.with_context("commit", commit.to_owned()))?;
+    read_listed(browse, repo, commit, &listing, limits).await
+}
+
+/// [`read_tree`] from a listing of `commit`'s tree the caller already has
+/// (the search indexer compares it with an older one, plan 20 K4).
+pub async fn read_listed(
+    browse: &Browser,
+    repo: RepoId,
+    commit: &str,
+    listing: &BlobListing,
+    limits: &DocLimits,
+) -> Result<DocTree, ForgeError> {
+    let with_commit = |e: ForgeError| e.with_context("commit", commit.to_owned());
+    let (chosen, mut tree) = select(listing, limits);
     let contents = browse
         .read_blobs(repo, &chosen.whole)
         .await

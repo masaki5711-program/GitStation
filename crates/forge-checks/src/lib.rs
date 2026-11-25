@@ -39,6 +39,7 @@ pub mod ci_lint;
 pub mod confidential;
 pub mod doc_lint;
 pub mod doc_migration;
+pub mod doc_search;
 // Plan 13 stage 4 part A: document revisions and edit claims.
 pub mod doc_revision;
 pub mod risk;

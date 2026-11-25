@@ -232,6 +232,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::LlmUnavailable
         | ErrorCode::LlmModelDigestMismatch
         | ErrorCode::LlmQueueDeadline
+        // Plan 20 W1/W2: the wiki link (never a merge's).
+        | ErrorCode::WikiLinkRefused
+        | ErrorCode::WikiProvisionFailed
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

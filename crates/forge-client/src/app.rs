@@ -260,6 +260,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
             env,
             io,
         ),
+        Command::Wiki { command } => crate::wiki::wiki(cli, command, env, io),
         Command::Admin { command } => crate::admin::admin(cli, command, env, io),
         Command::Browse { command } => crate::browse::browse(cli, command, env, io),
         Command::Api(a) => api(cli, a, env, io),

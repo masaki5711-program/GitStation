@@ -513,6 +513,15 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         }
 
         (Action::ProjectUpdate, Resource::Project(p)) => need(Role::Maintainer, p.role),
+        // Plan 20 W1 (ADR-0040 §5): creating, linking and unlinking the
+        // owner project's wiki — a person's decision (people only, never
+        // acting for a person or CI: the generated rows), Maintainer of the
+        // owner project. Its members then inherit their role on the wiki
+        // (`forge_db::roles`), so who may link decides who gains access.
+        (Action::ProjectWikiLink, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
 
         (Action::ProjectVisibilityChange, Resource::VisibilityChange { project, .. }) => {
             // Exposing a project to every signed-in user is a person's
@@ -1759,6 +1768,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::ProjectVisibilityChange
             | Action::ProjectTransfer
             | Action::ProjectDelete
+            | Action::ProjectWikiLink
             | Action::ProjectRestore
             | Action::ProtectedRefManage
             | Action::MemberManage

@@ -1222,6 +1222,22 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/user/approval-delegation",
         Coverage::BrowserOnly("removed in a web session only, like setting it (FG-AUTH-0002 session_required)"),
     ),
+    // Plan 20 W2: a project's wiki; W4: read the link (the web "Wiki" tab).
+    (
+        "GET",
+        "/api/v1/projects/{id}/wiki",
+        Coverage::Command("wiki show"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/wiki",
+        Coverage::Command("wiki create"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/wiki",
+        Coverage::Command("wiki unlink"),
+    ),
 ];
 
 /// Commands that call no API route, and why: local work only (C-1 counts
