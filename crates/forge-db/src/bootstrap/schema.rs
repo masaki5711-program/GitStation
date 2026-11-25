@@ -1134,6 +1134,15 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             "forge.search_index_state",
             [dml("forge_app"), ro("search_index_state")?].concat(),
         ),
+        // ── Plan 20 W1: the project wiki link (20270108100000) ──
+        (
+            "forge.project_wikis",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("project_wikis")?,
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -1382,6 +1391,8 @@ const LATER_TABLES: &[&str] = &[
     // ── Plan 20 K2: the search index (20270107100000) ──
     "search_entries",
     "search_index_state",
+    // ── Plan 20 W1: the project wiki link (20270108100000) ──
+    "project_wikis",
 ];
 
 /// Every table the first migration creates.
