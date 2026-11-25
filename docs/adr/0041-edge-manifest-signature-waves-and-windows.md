@@ -132,22 +132,23 @@ E1 は、I/O を持たない判断のすべて — マニフェストの形と�
 - 停止の判定の数（`HaltPolicy`）と時間帯（`Schedule`）は値の型で、DB の形は E3 / E5 が決める（`HaltPolicy::spec` で保存し `HaltPolicy::new`
   で読み戻す）。
 
-## Amendment（2026-11-25、範囲: GitStation はリリースの作成と署名だけ）
+## Amendment（2026-11-25、範囲: エッジの追加の変更の版を標準の機能で管理する）
 
-利用者が機器の管理を **別のエッジ管理・設定のアプリ** で作ると決め（機器の台帳と登録、グループと機器ごとの設定、展開の波・停止・承認、
-機器の上のエージェント）、GitStation の範囲を「リリースの作成と署名だけ」にした（計画 21 §0）。
+同じ日に利用者が 4 つ決めた（計画 21 §0）: (1) 機器の管理は利用者の **中央の設定管理のツール** が持つ（台帳・登録・設定・配布・突き合わせ・承認・機器の上の
+ソフト）。(2) 対象は ESP32 のモジュールのエッジで、GitStation は「追加の変更の版」— 追記だけの I/O の意味の辞書、ファームウェアの設定のスキーマ（追記だけ）、
+署名付きのファームウェア — を管理する。プラットフォームのエッジは範囲の外。(3) それは **標準の機能**（リポジトリ・MR・保護ブランチ・必須のチェック・CI・
+成果物・Webhook・サービスアカウント）と **パターン** でできる。(4) ハードウェアごと・派生ごとにファームウェアは別のプロジェクト、辞書は 1 つを共有、
+モジュールとファームウェアの対応は設定のツールが持つ。
 
-- **変わらない**: 決定 1（純粋なクレート）、2（マニフェストと封筒、`schema_version: 1`）、3（要約）、4（署名の領域と、署名の呼び出し元の絞り込み）、
-  5（確かめの順）、6（`edge-release.toml` の lint）、10（`gstn edge release verify`）。封筒はエッジのアプリと機器が読む **連携の契約** になる。
-  機器は GitStation のエッジの鍵で確かめ、アプリは署名し直さない（信頼の起点は 1 つ）。`max_install_seconds`・`health_soak_seconds` は署名した
-  欄のまま、アプリへのヒントとして残す。kind `agent` は「エッジのアプリの機器のエージェント」として使ってよい（形は変えない）。
-- **退役の候補**: 決定 7（波）、8（停止の判定）、9（保守の時間帯と `jiff`）と FG-EDGE-0005。GitStation に呼び出し元は作らない。コードは今は消さず、
-  エッジのアプリが `forge-edge` をライブラリとして使わないと確かめてから計画 21 E1b で消す（`jiff` も抜ける。FG-EDGE-0005 は errors.toml の
-  退役の手順で、番号は再利用しない）。
-- **後の MR の約束（Consequences の書き換え）**: E4a の機能クレートは `forge-fleet` ではなく **`forge-edge-release`**（候補・作成の worker・blob・署名・
-  取り下げ）で、`lint_release_definition` → `is_secret_like_path` → マニフェスト → `manifest_digest` → `sign_manifest` の順は変わらない。
-  `clippy.toml` の `sign_manifest` の呼び出し元の名前は E4a で直す。E5 の `forge-fleet`、E6 の `forge-edge-agent`（`verify_release`・
-  `may_start_install` の利用）は **作らない**。機器の資格情報（`Credential::Device`）も作らない。
-- **読み取りの境目**（E4b、ADR を足さずこの Amendment に記録）: スコープ `edge_release_read`（`MergeExecute` と同じく自分だけで満たされる）、
-  Action `EdgeReleaseRead`（Reporter 以上）・`EdgeKeysRead`・`EdgeReleaseCreate`・`EdgeReleaseWithdraw`（後の 2 つは人の Web のセッションだけ）、
-  ドメインイベント `edge_release.published`・`edge_release.withdrawn`（`Integration` の見え方、Webhook で配る）。詳細と deny の行は計画 21 §5.3〜5.4。
+- **この ADR の決定のうち使うもの**: 既定の計画では、E1 のコードの呼び出し元は `gstn edge release verify` だけになる。リリースは保護ブランチ `release` の
+  パイプラインの成果物（sha256 付き、ADR-0029 の成果物の API）で、モジュールの改ざんは ESP32 の Secure Boot V2 が防ぐ。**Ed25519 の封筒（決定 2〜5）は
+  既定では作らない**: 封筒が守る区間が無い（モジュールは封筒を見ず、設定のツールは TLS + sha256 で GitStation から直接取る）。設定のツールが取った物を
+  別の経路で配るなど、区間ができたら計画 21 の任意の E4 で使う。そのとき kind は `firmware` / `dictionary` 向けの v2 にし、v1 の `files`・`oci-image`・
+  `agent`・`arch`・`os`・`max_install_seconds`・`health_soak_seconds` は使わない（v1 で出したリリースは無い）。
+- **退役の候補**: 決定 7（波）、8（停止の判定）、9（保守の時間帯と `jiff`）と FG-EDGE-0005。どの案でも使わない。コードは今は消さない（任意の E1b、
+  FG-EDGE-0005 は errors.toml の退役の手順で、番号は再利用しない）。
+- **作らないもの**: `forge-fleet`、`forge-edge-agent`、`Credential::Device`、Consequences にあった E5・E6 の約束。1 回目の変更で書いた `forge-edge-release`・
+  `edge_release_read`・`edge_release.published` も既定では作らない（任意の E4）。`clippy.toml` の `sign_manifest` の呼び出し元の名前（`forge-fleet`）は
+  E4 を作るときに直す。
+- **足すのは CI の隙間 2 つ**（ADR-0029 の Amendment で決める）: 保護ブランチの push のパイプラインの成果物を `artifacts: { keep: true }` で残す（G1）、
+  ジョブの `fetch_depth`（G2。追記だけの確かめが `HEAD^1` と比べるため）。
