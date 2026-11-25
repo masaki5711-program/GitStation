@@ -126,3 +126,42 @@
   border-radius: var(--gs-radius-md);
   background: var(--gs-color-surface);
 }
+
+/* A plain line with its next step (no editing right, the role unread). */
+.note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gs-space-2);
+  margin: 0 0 var(--gs-space-4);
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-info-surface);
+  color: var(--gs-color-info-text);
+}
+
+.createAction {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--gs-space-3);
+}
+
+.retryLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gs-space-2);
+  margin: 0;
+}
+
+.kept {
+  max-width: 48rem;
+  margin-bottom: var(--gs-space-4);
+}
+
+.keptText {
+  font-family: var(--gs-font-mono);
+  background: var(--gs-color-code-surface);
+}

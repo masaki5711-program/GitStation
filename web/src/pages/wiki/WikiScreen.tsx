@@ -13,7 +13,7 @@
 // When the lint is red (the head's `forge/doc-lint`, or the page's own
 // parse problems) one line says where and links "直す" (plan 08).
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useId, useState, type ReactNode, type SyntheticEvent } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 
@@ -95,7 +95,14 @@ export function WikiScreen({
     (view.length === 1 && (first === 'new' || isDocId(first ?? ''))) ||
     (view.length === 2 && isDocId(first ?? '') && (second === 'edit' || second === 'history'));
   if (!shapeOk || rest.length > 0) return <NotFound />;
-  if (link.isPending) return <Loading />;
+  if (link.isPending) {
+    return (
+      <>
+        <PageHeader title={t('wiki.title')} />
+        <Loading />
+      </>
+    );
+  }
   if (link.isError) {
     return (
       <>
@@ -113,18 +120,69 @@ export function WikiScreen({
     const canCreate = isAdmin || role === 'maintainer' || role === 'owner';
     return <NoWiki projectId={projectId} canCreate={canCreate} />;
   }
-  if (wikiProject.isPending) return <Loading />;
+  if (wikiProject.isPending) {
+    return (
+      <>
+        <PageHeader title={t('wiki.title')} />
+        <Loading />
+      </>
+    );
+  }
   const ctx: Ctx = {
     link: link.data,
     base,
     canEdit: wikiProject.isSuccess && mayPush(wikiProject.data.role, isAdmin),
   };
-  if (view.length === 0) return <WikiHome ctx={ctx} />;
-  if (first === 'new') return ctx.canEdit ? <NewPageForm ctx={ctx} /> : <NotFound />;
+  // The role on the wiki could not be read: editing is hidden, and why is
+  // said with a retry (never a silent "read only").
+  const roleNote = wikiProject.isError ? (
+    <p className={styles.note} data-testid="wiki-role-note">
+      <span>{t('wiki.roleUnknown')}</span>{' '}
+      <button
+        type="button"
+        className={`${controls.button} ${controls.small}`}
+        onClick={() => {
+          void wikiProject.refetch();
+        }}
+      >
+        {t('wiki.retry')}
+      </button>
+    </p>
+  ) : null;
   const docId = first ?? '';
-  if (second === 'edit') return ctx.canEdit ? <EditPageForm key={docId} ctx={ctx} docId={docId} /> : <NotFound />;
-  if (second === 'history') return <PageHistory ctx={ctx} docId={docId} />;
-  return <PageView ctx={ctx} docId={docId} />;
+  let screen: ReactNode;
+  if (view.length === 0) screen = <WikiHome ctx={ctx} />;
+  else if (first === 'new' || second === 'edit') {
+    screen = !ctx.canEdit ? (
+      <NoEditRight ctx={ctx} back={first === 'new' ? ctx.base : pageUrl(ctx, docId)} />
+    ) : first === 'new' ? (
+      <NewPageForm ctx={ctx} />
+    ) : (
+      <EditPageForm key={docId} ctx={ctx} docId={docId} />
+    );
+  } else if (second === 'history') screen = <PageHistory ctx={ctx} docId={docId} />;
+  else screen = <PageView ctx={ctx} docId={docId} />;
+  return (
+    <>
+      {roleNote}
+      {screen}
+    </>
+  );
+}
+
+/** A reader who opened `/new` or `/edit`: why there is no form, and the way back. */
+function NoEditRight({ ctx, back }: { ctx: Ctx; back: string }) {
+  const { t } = useTranslation();
+  return (
+    <section aria-labelledby="wiki-noedit-title" className={styles.wiki}>
+      <BackLink ctx={ctx} />
+      <PageHeader title={t('wiki.editTitle')} titleId="wiki-noedit-title" />
+      <p className={styles.note}>
+        <span>{t('wiki.noEditRight')}</span>{' '}
+        <Link to={back}>{t('wiki.backToPage')}</Link>
+      </p>
+    </section>
+  );
 }
 
 function NoWiki({ projectId, canCreate }: { projectId: number; canCreate: boolean }) {
@@ -139,21 +197,28 @@ function NoWiki({ projectId, canCreate }: { projectId: number; canCreate: boolea
         hints={[t('wiki.empty.hint'), ...(canCreate ? [] : [t('wiki.empty.whoCreates')])]}
         action={
           canCreate ? (
-            <button
-              type="button"
-              className={controls.primary}
-              aria-busy={create.isPending ? true : undefined}
-              disabled={create.isPending}
-              onClick={() => {
-                create.mutate();
-              }}
-            >
-              {create.isPending ? t('wiki.empty.creating') : t('wiki.empty.create')}
-            </button>
+            <div className={styles.createAction}>
+              {create.isError && (
+                <>
+                  <ErrorNotice failure={failureOf(create.error)} />
+                  <p className={styles.retryLine}>{t('wiki.empty.retryLine')}</p>
+                </>
+              )}
+              <button
+                type="button"
+                className={controls.primary}
+                aria-busy={create.isPending ? true : undefined}
+                disabled={create.isPending}
+                onClick={() => {
+                  create.mutate();
+                }}
+              >
+                {create.isPending ? t('wiki.empty.creating') : t('wiki.empty.create')}
+              </button>
+            </div>
           ) : undefined
         }
       />
-      {create.isError && <ErrorNotice failure={failureOf(create.error)} />}
     </section>
   );
 }
@@ -213,7 +278,7 @@ function WikiHome({ ctx }: { ctx: Ctx }) {
         <EmptyState
           icon="folder"
           reason={t('wiki.noPages')}
-          {...(actions === undefined ? {} : { action: actions })}
+          {...(actions === undefined ? { hints: [t('wiki.readerHint')] } : { action: actions })}
         />
       ) : (
         <nav aria-label={t('wiki.pages')} className={styles.tree}>
@@ -296,7 +361,15 @@ function PageView({ ctx, docId }: { ctx: Ctx; docId: string }) {
   const wiki = ctx.link.wiki_project_id;
   const doc = useDocument(wiki, docId);
   useDocumentTitle(doc.data?.title ?? docId);
-  if (doc.isPending) return <Loading />;
+  if (doc.isPending) {
+    return (
+      <>
+        <BackLink ctx={ctx} />
+        <PageHeader title={docId} />
+        <Loading />
+      </>
+    );
+  }
   if (doc.isError) {
     return (
       <>
@@ -364,8 +437,11 @@ function PageBody({ ctx, d }: { ctx: Ctx; d: DocumentBody }) {
   return (
     <div className={styles.body} lang={d.lang ?? undefined}>
       {d.sections.map((s, i) => (
-        <section key={`${s.line}-${i}`} {...(s.heading !== null ? { 'aria-label': s.heading } : {})}>
-          {s.heading !== null && <h2>{s.heading}</h2>}
+        <section
+          key={`${s.line}-${i}`}
+          {...(s.heading !== null ? { 'aria-labelledby': `wiki-section-${i}` } : {})}
+        >
+          {s.heading !== null && <h2 id={`wiki-section-${i}`}>{s.heading}</h2>}
           {s.pieces.map((p, j) => (
             <MarkdownView
               key={`${p.line}-${j}`}
@@ -394,15 +470,23 @@ function NewPageForm({ ctx }: { ctx: Ctx }) {
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
   if (pages.isError) {
     return (
-      <RepoError
-        error={pages.error}
-        onRetry={() => {
-          void pages.refetch();
-        }}
-      />
+      <FormFrame ctx={ctx} mode="new">
+        <RepoError
+          error={pages.error}
+          onRetry={() => {
+            void pages.refetch();
+          }}
+        />
+      </FormFrame>
     );
   }
-  if (pages.isPending || pages.hasNextPage) return <Loading />;
+  if (pages.isPending || pages.hasNextPage) {
+    return (
+      <FormFrame ctx={ctx} mode="new">
+        <Loading />
+      </FormFrame>
+    );
+  }
   const ids = pages.data.pages.flatMap((p) => p.documents.map((d) => d.id));
   const head = pages.data.pages[0]?.ref.commit ?? '';
   const page: WikiPage = {
@@ -415,7 +499,30 @@ function NewPageForm({ ctx }: { ctx: Ctx }) {
     },
     body: '',
   };
-  return <FormBody ctx={ctx} initial={page} path={null} startSha={head} />;
+  return (
+    <FormBody
+      ctx={ctx}
+      initial={page}
+      path={null}
+      startSha={head}
+      kept={null}
+      onReload={() => {
+        void pages.refetch();
+      }}
+    />
+  );
+}
+
+/** The back link and the form's heading around a loader or an error. */
+function FormFrame({ ctx, mode, children }: { ctx: Ctx; mode: 'new' | 'edit'; children: ReactNode }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <BackLink ctx={ctx} />
+      <PageHeader title={mode === 'new' ? t('wiki.newTitle') : t('wiki.editTitle')} />
+      {children}
+    </>
+  );
 }
 
 /** An existing page: its file read at the branch head (that commit is the
@@ -425,24 +532,49 @@ function EditPageForm({ ctx, docId }: { ctx: Ctx; docId: string }) {
   const doc = useDocument(wiki, docId);
   const path = doc.data?.path ?? '';
   const blob = useBlob(wiki, `refs/heads/${ctx.link.default_branch}`, path, path !== '');
+  // The text typed before the page was opened again: kept on screen
+  // (copyable) after the latest version replaced the form.
+  const [kept, setKept] = useState<string | null>(null);
   const failed = doc.isError ? doc.error : blob.isError ? blob.error : null;
   if (failed !== null) {
     return (
-      <RepoError
-        error={failed}
-        onRetry={() => {
-          void doc.refetch();
-          void blob.refetch();
-        }}
-      />
+      <FormFrame ctx={ctx} mode="edit">
+        <RepoError
+          error={failed}
+          onRetry={() => {
+            void doc.refetch();
+            void blob.refetch();
+          }}
+        />
+      </FormFrame>
     );
   }
   const file = blob.data;
-  if (doc.isPending || file === undefined) return <Loading />;
+  if (doc.isPending || file === undefined) {
+    return (
+      <FormFrame ctx={ctx} mode="edit">
+        <Loading />
+      </FormFrame>
+    );
+  }
   const parsed =
     file.binary || file.truncated || file.content === null ? null : parsePage(file.content);
   if (parsed === null) return <NotForForm ctx={ctx} path={file.path} />;
-  return <FormBody ctx={ctx} initial={parsed} path={file.path} startSha={file.ref.commit} />;
+  return (
+    <FormBody
+      key={`${file.ref.commit}:${file.oid}`}
+      ctx={ctx}
+      initial={parsed}
+      path={file.path}
+      startSha={file.ref.commit}
+      kept={kept}
+      onReload={(typed) => {
+        setKept(typed);
+        void doc.refetch();
+        void blob.refetch();
+      }}
+    />
+  );
 }
 
 function NotForForm({ ctx, path }: { ctx: Ctx; path: string }) {
@@ -462,12 +594,18 @@ function FormBody({
   initial,
   path,
   startSha,
+  kept,
+  onReload,
 }: {
   ctx: Ctx;
   initial: WikiPage;
   /** The page's file; `null` for a new page. */
   path: string | null;
   startSha: string;
+  /** Text typed before the page was opened again (shown to copy from). */
+  kept: string | null;
+  /** Read the latest version again (after a conflict), keeping `typed`. */
+  onReload: (typed: string) => void;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -475,6 +613,9 @@ function FormBody({
   const wiki = ctx.link.wiki_project_id;
   const save = useSingleFileCommit(wiki);
   const bodyId = useId();
+  const keptId = useId();
+  const formRef = useRef<HTMLFormElement>(null);
+  const [attempt, setAttempt] = useState(0);
   const [title, setTitle] = useState(initial.front.title);
   const [classification, setClassification] = useState<Classification>(initial.front.classification);
   const [body, setBody] = useState(initial.body);
@@ -485,11 +626,20 @@ function FormBody({
   const titleError = tried && title.trim() === '' ? t('wiki.form.titleRequired') : null;
   const folderError = folderClean === null ? t('wiki.form.folderInvalid') : null;
   useDocumentTitle(path === null ? t('wiki.newTitle') : t('wiki.editTitle'));
+  // After a refused submit, the first field marked invalid gets the focus.
+  useEffect(() => {
+    if (attempt === 0) return;
+    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+  }, [attempt]);
 
   const onSubmit = (e: SyntheticEvent) => {
     e.preventDefault();
     setTried(true);
-    if (title.trim() === '' || folderClean === null || save.isPending) return;
+    if (title.trim() === '' || folderClean === null) {
+      setAttempt((a) => a + 1);
+      return;
+    }
+    if (save.isPending) return;
     const target = path ?? (folderClean === '' ? `${id}.md` : `${folderClean}/${id}.md`);
     const content = composePage({
       front: { ...initial.front, title: title.trim(), classification },
@@ -526,7 +676,15 @@ function FormBody({
         titleId="wiki-form-title"
         subtitle={t('wiki.form.subtitle')}
       />
-      <form className={styles.form} onSubmit={onSubmit} noValidate>
+      {kept !== null && (
+        <div className={`${controls.field} ${styles.kept}`}>
+          <label htmlFor={keptId} className={controls.label}>
+            {t('wiki.form.kept')}
+          </label>
+          <textarea id={keptId} className={`${controls.input} ${styles.keptText}`} value={kept} readOnly rows={6} />
+        </div>
+      )}
+      <form ref={formRef} className={styles.form} onSubmit={onSubmit} noValidate>
         <TextField label={t('wiki.form.title')} value={title} onChange={setTitle} required error={titleError} />
         <SelectField
           label={t('wiki.form.classification')}
@@ -569,7 +727,20 @@ function FormBody({
         {save.isError && (
           <div className={styles.saveError}>
             <ErrorNotice failure={failureOf(save.error)} />
-            {conflict && <p>{t('wiki.form.conflict')}</p>}
+            {conflict && (
+              <p className={styles.retryLine}>
+                <span>{t('wiki.form.conflict')}</span>{' '}
+                <button
+                  type="button"
+                  className={`${controls.button} ${controls.small}`}
+                  onClick={() => {
+                    onReload(body);
+                  }}
+                >
+                  {t('wiki.form.reload')}
+                </button>
+              </p>
+            )}
           </div>
         )}
         <div className={styles.formActions}>
@@ -625,17 +796,26 @@ function PageHistory({ ctx, docId }: { ctx: Ctx; docId: string }) {
       </>
     );
   }
-  if (doc.isPending || commits.data === undefined) return <Loading />;
+  if (doc.isPending || commits.data === undefined) {
+    return (
+      <>
+        {header}
+        <Loading />
+      </>
+    );
+  }
   const list = commits.data.pages.flatMap((p) => p.commits);
   return (
     <section aria-labelledby="wiki-history-title" className={styles.wiki}>
       {header}
+      {list.length === 0 && <p className={styles.meta}>{t('wiki.noHistory')}</p>}
       <ol className={styles.history}>
         {list.map((c) => (
           <li key={c.oid}>
             <Link to={commitUrl(ctx.link.wiki_path, c.oid)}>{c.subject}</Link>
             <span className={styles.meta}>
-              <span>{c.author_name}</span> {'·'} {formatDateTime(c.authored_at, i18n.language)}
+              <span>{c.author_name}</span> {'·'}{' '}
+              <time dateTime={c.authored_at}>{formatDateTime(c.authored_at, i18n.language)}</time>
             </span>
           </li>
         ))}

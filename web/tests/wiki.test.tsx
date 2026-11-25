@@ -416,6 +416,121 @@ describe('project wiki tab', () => {
     expect(alert.textContent).toContain('req-conflict');
     expect(alert.textContent).not.toContain('FG-GIT-0027');
   });
+
+  it('after a conflict, "開き直す" loads the latest and keeps the typed text to copy', async () => {
+    let reads = 0;
+    const latest = FIRST_PAGE.replace('プロジェクトの説明をここに書きます。', '最新の説明です。');
+    const server = mockServer(
+      wikiRoutes({
+        'POST /api/v1/projects/21/repository/commits/single-file': () =>
+          apiError(409, 'ほかの人が先に保存しました。', 'req-conflict', 'FG-GIT-0027'),
+        'GET /api/v1/projects/21/repository/blob': () => {
+          reads += 1;
+          const content = reads === 1 ? FIRST_PAGE : latest;
+          return json(200, {
+            binary: false,
+            content,
+            mode: '100644',
+            name: 'WIKI-0001.md',
+            oid: reads === 1 ? 'e'.repeat(40) : 'f'.repeat(40),
+            path: 'WIKI-0001.md',
+            ref: reads === 1 ? REV : { ...REV, commit: NEW_HEAD },
+            size: content.length,
+            truncated: false,
+            type: 'blob',
+          });
+        },
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/wiki/WIKI-0001/edit' });
+    fireEvent.change(await screen.findByLabelText('本文'), { target: { value: '私の直し\n' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    fireEvent.click(await screen.findByRole('button', { name: '開き直す' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText<HTMLTextAreaElement>('本文').value).toContain('最新の説明です。');
+    });
+    const kept = screen.getByLabelText<HTMLTextAreaElement>('保存できなかった本文（コピーして使えます）');
+    expect(kept.value).toBe('私の直し\n');
+    expect(kept.readOnly).toBe(true);
+    // The next save starts from the latest commit.
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await waitFor(() => {
+      expect(posted(server.calls)).toHaveLength(2);
+    });
+    expect((posted(server.calls)[1]?.body as Record<string, unknown>).start_sha).toBe(NEW_HEAD);
+  });
+
+  it('a failed "Wiki を作る" shows the error in the empty state with a retry line', async () => {
+    const server = mockServer(
+      wikiRoutes({
+        'GET /api/v1/projects/7/wiki': () => apiError(404, '見つかりません。', 'req-nowiki', 'FG-REPO-0005'),
+        'POST /api/v1/projects/7/wiki': () =>
+          apiError(500, 'Wiki を作れませんでした。', 'req-create', 'FG-KNOW-0004'),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/wiki' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Wiki を作る' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('req-create');
+    expect(alert.textContent).not.toContain('FG-KNOW-0004');
+    expect(screen.getByText(/もう一度「Wiki を作る」を押してください/)).toBeTruthy();
+    // The button stays, right under the error.
+    expect(screen.getByRole('button', { name: 'Wiki を作る' })).toBeTruthy();
+  });
+
+  it('a reader opening the edit address is told why, with the way back', async () => {
+    const server = mockServer(
+      wikiRoutes({ 'GET /api/v1/projects/21': () => json(200, { ...WIKI_PROJECT, role: 'reporter' }) }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/wiki/WIKI-0001/edit' });
+    expect(await screen.findByText('このページを編集する権限がありません。')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'ページに戻る' }).getAttribute('href')).toBe(
+      '/acme/forge-web/-/wiki/WIKI-0001',
+    );
+    expect(screen.queryByLabelText('本文')).toBeNull();
+  });
+
+  it('when the role on the wiki cannot be read, editing is hidden and says why', async () => {
+    let fail = true;
+    const server = mockServer(
+      wikiRoutes({
+        'GET /api/v1/projects/21': () =>
+          fail ? apiError(500, '読めませんでした。', 'req-role') : json(200, WIKI_PROJECT),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/wiki' });
+    const note = await screen.findByTestId('wiki-role-note');
+    expect(note.textContent).toContain('編集のボタンを隠しています');
+    expect(screen.queryByRole('link', { name: 'ページを作る' })).toBeNull();
+    fail = false;
+    fireEvent.click(within(note).getByRole('button', { name: 'もう一度読む' }));
+    expect(await screen.findByRole('link', { name: 'ページを作る' })).toBeTruthy();
+    expect(screen.queryByTestId('wiki-role-note')).toBeNull();
+  });
+
+  it('a save without a title marks the field and moves the focus to it', async () => {
+    const server = mockServer(wikiRoutes());
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/wiki/new' });
+    const title = await screen.findByLabelText('タイトル');
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await waitFor(() => {
+      expect(window.document.activeElement).toBe(title);
+    });
+    expect(title.getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByText('タイトルを入れてください。')).toBeTruthy();
+    expect(posted(server.calls)).toHaveLength(0);
+  });
+
+  it('a page without commits says so in its history', async () => {
+    const server = mockServer(
+      wikiRoutes({
+        'GET /api/v1/projects/21/repository/commits': () =>
+          json(200, { commits: [], has_more: false, head: HEAD, next_cursor: null, path: 'WIKI-0001.md', ref: REV }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/wiki/WIKI-0001/history' });
+    expect(await screen.findByText('まだ履歴がありません。')).toBeTruthy();
+  });
 });
 
 async function violations(root: HTMLElement): Promise<string[]> {

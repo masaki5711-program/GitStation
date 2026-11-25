@@ -2091,7 +2091,8 @@
       "hint": "Di wiki, siapa saja dapat menulis prosedur dan keputusan — tanpa perlu paham Git.",
       "whoCreates": "Wiki dapat dibuat oleh Maintainer ke atas.",
       "create": "Buat wiki",
-      "creating": "Membuat wiki…"
+      "creating": "Membuat wiki…",
+      "retryLine": "Tekan \"Buat wiki\" lagi. Jika terus gagal, berikan ID permintaan kepada administrator."
     },
     "lint": {
       "red": "Ada halaman wiki yang perlu diperbaiki.",
@@ -2112,11 +2113,19 @@
       "save": "Simpan",
       "saving": "Menyimpan…",
       "cancel": "Batal",
-      "conflict": "Orang lain mengubah halaman ini setelah Anda membukanya. Buka lagi halamannya, lalu ubah lagi."
+      "conflict": "Orang lain mengubah halaman ini setelah Anda membukanya. Tekan \"Buka lagi\" untuk memuat versi terbaru, lalu ubah lagi. Teks Anda tetap di layar.",
+      "kept": "Teks yang tidak tersimpan (salin dari sini)",
+      "reload": "Buka lagi"
     },
     "commit": {
       "create": "Wiki: buat {{id}} {{title}}",
       "update": "Wiki: ubah {{id}} {{title}}"
-    }
+    },
+    "roleUnknown": "Peran Anda di wiki tidak dapat dibaca, jadi tombol ubah disembunyikan.",
+    "retry": "Baca lagi",
+    "noEditRight": "Anda tidak memiliki izin untuk mengubah halaman ini.",
+    "backToPage": "Kembali ke halaman",
+    "readerHint": "Halaman dibuat oleh orang yang dapat mengubah (Developer ke atas).",
+    "noHistory": "Belum ada riwayat."
   }
 }
