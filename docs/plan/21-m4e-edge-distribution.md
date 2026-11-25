@@ -68,7 +68,7 @@
 - ジョブ: (1) 設定のスキーマの追記だけの確かめ（`HEAD^1` と比べる。削除・型・既定値の変更・範囲を狭める・既定値の無い追加を断る）、(2) ESP-IDF のビルド
   （`CONFIG_APP_REPRODUCIBLE_BUILD=y`）、(3) 成果物 `app.bin`・`config-schema.json`・`SHA256SUMS`。
 - **ESP-IDF のイメージ**: Espressif の公式のイメージ `espressif/idf`（サポート中の v5 系）を社内のレジストリに入れ、`.forge-ci.yml` で **ダイジェストで固定**。
-  Runner の `image_registries` に社内のレジストリを入れる（既存の設定）。target は **`esp32s3` だけ**（§11 問い 2、2026-11-25）に絞り、ツールチェーンも S3 の Xtensa の分だけ入れる。大きさは E4 ではなくイメージを作るときに測る（全 target の推定 2〜4 GB より小さい見込み）。
+  Runner の `image_registries` に社内のレジストリを入れる（既存の設定）。target は **`esp32s3` だけ**（§11 問い 2、2026-11-25）に絞り、ツールチェーンも S3 の Xtensa の分だけ入れる。大きさはイメージを作るときに測る（全 target の推定 2〜4 GB より小さい見込み）。
   ジョブにネットワークが無い（ADR-0029）ので、ESP-IDF の部品（component manager）は `dependencies.lock` と `managed_components/` をリポジトリに入れる。
   GitStation 自身の CI のイメージ（`ops/ci-image`、`ci/rust`）には混ぜない。
 - **Secure Boot V2 の署名** は §11 問い 1。既定は「CI では署名しない」（シークレットを受け取ったジョブの成果物はサービスアカウントが読めない — ADR-0029
