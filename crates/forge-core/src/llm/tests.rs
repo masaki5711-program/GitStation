@@ -1,4 +1,7 @@
 //! The LLM contract (plan 19 L5-1): input boundary, output checks, retry.
+//!
+//! Synthetic private-key headers for the output-check tests (no real key):
+//! forge:allow-secret (the push secret check, FG-GIT-0022).
 
 use std::sync::Mutex;
 
