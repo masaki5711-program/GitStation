@@ -90,6 +90,10 @@ pub struct AppState {
     /// Deployments (M4 C11; `forge serve` always sets them; without them
     /// those routes answer `FG-SYS-0001 reason=deploy_unconfigured`).
     pub deploy: Option<Arc<forge_deploy::Deploy>>,
+    /// The stored incident diagnoses (plan 19 L5-7b; `forge serve` always
+    /// sets them; without them the route answers `FG-SYS-0001
+    /// reason=diagnoses_unconfigured`).
+    pub diagnoses: Option<Arc<forge_llm::diagnoses::Diagnoses>>,
     /// The integrations' event feed (M3 I1c, ADR-0016 §7; `forge serve`
     /// always sets it; without it the feed routes answer `FG-SYS-0001
     /// reason=feed_unconfigured`).
@@ -218,6 +222,7 @@ impl AppState {
             doc_revisions: None,
             pipelines: None,
             deploy: None,
+            diagnoses: None,
             feed: None,
             webhooks: None,
             push_mirrors: None,
@@ -382,6 +387,13 @@ impl AppState {
         self
     }
 
+    /// The stored incident diagnoses (plan 19 L5-7b).
+    #[must_use]
+    pub fn with_diagnoses(mut self, diagnoses: forge_llm::diagnoses::Diagnoses) -> Self {
+        self.diagnoses = Some(Arc::new(diagnoses));
+        self
+    }
+
     /// The push mirror's administration (M3 O2).
     #[must_use]
     pub fn with_push_mirrors(mut self, mirrors: forge_integ::mirror::PushMirrors) -> Self {
@@ -490,7 +502,6 @@ pub const PLANNED: &[Action] = &[
     Action::AiAdviceFeedback,
     Action::AiReviewRerun,
     Action::LlmSettingsManage,
-    Action::OpsDiagnosisRead,
     Action::LlmPause,
     Action::LlmResume,
     // Plan 16 §4 (A4): the marketplace's and the builder's routes land
@@ -1172,6 +1183,16 @@ fn runner_routes(registry: Registry<AppState>) -> Registry<AppState> {
             r::list,
         )
         .responds::<r::RunnerList>(Verb::Get, r::ADMIN)
+        // Plan 19 L5-7b: a stored incident diagnosis (`forge diagnose`).
+        .route_with(
+            Verb::Get,
+            routes::diagnoses::ONE,
+            Action::OpsDiagnosisRead,
+            "A stored incident first diagnosis (forge diagnose): the local LLM's advice, labelled with its model, prompt version and time - at most three cause candidates, each citing the fact it comes from and a read-only command to look at next; never a step that changes anything. A confidential diagnosis is withheld from an agent (state withheld). 404 FG-REPO-0005 without such a diagnosis or for any other advice (administrators; a token needs admin)",
+            r::OnInstance,
+            routes::diagnoses::one,
+        )
+        .responds::<routes::diagnoses::DiagnosisBody>(Verb::Get, routes::diagnoses::ONE)
         .route_with_body(
             Verb::Post,
             r::ADMIN,

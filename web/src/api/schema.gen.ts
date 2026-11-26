@@ -610,6 +610,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/diagnoses/{advice_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A stored incident first diagnosis (forge diagnose): the local LLM's advice, labelled with its model, prompt version and time - at most three cause candidates, each citing the fact it comes from and a read-only command to look at next; never a step that changes anything. A confidential diagnosis is withheld from an agent (state withheld). 404 FG-REPO-0005 without such a diagnosis or for any other advice (administrators; a token needs admin) */
+        get: operations["get_api_v1_admin_diagnoses_advice_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/integrations": {
         parameters: {
             query?: never;
@@ -5507,6 +5524,30 @@ export interface components {
             pipeline_id: number;
             status: string;
         };
+        /** @description One cause candidate, as checked and stored. */
+        DiagnosisCandidateBody: {
+            /**
+             * Format: double
+             * @description How likely (0 to 1).
+             */
+            confidence: number;
+            /**
+             * Format: int32
+             * @description The cited log line (`L<n>`), for `log`.
+             */
+            line: number | null;
+            /** @description The cause and the read-only command to look at next. */
+            message: string;
+            /**
+             * @description The fact part it cites (`log`, `catalog:<code>`, `runbook:<name>`,
+             *     `incident:<id>`, `changes`, `doctor`).
+             */
+            path: string | null;
+            /** @description The evidence, as found in the facts. */
+            quote: string;
+            /** @description `critical`, `high`, `medium` or `low` (the impact). */
+            severity: string;
+        };
         /** @description The changed files of a diff. */
         DiffBody: {
             files: components["schemas"]["DiffFileBody"][];
@@ -6242,6 +6283,38 @@ export interface components {
              * @description Pass as `before` for the next (older) page; `null`: no more.
              */
             next_before: number | null;
+        };
+        /** @description A stored incident diagnosis. */
+        IncidentDiagnosisBody: {
+            /** @description At most three, most likely first (empty when withheld). */
+            candidates: components["schemas"]["DiagnosisCandidateBody"][];
+            /** @description UTC, `YYYY-MM-DDTHH:MM:SSZ`; null when withheld. */
+            created_at: string | null;
+            /**
+             * @description Less trustworthy than its words (a step or verdict was removed,
+             *     candidates dropped for their evidence).
+             */
+            degraded: boolean;
+            /** Format: int64 */
+            id: number;
+            /** @description `public`, `internal` or `confidential`. */
+            input_class: string;
+            /** @description Always "AI の助言（提案）": advice, never a decision. */
+            label: string;
+            /** @description The model (`name:tag`); null when withheld. */
+            model: string | null;
+            /** @description Why the words are not shown (withheld only). */
+            note: string | null;
+            /** Format: int32 */
+            prompt_version: number | null;
+            /** @description `shown`, or `withheld` (a confidential diagnosis read by an agent). */
+            state: string;
+            summary: string | null;
+            /**
+             * Format: int64
+             * @description A newer diagnosis of the same incident, if any.
+             */
+            superseded_by: number | null;
         };
         /** @description The instance's emergency stop. */
         InstanceAutoMergeBody: {
@@ -10493,6 +10566,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceAutoMergeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_diagnoses_advice_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                advice_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentDiagnosisBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

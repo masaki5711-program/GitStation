@@ -41,6 +41,7 @@ use tokio::time::Instant;
 
 pub mod background;
 pub mod bench;
+pub mod diagnoses;
 pub mod kanflow;
 pub mod metrics;
 pub mod ollama;

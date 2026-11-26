@@ -52,6 +52,8 @@ pub mod mr_revert;
 pub mod mr_run_pipeline;
 pub mod mr_work_items;
 pub mod notifications;
+// Plan 19 L5-7b: operator reads (the incident diagnosis).
+pub mod ops;
 pub mod registry;
 pub mod review;
 pub mod search;

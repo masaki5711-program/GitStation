@@ -547,6 +547,10 @@ gstn = "deploy summary"
 reason = "M5 L5-8: Kanflow's approval card reads the approval facts with its own credential; an agent tool (L5-9 question tools) decides then whether an agent needs them."
 
 [[deferred]]
+gstn = "ops diagnosis"
+reason = "Plan 19 L5-7b: an admin agent token may read internal diagnoses (plan 19 §11 question 6), but incident diagnosis is run by the incident-commander with gstn; an MCP tool waits for a use."
+
+[[deferred]]
 gstn = "deploy approvers"
 reason = "ADR-0038 step C: reading who approves a deploy environment is a settings read; an agent tool waits for a use."
 

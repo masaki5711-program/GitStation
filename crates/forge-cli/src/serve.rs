@@ -326,6 +326,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     None => pipelines,
                 }
             })
+            // Plan 19 L5-7b: the stored incident diagnoses (read-only).
+            .with_diagnoses(forge_llm::diagnoses::Diagnoses::new(
+                db.clone(), // clone: the pool handle is shared
+            ))
             // M4 C11: deployments (the routes; the worker runs them).
             .with_deploy(forge_deploy::Deploy::new(
                 db.clone(), // clone: the pool handle is shared

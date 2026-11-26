@@ -42,6 +42,8 @@ russh.workspace = true
 getrandom.workspace = true
 # M4 C11: the deployment routes.
 forge-deploy.workspace = true
+# Plan 19 L5-7b: the stored incident diagnosis (read-only route).
+forge-llm.workspace = true
 url.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).

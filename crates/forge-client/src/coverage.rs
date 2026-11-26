@@ -1215,6 +1215,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/ai-tools",
         Coverage::NotForCli("kanflow's AI chat tool pack, read by kanflow's service account; each tool is an API route gstn already covers"),
     ),
+    // M5 L5-7b: a stored incident diagnosis.
+    (
+        "GET",
+        "/api/v1/admin/diagnoses/{advice_id}",
+        Coverage::Command("ops diagnosis"),
+    ),
     // M5 L5-8: the approval facts and summary.
     (
         "GET",

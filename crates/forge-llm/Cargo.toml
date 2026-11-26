@@ -13,6 +13,9 @@ publish.workspace = true
 # features that build inputs (forge-review, forge-deploy) use
 # `forge_core::llm` types and are wired to the gateway by forge-cli.
 [dependencies]
+# M5 L5-7b: the diagnosis read is decided by forge-auth (authorize_advice on
+# the advice's own subject); forge-web calls it (web → feature → auth).
+forge-auth.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
 forge-errors.workspace = true
@@ -35,6 +38,7 @@ path = "src/bin/llm_bench.rs"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+forge-db = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

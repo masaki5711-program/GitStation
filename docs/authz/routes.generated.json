@@ -450,6 +450,15 @@
     "word": "fixed"
   },
   {
+    "action": "OpsDiagnosisRead",
+    "method": "GET",
+    "path": "/api/v1/admin/diagnoses/{advice_id}",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "IntegrationRead",
     "method": "GET",
     "path": "/api/v1/admin/integrations",
@@ -3142,10 +3151,6 @@
   },
   {
     "action": "LlmSettingsManage",
-    "planned": true
-  },
-  {
-    "action": "OpsDiagnosisRead",
     "planned": true
   },
   {

@@ -1489,6 +1489,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["tier","unrestricted","users","groups","selectors","approvals_required","allow_delegation"]}"#,
     },
     CommandSpec {
+        name: "ops diagnosis",
+        summary: "A stored incident first diagnosis (forge diagnose on the server, plan 19 L5-7): the local LLM's advice labelled with its model, prompt version and time - at most three cause candidates, each with the fact it cites and a read-only command to look at next; never a step that changes anything. A confidential diagnosis is withheld from an agent's token (administrators; a token needs read_api and admin).",
+        args: &[arg("id", "positional", true, "The diagnosis (advice) id forge diagnose printed.")],
+        examples: &["gstn ops diagnosis 42 --json"],
+        scopes: &["read_api", "admin"],
+        routes: &["GET /api/v1/admin/diagnoses/{advice_id}"],
+        output: r#"{"type":"object","required":["id","state","label","input_class","candidates"]}"#,
+    },
+    CommandSpec {
         name: "delegation show",
         summary: "Your delegation of approvals (who approves for you and when) and the people who delegate to you (ADR-0038 §3.5). Setting one is done in the browser (個人設定 → 代理の承認): a token is refused.",
         args: &[],

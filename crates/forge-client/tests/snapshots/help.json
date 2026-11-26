@@ -7983,6 +7983,39 @@
       "summary": "Set who may approve an environment's deployments (an Owner, a person): named users approve from Reporter, group members and people a selector finds from Maintainer; nobody else once any is named (FG-DEPLOY-0014). No --user, --group or --selector: any Maintainer. Audited."
     },
     {
+      "args": [
+        {
+          "description": "The diagnosis (advice) id forge diagnose printed.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn ops diagnosis 42 --json"
+      ],
+      "name": "ops diagnosis",
+      "output": {
+        "required": [
+          "id",
+          "state",
+          "label",
+          "input_class",
+          "candidates"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/diagnoses/{advice_id}"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "A stored incident first diagnosis (forge diagnose on the server, plan 19 L5-7): the local LLM's advice labelled with its model, prompt version and time - at most three cause candidates, each with the fact it cites and a read-only command to look at next; never a step that changes anything. A confidential diagnosis is withheld from an agent's token (administrators; a token needs read_api and admin)."
+    },
+    {
       "args": [],
       "examples": [
         "gstn delegation show --json"
