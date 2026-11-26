@@ -597,6 +597,8 @@ fn the_tool_list_is_exactly_the_manifest() {
             "get_pipeline",
             "get_job_log",
             "get_pipeline_diagnosis",
+            "search_knowledge",
+            "get_project_wiki",
             "create_merge_request",
             "update_merge_request",
             "close_merge_request",

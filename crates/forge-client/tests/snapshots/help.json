@@ -8441,6 +8441,8 @@
         "GET /api/v1/projects/{id}/pipelines/{pipeline_id}",
         "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log",
         "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis",
+        "GET /api/v1/search",
+        "GET /api/v1/projects/{id}/wiki",
         "POST /api/v1/projects/{id}/merge-requests",
         "PATCH /api/v1/projects/{id}/merge-requests/{iid}",
         "POST /api/v1/projects/{id}/merge-requests/{iid}/close",
