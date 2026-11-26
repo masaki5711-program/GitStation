@@ -152,3 +152,9 @@ export const pipelineSchedulesUrl = (project: string) => `${base(project)}/-/pip
 /** One pipeline; `job`: the job whose log is open. */
 export const pipelineUrl = (project: string, id: number, job?: number) =>
   `${base(project)}/-/pipelines/${String(id)}${job === undefined ? '' : `?job=${String(job)}`}`;
+
+/** A project's deployments (plan 19 L5-6). */
+export const deploymentsUrl = (project: string) => `${base(project)}/-/deployments`;
+/** One deployment: its approval facts, the AI summary and the approval. */
+export const deploymentUrl = (project: string, id: number) =>
+  `${base(project)}/-/deployments/${String(id)}`;

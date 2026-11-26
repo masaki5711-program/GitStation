@@ -2197,5 +2197,103 @@
       "more": "Cari lebih jauh",
       "backToList": "Kembali ke daftar"
     }
+  },
+  "deploy": {
+    "title": "Deployment",
+    "subtitle": "Deployment per lingkungan, dan yang menunggu persetujuan.",
+    "listLabel": "Daftar deployment",
+    "number": "Deployment #{{id}}",
+    "openCommit": "Buka commit {{sha}}",
+    "empty": "Belum ada deployment.",
+    "emptyAction": "Lihat pipeline (deployment diminta dari build yang berhasil)",
+    "backToList": "Kembali ke daftar deployment",
+    "statusNow": "Status: {{status}}",
+    "env": {
+      "prod": "Produksi (prod)",
+      "stg": "Staging (stg)",
+      "dev": "Pengembangan (dev)"
+    },
+    "status": {
+      "pending_approval": "Menunggu persetujuan",
+      "queued": "Dalam antrean",
+      "running": "Berjalan",
+      "succeeded": "Berhasil",
+      "failed": "Gagal",
+      "rolled_back": "Dikembalikan",
+      "rollback_failed": "Gagal dikembalikan",
+      "blocked": "Diblokir"
+    },
+    "line": {
+      "approve": "Menunggu persetujuan ({{given}} / {{required}}). Periksa fakta di bawah, lalu tekan Setujui.",
+      "requester": "Anda yang meminta deployment ini. Peminta tidak dapat menyetujuinya; minta penyetuju lain di lingkungan ini.",
+      "notApprover": "Menunggu persetujuan ({{given}} / {{required}}). Yang dapat menyetujui adalah penyetuju lingkungan ini.",
+      "queued": "Sudah disetujui; menunggu giliran deployment.",
+      "running": "Sedang melakukan deployment.",
+      "succeeded": "Deployment berhasil.",
+      "failed": "Deployment gagal. Kode di bawah menunjukkan tempat mencari penyebabnya.",
+      "rolled_back": "Dikembalikan ke versi sebelumnya setelah deployment.",
+      "rollback_failed": "Gagal kembali ke versi sebelumnya. Beri tahu tim operasi.",
+      "blocked": "Deployment diblokir. Kode di bawah menunjukkan alasannya.",
+      "other": "Deployment ini tidak menunggu persetujuan.",
+      "errorCode": "Kode kesalahan:",
+      "failedTarget": "(target yang gagal: {{target}})"
+    },
+    "facts": {
+      "title": "Fakta (dibuat oleh kode)",
+      "lead": "Putuskan persetujuan dari fakta ini. Ada tidaknya ringkasan AI, atau isinya, tidak pernah mengubahnya.",
+      "range": "Rentang perubahan",
+      "firstDeployment": "Deployment pertama ke lingkungan ini (tidak ada deployment sebelumnya untuk dibandingkan).",
+      "since_one": "{{count}} commit sejak deployment terakhir yang berhasil",
+      "since_other": "{{count}} commit sejak deployment terakhir yang berhasil",
+      "openCompare": "Lihat diff",
+      "openBase": "Buka commit deployment terakhir {{sha}}",
+      "rangeUnavailable": "Rentang perubahan tidak dapat dibaca ({{code}}). Daftar perubahan tidak diketahui, bukan kosong.",
+      "truncated": "Sebagian daftar dihilangkan: tidak lengkap. Periksa diff.",
+      "risk": "forge/risk",
+      "notAssessed": "Belum dinilai",
+      "mergeRequests": "Merge request",
+      "mr": "!{{iid}}",
+      "mrRisk": "risk: {{risk}}",
+      "migrations": "Migrasi",
+      "protectedPaths": "Path yang dilindungi",
+      "rule": "(aturan: {{rule}})",
+      "ciConfig": "Konfigurasi CI dan deployment",
+      "permissions": "Kode izin",
+      "failedChecks": "Check yang gagal",
+      "conclusion": "(hasil: {{conclusion}})",
+      "freeze": "Periode pembekuan",
+      "frozenNow": "Sekarang sedang periode pembekuan.",
+      "none": "Tidak ada",
+      "unknown": "Tidak diketahui"
+    },
+    "advice": {
+      "title": "Ringkasan AI",
+      "label": "Saran AI (usulan)",
+      "none": "Belum ada ringkasan AI. Persetujuan tidak memerlukannya.",
+      "withheld": "Tidak ditampilkan: masukannya rahasia.",
+      "staleLead": "Ringkasan ini sudah usang:",
+      "stale": {
+        "sha_changed": "ringkasan ini tentang commit lain.",
+        "newer_commit": "deployment commit yang lebih baru telah diminta untuk lingkungan ini.",
+        "facts_changed": "fakta berubah setelah ringkasan dibuat (sebuah check selesai, atau deployment lain berhasil).",
+        "facts_unknown": "fakta yang menjadi dasarnya tidak diketahui."
+      },
+      "degraded": "Ringkasan yang kurang dapat dipercaya (sebagian ditahan). Periksa faktanya.",
+      "model": "Model: {{model}}",
+      "prompt": "Versi prompt: v{{version}}",
+      "made": "Dibuat: {{at}}",
+      "notRequired": "Ringkasan ini hanya saran. Orang yang memutuskan persetujuan dari fakta, apa pun isi ringkasannya."
+    },
+    "approve": {
+      "title": "Persetujuan",
+      "lead": "Menyetujui adalah tindakan Anda sendiri (hanya orang yang dapat menyetujui produksi).",
+      "button": "Setujui",
+      "sending": "Menyetujui…",
+      "confirm": "Setujui deployment commit {{sha}} ke {{env}}?",
+      "yes": "Setujui",
+      "no": "Batal",
+      "done": "Disetujui.",
+      "doneMore": "Disetujui ({{given}} / {{required}}). Menunggu persetujuan lain."
+    }
   }
 }

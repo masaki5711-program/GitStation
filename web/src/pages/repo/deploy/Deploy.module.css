@@ -1,0 +1,287 @@
+/* The deployment screens (plan 19 §3.4, L5-6): list, approval detail. */
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  align-items: baseline;
+  padding: var(--gs-space-3) 0;
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.itemMain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.number {
+  font-weight: var(--gs-font-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.subject {
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.hint {
+  margin: 0 0 var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+}
+
+.empty {
+  margin: 0 0 var(--gs-space-4);
+  padding: var(--gs-space-4);
+  border: 1px dashed var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.empty p {
+  margin: 0 0 var(--gs-space-3);
+}
+
+/* The one line under the title: why it waits and what to press next (plan 08). */
+.statusLine {
+  margin: 0 0 var(--gs-space-4);
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+}
+
+.statusLine p {
+  margin: 0;
+}
+
+.statusLine p + p {
+  margin-top: var(--gs-space-2);
+}
+
+.statusWaiting {
+  border-left-color: var(--gs-color-attention);
+}
+
+.statusFailed {
+  border-left-color: var(--gs-color-danger-border);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.statusDone {
+  border-left-color: var(--gs-color-accent-strong);
+}
+
+.sectionTitle {
+  margin: var(--gs-space-6) 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-lg);
+  color: var(--gs-color-heading);
+}
+
+/* The facts: a term and its value, one row each. */
+.facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: var(--gs-space-2) var(--gs-space-4);
+  margin: 0;
+}
+
+.facts dt {
+  font-weight: var(--gs-font-weight-bold);
+  color: var(--gs-color-heading);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.facts ul {
+  margin: 0;
+  padding-left: var(--gs-space-6);
+}
+
+@media (max-width: 40rem) {
+  .facts {
+    grid-template-columns: 1fr;
+  }
+
+  .facts dd {
+    margin-bottom: var(--gs-space-2);
+  }
+}
+
+.unknown {
+  font-weight: var(--gs-font-weight-bold);
+  color: var(--gs-color-warning-text);
+}
+
+.unknown::before {
+  content: "? ";
+}
+
+.warning {
+  margin: 0 0 var(--gs-space-3);
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.warning::before {
+  content: "\26A0  ";
+}
+
+/* The AI's advice: framed apart from the facts, labelled in words and a
+ * glyph (never the colour alone), the text as plain text. */
+.advice {
+  margin: 0;
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border: 1px dashed var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-info-surface);
+}
+
+.adviceLabel {
+  display: inline-block;
+  margin: 0 0 var(--gs-space-2);
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+  color: var(--gs-color-info-text);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.adviceLabel::before {
+  content: "\2726  ";
+}
+
+.adviceText {
+  margin: 0 0 var(--gs-space-2);
+  color: var(--gs-color-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.advice p {
+  margin: 0 0 var(--gs-space-2);
+}
+
+.adviceMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-3);
+  align-items: center;
+  margin: var(--gs-space-3) 0 0;
+}
+
+.confirm {
+  margin: var(--gs-space-3) 0 0;
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+}
+
+.confirm p {
+  margin: 0;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The status badge: a word, a glyph and a colour. */
+.badge {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.badge::before {
+  margin-right: var(--gs-space-1);
+}
+
+.badgeSuccess {
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.badgeSuccess::before {
+  content: "\2713";
+}
+
+.badgeFailed {
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.badgeFailed::before {
+  content: "\2715";
+}
+
+.badgeRunning {
+  background: var(--gs-color-info-surface);
+  color: var(--gs-color-info-text);
+}
+
+.badgeRunning::before {
+  content: "\25B6";
+}
+
+.badgePending {
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text-muted);
+}
+
+.badgePending::before {
+  content: "\25F7";
+}
+
+.badgeNeutral {
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text-muted);
+}
+
+.badgeNeutral::before {
+  content: "\21BA";
+}

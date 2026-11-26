@@ -121,6 +121,12 @@ export const ICONS = {
       <path d="M7.5 12H12M12 6v12M12 6h4.5M12 18h4.5" />
     </Icon>
   ),
+  deployments: (
+    <Icon>
+      <path d="M12 3v11M7.5 9.5 12 14l4.5-4.5" />
+      <path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
+    </Icon>
+  ),
   members: (
     <Icon>
       <circle cx="12" cy="8" r="3.5" />

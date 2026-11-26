@@ -40,6 +40,8 @@ import { NewMergeRequestScreen } from './mr/NewMergeRequestScreen';
 import { parseHookId } from '../webhooks/common';
 import {
   DeliveriesScreen,
+  DeploymentScreen,
+  DeploymentsScreen,
   EditorScreen,
   MembersScreen,
   MergeQueueScreen,
@@ -52,7 +54,7 @@ import {
 } from '../lazyScreens';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'merge-queue', 'edit', 'new', 'wiki'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'deployments', 'merge-queue', 'edit', 'new', 'wiki'];
 
 export function RepoViews({
   projectId,
@@ -88,6 +90,11 @@ export function RepoViews({
   const schedules = word === 'pipelines' && tail.length === 1 && tail[0] === 'schedules';
   const pipelineId = word === 'pipelines' && tail.length === 1 ? parseId(tail[0]) : null;
   if (word === 'pipelines' && tail.length > 0 && !schedules && (tail.length > 1 || pipelineId === null)) {
+    return <NotFound />;
+  }
+  // `/-/deployments[/{id}]`: the same rule for a deployment id.
+  const deploymentId = word === 'deployments' && tail.length === 1 ? parseId(tail[0]) : null;
+  if (word === 'deployments' && tail.length > 0 && (tail.length > 1 || deploymentId === null)) {
     return <NotFound />;
   }
   if (info.isPending) return <Loading />;
@@ -184,6 +191,14 @@ export function RepoViews({
         <PipelineScreen key={pipelineId} projectId={projectId} project={project} id={pipelineId} />
       );
       break;
+    case 'deployments':
+      screen =
+        deploymentId === null ? (
+          <DeploymentsScreen projectId={projectId} project={project} />
+        ) : (
+          <DeploymentScreen key={deploymentId} projectId={projectId} project={project} id={deploymentId} />
+        );
+      break;
     case 'merge-queue':
       screen =
         tail.length === 0 ? <MergeQueueScreen projectId={projectId} project={project} /> : <NotFound />;
@@ -229,6 +244,7 @@ export function RepoViews({
     { words: ['documents'], to: `${base}/-/documents`, label: t('docs.title') },
     { words: ['wiki'], to: `${base}/-/wiki`, label: t('wiki.title') },
     { words: ['pipelines'], to: `${base}/-/pipelines`, label: t('pipelines.title') },
+    { words: ['deployments'], to: `${base}/-/deployments`, label: t('deploy.title') },
     { words: ['members'], to: `${base}/-/members`, label: t('members.title') },
     ...(canManageHooks
       ? [{ words: ['webhooks'], to: `${base}/-/webhooks`, label: t('webhooks.title') }]

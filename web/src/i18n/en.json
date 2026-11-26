@@ -2197,5 +2197,103 @@
       "more": "Search further",
       "backToList": "Back to the list"
     }
+  },
+  "deploy": {
+    "title": "Deployments",
+    "subtitle": "Deployments per environment, and those waiting for an approval.",
+    "listLabel": "Deployments",
+    "number": "Deployment #{{id}}",
+    "openCommit": "Open commit {{sha}}",
+    "empty": "No deployments yet.",
+    "emptyAction": "See the pipelines (a deployment is requested from a successful build)",
+    "backToList": "Back to the deployments",
+    "statusNow": "Status: {{status}}",
+    "env": {
+      "prod": "Production (prod)",
+      "stg": "Staging (stg)",
+      "dev": "Development (dev)"
+    },
+    "status": {
+      "pending_approval": "Waiting for approval",
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "rolled_back": "Rolled back",
+      "rollback_failed": "Rollback failed",
+      "blocked": "Blocked"
+    },
+    "line": {
+      "approve": "Waiting for approval ({{given}} / {{required}}). Check the facts below, then press Approve.",
+      "requester": "You requested this deployment. The requester cannot approve it; ask another approver of this environment.",
+      "notApprover": "Waiting for approval ({{given}} / {{required}}). This environment's approvers can approve it.",
+      "queued": "Approved; waiting for its turn to deploy.",
+      "running": "Deploying.",
+      "succeeded": "The deployment succeeded.",
+      "failed": "The deployment failed. The code below tells where to look.",
+      "rolled_back": "It was rolled back to the previous version after deploying.",
+      "rollback_failed": "The rollback to the previous version failed. Tell the operators.",
+      "blocked": "The deployment was blocked. The code below tells why.",
+      "other": "This deployment is not waiting for an approval.",
+      "errorCode": "Error code:",
+      "failedTarget": "(failed target: {{target}})"
+    },
+    "facts": {
+      "title": "Facts (listed by code)",
+      "lead": "Decide on the approval from these facts. Whether there is an AI summary, or what it says, never changes them.",
+      "range": "Range of changes",
+      "firstDeployment": "The first deployment to this environment (no earlier deployment to compare with).",
+      "since_one": "{{count}} commit since the last successful deployment",
+      "since_other": "{{count}} commits since the last successful deployment",
+      "openCompare": "See the diff",
+      "openBase": "Open the last deployment's commit {{sha}}",
+      "rangeUnavailable": "The range of changes could not be read ({{code}}). The lists of changes are unknown, not empty.",
+      "truncated": "Part of a list was left out: it is not complete. Check the diff.",
+      "risk": "forge/risk",
+      "notAssessed": "Not assessed",
+      "mergeRequests": "Merge requests",
+      "mr": "!{{iid}}",
+      "mrRisk": "risk: {{risk}}",
+      "migrations": "Migrations",
+      "protectedPaths": "Protected paths",
+      "rule": "(rule: {{rule}})",
+      "ciConfig": "CI and deploy configuration",
+      "permissions": "Permission code",
+      "failedChecks": "Failed checks",
+      "conclusion": "(conclusion: {{conclusion}})",
+      "freeze": "Freeze windows",
+      "frozenNow": "A freeze window is in force now.",
+      "none": "None",
+      "unknown": "Unknown"
+    },
+    "advice": {
+      "title": "AI summary",
+      "label": "AI advice (suggestion)",
+      "none": "There is no AI summary now. The approval does not need one.",
+      "withheld": "Not shown: the input is confidential.",
+      "staleLead": "This summary is out of date:",
+      "stale": {
+        "sha_changed": "it is about another commit.",
+        "newer_commit": "a deployment of a newer commit was requested for this environment.",
+        "facts_changed": "the facts changed after it was made (a check finished, or another deployment succeeded).",
+        "facts_unknown": "the facts it was made from are not known."
+      },
+      "degraded": "A less trustworthy summary (part of it was withheld). Check the facts.",
+      "model": "Model: {{model}}",
+      "prompt": "Prompt version: v{{version}}",
+      "made": "Made: {{at}}",
+      "notRequired": "The summary is advice. A person decides the approval from the facts, whatever the summary says."
+    },
+    "approve": {
+      "title": "Approval",
+      "lead": "Approving is your own action (only a person can approve production).",
+      "button": "Approve",
+      "sending": "Approving…",
+      "confirm": "Approve deploying commit {{sha}} to {{env}}?",
+      "yes": "Approve",
+      "no": "Cancel",
+      "done": "Approved.",
+      "doneMore": "Approved ({{given}} / {{required}}). Waiting for more approvals."
+    }
   }
 }

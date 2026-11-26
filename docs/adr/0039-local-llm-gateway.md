@@ -248,3 +248,31 @@ L5-7 で残した読み取りの経路を作った（計画 19 §3.2「`gstn ops
   要約・候補（最大 3、根拠つき）・`degraded`・`superseded_by`。
 - `gstn ops diagnosis <id>`（トークンは `read_api` と `admin`）。エージェントの MCP の道具は `deferred`（障害の指揮は gstn で読む）。forge-client の網羅の表は `Command("ops diagnosis")`。表示する文字はすべて `sanitize` を通す
   （モデルの文なので）。
+
+## Amendment（2026-11-27、L5-6 の一部 `feat/ui-deploy-approval`: デプロイの承認の画面と要約の表示）
+
+L5-8 で残した「GitStation の Web には承認の画面がまだ無い。要約の表示は L5-6 と一緒に足す」を作った。利用者の指示（計画の推奨を
+すべて採る）で、次を決めた。
+
+1. **範囲**: L5-6 のうち **デプロイの承認の画面と要約の表示** だけ。MR の画面の助言の欄（要約・指摘・深掘りの印・「役に立った / 誤り」）は
+   L5-5 の経路（MR の助言を読む API と `AiAdviceFeedback`）がまだ無いので、L5-5 の後に同じ見せ方（下の 3）で足す。
+2. **画面**: プロジェクトの画面の語 `deployments` を足した（`/-/deployments` は一覧 = `GET …/deployments`、`/-/deployments/{id}` は
+   承認の画面 = `GET …/deployments/{deployment_id}/approval-summary`）。横のメニューにも「デプロイ」。新しい経路・Action は無い
+   （生成物 `schema.gen.ts`・openapi・権限の表は変わらない）。
+3. **見せ方（計画 §4）**: 上に「なぜ待っているか・次に何を押すか」の 1 行（計画 08）、次に **事実の一覧（常に全部）**、その下に
+   別の枠で AI の要約。要約には文字と記号のラベル「AI の助言（提案）」（色だけに頼らない）、モデル・プロンプトの版・作った時刻、
+   古いときは「古い要約です」と理由（`sha_changed` / `newer_commit` / `facts_changed` / `facts_unknown`）、`degraded` は「信頼度が低い」、
+   `withheld` は「機密の入力のため表示しません」、`none` は「今ありません。承認には要りません」。本文は平文（HTML・Markdown にしない）で
+   `lang="ja"`（要約は ja だけ。§11 の問い 5 の en / id の「開いたときに作る」は API の側の別の変更）。ラベル・注記の文は画面の
+   i18n（ja / en / id）で、API の `label` / `note`（ja 固定）は使わない。助言の枠には操作の欄が無い。
+4. **事実の「不明」**: `range = unavailable` のとき、変更の一覧（MR・マイグレーション・保護パス・CI の設定・権限）は「なし」でなく
+   「不明」と出し、FG コードを示す。失敗したチェックはコミット自身のものなので範囲に関係なく出す。省いた一覧（`lists_truncated` /
+   `commits_truncated`）は「全部ではありません」。
+5. **承認のボタンは要約と無関係**: ボタンを出すかは デプロイの状態（`pending_approval`）・読み手・環境の承認者（`GET …/deploy/approvers`）
+   だけで決める（`approverStanding`）。依頼した人には出さず理由を言う（FG-DEPLOY-0009）。承認者の指定が無い環境は Maintainer 以上、
+   名指しの人は Reporter 以上、グループ・組織のセレクタは画面で判定できないので Maintainer 以上に出してサーバーが決める。
+   承認は確認の 1 段（環境と SHA を示す）を挟み、この Web のセッションの `POST …/approve`（本文も `on_behalf_of` も無い。CSRF つき）。
+   サーバーはトークン・代理を断り、本番は人だけ（変更なし）。断りは `user_message` と `request_id` だけを出す。
+6. **読み直し**: 承認待ちで要約が `none` の間だけ 30 秒ごと（worker の周回と同じ。読むたびに事実を作るので速くしない）。一覧は
+   動いているデプロイがある間 15 秒ごと。
+7. **まだ無いもの**: 代理の承認（`?on_behalf_of=`、ADR-0038 §3.5）の選択は画面に無い（API と PFS ポータルの部品）。MR の助言の欄は 1。

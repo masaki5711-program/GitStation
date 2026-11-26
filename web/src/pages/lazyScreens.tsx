@@ -85,6 +85,8 @@ export const WebhooksScreen = screen(() => loaders.webhooks().then((m) => m.Webh
 export const DeliveriesScreen = screen(() => loaders.deliveries().then((m) => m.DeliveriesScreen));
 export const PipelinesScreen = screen(() => loaders.pipelines().then((m) => m.PipelinesScreen));
 export const PipelineScreen = screen(() => loaders.pipeline().then((m) => m.PipelineScreen));
+export const DeploymentsScreen = screen(() => loaders.deployments().then((m) => m.DeploymentsScreen));
+export const DeploymentScreen = screen(() => loaders.deployment().then((m) => m.DeploymentScreen));
 export const MergeQueueScreen = screen(() => loaders.mergeQueue().then((m) => m.MergeQueueScreen));
 export const SchedulesScreen = screen(() => loaders.schedules().then((m) => m.SchedulesScreen));
 export const EditorScreen = screen(() => loaders.editor().then((m) => m.EditorScreen));
@@ -98,6 +100,7 @@ const BY_WORD: Record<string, (() => Promise<unknown>) | undefined> = {
   members: loaders.members,
   webhooks: loaders.webhooks,
   pipelines: loaders.pipelines,
+  deployments: loaders.deployments,
   'merge-queue': loaders.mergeQueue,
   edit: loaders.editor,
   new: loaders.editor,
