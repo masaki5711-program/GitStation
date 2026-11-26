@@ -362,6 +362,20 @@ async fn moved_notes_project_is_know_f() {
     let (status, body) = w.call("GET", NOTES, &w.olga).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(code(&body), "FG-KNOW-0005");
+    // The move left a tombstone at olga/notes: the path is taken until
+    // she releases it (nothing written).
+    let (status, body) = w.call("POST", NOTES, &w.olga).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(code(&body), "FG-KNOW-0006");
+    let (status, body) = send(
+        w.router.clone(),
+        "POST",
+        "/api/v1/namespaces/tombstones/release",
+        w.olga.clone(),
+        Some(json!({"path": "olga/notes"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     // Create again: new <olga>/notes, the stale pointer replaced.
     let (status, body) = w.call("POST", NOTES, &w.olga).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");

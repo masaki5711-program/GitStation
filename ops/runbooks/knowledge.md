@@ -93,7 +93,10 @@ SELECT n.project_id, p.deleted_at, ns.parent_id, ns.segment
 
 - **FG-KNOW-0005 `moved`**: the person renamed or moved the notes project
   (e.g. into a group to share it). It keeps working as an ordinary project;
-  `gstn note create` makes new `<user>/notes` and replaces the pointer.
+  The move left a tombstone (redirect) at `<user>/notes`: the person
+  releases it (`POST /api/v1/namespaces/tombstones/release`,
+  `{"path": "<user>/notes"}`), then `gstn note create` makes new
+  `<user>/notes` and replaces the pointer.
 - **FG-KNOW-0005 `deleted`**: the project is pending deletion. Restore it
   (`gstn project restore`, within the grace period), or wait for the purge
   (it removes the pointer and frees the path) and create the notes again —

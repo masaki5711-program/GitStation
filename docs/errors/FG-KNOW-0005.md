@@ -24,4 +24,4 @@ The log event carries `reason`, `user_id`, `notes_project_id` and, for `moved`, 
 
 ## 対処 (fix)
 
-The person creates the notes again (`POST /api/v1/user/notes`, `gstn note create`, or the web's 「ノートを作る」): a stale pointer is replaced by the new `<user>/notes`. A deleted project can instead be restored (`gstn project restore`) within its grace period; a moved one can be moved back. Runbook knowledge, 「Personal notes」.
+The person creates the notes again (`POST /api/v1/user/notes`, `gstn note create`, or the web's 「ノートを作る」): a stale pointer is replaced by the new `<user>/notes`. After a move the old path is a tombstone (the redirect): release it first (`POST /api/v1/namespaces/tombstones/release` with `path=<user>/notes`), else the creation is FG-KNOW-0006 `name_taken`. A deleted project can instead be restored (`gstn project restore`) within its grace period; a moved one can be moved back. Runbook knowledge, 「Personal notes」.

@@ -3442,7 +3442,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The caller's notes — the private project <user>/notes: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again) */
+        /** The caller's notes — the private project <user>/notes, proved ProjectRead with the caller's own credential: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again) */
         get: operations["get_api_v1_user_notes"];
         put?: never;
         /** Create the caller's notes in one step: the private project <user>/notes in their own namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/note.yml with owner_kind: user, README.md), then the pointer; a stale pointer (FG-KNOW-0005) is replaced. The person only (never an agent, a service account, acting for a person or CI), api; 409 FG-KNOW-0006 refused (already exists, name taken), 500 FG-KNOW-0007 when a step after the creation failed (no pointer written) */
