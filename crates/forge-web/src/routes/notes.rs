@@ -197,7 +197,8 @@ pub async fn read(state: AppState, request: Dispatched<InstanceCtx>) -> Response
             w.proof.principal(),
             Action::ProjectRead,
             ProjectCtx::new(projects::loaded(&record)),
-        )?;
+        )
+        .map(drop)?;
         let path = record.path.full_path();
         let owner = path
             .split_once('/')
