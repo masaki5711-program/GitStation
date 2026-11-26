@@ -919,6 +919,7 @@ async fn a_maintenance_run_deletes_finished_pipelines_refs() {
                 tags: Vec::new(),
                 secrets: Vec::new(),
                 manual: false,
+                artifacts_keep: false,
             }]),
         },
     )

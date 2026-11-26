@@ -956,6 +956,21 @@ fn the_git_calls_run_as_written_on_the_real_git() {
         "{ran:?}"
     );
     assert!(!ran.stderr_tail.contains("fgj_1_secret"));
+    // Plan 21 G2: the deepening fetch's argv parses too.
+    let deepen = plan
+        .deepen(
+            &work,
+            "http://127.0.0.1:9/api/v1/runner/jobs/1/repo.git",
+            1,
+            &JobToken::new("fgj_1_secret".to_owned()),
+            2,
+        )
+        .expect("in range");
+    let ran = run(&deepen);
+    assert!(
+        matches!(ran.exit, Exit::Code(c) if c != 0 && c != 129),
+        "{ran:?}"
+    );
     // Stand in for the fetch: a commit at refs/forge/job.
     let git = |args: &[&str]| {
         let out = Command::new("git")
@@ -985,6 +1000,73 @@ fn the_git_calls_run_as_written_on_the_real_git() {
     assert_eq!(String::from_utf8_lossy(&def.stdout), definition("make"));
     let checkout = run(&plan.checkout(&work, &oid));
     assert!(checkout.ok(), "{checkout:?}");
+}
+
+/// Plan 21 G2: a job with `fetch_depth: 2` fetches its pipeline ref again
+/// with `--depth=2` after the pinned definition is checked, and verifies
+/// the commit again; a job without it fetches once with `--depth=1`.
+#[test]
+fn a_job_with_fetch_depth_fetches_again_with_that_depth() {
+    let depths = |fake: &Fake| -> Vec<String> {
+        fake.calls()
+            .iter()
+            .filter(|c| c.program_name() == "git" && subcommand(c) == "fetch")
+            .flat_map(|c| c.argv().into_iter().filter(|a| a.starts_with("--depth")))
+            .collect()
+    };
+    let def = definition("make").replace(
+        "    timeout: 10m
+",
+        "    timeout: 10m
+    fetch_depth: 2
+",
+    );
+    let fake = Fake::new(&def, Podman::Exit(0));
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert_eq!(depths(&fake), ["--depth=1", "--depth=2"]);
+    let verifies = fake
+        .calls()
+        .iter()
+        .filter(|c| c.program_name() == "git" && subcommand(c) == "rev-parse")
+        .count();
+    assert_eq!(verifies, 2, "the commit is verified after each fetch");
+    let log = forge.logs.lock().unwrap().concat();
+    assert!(log.contains("fetching 2 commit(s) of history"), "{log}");
+
+    let def = definition("make");
+    let fake = Fake::new(&def, Podman::Exit(0));
+    let s = setup(&fake);
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert_eq!(depths(&fake), ["--depth=1"], "default_depth_is_one");
+}
+
+/// Plan 21 G2: a definition whose `fetch_depth` is out of range never runs
+/// (the runner's own lint of the pinned file: FG-CI-0008).
+#[test]
+fn a_fetch_depth_out_of_range_runs_nothing() {
+    let def = definition("make").replace(
+        "    timeout: 10m
+",
+        "    timeout: 10m
+    fetch_depth: 51
+",
+    );
+    let fake = Fake::new(&def, Podman::Exit(0));
+    let s = setup(&fake);
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
+    assert_eq!(out.result, JobResult::Failed);
+    assert_eq!(
+        out.error.expect("failed").code(),
+        ErrorCode::JobDefinitionMismatch
+    );
+    assert!(!fake
+        .calls()
+        .iter()
+        .any(|c| c.program_name() == "podman" && subcommand(c) == "create"));
 }
 
 /// M4 C4 review: an image outside the configured registries is refused
@@ -1958,6 +2040,46 @@ fn a_successful_jobs_declared_artifacts_are_uploaded() {
     );
     let log = forge.logs.lock().unwrap().concat();
     assert!(log.contains("artifact path not found: absent"), "{log}");
+}
+
+/// Plan 21 G1: a job that asks `artifacts: { keep: true }` is told in its
+/// log whether forge keeps them — never silently: kept only in a push
+/// pipeline of a protected branch (the claim's `secrets_allowed`).
+#[test]
+fn a_keep_request_is_named_in_the_job_log_on_both_kinds_of_pipeline() {
+    let def = artifact_definition().replace(
+        "      paths: [left-by-the-job, absent]
+",
+        "      paths: [left-by-the-job, absent]
+      keep: true
+",
+    );
+    for (protected_push, expected) in [
+        (false, "is not honoured here"),
+        (true, "artifacts kept: they do not expire"),
+    ] {
+        let fake = Fake::new(&def, Podman::Litter);
+        let s = setup(&fake);
+        let forge = Forge::default();
+        let mut job = claim(7, "fgj_7_secret", &def);
+        job.secrets_allowed = protected_push;
+        let out = run(&s, &job, &forge);
+        assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+        let log = forge.logs.lock().unwrap().concat();
+        assert!(log.contains(expected), "{protected_push}: {log}");
+    }
+    // A job that did not ask gets no line.
+    let def = artifact_definition();
+    let fake = Fake::new(&def, Podman::Litter);
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    let log = forge.logs.lock().unwrap().concat();
+    assert!(
+        !log.contains("artifacts kept") && !log.contains("keep: true"),
+        "{log}"
+    );
 }
 
 /// M4 C6: an upload that fails fails the job (FG-CI-0020): a later job

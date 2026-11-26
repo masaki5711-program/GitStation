@@ -96,6 +96,18 @@ M6（計画 20）は Wiki・個人ノート・横断検索（と最小の Issue�
 - **未了**: `forge/doc-lint` は今は MR の版の先端でだけ走る。Wiki の直接の push の後に走らせるのは別の項目（それまでは画面の 1 行はページ自身の解析の問題だけで出る）。
 - **受け入れた LOW（独立のセキュリティレビュー、2026-11-25）**: (1) `GET …/wiki` の「Wiki が無い」と「結び付いているが読めない」は同じ `404 FG-REPO-0005` だが、後者は Wiki のプロジェクトを読む分だけ応答が遅く、時間の差から「何かの Wiki がある」ことだけは分かり得る。id・パス・名前は出ないので受け入れる。(2) 主プロジェクトの Maintainer が Wiki を読めない場合、画面は「Wiki を作る」を出し、押すと `409 FG-KNOW-0003 reason=already_linked` になる。その Maintainer は結び付けを外せる（`ProjectWikiLink`）ので受け入れる。
 
+## Amendment W3（2026-11-25、Wiki への参照）
+
+- **書き方と置き場所**: `[[wiki:<id>]]` / `[[wiki:<id>#<block>]]`。`forge-doc` は純粋なまま（`Reference::wiki`、`wiki` はリポジトリのパスに使えない予約語）。lint は呼び出し側が読んだ Wiki の索引（`WikiRefs::Linked` / `NotLinked` / `Unchecked`）を受け取るだけ。
+- **lint は警告だけ**: 壊れた参照は `wiki_ref_broken`、Wiki の無いプロジェクトでは `wiki_not_linked`。どちらも常に警告（`FG-DOC-0008`）で、`forge/doc-lint` を失敗にしない（Wiki は別に編集されるので、主プロジェクトのマージを止めない）。`check.spec_index` ジョブは、文書に `[[wiki:` があるときだけ結び付けた Wiki の既定ブランチの先端を lint の上限で読む。上限に当たった・リポジトリが準備中なら確かめずに、要約にその 1 行を書く（黙って通さない）。`gstn doc lint`・差分の lint・マージキューの列車の lint は確かめない（Wiki を読めない・止める理由にしない）。
+- **描画は閲覧者ごと**: 文書の API は、文書に Wiki への参照があるときだけ、結び付け（主プロジェクトの側だけ）→ Wiki のプロジェクトを閲覧者で読み込み → `prove(RepoBrowse)` で決める。拒否・無い・準備中なら `unreadable`（ID だけ、Wiki は何も読まないのでページの有無も分からない）。許されたら先端を 1 回読み（閲覧者の予算に数える）、`found` / `hidden`（この文書より機密）/ `broken`。エージェントには先端で機密のページを `hidden` にする。結び付けが無ければ `no_wiki`。
+
+## Amendment W3-R（2026-11-25、W3 の独立レビューへの対応）
+
+- **Wiki の失敗で主プロジェクトを止めない（HIGH）**: `check.spec_index` の Wiki の読み（結び付け・プロジェクト・git・時間切れ）が失敗しても、ジョブは失敗にしない。参照は確かめず（`read_failed`）、要約に 1 行、ログ `forge.doc_lint.wiki_unavailable`（warn、元のコードと `request_id`）。文書の API でも Wiki の git が読めなければ参照を `unreadable` にして 200 で答え、`forge.documents.wiki_unavailable` を残す。
+- **検査の結果から Wiki を漏らさない（MEDIUM）**: ジョブはシステムの権限で読み、結果は主プロジェクトを読める全員が読む。だから要約・注記に Wiki のプロジェクトの id・パス・リポジトリの状態を書かない。Wiki が主プロジェクトより非公開（主が `internal`、Wiki が `private`）なら Wiki を読まず、ID ごとの `wiki_ref_broken` を出さずに「Wiki の参照は確かめていません（Wiki がこのプロジェクトより非公開のため）」の 1 行だけにする。
+- **`no_wiki` と `unreadable` の区別（MEDIUM）**: `no_wiki` は結び付けを扱える人（主プロジェクトで `prove(ProjectWikiLink)` が通る Maintainer、結び付けは元々見える）にだけ返す。それ以外の人には、結び付けが無いときも読めない Wiki のときも同じ `unreadable`。拒否の枝は `forge.documents.wiki_denied`（debug、`request_id`）。
+
 ## Amendment N1（2026-11-26、個人ノート）
 
 計画 20 の推奨（N-B）どおりに作った。決めたこと:

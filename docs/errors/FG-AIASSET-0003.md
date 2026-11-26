@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 409 |
 | 重大度 | info |
-| Runbook | なし |
+| Runbook | [`ai-eval-bench`](../../ops/runbooks/ai-eval-bench.md) |
 | 発生させるテスト | `baseline_absent_is_error` |
 
 ## 利用者向けメッセージ

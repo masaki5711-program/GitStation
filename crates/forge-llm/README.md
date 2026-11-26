@@ -15,7 +15,7 @@ checked retry, `ModelRef`) is pure and lives in `forge_core::llm`.
 - `Gateway::new(GatewayConfig, Arc<dyn LlmProvider>, Arc<dyn Records>)`,
   `submit(Submission) -> Outcome` (`Advised` / `Paused`), `pause` / `resume`,
   `verify_model(&dyn ModelCatalog)`, `set_conditions`, `tick`, `metrics()`.
-- `ollama::OllamaProvider` (`/api/chat`, `/api/tags`; rustls with `llm.ca_file`
+- `ollama::OllamaProvider` (`/api/chat`, `/api/tags`, `/api/ps` for doctor; rustls with `llm.ca_file`
   only, no proxy, no redirect, a timeout on every call).
 - `kanflow::KanflowGate` (Kanflow's `GET /api/internal/ai-busy`), `NoGate`.
 - `sched::Scheduler` (pure): concurrency, 10-minute promotion, the 20 % review
@@ -30,7 +30,11 @@ FG-LLM-0002 / 0006 from `forge_core::llm` at its boundary. The gateway logs
 each failure once (with `request_id`, `llm_request_id`, `purpose`, `model`,
 `prompt_version`); callers act on the returned code without logging it again.
 
-**Runbooks**: `ops/runbooks/llm-gateway.md`, `ops/runbooks/llm-model-update.md`.
+**Runbooks**: `ops/runbooks/llm-gateway.md`, `ops/runbooks/llm-model-update.md`,
+`ops/runbooks/llm-advice-quality.md` (L5-11). `forge doctor` (forge-cli
+`doctor/llm.rs`): `llm.endpoint`, `llm.model`, `llm.num_ctx` (`OllamaProvider::loaded`,
+`/api/ps`), `llm.kanflow_gate` (`KanflowGate::probe`), `llm.queue_age`
+(`forge_db::llm::queue_health`).
 
 **Configuration**: `[llm]` (`forge_core::config::llm`), disabled by default.
 

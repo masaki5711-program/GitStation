@@ -378,3 +378,76 @@ fn an_open_required_decision_is_annotated_under_its_rule() {
     assert_eq!(undecided.len(), 1, "{:?}", run.annotations);
     assert_eq!(undecided[0].path, "equipment/URS-L3-001.md");
 }
+
+/// Plan 20 W3: a broken wiki reference, or one in a project without a
+/// wiki, is a warning under FG-DOC-0008 — the run still succeeds; beside a
+/// real problem it stays a warning and the run fails for the problem.
+#[test]
+fn wiki_reference_problems_are_warnings_and_never_fail_the_run() {
+    use crate::doc_wiki::WikiRead;
+    use forge_doc::lint::{WikiIndex, WikiRefs};
+
+    let t = tree(
+        &[(".forge/doctypes/qms.manual.yml", MANUAL_T)],
+        &[("QM-001.md", doc("QM-001", "本文。[[wiki:WIKI-0404]]"))],
+    );
+    let linked = WikiRead {
+        refs: WikiRefs::Linked(WikiIndex::default()),
+        state: "linked",
+        note: None,
+    };
+    let run = super::assess_doc_lint_wiki(&t, None, &linked).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains("QM-001.md:8 wiki_ref_broken (warning) — WIKI-0404 [FG-DOC-0008]"),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary.contains("0 error(s) and 1 warning(s)"),
+        "{}",
+        run.summary
+    );
+    assert!(run
+        .annotations
+        .iter()
+        .all(|a| a.level == CheckAnnotationLevel::Warning));
+
+    let none = WikiRead {
+        refs: WikiRefs::NotLinked,
+        state: "not_linked",
+        note: None,
+    };
+    let run = super::assess_doc_lint_wiki(&t, None, &none).expect("run");
+    assert_eq!(run.conclusion, Some(CheckConclusion::Success));
+    assert!(run.summary.contains("wiki_not_linked"), "{}", run.summary);
+
+    // Beside an error: the run fails, under FG-DOC-0001, the wiki line a
+    // warning still.
+    let bad = tree(
+        &[(".forge/doctypes/qms.manual.yml", MANUAL_T)],
+        &[(
+            "QM-001.md",
+            doc("QM-001", "本文。[[wiki:WIKI-0404]] [[QM-404]]"),
+        )],
+    );
+    let run = super::assess_doc_lint_wiki(&bad, None, &none).expect("run");
+    assert_eq!(run.conclusion, Some(CheckConclusion::Failure));
+    assert!(run.summary.contains("[FG-DOC-0001]:"), "{}", run.summary);
+
+    // Unchecked with a note: the summary says so.
+    let noted = WikiRead {
+        refs: WikiRefs::Unchecked,
+        state: "bounded",
+        note: Some("Wiki references ([[wiki:…]]) were not checked: x".into()),
+    };
+    let run = super::assess_doc_lint_wiki(&t, None, &noted).expect("run");
+    assert_eq!(run.conclusion, Some(CheckConclusion::Success));
+    assert!(run.summary.contains("were not checked"), "{}", run.summary);
+}

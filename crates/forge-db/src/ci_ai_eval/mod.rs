@@ -417,5 +417,9 @@ pub fn baseline_candidate_payload(
     Ok((ProjectId::new(id("project_id")?), id("pipeline_id")?))
 }
 
+// Plan 17 P17-8: what `forge doctor` reads (`ai_eval.runner`,
+// `ai_eval.baseline_age`).
+pub mod health;
+
 #[cfg(test)]
 mod tests;

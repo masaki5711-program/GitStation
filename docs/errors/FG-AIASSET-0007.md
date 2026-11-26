@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 422 |
 | 重大度 | info |
-| Runbook | なし |
+| Runbook | [`ai-eval-bench`](../../ops/runbooks/ai-eval-bench.md) |
 | 発生させるテスト | `report_with_passes_above_runs_is_invalid` |
 
 ## 利用者向けメッセージ

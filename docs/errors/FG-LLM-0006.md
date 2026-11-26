@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 422 |
 | 重大度 | info |
-| Runbook | なし |
+| Runbook | [`llm-advice-quality`](../../ops/runbooks/llm-advice-quality.md) |
 | 発生させるテスト | `evidence_outside_input_dropped` |
 
 ## 利用者向けメッセージ

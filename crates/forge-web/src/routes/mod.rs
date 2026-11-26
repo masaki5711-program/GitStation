@@ -22,6 +22,8 @@ pub mod doc_lint_migration;
 pub mod file_commit;
 // Plan 13 stage 3: the document API (the document view as JSON).
 pub mod documents;
+// Plan 20 W3: `[[wiki:…]]` resolved per viewer against the linked wiki.
+pub(crate) mod doc_wiki;
 // Plan 13 stage 4 part A: document revisions and edit claims.
 pub mod document_revisions;
 pub mod git;

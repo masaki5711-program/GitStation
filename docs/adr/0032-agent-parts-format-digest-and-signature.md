@@ -155,3 +155,60 @@ diagnosis / fix に書いた。
 5. **doctor `agent.signing_keys`**: ファイルの鍵がすべて登録され、公開鍵が合い、失効していないこと、署名する鍵が退役していないこと。
    設定していないホストは `skip`。権限を確かめられない OS（Windows）では合っていても `warn`。`agent.revoked_in_use` とファイルの
    要約の抜き取りは、使う側の記録ができる A7・A9 で足す。
+
+## Amendment（2026-11-26、A4 `feat/auth-agent-marketplace`: 計画 16 §4 の Action と権限の表）
+
+計画 16 §4 の表を `authorize()` に入れた。経路はまだ無い（A5・A7・A10 で足す。それまで forge-web の `PLANNED`）。行は
+`crates/forge-auth/src/matrix_rows_agent.rs`（allow と deny の両方）。利用者は不在で「推奨を選ぶ」と言っているので、表に書かれて
+いない点は次のとおり決めた。
+
+1. **Action は 10 個**: `AgentPartRead`・`AgentPartList`・`AgentKeyRead`（インスタンス、`read_api`、サインインした全員 —
+   人・ボット・エージェントのトークン・サービスアカウント。部品の目録と公開鍵は秘密ではない。サービスアカウントを断る理由が
+   無く、種類で断ると「人だけの Action 以外は種類で判定しない」の不変条件に例外が増える）、`AgentPartPublish`・
+   `AgentPartPromote`・`AgentPartRevoke`（セッションだけ・人だけ）、`AgentBuilderRecommend`（`read_api`）、
+   `AgentBuilderDryRun`・`AgentBuilderCompile`（`api`。表の 1 行の「compile」を `dry_run` の真偽で 2 つの Action に分けた。
+   権限が違うので、経路は本文を読んでから 2 つのどちらかで判定する）、`RuleInjectLesson`（`api`）。代理と CI はすべて `Denied`
+   （`RuleInjectLesson` を除く）。
+2. **リソース `Resource::Agent(AgentResource)`**: `Part(AgentPartView)` は公開のグループでの役（`group_role`）とその見え方
+   （`group_sight`、見えないグループは 404）、tag の裏の人（`tag_authors`）、`network` の能力。`Lesson(LessonView)` は注入先の
+   プロジェクトと確認済みか。
+3. **「tag の作者」** は 1 人ではなく **tag の裏の人の集まり**: tag を押した人（push の監査）、tagger、tag の指すコミットの
+   author と committer を、アカウントに当たるものだけ。tagger と author は自己申告で偽れるので、押した人を必ず入れる（A5 の
+   ローダーの条件）。呼び手が含まれれば **FG-AGENT-0009** PublishSelfApproval（管理者も、`DeployApprove` と同じ二人の目）。
+   取り消しには作者の条件を付けない（作者が自分の版を引っ込めるのは止めない）。
+4. **判定の順**: セッションだけ（トークンは `FG-AUTH-0002 session_required`。エージェントのトークンもここで 403。テスト
+   `publish_denied_for_agent_token`）→ グループの可視性（404）→ 人だけ（サービスアカウント・ボットのセッション 403）→
+   Maintainer → tag の裏の人（`FG-AGENT-0009`、テスト `publish_denied_for_tag_author`）→ `network` は管理者だけ
+   （`FG-AUTH-0003 reason=network_capability`）。役の無い人に作者かどうかを教えないよう、役を先に見る。
+5. **推薦は `Resource::RepoCopy`**（既定の枝の先の丸ごとの写し）で判定する: 推薦は既定の枝の仕様書を読むので、`RepoRead` の
+   写しと同じ規則（エージェントの読み手は先が `Open` と測られたときだけ、他は **FG-AUTH-0022**）。新しいリソースや印を作らない。
+6. **`AgentBuilderCompile` は人だけ**（エージェント・サービスアカウント・ボット 403、テスト `compile_mr_denied_for_agent`）。人の
+   トークン（`api`）は通す（`gstn agent apply`）。`AgentBuilderDryRun` は何も変えないのでエージェントも通す。
+7. **教訓の注入は Kanflow の代理だけ**（ADR-0025 Amendment A4 の `ProposeWithoutAssertion`）。`LessonView` の「代理で来た」印は
+   非公開のフィールドで、代理の枝だけが付ける。経路が作ったものは印が無く、本人のセッション・トークン・管理者・サービス
+   アカウントは `FG-AUTH-0003 reason=act_as_required`（表の「代理でない → 403」）。本人の役（Developer 以上）→ 確認済み
+   （でなければ **FG-AGENT-0010** LessonNotConfirmed、テスト `unconfirmed_lesson_refused`）。
+8. **残す点**（A5 への条件）: 計画 16 §6 の `gstn part publish|promote|revoke` はトークンで呼ぶので、この表では断られる。表（人の
+   Web セッションだけ）を優先し、`gstn` は公開の画面の URL を出す形にする（A5 で決める）。
+
+### A4 の独立レビュー（2026-11-26、authz-matrix-auditor・security-reviewer）で変えた点
+
+- （security HIGH、直した）二人の目が開いたまま失敗しうる: アカウントに当たらない名前で作ると `tag_authors` が空になる。
+  **tag を押した人 `tag_pusher`（push の監査から。自己申告の tagger ではない）を別のフィールドにし、`None` なら断る**
+  （`FG-AUTH-0003 reason=tag_pusher_unknown`、閉じる側）。押した人が呼び手でも `FG-AGENT-0009`。ボットや CI のジョブの push は、
+  ボットの持ち主・パイプラインを始めた人として記録する（A5 のローダーの条件）。利用者への文は「作った・tag を付けた・push した」。
+- （security MEDIUM、直した）教訓の代理で、Kanflow のサービスアカウントがプロジェクトの役を持つことも確かめる
+  （`via.role` が無ければ `act_as_not_visible` の 404。読み取りの代理と同じ）。
+- （security MEDIUM、A10 への条件）`LessonView` のプロジェクトは代理の事実（`ViaView`）と同じプロジェクトから作る（他の代理の
+  経路と同じローダーの約束）。A10 の MR は規則のファイルへの追記だけ（フック・`settings.json`・`.mcp.json` に触れない、計画 16
+  の `lesson_text_cannot_touch_settings_json`）、MR に「Kanflow が X の代理で」と残し、X 本人はその MR を承認できない。
+- （security MEDIUM、受け入れ）`AgentBuilderCompile` をセッションだけにはしない: 計画 §6 の `gstn agent apply` は人のトークンで
+  呼ぶ。エージェントは `is_agent` のトークンで動く約束（ADR-0017 §4.0）で、人のトークンを使われた場合も、作られるのは MR だけで、
+  A2 の危険の規則 `agent_config` が自動マージを止め、Maintainer の人の承認と `forge/agent-lock`（A7）が要る。
+- （LOW、記録）部品の目録はインスタンス全体に公開（サインインした全員）。公開のグループの可視性は公開・昇格・取り消しだけに効く。
+- （LOW、A7 で決める）`GET …/agent-builder`（状態の読み取り）を `AgentBuilderDryRun`（`api`）で判定するか、読み取りの Action を
+  分けるか。
+- （authz MEDIUM、A10 への条件）`LessonView::new` のプロジェクトは本人の役で作る（サービスアカウントの役を入れない）。A10 で
+  ローダーの試験（Reporter のサービスアカウント + Developer の本人 → Developer）を足す。
+- 行を足した: 目録と公開鍵のサービスアカウントの allow、昇格の Owner の allow と Guest の deny、取り消しの無効なアカウント、
+  Dry-Run と compile の Guest、押した人が自分・押した人が不明、Kanflow のサービスアカウントが役を持たない教訓。

@@ -272,6 +272,7 @@ impl MergeRequestCtx {
             crate::ActAsRule::RequiresAssertion(_) => {}
             crate::ActAsRule::ReadWithoutAssertion
             | crate::ActAsRule::ListAsPerson
+            | crate::ActAsRule::ProposeWithoutAssertion
             | crate::ActAsRule::Denied => return ActAsTipGate::Skip(None),
         }
         let assertion = principal

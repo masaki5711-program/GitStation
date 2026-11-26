@@ -535,3 +535,21 @@ Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 �
 - （LOW、直した）MR の助言への評価は `MergeRequestRead` と同じく枝の名前も確かめる。見えない主体（エージェントを含む）は
   人だけの断りより先に 404（行を足した）。`DeployRead` の代理の min のロールの allow の行と、内部の MR の役の無い人の
   `AiReviewRerun` の 403 の行を足した。
+
+## Amendment（2026-11-26、計画 16 A4 `feat/auth-agent-marketplace`: 教訓の注入の代理）
+
+計画 16 §4 の `RuleInjectLesson`（`POST /api/v1/repos/{id}/rules/inject-lesson`、経路は A10）は「Kanflow の代理だけ、本人が
+Developer 以上、教訓が確認済み」。**閉じた既定を 1 つ広げる決定**なので記録する。
+
+1. **新しい規則 `ActAsRule::ProposeWithoutAssertion`**（`RuleInjectLesson` だけ。テスト
+   `propose_without_assertion_is_the_lesson_only` で固定）: 主張を取らない（付いていれば `FG-AUTH-0020 unexpected`）、結びつけた
+   プロジェクトだけ（`act_as_unbound` は 404）、**本人の役で判定する**（§3 の min のロールで上限を付けない。サービスアカウントは
+   結びつけで Reporter なので、min では Developer の条件を誰も満たせない）。管理者の権限は通さない。
+2. **主張を取らない理由**: 書き込みは §4 で主張が要るが、この操作が作るのは **MR だけ**（規則のファイルに追記する。マージは
+   しない）。人がその MR を確認し、A2 の危険の規則 `agent_config` が自動マージを止める。本人の同意は Kanflow での教訓の確認
+   （W11 の「確認済み」）で、forge で主張を発行する画面を足すと意図・DB の CHECK・確認の画面が増える割に守りが増えない。
+   主張の代わりに、リソースの `confirmed` が偽なら **FG-AGENT-0010**。
+3. **代理でない呼び手は断る**: 通常の枝は、代理の枝が印を付けた `LessonView` だけを判定する（印は非公開のフィールド）。人の
+   セッション・トークン・サービスアカウントの直接の要求は `FG-AUTH-0003 reason=act_as_required`。
+4. 代理の要求の資格の確かめ（サービスアカウントのトークン、`act_as`、エージェントでない、連携が有効）と `api` のスコープは
+   他の代理と同じ。A10 の経路のローダーは `ActAsView` に結びつけの事実と教訓の状態を読み込む。

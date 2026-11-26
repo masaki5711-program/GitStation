@@ -71,7 +71,8 @@ pub enum PayloadKind {
     Files,
     /// An OCI image layout; each layer is a blob.
     OciImage,
-    /// `forge-edge-agent` itself (one binary; a release of its own).
+    /// A device agent itself (one binary; a release of its own). Unused since
+    /// the 2026-11-25 re-scope; a v2 manifest (optional E4) drops it.
     Agent,
 }
 
@@ -117,8 +118,8 @@ pub struct Manifest {
     pub project: String,
     pub version: String,
     pub source_sha: String,
-    /// Grows within a project; a device never installs a lower one as an
-    /// upgrade (E6).
+    /// Grows within a project; an installer must never take a lower one as
+    /// an upgrade.
     pub sequence: u64,
     pub created_at: Timestamp,
     pub arch: Arch,

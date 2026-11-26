@@ -11,7 +11,9 @@
 //!   the pipeline's mark before any row is returned.
 //! - [`needs_of`] / [`need_one`]: what a job may read of the jobs it
 //!   `needs` in its own pipeline (their current attempt, succeeded).
-//! - [`due`] / [`forget`]: the worker's expiry sweep (not `keep`).
+//! - [`due`] / [`forget`]: the worker's expiry sweep (not `keep`: a
+//!   deployed version, C11, or the artifacts of a job that asked for
+//!   `keep` in a protected push pipeline, plan 21 G1).
 
 use forge_core::ci_artifact::{MAX_JOB_BYTES, MAX_JOB_FILES, RETENTION_DAYS};
 use forge_core::ProjectId;
@@ -271,10 +273,18 @@ pub async fn record(
             tx.rollback().await.map_err(|e| query_error(QUERY, e))?;
             return Err(e);
         }
-        let id: i64 = sqlx::query_scalar(
+        // Plan 21 G1: kept only when the job asked (written with the plan,
+        // already decided) AND its pipeline is a push to a protected branch
+        // — the same answer as `StoredPipeline::secrets_allowed`, read
+        // again here so no other row makes an artifact outlive the
+        // retention.
+        let id: Option<i64> = sqlx::query_scalar(
             "INSERT INTO forge.ci_artifacts (project_id, pipeline_id, job_id, attempt, \
-               path, size_bytes, sha256, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(days => $8)) RETURNING id",
+               path, size_bytes, sha256, expires_at, keep) \
+             SELECT $1, $2, $3, $4, $5, $6, $7, now() + make_interval(days => $8), \
+               j.artifacts_keep AND p.source = 'push' AND p.protected \
+             FROM forge.ci_jobs j JOIN forge.ci_pipelines p ON p.id = j.pipeline_id \
+             WHERE j.id = $3 AND p.id = $2 RETURNING id",
         )
         .bind(project)
         .bind(target.pipeline_id)
@@ -284,9 +294,19 @@ pub async fn record(
         .bind(stored)
         .bind(sha256.as_slice())
         .bind(i32::try_from(RETENTION_DAYS).unwrap_or(30))
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| query_error(QUERY, e))?;
+        // The job row is locked above, so its pipeline is there; a missing
+        // pair is still a coded refusal, never a silent row.
+        let Some(id) = id else {
+            tx.rollback().await.map_err(|e| query_error(QUERY, e))?;
+            return Err(ForgeError::new(ErrorCode::JobLeaseLost)
+                .with_context("reason", "not_recorded")
+                .with_context("job_id", job)
+                .with_context("pipeline_id", target.pipeline_id)
+                .with_context("operation", "artifact"));
+        };
         tx.commit().await.map_err(|e| query_error(QUERY, e))?;
         Ok(id)
     })

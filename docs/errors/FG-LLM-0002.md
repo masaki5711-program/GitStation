@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 502 |
 | 重大度 | warn |
-| Runbook | なし |
+| Runbook | [`llm-advice-quality`](../../ops/runbooks/llm-advice-quality.md) |
 | 発生させるテスト | `invalid_output_retried_once_then_error` |
 
 ## 利用者向けメッセージ

@@ -75,10 +75,10 @@ use crate::action::Action;
 use forge_core::merge_conditions::MAX_CODEOWNERS_SUSPENSION_MINUTES;
 
 use crate::model::{
-    AccountKind, AdmissionAccount, CodeownersToggle, CopyMark, Credential, GroupSight,
-    MembershipChange, MembershipScope, MergeRequestState, NamespaceView, Principal, ProjectView,
-    RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, ServiceAccountView, TombstoneRelease,
-    TransferTarget, UnresolvedReason, Visibility,
+    AccountKind, AdmissionAccount, AgentResource, CodeownersToggle, CopyMark, Credential,
+    GroupSight, MembershipChange, MembershipScope, MergeRequestState, NamespaceView, Principal,
+    ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, ServiceAccountView,
+    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 
 /// How the caller sees a group (plan 15 MR 3, ADR-0010 Amendment
@@ -1761,6 +1761,80 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             admin_only()
         }
 
+        // --- the agent marketplace and builder (plan 16 §4, ADR-0032
+        // Amendment A4) ---
+        // The catalog and the public keys: every signed-in account.
+        (
+            Action::AgentPartRead | Action::AgentPartList | Action::AgentKeyRead,
+            Resource::Instance,
+        ) => Ok(()),
+        // Publishing and promoting (a session only, `is_session_only`):
+        // a person, a Maintainer of the publishing group, never one of the
+        // people behind the tag (administrators included), and a part
+        // that uses the network an administrator's. The group's
+        // visibility was decided above.
+        (
+            Action::AgentPartPublish | Action::AgentPartPromote,
+            Resource::Agent(AgentResource::Part(part)),
+        ) => {
+            people_only()?;
+            need(Role::Maintainer, part.group_role)?;
+            // Review of A4 (HIGH): the rule fails closed — nobody known
+            // to have pushed the tag, nobody to tell apart from the caller.
+            let Some(pusher) = part.tag_pusher else {
+                return Err(refused("tag_pusher_unknown"));
+            };
+            if pusher == user || part.tag_authors.contains(&user) {
+                return Err(
+                    deny(ErrorCode::PublishSelfApproval).with_context("reason", "tag_author")
+                );
+            }
+            if part.network && !admin {
+                return Err(refused("network_capability").with_context("required_role", "admin"));
+            }
+            Ok(())
+        }
+        // Revoking: a person, a Maintainer of the publishing group or an
+        // administrator (a session only). The author may revoke their own.
+        (Action::AgentPartRevoke, Resource::Agent(AgentResource::Part(part))) => {
+            people_only()?;
+            need(Role::Maintainer, part.group_role)
+        }
+        // The recommendation reads the specs of the default tip: as a
+        // whole copy of it, so an AI agent audience only when the tip was
+        // measured open (`FG-AUTH-0022`).
+        (Action::AgentBuilderRecommend, Resource::RepoCopy { project, mark }) => {
+            need(Role::Reporter, read_role(project))?;
+            if !principal.is_agent_audience() || *mark == CopyMark::Open {
+                return Ok(());
+            }
+            Err(deny(ErrorCode::RepositoryCopyWithheld)
+                .with_context("reason", mark.as_str())
+                .with_context("audience", audience_of(principal)))
+        }
+        // A dry run changes nothing: a Developer, an agent included.
+        (Action::AgentBuilderDryRun, Resource::Project(p)) => need(Role::Developer, p.role),
+        // The builder's merge request: a Developer, a person — an agent
+        // never rewrites its own guard rails.
+        (Action::AgentBuilderCompile, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Developer, p.role)
+        }
+        // A lesson: only kanflow acting for the person (the act-as arm
+        // marks the lesson), the person a Developer by their own role, the
+        // lesson confirmed in kanflow.
+        (Action::RuleInjectLesson, Resource::Agent(AgentResource::Lesson(lesson))) => {
+            if !lesson.is_acted_for() {
+                return Err(refused("act_as_required"));
+            }
+            need(Role::Developer, lesson.project.role)?;
+            if !lesson.confirmed {
+                return Err(deny(ErrorCode::LessonNotConfirmed)
+                    .with_context("reason", "lesson_not_confirmed"));
+            }
+            Ok(())
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role, .. }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1920,6 +1994,16 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::OpsDiagnosisRead
             | Action::LlmPause
             | Action::LlmResume
+            | Action::AgentPartRead
+            | Action::AgentPartList
+            | Action::AgentPartPublish
+            | Action::AgentPartPromote
+            | Action::AgentPartRevoke
+            | Action::AgentKeyRead
+            | Action::AgentBuilderRecommend
+            | Action::AgentBuilderDryRun
+            | Action::AgentBuilderCompile
+            | Action::RuleInjectLesson
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -1957,7 +2041,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::JobSelf(_)
             | Resource::AutoMerge(_)
             | Resource::Autofix(_)
-            | Resource::Deployment(_),
+            | Resource::Deployment(_)
+            | Resource::Agent(_),
         ) => wrong_resource(),
     }
 }
@@ -2019,6 +2104,10 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::ProjectEvents { project, .. } => live(project),
         // M4 C11: a deployment is seen through its project.
         Resource::Deployment(d) => live(&d.project),
+        // Plan 16 §4: a lesson through the project it is injected into.
+        Resource::Agent(AgentResource::Lesson(l)) => live(&l.project),
+        // A part through its publishing group (`group_of`).
+        Resource::Agent(AgentResource::Part(_)) => None,
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -2067,6 +2156,10 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
 /// The group a resource is (or is reached through) and how it is seen, for
 /// the group visibility check (plan 15 MR 3).
 fn group_of(resource: &Resource) -> Option<(Option<Role>, GroupSight)> {
+    // Plan 16 §4: a part is seen through its publishing group.
+    if let Resource::Agent(AgentResource::Part(part)) = resource {
+        return Some((part.group_role, part.group_sight));
+    }
     if let Resource::Group { role, sight }
     | Resource::Resolved {
         view: NamespaceView::Group { role, sight },
@@ -2160,7 +2253,8 @@ fn hidden_target(resource: &Resource, admin: bool, kind: AccountKind) -> Option<
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
-        | Resource::ActAsConfirm(_) => None,
+        | Resource::ActAsConfirm(_)
+        | Resource::Agent(_) => None,
     }
 }
 

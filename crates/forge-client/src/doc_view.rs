@@ -41,16 +41,22 @@ pub fn parse_doc_id(raw: &str) -> std::result::Result<String, String> {
 }
 
 /// How one reference reads: `ID title`, `ID (more confidential)`,
-/// `ID (broken)` or `repo:ID (another repository)`.
+/// `ID (broken)` or `repo:ID (another repository)`; a wiki reference is
+/// `wiki:ID …`, also `(wiki not readable: id only)` or `(no wiki linked)`.
 fn reference_text(r: &Value) -> String {
     let mut id = text(r, "doc");
     if let Some(b) = r.get("block").and_then(Value::as_str) {
         id = format!("{id}#{}", crate::error::sanitize(b));
     }
+    if r.get("wiki").and_then(Value::as_bool) == Some(true) {
+        id = format!("wiki:{id}");
+    }
     match r.get("target").and_then(Value::as_str) {
         Some("found") => format!("{id} {}", text(r, "title")),
         Some("hidden") => format!("{id} (more confidential: id only)"),
         Some("external") => format!("{}:{id} (another repository)", text(r, "repo")),
+        Some("unreadable") => format!("{id} (wiki not readable: id only)"),
+        Some("no_wiki") => format!("{id} (no wiki linked)"),
         _ => format!("{id} (broken)"),
     }
 }
