@@ -138,6 +138,9 @@ const SHELL_PATHS: &[&str] = &[
     // The CI pipeline screens (plan 14 M4).
     "/acme/x/-/pipelines",
     "/acme/x/-/pipelines/12",
+    // The deployment screens (plan 19 L5-6).
+    "/acme/x/-/deployments",
+    "/acme/x/-/deployments/12",
     // The webhook screens (M3 I2): a reload was a 404.
     "/acme/x/-/webhooks",
     "/acme/x/-/webhooks/3/deliveries",

@@ -348,6 +348,19 @@
       }
     },
     {
+      "name": "route word deployments (plan 19 L5-6)",
+      "path": "/g/p/-/deployments/12",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "deployments",
+        "rest": [
+          "12"
+        ]
+      }
+    },
+    {
       "name": "route word wiki (plan 20 W4)",
       "path": "/g/p/-/wiki/WIKI-0002/edit",
       "form": "both",

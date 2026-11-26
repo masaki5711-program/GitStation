@@ -570,6 +570,9 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     // Plan 20 W4: the project's wiki (its data: `GET …/wiki` and the
     // wiki project's document API).
     RouteWord::Wiki,
+    // Plan 19 L5-6: the deployments and the approval screen (its data: the
+    // deployment API and `…/approval-summary`, project readers).
+    RouteWord::Deployments,
 ];
 
 /// The words whose page is the SPA shell on a group (no merge request

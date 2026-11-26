@@ -5,7 +5,7 @@
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
-import { useDeployments, type Deployment } from '../../../api/deployments';
+import { DEPLOY_LIST_MAX, useDeployments, type Deployment } from '../../../api/deployments';
 import { Loading } from '../../../components/Loading';
 import { environmentLabel } from '../../../features/deployApproval';
 import { formatDateTime, formatRelative } from '../../../features/labels';
@@ -42,7 +42,14 @@ export function DeploymentsScreen({ projectId, project }: { projectId: number; p
             </p>
           </section>
         ) : (
-          <DeploymentList project={project} items={list.data.deployments} />
+          <>
+            <DeploymentList project={project} items={list.data.deployments} />
+            {list.data.deployments.length >= DEPLOY_LIST_MAX && (
+              <p className={styles.hint} data-testid="deployments-capped">
+                {t('deploy.capped', { count: DEPLOY_LIST_MAX })}
+              </p>
+            )}
+          </>
         ))}
     </>
   );

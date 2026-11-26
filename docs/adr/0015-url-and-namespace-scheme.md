@@ -1199,3 +1199,12 @@ MR7 の閲覧の API（`RepoBrowse`）に `commits`・`commits/{oid}`・`compare
   ノートを落としたりしない。今は外部キーで起きない。**将来、利用者の消去や匿名化を作るときは、`forge.users` の行と `username` /
   `display_name`（`NOT NULL`）を残す（匿名化なら置き換えの値を入れる）こと**。行を消す設計にするなら、先に forge-db の `user_name()` と
   この節を変える（消えた利用者を表す値を返す）。そうしないと、その人が書いたマージリクエストとスレッドが読めなくなる。
+
+## Amendment（2026-11-27、計画 19 L5-6: 画面の語 `deployments`）
+
+- **語を 1 つ足す**: 上の表で M4 に予約した `/{project}/-/deployments`（一覧）と `/{project}/-/deployments/{id}`（承認の画面）。
+  `RouteWord::Deployments`、共有の URL ベクタ（`tests/fixtures/url-vectors.json`）の accept に入れた。`/-/jobs` と `/-/environments` は
+  予約のまま。
+- **画面の殻（`WebShell`、公開）だけを返す**（他の画面の語と同じ）。データは API の `DeployRead`（`GET …/deployments`、
+  `GET …/deployments/{deployment_id}/approval-summary`）と `DeployApprove`（`POST …/approve`）が返し、可視性と権限はそこで
+  `authorize()` が決める。プロジェクトの語だけで、グループの殻の語には入れない。詳しくは ADR-0039 の Amendment（L5-6）。

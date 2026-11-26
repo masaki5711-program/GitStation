@@ -165,8 +165,8 @@ export function ApprovalFacts({ project, sha, facts }: { project: string; sha: s
             !facts.frozen_now && t('deploy.facts.none')
           ) : (
             <ul>
-              {facts.freeze_windows.map((w) => (
-                <li key={w}>
+              {facts.freeze_windows.map((w, i) => (
+                <li key={`${w}-${String(i)}`}>
                   <code>{w}</code>
                 </li>
               ))}

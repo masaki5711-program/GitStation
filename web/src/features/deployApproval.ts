@@ -5,7 +5,7 @@
 // decision 6). The server decides again on every approval.
 import type { TFunction } from 'i18next';
 
-import type { ApprovalFacts, Deployment, SummaryAdvice } from '../api/deployments';
+import type { ApprovalFacts, ApprovalSummary, Deployment, SummaryAdvice } from '../api/deployments';
 import type { DeployApprovers } from '../api/types';
 
 /** Who the caller is to this deployment's approval, as far as the screen
@@ -125,4 +125,11 @@ export function adviceState(s: SummaryAdvice): 'shown' | 'withheld' | 'none' {
   if (s.state === 'shown' && typeof s.text === 'string' && s.text !== '') return 'shown';
   if (s.state === 'withheld') return 'withheld';
   return 'none';
+}
+
+/** What the approver decides on: the deployment's state, commit and
+ * environment, and the facts. The summary is not part of it (a summary
+ * that came meanwhile is no reason to ask again). */
+export function decisionKey(s: ApprovalSummary): string {
+  return JSON.stringify([s.deployment.status, s.deployment.sha, s.deployment.environment, s.facts]);
 }

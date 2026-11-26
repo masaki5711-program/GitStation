@@ -167,9 +167,8 @@ describe('deployment approval screen', () => {
     expect(within(factsBox).getByText('0042_press_timer.sql')).toBeTruthy();
     expect(within(factsBox).getByText('ci/lint')).toBeTruthy();
     expect(screen.getByTestId('advice-none').textContent).toContain('承認には要りません');
-    expect(screen.getByTestId('deploy-status-line').textContent).toContain('1');
-
-    fireEvent.click(screen.getByRole('button', { name: '承認する' }));
+    fireEvent.click(await screen.findByRole('button', { name: '承認する' }));
+    expect(screen.getByTestId('deploy-status-line').textContent).toContain('0 / 1');
     const confirm = await screen.findByTestId('approve-confirm');
     expect(confirm.textContent).toContain('aaaaaaaa');
     expect(confirm.textContent).toContain('本番 (prod)');
@@ -208,7 +207,7 @@ describe('deployment approval screen', () => {
     // The advice has no controls at all.
     expect(within(advice).queryAllByRole('button')).toHaveLength(0);
     // The button is the same with a summary as without one.
-    expect(screen.getByRole('button', { name: '承認する' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '承認する' })).toBeTruthy();
     expect(await violations(container)).toEqual([]);
   });
 
@@ -222,7 +221,7 @@ describe('deployment approval screen', () => {
     expect(stale.textContent).toContain('古い要約です');
     expect(stale.textContent).toContain('新しいコミット');
     expect(screen.getByTestId('advice-degraded')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '承認する' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '承認する' })).toBeTruthy();
   });
 
   it('says a withheld summary is not shown', async () => {
@@ -302,6 +301,63 @@ describe('deployment approval screen', () => {
     fireEvent.click(within(await screen.findByTestId('approve-confirm')).getByRole('button', { name: '承認する' }));
     expect(await screen.findByText('req-approve-403')).toBeTruthy();
     expect(screen.getByText('このコミットに関わった人は承認できません。')).toBeTruthy();
+  });
+
+  it('reads the facts again on Approve and asks nothing when they changed since they were shown', async () => {
+    let reads = 0;
+    const server = routes('maintainer', {
+      [`GET ${SUMMARY}`]: () => {
+        reads += 1;
+        return json(200, reads === 1 ? body() : body({ facts: { migrations: ['0042_press_timer.sql', '0043_drop_x.sql'] } }));
+      },
+    });
+    await renderApp({ fetch: server.fetch, path: `${PAGE}/21` });
+    fireEvent.click(await screen.findByRole('button', { name: '承認する' }));
+    expect((await screen.findByTestId('approve-changed')).textContent).toContain('もう一度');
+    expect(screen.queryByTestId('approve-confirm')).toBeNull();
+    expect(within(screen.getByTestId('deploy-facts')).getByText('0043_drop_x.sql')).toBeTruthy();
+    // Pressed again on the new facts: now it asks.
+    fireEvent.click(screen.getByRole('button', { name: '承認する' }));
+    expect(await screen.findByTestId('approve-confirm')).toBeTruthy();
+    expect(server.to('POST', APPROVE)).toHaveLength(0);
+  });
+
+  it('repeats a freeze, failed checks and an unread range in the question', async () => {
+    const server = routes('maintainer', {
+      [`GET ${SUMMARY}`]: () => json(200, body({ facts: { frozen_now: true, range: 'unavailable', range_error_code: 'FG-GIT-0001' } })),
+    });
+    await renderApp({ fetch: server.fetch, path: `${PAGE}/21` });
+    fireEvent.click(await screen.findByRole('button', { name: '承認する' }));
+    const confirm = await screen.findByTestId('approve-confirm');
+    expect(confirm.textContent).toContain('凍結');
+    expect(confirm.textContent).toContain('失敗したチェックが 1 件');
+    expect(confirm.textContent).toContain('範囲を読めていません');
+  });
+
+  it('offers nothing on a guess when the approvers cannot be read, and says so', async () => {
+    const server = routes('maintainer', {
+      [`GET ${SUMMARY}`]: () => json(200, body()),
+      [`GET ${APPROVERS}`]: () => apiError(503, '一時的に読めません。', 'req-approvers-503'),
+    });
+    await renderApp({ fetch: server.fetch, path: `${PAGE}/21` });
+    expect(await screen.findByText('req-approvers-503')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '承認する' })).toBeNull();
+    expect(screen.getByTestId('deploy-facts')).toBeTruthy();
+  });
+
+  it('keeps what was shown when a read again fails', async () => {
+    let reads = 0;
+    const server = routes('maintainer', {
+      [`GET ${SUMMARY}`]: () => {
+        reads += 1;
+        return reads === 1 ? json(200, body()) : apiError(503, '一時的に読めません。', 'req-reread-503');
+      },
+    });
+    await renderApp({ fetch: server.fetch, path: `${PAGE}/21` });
+    fireEvent.click(await screen.findByRole('button', { name: '承認する' }));
+    expect(await screen.findByText('req-reread-503')).toBeTruthy();
+    expect(screen.getByTestId('deploy-facts')).toBeTruthy();
+    expect(screen.queryByTestId('approve-confirm')).toBeNull();
   });
 
   it('shows no approval for a deployment that is not waiting', async () => {

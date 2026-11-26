@@ -2844,6 +2844,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/{namespace}/-/deployments/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "deployments"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/deployments/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "deployments"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/{namespace}/-/documents/{*rest}",
     "people_only": false,
     "public": true,

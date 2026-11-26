@@ -2286,14 +2286,21 @@
     },
     "approve": {
       "title": "Persetujuan",
-      "lead": "Menyetujui adalah tindakan Anda sendiri (hanya orang yang dapat menyetujui produksi).",
+      "lead": "Menyetujui adalah tindakan Anda sendiri di layar ini. Saat ditekan, fakta dibaca ulang sebelum ditanyakan.",
       "button": "Setujui",
       "sending": "Menyetujui…",
       "confirm": "Setujui deployment commit {{sha}} ke {{env}}?",
       "yes": "Setujui",
       "no": "Batal",
       "done": "Disetujui.",
-      "doneMore": "Disetujui ({{given}} / {{required}}). Menunggu persetujuan lain."
-    }
+      "doneMore": "Disetujui ({{given}} / {{required}}). Menunggu persetujuan lain.",
+      "checking": "Membaca ulang fakta…",
+      "changed": "Fakta atau status berubah setelah ditampilkan. Periksa daftar di atas, lalu tekan Setujui lagi.",
+      "warnFrozen": "Sekarang sedang periode pembekuan.",
+      "warnChecks_one": "{{count}} check gagal.",
+      "warnChecks_other": "{{count}} check gagal.",
+      "warnRange": "Rentang perubahan tidak dapat dibaca (daftar perubahan tidak diketahui)."
+    },
+    "capped": "Hanya menampilkan {{count}} yang terbaru."
   }
 }

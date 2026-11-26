@@ -2286,14 +2286,21 @@
     },
     "approve": {
       "title": "Approval",
-      "lead": "Approving is your own action (only a person can approve production).",
+      "lead": "Approving is your own action on this screen. Pressing it reads the facts again before asking.",
       "button": "Approve",
       "sending": "Approving…",
       "confirm": "Approve deploying commit {{sha}} to {{env}}?",
       "yes": "Approve",
       "no": "Cancel",
       "done": "Approved.",
-      "doneMore": "Approved ({{given}} / {{required}}). Waiting for more approvals."
-    }
+      "doneMore": "Approved ({{given}} / {{required}}). Waiting for more approvals.",
+      "checking": "Reading the facts again…",
+      "changed": "The facts or the status changed after they were shown. Check the lists above, then press Approve again.",
+      "warnFrozen": "A freeze window is in force now.",
+      "warnChecks_one": "{{count}} check failed.",
+      "warnChecks_other": "{{count}} checks failed.",
+      "warnRange": "The range of changes could not be read (the lists of changes are unknown)."
+    },
+    "capped": "Showing the newest {{count}} only."
   }
 }

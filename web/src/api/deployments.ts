@@ -23,6 +23,8 @@ export type SummaryAdvice = S['ApprovalSummaryAdvice'];
 export const SUMMARY_POLL_MS = 30000;
 /** While a deployment on the list moves (waits, queued, running) (ms). */
 export const DEPLOY_LIST_POLL_MS = 15000;
+/** The list's length at most (the API's newest 100). */
+export const DEPLOY_LIST_MAX = 100;
 
 export const deploymentKeys = {
   all: (project: number) => ['deployments', project] as const,
@@ -68,6 +70,8 @@ export function useApprovalSummary(project: number, id: number) {
         }),
       ),
     refetchInterval: (q) => summaryPollInterval(q.state.data),
+    // Each read makes the facts again (git compare): not on every focus.
+    refetchOnWindowFocus: false,
   });
 }
 
