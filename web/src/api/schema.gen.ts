@@ -6089,7 +6089,10 @@ export interface components {
             /**
              * @description `read_repository`, `write_repository`, `read_api`, `api`,
              *     `merge_execute`, `merge_approve`, `user_email`, `user_employee_number`
-             *     (M3 I1c: the event feed's actor); never `admin`.
+             *     (M3 I1c: the event feed's actor), `act_as` (M3 S2, ADR-0025 §2:
+             *     the integration acts for a person with `Forge-Act-As`; refused with
+             *     `is_agent: true`, `FG-AUTH-0003 reason=act_as_agent_token`); never
+             *     `admin`. At most 8.
              */
             scopes: string[];
         };
