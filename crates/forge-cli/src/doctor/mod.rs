@@ -221,6 +221,13 @@ pub fn run(
     })
 }
 
+/// `forge doctor --json`'s report for `forge diagnose` (plan 19 L5-7): a
+/// fact of the diagnosis, so its failures are not logged here (the report
+/// carries them).
+pub(crate) async fn json_report(config_file: Option<&Path>) -> String {
+    render::json(&collect(config_file).await)
+}
+
 async fn collect(config_file: Option<&Path>) -> Vec<Check> {
     let mut checks = Vec::new();
     let cfg = config::Env::from_process().and_then(|env| config::load(config_file, &env));

@@ -143,3 +143,41 @@ Claude（保守者）がログと成果物だけで失敗を診断できるこ�
    範囲の MR はマージのコミット（`new_sha`）で見つけるので、マージのコミットを作らない方法の MR が漏れうる（事実の一覧は
    「MR の一覧はマージのコミットから」と読む）。
 
+
+## Amendment（2026-11-26、L5-7 `feat/ops-llm-first-diagnosis`: 障害の一次診断）
+
+計画 19 §3.2 の `forge diagnose` を作った。着手前に確かめたことと、選んだこと（計画の推奨どおり）:
+
+- **ログの置き場所**: forge は JSON を stderr に出し、systemd が **journald** に残す。ログのファイルは無く（`ops/linux/README.md`）、
+  `forge diag bundle` もまだ無い（01 の M1 の予定のまま）。計画の「ログの行」は、運用者が **journald の出力を渡す** 形にした:
+  `journalctl -u forge-serve -u forge-worker --since -2h -o cat | forge diagnose --request-id <id> --logs -`（`--logs <file>` も可）。
+  forge が `journalctl` を自分で動かさない（子プロセス・権限・Windows の開発環境で動かない、を避ける）。時間の窓は渡す側が決め、
+  `--since`（既定 2h、最大 7d）は直近の変更（デプロイ・マイグレーション）の窓。
+- **事実の束**（`forge_core::llm::diagnosis`、純粋）: その `request_id`（イベントか span の）/ `error_code` の行を、流れの中の行番号つき
+  （`L<n>: `）で最新 200 行まで。コードはその行の `error_code`（最大 3）か指定のもの。catalog の cause / diagnosis / fix、runbook の
+  コードを含む節（`--runbooks`、既定はリリースの `share/runbooks`）、障害の記憶の同じコードの行（`--incidents`、既定
+  `share/incidents/records.jsonl`。リリースに同梱を足した）、直近のデプロイとマイグレーション、設定ファイルの更新時刻、
+  `forge doctor --json`（`--no-doctor` で省く）。
+- **読み取りだけのロール**: 直近の変更は読み取りのプールの 1 つのトランザクションで読み、最初に `current_user` と
+  `transaction_read_only` を確かめ、`forge_ro` / `on` でなければ読まない（`read_only_db_role`）。書くのはゲートウェイの記録
+  （`llm_requests` / `llm_advice`、計画の置き場所）だけ。`--facts-only` なら何も書かない。
+- **区分**: ログの行は伏せ字の後 `internal`。メールアドレス・名前・ログイン名・IP の欄を含む行、forge の JSON でない行（panic など）が
+  あれば、そのログの部分は `confidential`（計画 §11 の問い 6: 個人情報を含みうるログの診断は人だけ。エージェントには `advice_decided` が
+  伏せる）。障害の記憶と doctor の部分も同じ判定。`--json`（障害の記録に貼る＝git に残る）では `confidential` の部分の本文を出さない。秘密は部分ごとに `prepare` を通し、
+  伏せられない部分は渡さず・表示もせず、メモに残す。**表示する事実の束も伏せ字の後のもの**。
+- **出力の検査**（`OutputPolicy` に 2 つ足した。既定は off で、ほかの目的は変わらない）: `forbid_mutating_steps` は 2 層。
+  (1) 許可の一覧: 「次に見るもの:」の後のコマンドは、`|` `;` `&&` で分けた各部分が読み取りのコマンド（`journalctl`（`--vacuum` 等なし）・
+  `jq`・`SELECT`（書き込みの関数・`INTO`・`COPY` なし）・`forge doctor/explain`・`systemctl status`・`git log` 等・`curl -s` の GET で
+  ループバックか `<…>` の置き場所だけ）で、SQL 以外に `>` が無いこと（`next_look_is_read_only`）。(2) 拒否の一覧: SQL の書き込み・
+  `systemctl restart` などの操作・書き込む `forge admin`・「再起動」などの命令（`names_a_mutating_step`）。どちらかに当たる候補は捨て、
+  要約は伏せる（数は `Advice::dropped_mutating`、`degraded`）。`cited_lines_of = "log"`: ログの候補は渡した行番号を `line` で名指し、
+  その行から引用する（無い行・別の行の引用・部分を名指さない候補は根拠なしで捨てる）。候補は 3 つまで、確信度 0.3 未満は出さない。
+  捨てた数（変更・根拠・確信度・上限）はすべて表示する。保守的に捨てる（原因の文が操作の語を含むと落ちうる）方を選んだ。
+- **ゲートウェイ**: `forge diagnose` は worker と別のプロセスなので、自分のゲートウェイ（同時 1、背景の task なし）を持つ。対話の層は
+  Kanflow の `ai-busy` でも `gpu-eval` でも待たないので、背景の状態は要らない。呼ぶ前に digest を確かめる（違えば FG-LLM-0003）。
+  worker のゲートウェイとは列を共有しないので、まれに Ollama に 2 件が同時に行きうる（診断は人が打つ時だけ、と受け入れた）。
+- **失敗**: LLM が使えない・一時停止・off・DB に届かないときも、事実の束を出して exit 0（「診断の道具は止まらない」）。助言が無い理由は
+  コード（FG-LLM-0001 など）と問い合わせ番号で出す。材料が読めないときは新しいコード **FG-SYS-0010 DiagnoseSourceUnreadable**（warn。診断のコマンドのログは warn 以上を出すため）で
+  1 材料 1 回ログに出し、出力のメモに書いて続ける。
+- **まだ作っていないもの**: `gstn ops diagnosis <id>`（読み取りの経路 `OpsDiagnosisRead` と forge-web の配線、openapi）は次の MR
+  （`OpsDiagnosisRead` は forge-web の `PLANNED` のまま）。それまでは `forge diagnose --json` の出力を `incident-commander` が障害の記録に貼る。
