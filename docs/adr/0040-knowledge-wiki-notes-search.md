@@ -121,3 +121,11 @@ M6（計画 20）は Wiki・個人ノート・横断検索（と最小の Issue�
 - **エラーコード**: `FG-KNOW-0005` NotesProjectMissing（404、info）、`FG-KNOW-0006` NotesCreateRefused（409、info: `already_exists`・`name_taken`）、`FG-KNOW-0007` NotesProvisionFailed（500、warn: `step=provision|seed|link`、指す行は書かない）。runbook `knowledge`「Personal notes」。
 - **検索（K4）**: ノートは非公開のプロジェクトなので、検索の 1 件ずつの判定（`ProjectRead` / `RepoBrowse`）で他人には出ない（`notes_not_in_others_search`）。管理者はすべてのプロジェクトを読めるので管理者の検索には出る — 既存の読みの規則のまま受け入れる。
 - **`gstn note show|create|new`**: `docs/api/agent-tools.toml` ではどれも `excluded`（本人の物で、エージェントの道具にしない）。
+
+## Amendment X1（2026-11-26、AI のための知識の検索）
+
+- **新しいルートを作らない**: 検索の道具は既存の `GET /api/v1/search`（K3）をそのまま使う。`docs/api/agent-tools.toml` に `search_knowledge`（`gstn search`）と `get_project_wiki`（`gstn wiki show`）を足し、2 つの `[[deferred]]` を外す。`gstn mcp` はどの要求にも `Forge-Context-Audience: agent` を付けるので、サーバーは読みの段で `confidential` の行を外す（返さず、数えない。カーソルも AI の聞き手に封印され、同じ人がヘッダなしで続きを読むことはできない）。AI の利用者の規則・`SearchQuery` の判定・1 件ずつの `authorize()` は K3 のまま変えない。Kanflow の道具の束 `GET /api/v1/ai-tools`（計画 02 §6 F-18、ADR-0025 Amendment L5-9）には今回は足さない: 足すには `SearchQuery` を「人の代わりに読む」（`ActAsRule::ReadWithoutAssertion`）に変え、カーソルの封印を代わりに読まれた人に結び、権限の表に行を足す認可の変更が要る（`authz-matrix-auditor` の確かめと共に別の項目で。未了として記録）。
+- **Wiki の読み方**: 検索の結果の文書は、Wiki のページなら Wiki のプロジェクトの文書として出る（K4 がそのまま索引する）。`get_project_wiki` は結び付けた Wiki のプロジェクトの id を返すだけで、ページは `list_documents` / `get_document` / `search_knowledge`（`project_id` に Wiki の id）で読む。結果に「Wiki の印」は足さない（パスとプロジェクトで分かる。印が要るなら計測してから）。
+- **ノート（N1）への手当て**: 個人のノートは `<user>/notes` の普通の非公開プロジェクトの文書なので、N1 が入れば K4 の索引に載り、この道具で本人の資格情報からだけ見つかる（区分 `confidential` に変えたノートは AI に出ない）。X1 は N1 に依存せず、追加の作業は無い。ノートを AI から隠す設定（本人のノートすべてを AI の聞き手から外す）が要るなら、N1 の後に `search.rs` の読みの絞り込みへ 1 つ足す（未了として記録）。
+- **直した不具合**: `scope` の値は百分率で復号してから `,` で分けるようにした（`gstn search --scope a --scope b` と MCP の道具は `,` を `%2C` で送るので、これまでは `FG-WEB-0006 reason=invalid_value` で拒否されていた）。復号できない値は `param=scope rule=malformed`。
+- **テスト**: `agent_search_withholds_confidential` を両側に置く — `forge-web` の検索のテスト（MCP と同じ要求で、機密の MR と文書がどのページにも出ない、読みが `exclude_confidential`、AI のカーソルはヘッダなしで拒否）と `forge-client/tests/mcp_knowledge.rs`（どの知識の道具の要求にも聞き手のヘッダと本人のトークン）。
