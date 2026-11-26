@@ -412,12 +412,18 @@ fn every_tool_builds_its_route_and_refuses_unknown_arguments() {
         let req = t
             .request(&given)
             .unwrap_or_else(|e| panic!("{}: {e:?}", t.name));
-        assert!(
-            req.path.starts_with("/api/v1/projects/7/"),
-            "{}: {}",
-            t.name,
-            req.path
-        );
+        // A project's route gets the project; an instance route (the
+        // knowledge search, plan 20 X1) is its path as it stands.
+        if t.path.starts_with("/api/v1/projects/{id}") {
+            assert!(
+                req.path.starts_with("/api/v1/projects/7/"),
+                "{}: {}",
+                t.name,
+                req.path
+            );
+        } else {
+            assert_eq!(req.path, t.path, "{}", t.name);
+        }
         assert!(!req.path.contains('{'), "{}: {}", t.name, req.path);
         given.insert("token".to_owned(), json!("x"));
         assert!(t.request(&given).is_err(), "{}", t.name);

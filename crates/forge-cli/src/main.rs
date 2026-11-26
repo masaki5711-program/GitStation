@@ -32,6 +32,8 @@ mod backup;
 // M4 C2: the confidential mark of a pipeline's commit.
 mod ci_marks;
 mod db;
+// Plan 19 L5-7: the incident first diagnosis.
+mod diagnose;
 mod doctor;
 mod explain;
 // M3 X8: the push checks' pre-receive hook.
@@ -97,6 +99,45 @@ enum Command {
     /// Read-only health checks of everything `forge serve` needs
     /// (configuration, database, schema, storage, git).
     Doctor {
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// The incident first diagnosis (plan 19 L5-7): gathers the facts
+    /// (log lines, catalog, runbook, incident memory, recent changes,
+    /// doctor) and, with `llm.enabled`, asks the local LLM for at most
+    /// three cause candidates — advice only, never a change. Reads only;
+    /// the advice is recorded in `forge.llm_advice`.
+    Diagnose {
+        /// The request to diagnose (its `request_id`).
+        #[arg(
+            long,
+            conflicts_with = "error_code",
+            required_unless_present = "error_code"
+        )]
+        request_id: Option<String>,
+        /// The FG code to diagnose, e.g. FG-DB-0001.
+        #[arg(long)]
+        error_code: Option<String>,
+        /// The window of recent changes: 30m, 2h, 1d (at most 7d).
+        #[arg(long, default_value = "2h", value_parser = diagnose::parse_since)]
+        since: std::time::Duration,
+        /// forge's JSON log lines, `-` for stdin: `journalctl -u forge-serve
+        /// -u forge-worker --since -2h -o cat | forge diagnose ... --logs -`.
+        #[arg(long)]
+        logs: Option<std::path::PathBuf>,
+        /// The runbook directory (default: the release's share/runbooks).
+        #[arg(long)]
+        runbooks: Option<std::path::PathBuf>,
+        /// The incident memory (default: share/incidents/records.jsonl).
+        #[arg(long)]
+        incidents: Option<std::path::PathBuf>,
+        /// Do not include `forge doctor --json`.
+        #[arg(long)]
+        no_doctor: bool,
+        /// Gather and print the facts only; do not ask the LLM.
+        #[arg(long)]
+        facts_only: bool,
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
@@ -706,6 +747,7 @@ fn main() -> ExitCode {
                 },
         }
         | Command::Doctor { .. }
+        | Command::Diagnose { .. }
         | Command::Db {
             command: DbCommand::Status { .. },
         } => telemetry::init(LogFormat::Pretty, "warn"),
@@ -1038,6 +1080,32 @@ fn main() -> ExitCode {
             }
         }),
         // ── end M3 O1 ──
+        Command::Diagnose {
+            request_id: rid,
+            error_code,
+            since,
+            logs,
+            runbooks,
+            incidents,
+            no_doctor,
+            facts_only,
+            json,
+        } => diagnose::target(rid.as_deref(), error_code.as_deref()).and_then(|target| {
+            diagnose::run(
+                config_file.as_deref(),
+                &diagnose::Args {
+                    target,
+                    since,
+                    logs,
+                    runbooks,
+                    incidents,
+                    doctor: !no_doctor,
+                    ask: !facts_only,
+                    json,
+                },
+                &request_id,
+            )
+        }),
         Command::Db {
             command: DbCommand::Status { check },
         } => config().and_then(|cfg| db::status(&cfg.database, check)),

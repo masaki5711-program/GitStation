@@ -71,6 +71,12 @@ actions! {
     /// an agent too; never acting for a person, never CI). Every hit is
     /// then decided again (`ProjectRead`, `MergeRequestList`).
     SearchQuery,
+    /// `GET /api/v1/ai-tools` (plan 19 §3.3, plan 02 §6 F-18, L5-9): the
+    /// read-only tool pack kanflow's AI chat offers its model — like
+    /// `SearchQuery` (any active signed-in user, `read_api`, an agent and a
+    /// service account too; never acting for a person, never CI). The list
+    /// is static data; each tool is then a route of its own, decided there.
+    AiToolList,
     ProjectCreate,
     ProjectUpdate,
     /// Private ⇄ internal: Owner only (exposes a project to every signed-in user).
@@ -88,6 +94,15 @@ actions! {
     /// actions on the wiki project (`RepoBrowse`, `RepoPush`), whose role
     /// the owner project's members inherit (`forge_db::roles`).
     ProjectWikiLink,
+    /// `POST /api/v1/user/notes` (plan 20 N1, ADR-0040 §6): create the
+    /// caller's notes — the private project `<user>/notes` — and point at
+    /// it. Decided on the caller's own personal namespace: only its owner,
+    /// a person (never an agent, a service account, a bot, acting for a
+    /// person or CI — administrators included, for another's namespace),
+    /// `api`. Creating the project is also `ProjectCreate` there, decided
+    /// again by the command. Reading and writing notes are the existing
+    /// actions on the project (`RepoBrowse`, `RepoPush`).
+    PersonalNotesCreate,
     ProjectRestore,
     ProtectedRefManage,
     MemberManage,
@@ -885,6 +900,7 @@ impl Action {
                 | Action::ProjectRestore
                 // Plan 20 W1: a wiki is linked by a person.
                 | Action::ProjectWikiLink
+                | Action::PersonalNotesCreate
                 | Action::MemberManage
                 | Action::UserDisable
                 // ADR-0021 amendment 2026-11-20: another person's positions
@@ -1034,6 +1050,7 @@ impl Action {
             | Action::ContextRead
             | Action::ProjectList
             | Action::SearchQuery
+            | Action::AiToolList
             | Action::MemberList
             | Action::ProtectedRefList
             | Action::GroupRead
@@ -1089,6 +1106,7 @@ impl Action {
             | Action::ProjectDelete
             | Action::ProjectRestore
             | Action::ProjectWikiLink
+            | Action::PersonalNotesCreate
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::GroupCreateTopLevel
@@ -1205,6 +1223,7 @@ impl Action {
             | Action::RepoBrowse
             | Action::ProjectList
             | Action::SearchQuery
+            | Action::AiToolList
             | Action::ProjectCreate
             | Action::ProjectUpdate
             | Action::ProjectVisibilityChange
@@ -1212,6 +1231,7 @@ impl Action {
             | Action::ProjectDelete
             | Action::ProjectRestore
             | Action::ProjectWikiLink
+            | Action::PersonalNotesCreate
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::MemberList
@@ -1401,6 +1421,7 @@ impl Action {
             | Action::RepoBrowse
             | Action::ProjectList
             | Action::SearchQuery
+            | Action::AiToolList
             | Action::ProjectCreate
             | Action::ProjectUpdate
             | Action::ProjectVisibilityChange
@@ -1408,6 +1429,7 @@ impl Action {
             | Action::ProjectDelete
             | Action::ProjectRestore
             | Action::ProjectWikiLink
+            | Action::PersonalNotesCreate
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::MemberList

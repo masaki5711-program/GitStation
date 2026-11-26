@@ -16,8 +16,8 @@
 mod act_as;
 mod act_as_ctx;
 // Plan 16 A5: the marketplace's publishing routes.
-mod agent_ctx;
 mod action;
+mod agent_ctx;
 mod authorize;
 mod auto_merge;
 // M4 C14: the autofix bot's arm.
@@ -108,8 +108,12 @@ mod matrix_rows_spec_refs;
 mod matrix_rows_repo_copy;
 // Plan 20 K3 (ADR-0040): the cross search.
 mod matrix_rows_search;
+// Plan 19 L5-9: kanflow's tool pack list.
+mod matrix_rows_ai_tools;
 // Plan 20 W1 (ADR-0040 §5): the project wiki link.
 mod matrix_rows_wiki;
+// Plan 20 N1 (ADR-0040 §6): a person's notes.
+mod matrix_rows_notes;
 // The CLI distribution (`gstn` downloads).
 mod matrix_rows_clients;
 mod spec_ref;
@@ -118,8 +122,8 @@ mod spec_ref;
 pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action, CiRule};
-pub use authorize::{authorize, group_seen, GroupSeen};
 pub use agent_ctx::{AgentPartCtx, AgentPartTarget};
+pub use authorize::{authorize, group_seen, GroupSeen};
 pub use auto_merge::{auto_merge_may, AutoMergeCtx};
 pub use autofix::{autofix_may, AutofixCtx};
 pub use ci_output::{authorize_ci_artifact, authorize_ci_output, CiOutputAllowed};

@@ -7337,6 +7337,181 @@
       "summary": "Check the repository's Claude Code configuration on this computer: every managed file (.claude/, CLAUDE.md, .mcp.json) must match .gitstation/agent.lock.json (FG-AGENT-0007), and every part's digest and Ed25519 signature must verify with the local public keys (FG-AGENT-0002; a missing or stale key list is FG-AGENT-0003). With --part, check one part directory instead: part.toml, install paths (FG-AGENT-0001), the static scan for undeclared commands, network or permissions (FG-AGENT-0005) and MCP hosts outside the list (FG-AGENT-0013), and print its digest. Exit 1 with the most serious problem's code. Local only: revocation is not checked."
     },
     {
+      "args": [],
+      "examples": [
+        "gstn agent keys",
+        "gstn agent keys --json"
+      ],
+      "name": "agent keys",
+      "output": {
+        "required": [
+          "keys"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/agent-keys"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The public keys that sign agent parts (kid, base64 public key, created, retired, revoked). --json prints the agent-keys.json that `gstn agent verify` reads from the gstn configuration directory."
+    },
+    {
+      "args": [
+        {
+          "description": "skill, agent, rule, hook, command, mcp or adapter.",
+          "kind": "option",
+          "name": "--kind",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "beta or stable.",
+          "kind": "option",
+          "name": "--channel",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A part of the slug.",
+          "kind": "option",
+          "name": "--q",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn part list --kind hook --channel stable --json"
+      ],
+      "name": "part list",
+      "output": {
+        "required": [
+          "parts"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/agent-parts"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The agent parts catalog (plan 16): each part with its newest version that is not revoked (slug, version, channel, state, digest, capabilities). Every signed-in account."
+    },
+    {
+      "args": [
+        {
+          "description": "The part's slug.",
+          "kind": "positional",
+          "name": "slug",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "One version (x.y.z).",
+          "kind": "positional",
+          "name": "version",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn part view guard-hook",
+        "gstn part view guard-hook 1.2.0 --json"
+      ],
+      "name": "part view",
+      "output": {
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/agent-parts/{slug}",
+        "GET /api/v1/agent-parts/{slug}/versions/{version}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "One agent part's published versions, newest first; with a version, that version with its files (path, mode, sha256, size), its source commit, digest, signature and key id."
+    },
+    {
+      "args": [
+        {
+          "description": "The part's slug.",
+          "kind": "positional",
+          "name": "slug",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn part publish guard-hook"
+      ],
+      "name": "part publish",
+      "output": {
+        "required": [
+          "action",
+          "web_session_only",
+          "page"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Publishing a tag is decided only in a web session of a person (a token is refused, ADR-0032 Amendment A4): prints the marketplace page to open. Nothing is sent."
+    },
+    {
+      "args": [
+        {
+          "description": "The part's slug.",
+          "kind": "positional",
+          "name": "slug",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn part promote guard-hook"
+      ],
+      "name": "part promote",
+      "output": {
+        "required": [
+          "action",
+          "web_session_only",
+          "page"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Moving a version from beta to stable is decided only in a web session of a person: prints the marketplace page to open. Nothing is sent."
+    },
+    {
+      "args": [
+        {
+          "description": "The part's slug.",
+          "kind": "positional",
+          "name": "slug",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn part revoke guard-hook"
+      ],
+      "name": "part revoke",
+      "output": {
+        "required": [
+          "action",
+          "web_session_only",
+          "page"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Revoking a version is decided only in a web session of a person: prints the marketplace page to open. Nothing is sent."
+    },
+    {
       "args": [
         {
           "description": "The release file ({manifest, digest, key_id, signature}).",
@@ -8441,6 +8616,8 @@
         "GET /api/v1/projects/{id}/pipelines/{pipeline_id}",
         "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log",
         "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis",
+        "GET /api/v1/search",
+        "GET /api/v1/projects/{id}/wiki",
         "POST /api/v1/projects/{id}/merge-requests",
         "PATCH /api/v1/projects/{id}/merge-requests/{iid}",
         "POST /api/v1/projects/{id}/merge-requests/{iid}/close",
@@ -9628,6 +9805,139 @@
         "api"
       ],
       "summary": "Unlink a project's wiki; the wiki project and its history stay, and the project's members lose the inherited role. Needs --yes."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn note show",
+        "gstn note show --json"
+      ],
+      "name": "note show",
+      "output": {
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "owner",
+          "default_branch"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notes"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show your notes: the private project <you>/notes (id, path, owner, branch). 404 FG-REPO-0005 when you have none; 404 FG-KNOW-0005 when the notes project was moved or deleted (gstn note create makes new ones)."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn note create"
+      ],
+      "name": "note create",
+      "output": {
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "replaced_project_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "owner",
+          "default_branch",
+          "commit",
+          "replaced_project_id"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/user/notes"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create your notes in one step: the private project <you>/notes with the note type (.forge/doctypes/note.yml, owner_kind: user) on main. Yours only (a person, never an agent or a service account); 409 FG-KNOW-0006 when they exist or the name is taken, 500 FG-KNOW-0007 when a step after the creation failed."
+    },
+    {
+      "args": [
+        {
+          "description": "The note's title (default: the body's first line).",
+          "kind": "option",
+          "name": "--title",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The note's text (default: standard input).",
+          "kind": "option",
+          "name": "--body",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn note new --body \"打ち合わせのメモ\"",
+        "gstn note new --title Ideas < ideas.md"
+      ],
+      "name": "note new",
+      "output": {
+        "required": [
+          "commit_sha",
+          "parent_sha",
+          "branch",
+          "branch_created",
+          "path",
+          "blob_sha",
+          "merge_request",
+          "merge_request_error"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notes",
+        "GET /api/v1/projects/{id}/repository/resolve",
+        "GET /api/v1/projects/{id}/repository/blob",
+        "POST /api/v1/projects/{id}/repository/commits/single-file"
+      ],
+      "scopes": [
+        "read_api",
+        "write_repository"
+      ],
+      "summary": "Save a quick note: one direct commit of N-YYYYMMDD-HHMMSS.md (UTC, doctype note, owner = you) on your notes' main, from --body or standard input. Checked like a push (secrets refused, FG-GIT-0022)."
     },
     {
       "args": [],

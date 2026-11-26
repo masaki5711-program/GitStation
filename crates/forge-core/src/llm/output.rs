@@ -28,7 +28,17 @@
 //!   (`closes #12`), images and links: an advice can notify no one, close
 //!   nothing and carry nothing out (ADR-0017 §2);
 //! - any other key (`"approve": true`) is ignored: an advice has no action
-//!   field, so nothing in it can change state.
+//!   field, so nothing in it can change state;
+//! - with [`OutputPolicy::forbid_mutating_steps`] (the incident diagnosis,
+//!   plan 19 §3.2, contract 7) a finding whose message names a step that
+//!   changes something (`UPDATE … SET`, `systemctl restart`, 「再起動」), or
+//!   whose "next look" (after `次に見るもの:`) is not an allow-listed
+//!   read-only command ([`next_look_is_read_only`]), is dropped
+//!   ([`Advice::dropped_mutating`]) and such a summary withheld
+//!   ([`MUTATING_WITHHELD`]): the diagnosis only says what to look at next;
+//! - with [`OutputPolicy::cited_lines_of`] a finding about that path (the
+//!   numbered log, `L<n>: …`) must name a given line and quote that line,
+//!   and every finding must name its part.
 
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{Map, Value};
@@ -108,10 +118,18 @@ pub struct Advice {
     /// Verdict phrases replaced by [`VERDICT_REMOVED`] in finding
     /// messages, quotes and the deep-review reason.
     pub verdicts_removed: usize,
+    /// Findings (and a deep-review reason) dropped because they name a
+    /// mutating step ([`OutputPolicy::forbid_mutating_steps`]).
+    pub dropped_mutating: usize,
     /// Less trustworthy than its words suggest: a verdict was withheld or
-    /// removed, or findings were dropped for their evidence (shown as such).
+    /// removed, findings were dropped for their evidence, or a mutating
+    /// step was refused (shown as such).
     pub degraded: bool,
 }
+
+/// What replaces a summary that names a mutating step (a diagnosis).
+pub const MUTATING_WITHHELD: &str =
+    "[summary withheld: the model proposed a change; mitigation is a person's approved runbook step]";
 
 /// What replaces a summary that stated a verdict.
 pub const WITHHELD_SUMMARY: &str =
@@ -273,6 +291,12 @@ pub struct OutputPolicy {
     pub max_summary_chars: usize,
     pub max_message_chars: usize,
     pub max_quote_chars: usize,
+    /// Drop findings (and withhold a summary) that name a step changing
+    /// something (module docs). Off by default.
+    pub forbid_mutating_steps: bool,
+    /// A finding about this path must cite one of its numbered lines
+    /// (`L<n>: `) by `line` and quote that line only (module docs).
+    pub cited_lines_of: Option<&'static str>,
 }
 
 impl Default for OutputPolicy {
@@ -283,6 +307,8 @@ impl Default for OutputPolicy {
             max_summary_chars: 1_200,
             max_message_chars: 1_000,
             max_quote_chars: 500,
+            forbid_mutating_steps: false,
+            cited_lines_of: None,
         }
     }
 }
@@ -314,8 +340,12 @@ pub fn check_output(
     };
     // No evidence gate can prove a summary; a verdict in it is refused.
     let summary_withheld = states_a_verdict(&summary);
+    let summary_mutating =
+        !summary_withheld && policy.forbid_mutating_steps && names_a_mutating_step(&summary);
     let summary = if summary_withheld {
         WITHHELD_SUMMARY.to_owned()
+    } else if summary_mutating {
+        MUTATING_WITHHELD.to_owned()
     } else {
         summary
     };
@@ -327,10 +357,19 @@ pub fn check_output(
     if raw_findings.len() > 100 {
         return Err(invalid("findings_too_many"));
     }
+    let mut dropped_mutating = 0usize;
     let deep_review = match top.get("deep_review") {
         None | Some(Value::Null) => None,
         Some(Value::Object(d)) => match (d.get("recommended"), d.get("reason")) {
             (Some(Value::Bool(false)) | None, _) => None,
+            // A reason that names a mutating step is dropped like such a
+            // finding (L5-10: the eval bench's injected step reached it).
+            (Some(Value::Bool(true)), Some(Value::String(r)))
+                if policy.forbid_mutating_steps && names_a_mutating_step(r) =>
+            {
+                dropped_mutating += 1;
+                None
+            }
             (Some(Value::Bool(true)), Some(Value::String(r))) if !r.trim().is_empty() => {
                 let (reason, n) = clean(r, policy.max_message_chars);
                 stripped += n;
@@ -355,7 +394,14 @@ pub fn check_output(
             dropped_low_confidence += 1;
             continue;
         }
-        if !evidence_in_input(&finding, input) {
+        if policy.forbid_mutating_steps
+            && (names_a_mutating_step(&finding.message)
+                || !next_look_is_read_only(&finding.message))
+        {
+            dropped_mutating += 1;
+            continue;
+        }
+        if !evidence_in_input(&finding, input, policy) {
             dropped_evidence += 1;
             continue;
         }
@@ -403,7 +449,12 @@ pub fn check_output(
         stripped,
         summary_withheld,
         verdicts_removed,
-        degraded: summary_withheld || verdicts_removed > 0 || dropped_evidence > 0,
+        dropped_mutating,
+        degraded: summary_withheld
+            || summary_mutating
+            || verdicts_removed > 0
+            || dropped_evidence > 0
+            || dropped_mutating > 0,
     })
 }
 
@@ -475,12 +526,32 @@ fn squash(text: &str) -> String {
 /// The quote is in the input: in the parts of the finding's path when any
 /// part has that path, otherwise in any part. A quote of fewer than 8
 /// characters proves nothing and does not count.
-fn evidence_in_input(finding: &Finding, input: &PreparedInput) -> bool {
+fn evidence_in_input(finding: &Finding, input: &PreparedInput, policy: &OutputPolicy) -> bool {
     let quote = squash(&finding.quote);
     if quote.chars().count() < 8 {
         return false;
     }
     let parts = input.parts();
+    if policy.cited_lines_of.is_some() && finding.path.is_none() {
+        // A diagnosis names the part of every candidate.
+        return false;
+    }
+    if let (Some(numbered), Some(path)) = (policy.cited_lines_of, finding.path.as_deref()) {
+        if numbered == path {
+            // Only the cited line of that part counts: a line the input
+            // does not have, or a quote from another line, is no evidence.
+            let Some(n) = finding.line else {
+                return false;
+            };
+            let prefix = format!("L{n}: ");
+            return parts
+                .iter()
+                .filter(|part| part.path.as_deref() == Some(path))
+                .flat_map(|part| part.text.lines())
+                .filter_map(|line| line.strip_prefix(prefix.as_str()))
+                .any(|line| squash(line).contains(&quote));
+        }
+    }
     let of_path: Vec<_> = match &finding.path {
         Some(p) => parts
             .iter()
@@ -498,6 +569,298 @@ fn evidence_in_input(finding: &Finding, input: &PreparedInput) -> bool {
         of_path
     };
     scope.iter().any(|part| squash(&part.text).contains(&quote))
+}
+
+/// Whole words that change something when run (lowercase).
+const MUTATING_WORDS: &[&str] = &[
+    "rm", "rmdir", "mv", "chmod", "chown", "chgrp", "sudo", "kill", "pkill", "killall", "reboot",
+    "shutdown", "restart", "redeploy", "rollback", "truncate", "forgectl",
+];
+
+/// Phrases that change something (lowercase; matched on the squashed,
+/// lowercased text).
+const MUTATING_PHRASES: &[&str] = &[
+    "delete from",
+    "insert into",
+    "drop table",
+    "drop index",
+    "drop schema",
+    "drop database",
+    "drop role",
+    "alter table",
+    "alter role",
+    "alter system",
+    "grant ",
+    "revoke ",
+    "vacuum full",
+    "reindex ",
+    "roll back",
+    "systemctl start",
+    "systemctl stop",
+    "systemctl reload",
+    "systemctl kill",
+    "systemctl enable",
+    "systemctl disable",
+    "systemctl mask",
+    "service restart",
+    "git push",
+    "git reset",
+    "git update-ref",
+    "git gc",
+    "git prune",
+    "git branch -d",
+    "forge db migrate",
+    "forge restore",
+    "forge backup",
+    "forge search reindex",
+    "ollama pull",
+    "ollama rm",
+    "ollama stop",
+    "podman rm",
+    "podman stop",
+    "podman kill",
+    "docker rm",
+    "docker stop",
+    "docker kill",
+    "-x post",
+    "-x put",
+    "-x patch",
+    "-x delete",
+    "--request post",
+    "--request put",
+    "--request patch",
+    "--request delete",
+    "llm.paused",
+    "再起動",
+    "削除して",
+    "削除する",
+    "削除し、",
+    "消して",
+    "停止して",
+    "止めて",
+    "書き換え",
+    "変更して",
+    "変更する",
+    "適用して",
+    "移行して",
+    "戻して",
+    "ロールバック",
+    "切り替えて",
+    "有効にして",
+    "無効にして",
+];
+
+/// `forge admin` subcommands that change data (`forge admin token list`
+/// only reads).
+const MUTATING_ADMIN: &[&str] = &[
+    "issue",
+    "revoke",
+    "disable",
+    "enable",
+    "rename",
+    "reprovision",
+    "record-push",
+    "maintain",
+    "allow-import",
+    "purge",
+    "move",
+    "new-epoch",
+    "register",
+    "generate",
+    "bootstrap-admin",
+    "link-identity",
+    "admin-source",
+];
+
+/// Whether `text` names a step that changes something: a mutating SQL
+/// statement, a shell or service command, a forge operator command that
+/// writes, or a Japanese imperative to change, stop or restart. It is
+/// conservative: a cause worded like a step is dropped too. The incident
+/// diagnosis only says what to look at next (plan 19 §3.2, contract 7).
+pub fn names_a_mutating_step(text: &str) -> bool {
+    let lower = squash(&normalized(text)).to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '.')))
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.iter().any(|w| MUTATING_WORDS.contains(w)) {
+        return true;
+    }
+    // `UPDATE <table> SET`: a statement, not the noun "update".
+    let update_set = words
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| **w == "update")
+        .any(|(at, _)| words.iter().skip(at + 1).take(4).any(|w| *w == "set"));
+    if update_set || MUTATING_PHRASES.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+    lower.split("forge admin").skip(1).any(|rest| {
+        rest.split_whitespace()
+            .take(3)
+            .any(|w| MUTATING_ADMIN.contains(&w))
+    })
+}
+
+/// The markers before a diagnosis's "next look" (after NFKC: `：` is `:`).
+const NEXT_MARKERS: &[&str] = &["次に見るもの:", "次に見るもの :", "next:", "next look:"];
+
+/// Commands a "next look" may start with: they only read.
+const READ_ONLY_COMMANDS: &[&str] = &[
+    "journalctl",
+    "jq",
+    "grep",
+    "rg",
+    "awk",
+    "cut",
+    "sort",
+    "uniq",
+    "head",
+    "tail",
+    "wc",
+    "cat",
+    "less",
+    "ls",
+    "stat",
+    "df",
+    "du",
+    "findmnt",
+    "free",
+    "uptime",
+    "ps",
+    "ss",
+    "date",
+    "nvidia-smi",
+    "sha256sum",
+    "select",
+    "with",
+    "explain",
+    "forge",
+    "systemctl",
+    "git",
+    "curl",
+    "ollama",
+    "podman",
+    "psql",
+];
+
+/// The read-only subcommands of the commands that also write.
+fn read_only_use(cmd: &str, rest: &[&str]) -> bool {
+    let first = rest.first().copied().unwrap_or("");
+    let has = |w: &str| rest.contains(&w);
+    match cmd {
+        "forge" => match first {
+            "doctor" | "explain" | "diagnose" => true,
+            "errors" => rest.get(1) == Some(&"list"),
+            "db" => rest.get(1) == Some(&"status"),
+            "admin" => {
+                (matches!(rest.get(1).copied(), Some("token" | "runner"))
+                    && rest.get(2) == Some(&"list"))
+                    || rest.get(1) == Some(&"repo-path")
+            }
+            _ => false,
+        },
+        "systemctl" => matches!(
+            first,
+            "status" | "show" | "is-active" | "is-failed" | "list-units"
+        ),
+        "git" => matches!(
+            first,
+            "log"
+                | "show"
+                | "status"
+                | "cat-file"
+                | "rev-parse"
+                | "for-each-ref"
+                | "ls-tree"
+                | "fsck"
+                | "count-objects"
+                | "diff"
+        ),
+        "ollama" => matches!(first, "list" | "ps" | "show"),
+        "podman" => matches!(first, "ps" | "info" | "images" | "inspect" | "logs"),
+        "journalctl" => !rest
+            .iter()
+            .any(|w| w.starts_with("--vacuum") || *w == "--rotate" || *w == "--flush"),
+        // GET only, to this host or a placeholder (`<llm.endpoint>`): no
+        // body, no method, no output file, nothing sent elsewhere.
+        "curl" => {
+            !rest.iter().any(|w| {
+                w.starts_with("-x")
+                    || w.starts_with("--request")
+                    || w.starts_with("-d")
+                    || w.starts_with("--data")
+                    || w.starts_with("-f")
+                    || w.starts_with("--form")
+                    || w.starts_with("-t")
+                    || w.starts_with("--upload")
+                    || w.starts_with("-o")
+                    || w.starts_with("--output")
+            }) && rest.iter().filter(|w| w.contains("://")).all(|u| {
+                u.contains("://127.0.0.1") || u.contains("://localhost") || u.contains("://[::1]")
+            })
+        }
+        "psql" => has("-c") && !has("-f"),
+        _ => true,
+    }
+}
+
+/// SQL that is not a plain read, even inside a SELECT.
+const SQL_WRITES: &[&str] = &[
+    " into ",
+    "pg_terminate_backend",
+    "pg_cancel_backend",
+    "pg_reload_conf",
+    "pg_rotate_logfile",
+    "set_config",
+    "nextval",
+    "setval",
+    "lo_",
+    "dblink",
+    "pg_read_file",
+    "pg_read_binary_file",
+    " copy ",
+    " for update",
+    " refresh ",
+    " create ",
+    " call ",
+    " do ",
+];
+
+/// Whether every command of the "next look" in `text` only reads: each
+/// segment (split at `|`, `;`, `&&`, `||`) starts with an allowed command
+/// used read-only, no redirection into a file outside SQL, no writing SQL.
+/// Text without a marker names no command and passes (the deny-list still
+/// applies to it).
+pub fn next_look_is_read_only(text: &str) -> bool {
+    let lower = squash(&normalized(text)).to_lowercase();
+    let Some(after) = NEXT_MARKERS
+        .iter()
+        .filter_map(|m| lower.find(m).map(|at| &lower[at + m.len()..]))
+        .next()
+    else {
+        return true;
+    };
+    let after = after.replace("&&", ";").replace("||", ";");
+    after.split(['|', ';']).all(|segment| {
+        let words: Vec<&str> = segment
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | '(' | ')')))
+            .filter(|w| !w.is_empty())
+            .collect();
+        let Some((cmd, rest)) = words.split_first() else {
+            return true;
+        };
+        // Words after the command that are not ASCII end it (「で確かめる」).
+        let rest: Vec<&str> = rest.iter().copied().take_while(|w| w.is_ascii()).collect();
+        let sql = matches!(*cmd, "select" | "with" | "explain" | "psql");
+        let seg = format!(" {segment} ");
+        READ_ONLY_COMMANDS.contains(cmd)
+            && read_only_use(cmd, &rest)
+            && (sql || !segment.contains('>'))
+            && !(sql && SQL_WRITES.iter().any(|w| seg.contains(w)))
+            && !(*cmd == "explain" && seg.contains("analyze"))
+    })
 }
 
 /// Closing keywords followed by an issue reference.

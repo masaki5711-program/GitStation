@@ -40,6 +40,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 pub mod background;
+pub mod bench;
 pub mod kanflow;
 pub mod metrics;
 pub mod ollama;
@@ -568,7 +569,10 @@ impl Gateway {
             findings: findings_json(&advice),
             deep_review: advice.deep_review.as_ref().map(|d| d.reason.clone()),
             dropped_findings: i32::try_from(
-                advice.dropped_evidence + advice.dropped_low_confidence + advice.dropped_over_cap,
+                advice.dropped_evidence
+                    + advice.dropped_low_confidence
+                    + advice.dropped_over_cap
+                    + advice.dropped_mutating,
             )
             .unwrap_or(i32::MAX),
             degraded: advice.degraded,

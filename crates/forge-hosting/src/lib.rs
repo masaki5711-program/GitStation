@@ -37,6 +37,7 @@ pub mod service_accounts;
 // M3 I1a: integrations and their project bindings.
 pub mod integrations;
 // Plan 20 W2 (ADR-0040 §5): a project's wiki.
+pub mod notes;
 pub mod wiki;
 
 pub use forge_db::namespaces::MoveOutcome;

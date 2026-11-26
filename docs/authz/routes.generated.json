@@ -200,6 +200,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/notes",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/notes",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/notifications",
     "people_only": false,
     "public": true,
@@ -697,6 +715,15 @@
     "method": "POST",
     "path": "/api/v1/agent-parts/{slug}/versions/{version}/revoke",
     "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AiToolList",
+    "method": "GET",
+    "path": "/api/v1/ai-tools",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -2461,6 +2488,24 @@
     "method": "GET",
     "path": "/api/v1/user/merge-requests/counts",
     "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectList",
+    "method": "GET",
+    "path": "/api/v1/user/notes",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PersonalNotesCreate",
+    "method": "POST",
+    "path": "/api/v1/user/notes",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"

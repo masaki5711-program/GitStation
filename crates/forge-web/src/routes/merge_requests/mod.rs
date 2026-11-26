@@ -177,6 +177,11 @@ pub const QUERY: &[QueryParam] = &[
         description: "The previous page's next_before (an iid): merge requests with a smaller iid",
         integer_range: Some((1, i64::MAX)),
     },
+    QueryParam {
+        name: "work_item",
+        description: "PBI-<n>: only the merge requests openly linked to that work item of the project's binding (plan 19 L5-9)",
+        integer_range: None,
+    },
 ];
 
 /// `POST …/merge-requests`.
@@ -319,6 +324,8 @@ pub struct MergeRequestPage {
     pub merge_requests: Vec<MergeRequestBody>,
     /// Pass as `before` for the next page; `null` on the last page.
     pub next_before: Option<i64>,
+    /// Plan 19 §3.3 (L5-9): when the page was read (UTC, RFC 3339).
+    pub as_of: String,
 }
 
 fn short(name: &RefName) -> String {
@@ -506,20 +513,83 @@ fn page_query(
     Ok((state, limit, before))
 }
 
-/// `GET …/merge-requests` → `200` one page.
+/// `work_item=PBI-<n>` taken out of the list's query (plan 19 §3.3,
+/// L5-9): the reference, and the rest for [`page_query`].
+fn work_item_query(
+    query: Option<&str>,
+) -> Result<(Option<forge_core::WorkItemRef>, String), ForgeError> {
+    let mut found = None;
+    let mut rest = Vec::new();
+    for pair in query.unwrap_or_default().split('&') {
+        match pair.split_once('=') {
+            Some(("work_item", raw)) => {
+                let reference = forge_core::WorkItemRef::parse(raw)
+                    .ok_or_else(|| param_invalid("work_item", "format"))?;
+                if found.replace(reference).is_some() {
+                    return Err(param_invalid("work_item", "repeated"));
+                }
+            }
+            _ if pair == "work_item" => return Err(param_invalid("work_item", "format")),
+            _ => rest.push(pair),
+        }
+    }
+    Ok((found, rest.join("&")))
+}
+
+/// `GET …/merge-requests` → `200` one page; with `work_item=PBI-<n>` only
+/// the merge requests openly linked to that work item of the project's
+/// binding (none when the project is not bound, forge never saw it, or —
+/// for an agent audience — it is confidential).
 pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     // Owned before the first await: the request (its body) is not `Sync`.
-    let query = page_query(request.raw_query());
+    let query = work_item_query(request.raw_query()).and_then(|(item, rest)| {
+        page_query(Some(rest.as_str())).map(|(wanted, limit, before)| (item, wanted, limit, before))
+    });
+    let audience = crate::routes::context::audience(&request);
+    let request_id = request.ctx().request_id.clone(); // clone: logged after the awaits
     let id = *request.proof().id();
     let caller = request.principal().clone(); // clone: owned across the awaits
     let built = async {
-        let (wanted, limit, before) = query?;
-        let rows = bounded(
-            &state,
-            "merge_request_page",
-            review(&state)?.merge_requests(id, wanted, before, limit),
-        )
-        .await?;
+        let (item, wanted, limit, before) = query?;
+        let audience = audience?;
+        let as_of = crate::routes::ai_tools::as_of_now()?;
+        let rows = match item {
+            None => {
+                bounded(
+                    &state,
+                    "merge_request_page",
+                    review(&state)?.merge_requests(id, wanted, before, limit),
+                )
+                .await?
+            }
+            Some(reference) => {
+                let found = bounded(
+                    &state,
+                    "merge_request_page_of_work_item",
+                    review(&state)?
+                        .merge_requests_of_work_item(id, &reference, wanted, before, limit),
+                )
+                .await?;
+                match found {
+                    // Review L5-9 (security MEDIUM): a confidential work
+                    // item is answered to an agent audience like one forge
+                    // never saw — no oracle of which confidential ones exist.
+                    Some((Some(true), _)) if audience.is_agent() => {
+                        tracing::info!(
+                            target: "forge_web",
+                            event = "forge.merge_request_list.work_item_withheld",
+                            request_id = %request_id,
+                            project_id = id.get(),
+                            reason = "work_item_confidential",
+                            "a confidential work item's merge requests were withheld from an agent audience"
+                        );
+                        Vec::new()
+                    }
+                    Some((_, rows)) => rows,
+                    None => Vec::new(),
+                }
+            }
+        };
         let next_before = if rows.len() == limit {
             rows.last().map(|r| r.iid)
         } else {
@@ -537,6 +607,7 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
                 .map(|mr| with_numbers(body_of(mr), &numbers))
                 .collect(),
             next_before,
+            as_of,
         })
     }
     .await;

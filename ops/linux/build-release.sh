@@ -17,7 +17,7 @@
 # signature: carry it over a separate channel (runbook linux-install 2). Inside: bin/forge (UI embedded:
 # forge-cli feature embed-ui, as the CI release job builds it), share/ (the
 # systemd units, example configuration, forgectl, nginx, PostgreSQL, the
-# database bootstrap SQL, the runbooks) and BUILD-INFO.
+# database bootstrap SQL, the runbooks, the incident memory) and BUILD-INFO.
 #
 # Build on Linux. The binary links the build host's glibc dynamically: build
 # on a distribution no newer than the production server (or in the CI image,
@@ -164,7 +164,7 @@ fi
 # 3. The tree.
 run rm -rf -- "$stage"
 run mkdir -p "$stage/bin" "$stage/share/systemd" "$stage/share/etc" "$stage/share/bin" \
-  "$stage/share/nginx" "$stage/share/postgresql" "$stage/share/db/bootstrap" "$stage/share/runbooks"
+  "$stage/share/nginx" "$stage/share/postgresql" "$stage/share/db/bootstrap" "$stage/share/runbooks"   "$stage/share/incidents"
 run install -m 0755 "$bin" "$stage/bin/forge"
 run install -m 0644 "$here"/systemd/forge-serve.service "$here"/systemd/forge-worker.service \
   "$here"/systemd/forge-backup.service "$here"/systemd/forge-backup.timer \
@@ -176,6 +176,8 @@ run install -m 0644 "$here"/postgresql/README.md "$here"/postgresql/forge-postgr
   "$here"/postgresql/compose.yml "$stage/share/postgresql/"
 run install -m 0644 "$root"/ops/db/bootstrap/*.sql "$stage/share/db/bootstrap/"
 run install -m 0644 "$root"/ops/runbooks/*.md "$stage/share/runbooks/"
+# Plan 19 L5-7: forge diagnose reads the runbooks and the incident memory here.
+run install -m 0644 "$root/ops/incidents/records.jsonl" "$stage/share/incidents/"
 run install -m 0644 "$here/README.md" "$stage/README.md"
 
 ui_sha="-"

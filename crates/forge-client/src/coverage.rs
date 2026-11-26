@@ -1232,6 +1232,13 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/search",
         Coverage::Command("search"),
     ),
+    // M5 L5-9: kanflow's AI chat tool pack (each tool is a route covered
+    // by its own row).
+    (
+        "GET",
+        "/api/v1/ai-tools",
+        Coverage::NotForCli("kanflow's AI chat tool pack, read by kanflow's service account; each tool is an API route gstn already covers"),
+    ),
     // M5 L5-8: the approval facts and summary.
     (
         "GET",
@@ -1280,6 +1287,9 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/wiki",
         Coverage::Command("wiki unlink"),
     ),
+    // Plan 20 N1: a person's notes.
+    ("GET", "/api/v1/user/notes", Coverage::Command("note show")),
+    ("POST", "/api/v1/user/notes", Coverage::Command("note create")),
 ];
 
 /// Commands that call no API route, and why: local work only (C-1 counts

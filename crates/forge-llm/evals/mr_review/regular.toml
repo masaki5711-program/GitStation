@@ -1,0 +1,125 @@
+# The merge request first pass (plan 19 §3.1, §6): diffs with a planted
+# defect (must not be missed) and clean diffs (false alarms are counted).
+# Not run until the mr_review prompt lands (L5-5). Synthetic code only.
+
+[[case]]
+name = "planted-unwrap-on-user-input"
+kind = "regular"
+about = "A request handler unwraps a parse of user input (a panic on a production path)."
+[[case.parts]]
+label = "title"
+class = "internal"
+text = "Read the page size from the query"
+[[case.parts]]
+label = "diff"
+class = "internal"
+path = "crates/shop-web/src/orders.rs"
+text = """
+@@ -40,6 +40,8 @@ pub async fn list_orders(Query(q): Query<HashMap<String, String>>) -> Response {
+     let db = state.db();
++    let size: u32 = q.get("size").unwrap().parse().unwrap();
++    let rows = db.orders(size).await?;
+-    let rows = db.orders(50).await?;
+     Json(rows).into_response()
+ }
+"""
+[case.expect]
+finding = { path = "crates/shop-web/src/orders.rs", quote_contains = "unwrap()" }
+
+[[case]]
+name = "planted-shell-string"
+kind = "regular"
+about = "A branch name from the request is interpolated into a shell string."
+[[case.parts]]
+label = "title"
+class = "internal"
+text = "Show the log of a branch"
+[[case.parts]]
+label = "diff"
+class = "internal"
+path = "crates/shop-tools/src/git_log.rs"
+text = """
+@@ -10,5 +10,9 @@ use std::process::Command;
+ pub fn branch_log(branch: &str) -> std::io::Result<String> {
+-    todo_log()
++    let out = Command::new("sh")
++        .arg("-c")
++        .arg(format!("git log --oneline {branch}"))
++        .output()?;
++    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+ }
+"""
+[case.expect]
+finding = { path = "crates/shop-tools/src/git_log.rs", quote_contains = "git log --oneline {branch}" }
+
+[[case]]
+name = "planted-missing-timeout"
+kind = "regular"
+about = "An HTTP call to another service has no timeout."
+[[case.parts]]
+label = "title"
+class = "internal"
+text = "Notify the stock service"
+[[case.parts]]
+label = "diff"
+class = "internal"
+path = "crates/shop-integ/src/stock.rs"
+text = """
+@@ -1,4 +1,10 @@
++pub async fn notify(url: &str, body: String) -> Result<(), reqwest::Error> {
++    let client = reqwest::Client::new();
++    client.post(url).body(body).send().await?;
++    Ok(())
++}
+"""
+[case.expect]
+finding = { path = "crates/shop-integ/src/stock.rs", quote_contains = "reqwest::Client::new()" }
+
+[[case]]
+name = "clean-doc-comment"
+kind = "regular"
+about = "Only a doc comment changes: nothing to find."
+[[case.parts]]
+label = "title"
+class = "internal"
+text = "Explain the rounding rule"
+[[case.parts]]
+label = "diff"
+class = "internal"
+path = "crates/shop-core/src/price.rs"
+text = """
+@@ -12,3 +12,5 @@
+-/// Rounds a price.
++/// Rounds a price to the nearest yen, halves away from zero (the
++/// accounting team's rule since 2025).
+ pub fn round_yen(v: Decimal) -> Decimal {
+"""
+[case.expect]
+clean = true
+
+[[case]]
+name = "clean-rename"
+kind = "regular"
+about = "A local variable is renamed: nothing to find."
+[[case.parts]]
+label = "title"
+class = "internal"
+text = "Rename n to count"
+[[case.parts]]
+label = "diff"
+class = "internal"
+path = "crates/shop-core/src/cart.rs"
+text = """
+@@ -20,7 +20,7 @@ pub fn total_items(cart: &Cart) -> usize {
+-    let mut n = 0;
++    let mut count = 0;
+     for line in &cart.lines {
+-        n += line.quantity;
++        count += line.quantity;
+     }
+-    n
++    count
+ }
+"""
+[case.expect]
+clean = true

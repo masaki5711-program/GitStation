@@ -36,6 +36,8 @@
 //! | `get_pipeline` | `GET …/pipelines/{pipeline_id}` | read |
 //! | `get_job_log` | `GET …/pipelines/{pipeline_id}/jobs/{job_id}/log?attempt=&from=` | read (FG-AUTH-0022 when marked) |
 //! | `get_pipeline_diagnosis` | `GET …/pipelines/{pipeline_id}/diagnosis` | read (FG-AUTH-0022 when marked) |
+//! | `search_knowledge` | `GET /api/v1/search?q=&scope=&project=&limit=&cursor=` | read (never a confidential hit, never a total) |
+//! | `get_project_wiki` | `GET …/projects/{id}/wiki` | read |
 //! | `create_merge_request` | `POST …/projects/{id}/merge-requests` | write |
 //! | `update_merge_request` | `PATCH …/merge-requests/{iid}` (title, description, draft) | write, destructive |
 //! | `close_merge_request` | `POST …/merge-requests/{iid}/close` | write, destructive |

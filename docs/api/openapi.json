@@ -488,6 +488,142 @@
         ],
         "type": "object"
       },
+      "AiTermBody": {
+        "additionalProperties": false,
+        "description": "One state name and its plain words (plan 08).",
+        "properties": {
+          "en": {
+            "type": "string"
+          },
+          "ja": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`merge_request_state`, `block_reason`, `pipeline_status`,\n`deployment_status`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name as the answers spell it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "ja",
+          "en"
+        ],
+        "type": "object"
+      },
+      "AiToolBindingBody": {
+        "additionalProperties": false,
+        "description": "One argument's place in the request.",
+        "properties": {
+          "in": {
+            "$ref": "#/components/schemas/ArgumentIn"
+          },
+          "name": {
+            "description": "The argument's name (a property of `parameters`).",
+            "type": "string"
+          },
+          "wire": {
+            "description": "The name on the wire (`{id}` of the path, a query key).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "in",
+          "wire"
+        ],
+        "type": "object"
+      },
+      "AiToolBody": {
+        "additionalProperties": false,
+        "description": "One tool.",
+        "properties": {
+          "bindings": {
+            "description": "Where each argument goes.",
+            "items": {
+              "$ref": "#/components/schemas/AiToolBindingBody"
+            },
+            "type": "array"
+          },
+          "description": {
+            "description": "What the model reads to choose the tool.",
+            "type": "string"
+          },
+          "method": {
+            "description": "Always `GET`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The tool's name for the model (`snake_case`).",
+            "type": "string"
+          },
+          "parameters": {
+            "description": "The arguments as a JSON Schema object (kanflow's tool form).",
+            "type": "object"
+          },
+          "path": {
+            "description": "As in `openapi.json`: `{wire}` for each path argument.",
+            "type": "string"
+          },
+          "read_only": {
+            "description": "Always `true`: the pack has no writes (plan 19 §3.3).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "read_only",
+          "method",
+          "path",
+          "parameters",
+          "bindings"
+        ],
+        "type": "object"
+      },
+      "AiToolPackBody": {
+        "additionalProperties": false,
+        "description": "`GET /api/v1/ai-tools`.",
+        "properties": {
+          "act_as_header": {
+            "description": "How a tool is called: the service account's token, acting for the\nperson who asked (`Forge-Act-As: user:<id>`, no assertion).",
+            "type": "string"
+          },
+          "pack": {
+            "description": "Always `gitstation`: kanflow's routing table adds it as a pack.",
+            "type": "string"
+          },
+          "schema_version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/AiTermBody"
+            },
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/AiToolBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "pack",
+          "act_as_header",
+          "tools",
+          "terms"
+        ],
+        "type": "object"
+      },
       "AnnotationBody": {
         "additionalProperties": false,
         "description": "One annotation as stored.",
@@ -1221,6 +1357,14 @@
           "environments"
         ],
         "type": "object"
+      },
+      "ArgumentIn": {
+        "description": "Where an argument goes on the wire.",
+        "enum": [
+          "path",
+          "query"
+        ],
+        "type": "string"
       },
       "ArtifactBody": {
         "additionalProperties": false,
@@ -4039,6 +4183,51 @@
         },
         "type": "object"
       },
+      "CreatedNotesBody": {
+        "additionalProperties": false,
+        "description": "The created notes.",
+        "properties": {
+          "commit": {
+            "description": "The first commit (`.forge/doctypes/note.yml`, `README.md`).",
+            "type": "string"
+          },
+          "default_branch": {
+            "description": "`main`.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The person's login: a note's `owner`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "`<user>/notes`.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "replaced_project_id": {
+            "description": "The stale notes project the pointer named before, now replaced\n(`null` for first notes).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "owner",
+          "default_branch",
+          "commit",
+          "replaced_project_id"
+        ],
+        "type": "object"
+      },
       "CreatedToken": {
         "additionalProperties": false,
         "description": "A created token: the secret, shown this once.",
@@ -4490,6 +4679,10 @@
         "additionalProperties": false,
         "description": "`GET …/deployments`.",
         "properties": {
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9): when the list was read (UTC, RFC 3339).",
+            "type": "string"
+          },
           "deployments": {
             "items": {
               "$ref": "#/components/schemas/DeploymentBody"
@@ -4498,7 +4691,8 @@
           }
         },
         "required": [
-          "deployments"
+          "deployments",
+          "as_of"
         ],
         "type": "object"
       },
@@ -8152,6 +8346,10 @@
         "additionalProperties": false,
         "description": "One page of a project's merge requests, newest first.",
         "properties": {
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9): when the page was read (UTC, RFC 3339).",
+            "type": "string"
+          },
           "merge_requests": {
             "items": {
               "$ref": "#/components/schemas/MergeRequestBody"
@@ -8168,7 +8366,8 @@
           }
         },
         "required": [
-          "merge_requests"
+          "merge_requests",
+          "as_of"
         ],
         "type": "object"
       },
@@ -8262,6 +8461,10 @@
                 "description": "`null` before the first version."
               }
             ]
+          },
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9, added within `schema_version` 1): when the\nstatus was read (UTC, RFC 3339).",
+            "type": "string"
           },
           "carried_from_target_sha": {
             "description": "Plan 18 S4 (added within `schema_version` 1): the target tip the\nmergeability result was computed against, when it answers for the\ntarget's current tip only because it was carried forward — every\nlanding since touched no path this merge request's change can\ninteract with. `null`: computed against the current tip (or no\nresult answers for it). The decision is the same either way; the\nmerge queue merges the change again before anything lands.",
@@ -8365,7 +8568,8 @@
           "discussions",
           "work_item_link",
           "codeowners",
-          "viewer"
+          "viewer",
+          "as_of"
         ],
         "type": "object"
       },
@@ -8860,6 +9064,37 @@
         ],
         "type": "object"
       },
+      "NotesBody": {
+        "additionalProperties": false,
+        "description": "The caller's notes.",
+        "properties": {
+          "default_branch": {
+            "description": "`main`: quick notes are direct commits on it.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The person's login: a note's `owner`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The notes project's full path (`<user>/notes`).",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The notes project.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "owner",
+          "default_branch"
+        ],
+        "type": "object"
+      },
       "OrgBindingAuthorBody": {
         "additionalProperties": false,
         "description": "Who added a binding.",
@@ -9351,6 +9586,13 @@
         "additionalProperties": false,
         "description": "A pipeline (with its jobs on the one-pipeline routes).",
         "properties": {
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9): when it was read (UTC, RFC 3339); only on\n`GET …/{pipeline_id}`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "copy_mark": {
             "description": "The confidential marks at `sha` when it was created: `open`,\n`confidential`, `undecided` (ADR-0029 decision 5).",
             "type": "string"
@@ -9567,6 +9809,10 @@
         "additionalProperties": false,
         "description": "`GET …/pipelines`.",
         "properties": {
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9): when the page was read (UTC, RFC 3339).",
+            "type": "string"
+          },
           "next_before": {
             "description": "Pass as `before` for the next page; `null` on the last.",
             "format": "int64",
@@ -9585,7 +9831,8 @@
         },
         "required": [
           "pipelines",
-          "next_before"
+          "next_before",
+          "as_of"
         ],
         "type": "object"
       },
@@ -13365,16 +13612,22 @@
             "type": "array"
           },
           "pattern": {
+            "description": "Empty when `withheld`.",
             "type": "string"
           },
           "satisfied": {
+            "type": "boolean"
+          },
+          "withheld": {
+            "description": "Plan 19 §5 (L5-9, added within `schema_version` 1): an agent\naudience (an agent's token, a service account, acting for a person)\nis not shown a pattern matching a file confidential at the head, the\ntarget's tip or the default branch (\"機密のため表示しません\"); the\nowners stay.",
             "type": "boolean"
           }
         },
         "required": [
           "pattern",
           "owners",
-          "satisfied"
+          "satisfied",
+          "withheld"
         ],
         "type": "object"
       },
@@ -15658,6 +15911,44 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/-/notes": {
+      "get": {
+        "operationId": "get_notes",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's notes",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_notes",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's notes",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/notifications": {
       "get": {
         "operationId": "get_notifications",
@@ -17820,6 +18111,35 @@
         "summary": "Revoke a published version ({\"reason\"}, 1..=500 characters): final, 409 FG-AGENT-0006 when it was revoked already (a Maintainer of the publishing group or an administrator, a person in a web session)",
         "x-forge-action": "AgentPartRevoke",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/ai-tools": {
+      "get": {
+        "operationId": "get_api_v1_ai_tools",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiToolPackBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Kanflow's read-only tool pack (plan 02 §6 F-18): each tool's name, description, JSON Schema arguments and route, called acting for the person who asked (Forge-Act-As, no assertion), and the plain words of every state name the tools answer (read_api; never acting for a person)",
+        "x-forge-action": "AiToolList"
       }
     },
     "/api/v1/clients": {
@@ -20627,7 +20947,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers)",
+        "summary": "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target and as_of (project readers; also acting for a person: kanflow's tool, without the commit author's name and address)",
         "x-forge-action": "DeployRead"
       },
       "post": {
@@ -22109,6 +22429,15 @@
               "maximum": 9223372036854775807,
               "minimum": 1,
               "type": "integer"
+            }
+          },
+          {
+            "description": "PBI-<n>: only the merge requests openly linked to that work item of the project's binding (plan 19 L5-9)",
+            "in": "query",
+            "name": "work_item",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -24509,7 +24838,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit (project readers; metadata only)",
+        "summary": "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit and as_of (project readers, also acting for a person: kanflow's tool; metadata only)",
         "x-forge-action": "PipelineRead"
       },
       "post": {
@@ -24610,7 +24939,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt); 404 FG-REPO-0005 when the project has no such pipeline (project readers; metadata only)",
+        "summary": "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt) and as_of; 404 FG-REPO-0005 when the project has no such pipeline (project readers, also acting for a person: kanflow's tool; metadata only)",
         "x-forge-action": "PipelineRead"
       }
     },
@@ -27835,6 +28164,62 @@
         },
         "summary": "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found, truncated when the scan bound was reached with candidates left)",
         "x-forge-action": "UserMergeRequestList"
+      }
+    },
+    "/api/v1/user/notes": {
+      "get": {
+        "operationId": "get_api_v1_user_notes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotesBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's notes — the private project <user>/notes, proved ProjectRead with the caller's own credential: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again)",
+        "x-forge-action": "ProjectList"
+      },
+      "post": {
+        "operationId": "post_api_v1_user_notes",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedNotesBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create the caller's notes in one step: the private project <user>/notes in their own namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/note.yml with owner_kind: user, README.md), then the pointer; a stale pointer (FG-KNOW-0005) is replaced. The person only (never an agent, a service account, acting for a person or CI), api; 409 FG-KNOW-0006 refused (already exists, name taken), 500 FG-KNOW-0007 when a step after the creation failed (no pointer written)",
+        "x-forge-action": "PersonalNotesCreate"
       }
     },
     "/api/v1/user/notification-preferences": {

@@ -10,7 +10,14 @@ import { Layout } from './components/Layout';
 import { GroupsPage } from './pages/Groups';
 import { Home } from './pages/Home';
 import { Inbox } from './pages/Inbox';
-import { ActAsBindingConfirm, ActAsConfirm, Activity, AdminRedirect, SearchScreen } from './pages/lazyScreens';
+import {
+  ActAsBindingConfirm,
+  ActAsConfirm,
+  Activity,
+  AdminRedirect,
+  NotesScreen,
+  SearchScreen,
+} from './pages/lazyScreens';
 import { MyMergeRequests } from './pages/MyMergeRequests';
 import { NamespaceRoute } from './pages/Namespace';
 import { NotFound } from './pages/NotFound';
@@ -60,6 +67,7 @@ export function AppRoutes() {
         <Route path="-/notifications" element={<Inbox />} />
         <Route path="-/admin" element={<AdminRedirect />} />
         <Route path="-/search" element={<SearchScreen />} />
+        <Route path="-/notes" element={<NotesScreen />} />
         <Route path="-/*" element={<NotFound />} />
         <Route path="*" element={<NamespaceRoute />} />
       </Route>

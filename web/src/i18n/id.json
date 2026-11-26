@@ -81,7 +81,8 @@
     "showAll": "Lihat semua isinya",
     "mergeRequests": "Merge request",
     "mrBadge": ", {{shown}} perlu ditindak",
-    "activity": "Aktivitas"
+    "activity": "Aktivitas",
+    "notes": "Catatan"
   },
   "myMrs": {
     "title": "Merge request",
@@ -2147,5 +2148,54 @@
     "backToPage": "Kembali ke halaman",
     "readerHint": "Halaman dibuat oleh orang yang dapat mengubah (Developer ke atas).",
     "noHistory": "Belum ada riwayat."
+  },
+  "notes": {
+    "title": "Catatan saya",
+    "subtitle": "Catatan yang hanya bisa Anda baca. Simpan, lalu temukan lagi di daftar atau lewat pencarian.",
+    "openProject": "Buka sebagai proyek",
+    "start": {
+      "reason": "Anda belum punya catatan.",
+      "hint": "Ini membuat proyek pribadi yang hanya bisa Anda baca, dan catatan Anda disimpan di sana.",
+      "create": "Mulai catatan saya",
+      "creating": "Membuat…",
+      "missing": "Catatan Anda tidak ditemukan (dipindahkan atau dihapus).",
+      "missingHint": "Buat ulang agar bisa menyimpan catatan di tempat baru.",
+      "recreate": "Buat ulang catatan saya",
+      "requestId": "ID permintaan: {{id}}"
+    },
+    "quick": {
+      "title": "Catatan cepat",
+      "titleLabel": "Judul (opsional)",
+      "titleHelp": "Jika kosong, baris pertama teks menjadi judul.",
+      "bodyLabel": "Teks",
+      "bodyHelp": "Bisa memakai Markdown.",
+      "bodyRequired": "Tulis teksnya dulu.",
+      "tooLong": "Terlalu panjang. Maksimal {{kib}} KiB.",
+      "save": "Simpan",
+      "saving": "Menyimpan…",
+      "shortcut": "Ctrl + Enter juga menyimpan",
+      "saved": "“{{title}}” tersimpan.",
+      "open": "Buka",
+      "sameSecond": "Sudah ada catatan pada detik yang sama. Tekan Simpan sekali lagi."
+    },
+    "list": {
+      "title": "Catatan terbaru",
+      "empty": "Belum ada catatan. Tulis catatan cepat lalu simpan.",
+      "write": "Tulis catatan",
+      "capped": "Hanya sebagian catatan yang ditampilkan. Cari untuk menemukan yang lebih lama."
+    },
+    "search": {
+      "title": "Cari catatan",
+      "label": "Cari catatan",
+      "submit": "Cari",
+      "clear": "Berhenti mencari",
+      "tooShort": "Ketik minimal {{n}} karakter.",
+      "shown_one": "Menampilkan {{count}} catatan",
+      "shown_other": "Menampilkan {{count}} catatan",
+      "none": "Tidak ada catatan yang cocok dengan “{{q}}”.",
+      "lag": "Catatan yang baru disimpan muncul di pencarian setelah sekitar satu menit.",
+      "more": "Cari lebih jauh",
+      "backToList": "Kembali ke daftar"
+    }
   }
 }

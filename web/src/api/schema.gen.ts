@@ -232,6 +232,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the caller's notes */
+        get: operations["get_notes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the caller's notes */
+        head: operations["head_notes"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/notifications": {
         parameters: {
             query?: never;
@@ -974,6 +992,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Kanflow's read-only tool pack (plan 02 §6 F-18): each tool's name, description, JSON Schema arguments and route, called acting for the person who asked (Forge-Act-As, no assertion), and the plain words of every state name the tools answer (read_api; never acting for a person) */
+        get: operations["get_api_v1_ai_tools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients": {
         parameters: {
             query?: never;
@@ -1677,7 +1712,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers) */
+        /** A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target and as_of (project readers; also acting for a person: kanflow's tool, without the commit author's name and address) */
         get: operations["get_api_v1_projects_id_deployments"];
         put?: never;
         /** Request a deployment ({"environment": "stg", "sha"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer) */
@@ -2613,7 +2648,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit (project readers; metadata only) */
+        /** A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit and as_of (project readers, also acting for a person: kanflow's tool; metadata only) */
         get: operations["get_api_v1_projects_id_pipelines"];
         put?: never;
         /** Run a pipeline by hand on a branch's tip ({"ref": "main"}): 201 the pipeline (pending, skipped or invalid; a manual run is never protected, so a job with secrets is invalid); 404 FG-REPO-0023 without the branch or .forge-ci.yml; 503 FG-CI-0002 when the definition could not be read (Developer) */
@@ -2631,7 +2666,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt); 404 FG-REPO-0005 when the project has no such pipeline (project readers; metadata only) */
+        /** One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt) and as_of; 404 FG-REPO-0005 when the project has no such pipeline (project readers, also acting for a person: kanflow's tool; metadata only) */
         get: operations["get_api_v1_projects_id_pipelines_pipeline_id"];
         put?: never;
         post?: never;
@@ -3554,6 +3589,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's notes — the private project <user>/notes, proved ProjectRead with the caller's own credential: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again) */
+        get: operations["get_api_v1_user_notes"];
+        put?: never;
+        /** Create the caller's notes in one step: the private project <user>/notes in their own namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/note.yml with owner_kind: user, README.md), then the pointer; a stale pointer (FG-KNOW-0005) is replaced. The person only (never an agent, a service account, acting for a person or CI), api; 409 FG-KNOW-0006 refused (already exists, name taken), 500 FG-KNOW-0007 when a step after the creation failed (no pointer written) */
+        post: operations["post_api_v1_user_notes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user/notification-preferences": {
         parameters: {
             query?: never;
@@ -3994,6 +4047,57 @@ export interface components {
         AiAssetsViewerBody: {
             can_change: boolean;
         };
+        /** @description One state name and its plain words (plan 08). */
+        AiTermBody: {
+            en: string;
+            ja: string;
+            /**
+             * @description `merge_request_state`, `block_reason`, `pipeline_status`,
+             *     `deployment_status`.
+             */
+            kind: string;
+            /** @description The name as the answers spell it. */
+            name: string;
+        };
+        /** @description One argument's place in the request. */
+        AiToolBindingBody: {
+            in: components["schemas"]["ArgumentIn"];
+            /** @description The argument's name (a property of `parameters`). */
+            name: string;
+            /** @description The name on the wire (`{id}` of the path, a query key). */
+            wire: string;
+        };
+        /** @description One tool. */
+        AiToolBody: {
+            /** @description Where each argument goes. */
+            bindings: components["schemas"]["AiToolBindingBody"][];
+            /** @description What the model reads to choose the tool. */
+            description: string;
+            /** @description Always `GET`. */
+            method: string;
+            /** @description The tool's name for the model (`snake_case`). */
+            name: string;
+            /** @description The arguments as a JSON Schema object (kanflow's tool form). */
+            parameters: Record<string, never>;
+            /** @description As in `openapi.json`: `{wire}` for each path argument. */
+            path: string;
+            /** @description Always `true`: the pack has no writes (plan 19 §3.3). */
+            read_only: boolean;
+        };
+        /** @description `GET /api/v1/ai-tools`. */
+        AiToolPackBody: {
+            /**
+             * @description How a tool is called: the service account's token, acting for the
+             *     person who asked (`Forge-Act-As: user:<id>`, no assertion).
+             */
+            act_as_header: string;
+            /** @description Always `gitstation`: kanflow's routing table adds it as a pack. */
+            pack: string;
+            /** Format: int32 */
+            schema_version: number;
+            terms: components["schemas"]["AiTermBody"][];
+            tools: components["schemas"]["AiToolBody"][];
+        };
         /** @description One annotation as stored. */
         AnnotationBody: {
             /** Format: int32 */
@@ -4248,6 +4352,11 @@ export interface components {
         ApproversList: {
             environments: components["schemas"]["ApproversBody"][];
         };
+        /**
+         * @description Where an argument goes on the wire.
+         * @enum {string}
+         */
+        ArgumentIn: "path" | "query";
         /** @description One artifact's metadata. */
         ArtifactBody: {
             /** Format: int32 */
@@ -5279,6 +5388,25 @@ export interface components {
              */
             path?: string | null;
         };
+        /** @description The created notes. */
+        CreatedNotesBody: {
+            /** @description The first commit (`.forge/doctypes/note.yml`, `README.md`). */
+            commit: string;
+            /** @description `main`. */
+            default_branch: string;
+            /** @description The person's login: a note's `owner`. */
+            owner: string;
+            /** @description `<user>/notes`. */
+            path: string;
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * Format: int64
+             * @description The stale notes project the pointer named before, now replaced
+             *     (`null` for first notes).
+             */
+            replaced_project_id: number | null;
+        };
         /** @description A created token: the secret, shown this once. */
         CreatedToken: {
             expires_at: string;
@@ -5431,6 +5559,8 @@ export interface components {
         };
         /** @description `GET …/deployments`. */
         DeploymentList: {
+            /** @description Plan 19 §3.3 (L5-9): when the list was read (UTC, RFC 3339). */
+            as_of: string;
             deployments: components["schemas"]["DeploymentBody"][];
         };
         /** @description The approvals given on the head and target now. */
@@ -6776,6 +6906,8 @@ export interface components {
         };
         /** @description One page of a project's merge requests, newest first. */
         MergeRequestPage: {
+            /** @description Plan 19 §3.3 (L5-9): when the page was read (UTC, RFC 3339). */
+            as_of: string;
             merge_requests: components["schemas"]["MergeRequestBody"][];
             /**
              * Format: int64
@@ -6822,6 +6954,11 @@ export interface components {
         /** @description `GET …/status` (the stable contract, `schema_version` 1). */
         MergeRequestStatusBody: {
             approvals: null | components["schemas"]["StatusApprovalsBody"];
+            /**
+             * @description Plan 19 §3.3 (L5-9, added within `schema_version` 1): when the
+             *     status was read (UTC, RFC 3339).
+             */
+            as_of: string;
             /**
              * @description Plan 18 S4 (added within `schema_version` 1): the target tip the
              *     mergeability result was computed against, when it answers for the
@@ -7096,6 +7233,20 @@ export interface components {
             /** Format: int64 */
             id: number;
         };
+        /** @description The caller's notes. */
+        NotesBody: {
+            /** @description `main`: quick notes are direct commits on it. */
+            default_branch: string;
+            /** @description The person's login: a note's `owner`. */
+            owner: string;
+            /** @description The notes project's full path (`<user>/notes`). */
+            path: string;
+            /**
+             * Format: int64
+             * @description The notes project.
+             */
+            project_id: number;
+        };
         /** @description Who added a binding. */
         OrgBindingAuthorBody: {
             /** Format: int64 */
@@ -7254,6 +7405,11 @@ export interface components {
         /** @description A pipeline (with its jobs on the one-pipeline routes). */
         PipelineBody: {
             /**
+             * @description Plan 19 §3.3 (L5-9): when it was read (UTC, RFC 3339); only on
+             *     `GET …/{pipeline_id}`.
+             */
+            as_of?: string | null;
+            /**
              * @description The confidential marks at `sha` when it was created: `open`,
              *     `confidential`, `undecided` (ADR-0029 decision 5).
              */
@@ -7333,6 +7489,8 @@ export interface components {
         };
         /** @description `GET …/pipelines`. */
         PipelinePage: {
+            /** @description Plan 19 §3.3 (L5-9): when the page was read (UTC, RFC 3339). */
+            as_of: string;
             /**
              * Format: int64
              * @description Pass as `before` for the next page; `null` on the last.
@@ -8804,8 +8962,17 @@ export interface components {
         /** @description One CODEOWNERS rule the changes need. */
         StatusCodeownerBody: {
             owners: string[];
+            /** @description Empty when `withheld`. */
             pattern: string;
             satisfied: boolean;
+            /**
+             * @description Plan 19 §5 (L5-9, added within `schema_version` 1): an agent
+             *     audience (an agent's token, a service account, acting for a person)
+             *     is not shown a pattern matching a file confidential at the head, the
+             *     target's tip or the default branch ("機密のため表示しません"); the
+             *     owners stay.
+             */
+            withheld: boolean;
         };
         /** @description CODEOWNERS enforcement now. */
         StatusCodeownersBody: {
@@ -9917,6 +10084,46 @@ export interface operations {
         };
     };
     head_merge_requests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_notes: {
         parameters: {
             query?: never;
             header?: never;
@@ -11481,6 +11688,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentPartVersionDetailBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_ai_tools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiToolPackBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -14297,6 +14533,8 @@ export interface operations {
                 limit?: number;
                 /** @description The previous page's next_before (an iid): merge requests with a smaller iid */
                 before?: number;
+                /** @description PBI-<n>: only the merge requests openly linked to that work item of the project's binding (plan 19 L5-9) */
+                work_item?: string;
             };
             header?: never;
             path: {
@@ -18008,6 +18246,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserMergeRequestCounts"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotesBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_user_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedNotesBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

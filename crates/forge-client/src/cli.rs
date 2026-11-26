@@ -301,6 +301,12 @@ pub enum Command {
         #[command(subcommand)]
         command: WikiCommand,
     },
+    /// Your personal notes: the private project `<you>/notes` (plan 20 N1).
+    #[command(disable_help_subcommand = true)]
+    Note {
+        #[command(subcommand)]
+        command: NoteCommand,
+    },
     /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
     Admin {
@@ -573,6 +579,25 @@ pub enum ProjectCommand {
     },
     /// Restore a deleted project within its grace period.
     Restore(IdArg),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum NoteCommand {
+    /// Show your notes project (id, path, owner, branch).
+    Show,
+    /// Create your notes: the private project `<you>/notes` with the note
+    /// type. Replaces a pointer whose project was moved or deleted.
+    Create,
+    /// A quick note: one direct commit of `N-YYYYMMDD-HHMMSS.md` (UTC) on
+    /// your notes' `main`. The body is `--body` or standard input.
+    New {
+        /// The note's title (default: the body's first line).
+        #[arg(long, value_parser = parse_text, value_name = "TITLE")]
+        title: Option<String>,
+        /// The note's text (default: read from standard input).
+        #[arg(long, value_name = "TEXT")]
+        body: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

@@ -170,6 +170,44 @@ impl Rule {
     }
 }
 
+/// Who a document's `owner` must name (`owner_kind:`; plan 20 N1,
+/// ADR-0040 §6). Absent: any owner (a team, a namespace path, a person).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerKind {
+    /// One person's login: a single path segment (`alice`), never a
+    /// group path (`team/web`) — a personal note's owner is its author.
+    User,
+}
+
+impl OwnerKind {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "user" => Some(Self::User),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+        }
+    }
+}
+
+/// Whether `owner` is one person's login (`OwnerKind::User`): 1–255
+/// characters, starting with a letter or digit, then letters, digits,
+/// `.`, `_` and `-` — one namespace segment, no `/`, no spaces.
+pub fn user_owner_ok(owner: &str) -> bool {
+    owner.len() <= 255
+        && owner
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphanumeric())
+        && owner
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 /// A parsed definition (module docs).
 #[derive(Debug, Clone)]
 pub struct Doctype {
@@ -182,6 +220,8 @@ pub struct Doctype {
     /// `defaults.classification` (`None`: `internal`).
     pub default_classification: Option<crate::document::Classification>,
     pub default_review_cycle: Option<String>,
+    /// `owner_kind:` (`None`: any owner).
+    pub owner_kind: Option<OwnerKind>,
     pub fields: Vec<ValueDef>,
     pub sections: Vec<SectionDef>,
     pub blocks: Vec<BlockDef>,
@@ -276,6 +316,7 @@ pub fn parse_doctype(stem: &str, bytes: &[u8]) -> Result<Doctype, DoctypeProblem
         id_pattern: None,
         default_classification: None,
         default_review_cycle: None,
+        owner_kind: None,
         fields: Vec::new(),
         sections: Vec::new(),
         blocks: Vec::new(),
@@ -302,6 +343,13 @@ pub fn parse_doctype(stem: &str, bytes: &[u8]) -> Result<Doctype, DoctypeProblem
                     Some(Pattern::new(raw).ok_or_else(|| problem(field.line, "pattern_invalid"))?);
             }
             "defaults" => defaults(&field, &mut out)?,
+            "owner_kind" => {
+                let raw = text(field.value, field.line, "owner_kind_invalid")?;
+                out.owner_kind = Some(
+                    OwnerKind::parse(raw)
+                        .ok_or_else(|| problem(field.line, "owner_kind_invalid"))?,
+                );
+            }
             "fields" => out.fields = value_defs(field.value, "fields_invalid", false)?,
             "sections" => out.sections = sections(field.value)?,
             "blocks" => out.blocks = blocks(field.value)?,

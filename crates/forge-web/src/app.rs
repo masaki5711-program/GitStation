@@ -645,6 +645,16 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
         )
         .responds::<routes::search::SearchPage>(Verb::Get, routes::search::PATH)
         .queries(Verb::Get, routes::search::PATH, routes::search::QUERY)
+        // Plan 19 §3.3 (L5-9): kanflow's read-only tool pack; each tool is
+        // a route of its own, decided there acting for the person.
+        .route(
+            Verb::Get,
+            routes::ai_tools::PATH,
+            Action::AiToolList,
+            "Kanflow's read-only tool pack (plan 02 §6 F-18): each tool's name, description, JSON Schema arguments and route, called acting for the person who asked (Forge-Act-As, no assertion), and the plain words of every state name the tools answer (read_api; never acting for a person)",
+            routes::ai_tools::list,
+        )
+        .responds::<routes::ai_tools::AiToolPackBody>(Verb::Get, routes::ai_tools::PATH)
         .route(
             Verb::Get,
             routes::users::PATH,
@@ -732,8 +742,32 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
         ))),
     ))));
     // ADR-0036: the PFS portal's home widgets; plan 20 W2: the wiki;
-    // plan 16 A5: the agent marketplace.
-    agent_part_routes(wiki_routes(portal_widget_routes(all)))
+    // plan 20 N1: notes; plan 16 A5: the agent marketplace.
+    agent_part_routes(notes_routes(wiki_routes(portal_widget_routes(all))))
+}
+
+/// A person's notes (plan 20 N1, ADR-0040 §6): create them, read the
+/// pointer. A quick note is the simple editor's commit on the notes.
+fn notes_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::notes as n;
+    registry
+        .route(
+            Verb::Get,
+            n::PATH,
+            Action::ProjectList,
+            "The caller's notes — the private project <user>/notes, proved ProjectRead with the caller's own credential: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again)",
+            n::read,
+        )
+        .responds::<n::NotesBody>(Verb::Get, n::PATH)
+        .route_with(
+            Verb::Post,
+            n::PATH,
+            Action::PersonalNotesCreate,
+            "Create the caller's notes in one step: the private project <user>/notes in their own namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/note.yml with owner_kind: user, README.md), then the pointer; a stale pointer (FG-KNOW-0005) is replaced. The person only (never an agent, a service account, acting for a person or CI), api; 409 FG-KNOW-0006 refused (already exists, name taken), 500 FG-KNOW-0007 when a step after the creation failed (no pointer written)",
+            n::OwnNamespace,
+            n::create,
+        )
+        .responds_created::<n::CreatedNotesBody>(Verb::Post, n::PATH)
 }
 
 /// The agent marketplace (plan 16 §6 A5, ADR-0032 Amendment A5): the
@@ -1367,8 +1401,8 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             d::DEPLOYMENTS,
             Action::DeployRead,
-            "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers)",
-            d::OF_PROJECT,
+            "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target and as_of (project readers; also acting for a person: kanflow's tool, without the commit author's name and address)",
+            d::OF_DEPLOYMENTS,
             d::deployments,
         )
         .responds::<d::DeploymentList>(Verb::Get, d::DEPLOYMENTS)
@@ -1433,7 +1467,7 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             p::LIST,
             Action::PipelineRead,
-            "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit (project readers; metadata only)",
+            "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit and as_of (project readers, also acting for a person: kanflow's tool; metadata only)",
             p::OF_LIST,
             p::list,
         )
@@ -1453,7 +1487,7 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             p::ONE,
             Action::PipelineRead,
-            "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt); 404 FG-REPO-0005 when the project has no such pipeline (project readers; metadata only)",
+            "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt) and as_of; 404 FG-REPO-0005 when the project has no such pipeline (project readers, also acting for a person: kanflow's tool; metadata only)",
             p::OF_ONE,
             p::one,
         )
@@ -3682,6 +3716,15 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: search results",
                 shell,
             )
+            // The caller's notes (plan 20 N2): the "My work" sidebar's
+            // notes page, reloaded or opened from a bookmark.
+            .route(
+                verb,
+                NOTES_PAGE,
+                Action::WebShell,
+                "SPA shell: the caller's notes",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -3929,3 +3972,6 @@ pub const MY_ACTIVITY_PAGE: &str = "/-/activity";
 pub const ADMIN_PAGE: &str = "/-/admin";
 /// The search results page (plan 20 K5; the API is `GET /api/v1/search`).
 pub const SEARCH_PAGE: &str = "/-/search";
+/// The "My work" sidebar's notes page (plan 20 N2; the API is
+/// `GET`/`POST /api/v1/user/notes`).
+pub const NOTES_PAGE: &str = "/-/notes";

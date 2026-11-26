@@ -618,3 +618,22 @@ fn an_unasserted_read_without_the_act_as_facts_is_refused() {
         assert_eq!(reason(&err), "act_as_facts_missing", "{action:?}");
     }
 }
+
+/// Plan 19 §3.3 / §5 (L5-9, ADR-0039 decision 6): a request acting for a
+/// person is a delegated tool, an agent audience — kanflow's AI chat is
+/// never handed what an agent is not (confidential files, work items, the
+/// CODEOWNERS patterns naming them).
+#[test]
+fn acting_for_a_person_is_an_agent_audience() {
+    let reader = via(DEV, ViaToken::Reader, Assert::None).principal();
+    assert!(reader.act_as_credential().is_some());
+    assert!(!reader.is_agent());
+    assert!(reader.is_agent_audience());
+    assert_eq!(
+        crate::advice_reader(&reader, false),
+        crate::AdviceReader::Agent
+    );
+    let session =
+        Principal::authenticated(ME, false, true, Credential::Session, AccountKind::Human);
+    assert!(!session.is_agent_audience());
+}

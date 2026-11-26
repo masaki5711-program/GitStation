@@ -535,6 +535,21 @@ pub(crate) fn decide(
             need(Role::Maintainer, p.role)
         }
 
+        // Plan 20 N1 (ADR-0040 §6): a person creates their own notes, in
+        // their own namespace only — nobody else's, administrators
+        // included (a person's notes are theirs alone).
+        (Action::PersonalNotesCreate, Resource::Namespace { owner, owner_kind }) => {
+            people_only()?;
+            if *owner_kind != AccountKind::Human {
+                return Err(refused("non_person_namespace"));
+            }
+            if *owner == user {
+                Ok(())
+            } else {
+                Err(deny(ErrorCode::Forbidden).with_context("reason", "foreign_namespace"))
+            }
+        }
+
         (Action::ProjectVisibilityChange, Resource::VisibilityChange { project, .. }) => {
             // Exposing a project to every signed-in user is a person's
             // decision (ADR-0017 amendment, M1 phase 8b MR7a): an agent's
@@ -917,6 +932,9 @@ pub(crate) fn decide(
         // Plan 20 K3 (ADR-0040): searching is open like listing; every hit
         // is decided again with `ProjectRead` / `MergeRequestList`.
         (Action::SearchQuery, Resource::Instance) => Ok(()),
+        // Plan 19 §3.3 (L5-9): the tool pack is static data; each tool is
+        // a route decided on its own resource.
+        (Action::AiToolList, Resource::Instance) => Ok(()),
 
         // --- merge requests (M3 R1a, ADR-0024 §12) ---
         // Listing and reading as the repository browse API.
@@ -1853,12 +1871,14 @@ pub(crate) fn decide(
             | Action::ProjectRead
             | Action::ProjectList
             | Action::SearchQuery
+            | Action::AiToolList
             | Action::ProjectCreate
             | Action::ProjectUpdate
             | Action::ProjectVisibilityChange
             | Action::ProjectTransfer
             | Action::ProjectDelete
             | Action::ProjectWikiLink
+            | Action::PersonalNotesCreate
             | Action::ProjectRestore
             | Action::ProtectedRefManage
             | Action::MemberManage
@@ -2053,6 +2073,9 @@ pub(crate) fn decide(
 fn audience_of(principal: &Principal) -> &'static str {
     if principal.is_agent() {
         return "agent_token";
+    }
+    if principal.act_as_credential().is_some() {
+        return "act_as";
     }
     match principal.account_kind() {
         AccountKind::ServiceAccount => "service_account",

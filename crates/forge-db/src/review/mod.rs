@@ -462,6 +462,37 @@ pub async fn list(
     rows.into_iter().map(Row::parse).collect()
 }
 
+/// A page of `project`'s merge requests with an open link to the work item
+/// `work_item` (plan 19 §3.3, L5-9: kanflow's "PBI に結びついた MR" tool), as
+/// [`list`] otherwise: newest first, `state`, `before`, at most `limit`.
+pub async fn list_linked(
+    db: &Db,
+    project: ProjectId,
+    work_item: i64,
+    state: Option<MergeRequestState>,
+    before: Option<i64>,
+    limit: usize,
+) -> Result<Vec<StoredMergeRequest>, ForgeError> {
+    const QUERY: &str = "review.list_linked";
+    let limit = i64::try_from(limit.min(MAX_PAGE)).unwrap_or(1);
+    let rows: Vec<Row> = db
+        .within(QUERY, async {
+            sqlx::query_as(&format!(
+                "SELECT {COLUMNS} FROM forge.merge_requests WHERE project_id = $1                  AND ($2::text IS NULL OR state = $2) AND ($3::bigint IS NULL OR iid < $3)                  AND EXISTS (SELECT 1 FROM forge.merge_request_work_items AS l                  WHERE l.merge_request_id = merge_requests.id AND l.project_id = $1                  AND l.work_item_id = $5 AND l.unlinked_at IS NULL)                  ORDER BY iid DESC LIMIT $4"
+            ))
+            .bind(project.get())
+            .bind(state.map(MergeRequestState::as_str))
+            .bind(before)
+            .bind(limit)
+            .bind(work_item)
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    rows.into_iter().map(Row::parse).collect()
+}
+
 #[cfg(test)]
 mod approval_tests;
 #[cfg(test)]

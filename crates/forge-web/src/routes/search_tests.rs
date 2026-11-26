@@ -818,3 +818,164 @@ async fn the_agent_audience_header_withholds_confidential_documents() {
     let filters = fake.filters.lock().expect("lock").clone();
     assert!(filters[0].0.exclude_confidential, "left out by the read");
 }
+
+// --- plan 20 X1: the agent's knowledge search tool -------------------------
+
+/// One page as `gstn mcp`'s `search_knowledge` asks for it: a person's
+/// token, `Forge-Context-Audience: agent`, the query percent-encoded with
+/// the scope's comma as `%2C`.
+async fn agent_page(fake: &Arc<Fake>, uri: &str, header: bool) -> (StatusCode, Value) {
+    let mut req = Request::builder().method("GET").uri(uri);
+    if header {
+        req = req.header("Forge-Context-Audience", "agent");
+    }
+    let mut req = req.body(Body::empty()).expect("request");
+    req.extensions_mut().insert(person());
+    let res = app(fake).oneshot(req).await.expect("infallible");
+    let status = res.status();
+    if status == StatusCode::OK {
+        // The answer depends on the audience: no cache may share it.
+        let vary = res.headers().get("vary").and_then(|v| v.to_str().ok());
+        assert!(
+            vary.is_some_and(|v| v.contains("Forge-Context-Audience")),
+            "{vary:?}"
+        );
+    }
+    let bytes = res.into_body().collect().await.expect("body").to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn agent_search_withholds_confidential() {
+    let mut all = candidates();
+    for c in &mut all {
+        if c.kind == SourceKind::MergeRequest {
+            c.classification = "confidential".to_owned();
+        }
+    }
+    all.extend(documents());
+    all.push(candidate(
+        SourceKind::Document,
+        READABLE,
+        "docs/WIKI-0001.md",
+        "wiki page",
+    ));
+    let fake = Arc::new(Fake {
+        candidates: all,
+        ..Fake::default()
+    });
+    let first = "/api/v1/search?q=%E8%A8%AD%E5%82%99&scope=merge_request%2Cdocument&limit=1";
+    let mut uri = first.to_owned();
+    let mut paths: Vec<Value> = Vec::new();
+    let mut cursor_of_agent = None;
+    for _ in 0..10 {
+        let (status, body) = agent_page(&fake, &uri, true).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        for item in body["items"].as_array().expect("items") {
+            assert_ne!(item["kind"], "merge_request", "a confidential MR: {body}");
+            paths.push(item["path"].clone());
+        }
+        match body["next_cursor"].as_str() {
+            Some(next) => {
+                cursor_of_agent = Some(next.to_owned());
+                uri = format!("{first}&cursor={next}");
+            }
+            None => break,
+        }
+    }
+    assert_eq!(
+        paths,
+        vec![
+            Value::from("docs/SPEC-1.md"),
+            Value::from("docs/WIKI-0001.md")
+        ],
+        "only the readable, not confidential documents, across pages"
+    );
+    let filters = fake.filters.lock().expect("lock").clone();
+    assert!(filters.iter().all(|(f, _)| f.exclude_confidential));
+    assert_eq!(
+        filters[0].0.kinds,
+        vec![SourceKind::MergeRequest, SourceKind::Document]
+    );
+    // The agent's cursor is sealed for the agent audience: the same person
+    // without the header (who would see the confidential rows) is refused.
+    let cursor = cursor_of_agent.expect("a second page");
+    let (status, body) = agent_page(&fake, &format!("{first}&cursor={cursor}"), false).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error_code"], "FG-WEB-0006");
+    // The control: the same person without the header reads the
+    // confidential rows (so the agent's answer above is not vacuous), and
+    // that person's cursor is refused to the agent audience.
+    let person_uri = first.replace("limit=1", "limit=50");
+    let (status, body) = agent_page(&fake, &person_uri, false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let kinds: Vec<&str> = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|h| h["path"].as_str().or(h["kind"].as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "merge_request",
+            "docs/SPEC-1.md",
+            "docs/HR-1.md",
+            "docs/WIKI-0001.md"
+        ],
+        "{body}"
+    );
+    let (_, body) = agent_page(&fake, first, false).await;
+    let cursor = body["next_cursor"].as_str().expect("a person's next page");
+    let (status, body) = agent_page(&fake, &format!("{first}&cursor={cursor}"), true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error_code"], "FG-WEB-0006");
+}
+
+#[tokio::test]
+async fn agent_search_of_only_confidential_rows_is_one_empty_last_page() {
+    // Neither shown nor counted: no short page, no has_more, no cursor.
+    let mut all = documents();
+    all.retain(|c| c.classification == "confidential");
+    let fake = Arc::new(Fake {
+        candidates: all,
+        ..Fake::default()
+    });
+    let (status, body) = agent_page(
+        &fake,
+        "/api/v1/search?q=%E8%A8%AD%E5%82%99&scope=document&limit=1",
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["items"], serde_json::json!([]), "{body}");
+    assert_eq!(body["has_more"], false, "{body}");
+    assert!(body["next_cursor"].is_null(), "{body}");
+}
+
+#[test]
+fn an_encoded_scope_comma_is_one_list() {
+    let r = parse(Some("q=ab&scope=merge_request%2Cproject")).expect("parse");
+    assert_eq!(r.kinds, vec![SourceKind::Project, SourceKind::MergeRequest]);
+    for (raw, expected) in [
+        ("q=ab&scope=%ZZ", "malformed"),
+        ("q=ab&scope=project%2", "malformed"),
+        ("q=ab&scope=%FF", "malformed"),
+        ("q=ab&scope=project%2Cbogus", "invalid_value"),
+        ("q=ab&scope=project%2C", "invalid_value"),
+    ] {
+        let err = parse(Some(raw)).expect_err(raw);
+        assert_eq!(
+            rule(&err),
+            (
+                ErrorCode::RequestInvalid,
+                "scope".to_owned(),
+                expected.to_owned()
+            ),
+            "{raw}"
+        );
+    }
+}

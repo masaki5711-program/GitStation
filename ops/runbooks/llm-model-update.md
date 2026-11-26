@@ -28,7 +28,10 @@
 - **元の版に戻す**（意図しない変更）: Kanflow の側と合意して、評価済みの版を Ollama に戻す。gateway は 10 分以内に確かめ直し、
   一致すれば自動で再開する（`forge.llm.model_verified`）。
 - **新しい版に切り替える**（意図した変更）: 1 本の MR で行う —
-  1. 評価セット（`crates/forge-llm/evals/`、L5-10）を新旧のモデルで流し、`eval-report.json` を比べる（安全のケースは 100 %）。
+  1. 評価セット（`crates/forge-llm/evals/`、L5-10）を新旧のモデルで流し、`eval-report.json` を比べる（安全のケースは 100 %）:
+     `cargo run -p forge-llm --bin llm-bench -- --endpoint <llm.endpoint> --out eval-report.json`（`evals/bench.toml` の `model` を
+     新しい `name:tag@sha256:<digest>` にして）。新しいモデルの基準 `evals/baselines/<models>.json` は **先に別の MR で** 入れる
+     （ADR-0034 Amendment 1）。`.forge-ci.yml` の `llm-eval` のサービスのモデル置き場も同じモデルにする（runbook `ci-runner`）。
   2. 設定の `llm.model` を新しい `name:tag@sha256:<digest>` にする（`latest` は使えない）。
   3. Kanflow と同時に切り替える（同じモデル・同じ `num_ctx` なら VRAM の入れ替えが起きない）。
   4. worker を再起動する（本番は承認された手順）。

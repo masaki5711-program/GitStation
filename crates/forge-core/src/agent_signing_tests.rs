@@ -138,7 +138,10 @@ fn the_signing_seed_is_the_highest_kids() {
     assert_eq!(signer.kid(), 2);
     assert_eq!(signer.seed(), &seed(SEED_2));
     let shown = format!("{signer:?}");
-    assert!(shown.contains("kid: 2") && !shown.contains("0202"), "{shown}");
+    assert!(
+        shown.contains("kid: 2") && !shown.contains("0202"),
+        "{shown}"
+    );
     let missing = signing_seed_of(&text, 3).expect_err("no kid 3");
     assert_eq!(reason(&missing), "signing_key_invalid");
 }
