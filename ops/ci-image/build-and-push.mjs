@@ -13,6 +13,13 @@
 //
 // Usage (repository root or anywhere in it):
 //   node ops/ci-image/build-and-push.mjs [--skip-build] [--skip-postgres] [--jobs N]
+//   node ops/ci-image/build-and-push.mjs --only-ollama
+//
+// --only-ollama (plan 19 L5-10): copies the Ollama image the `llm-eval` job's
+// GPU service runs (OLLAMA_UPSTREAM, pinned by digest) into the test registry
+// as ci/ollama, pins it in `.forge-ci.yml` and records it in image.toml; the
+// job and PostgreSQL images stay as recorded. A normal run keeps the pinned
+// Ollama image.
 //
 // Node built-ins only; every command is an argument vector (no shell string
 // on this host) and has a timeout.
@@ -30,13 +37,22 @@ const REGISTRY = "registry:5000";
 const MIN = 60_000;
 /** The image label that carries the fingerprint of the crates it was built with. */
 const CRATES_LABEL = "io.gitstation.crates.sha256";
+/**
+ * The upstream Ollama image of the `llm-eval` GPU service: ollama/ollama
+ * 0.32.13 (the version of the shared Ollama on the development server),
+ * linux/amd64, by its manifest digest.
+ */
+const OLLAMA_UPSTREAM =
+  "docker.io/ollama/ollama@sha256:268c47cdc4718ded54babcd842579a7295ad79fd8d5c2ea64d7ba2e76872de6b";
+const OLLAMA_TAG = "0.32.13";
 
 function parseArgs(argv) {
-  const opts = { build: true, postgres: true, jobs: 4 };
+  const opts = { build: true, postgres: true, jobs: 4, onlyOllama: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--skip-build") opts.build = false;
     else if (a === "--skip-postgres") opts.postgres = false;
+    else if (a === "--only-ollama") opts.onlyOllama = true;
     else if (a === "--jobs") {
       const n = Number(argv[(i += 1)]);
       if (!Number.isInteger(n) || n < 1 || n > 32) fail(`--jobs needs 1..32, got ${argv[i]}`);
@@ -154,7 +170,7 @@ function lockedCrates() {
 }
 
 /** Pins the digests in `.forge-ci.yml` and writes ops/ci-image/image.toml. */
-function record({ channel, rustDigest, pgDigest, crates }) {
+function record({ channel, rustDigest, pgDigest, crates, ollamaDigest }) {
   const ciPath = join(ROOT, ".forge-ci.yml");
   let ci = readFileSync(ciPath, "utf8");
   const pin = (name, digest) => {
@@ -171,6 +187,13 @@ function record({ channel, rustDigest, pgDigest, crates }) {
     if (!m) fail(`.forge-ci.yml has no ${REGISTRY}/ci/postgres@sha256:… to keep`);
     postgres = m[1];
   }
+  let ollama = ollamaDigest;
+  if (ollama) pin("ollama", ollama);
+  else {
+    // The GPU service image stays the one already pinned (if any).
+    const m = new RegExp(`${REGISTRY}/ci/ollama@(sha256:[0-9a-f]{64})`).exec(ci);
+    ollama = m ? m[1] : null;
+  }
   writeFileSync(ciPath, ci);
   const toml = [
     "# Written by ops/ci-image/build-and-push.mjs: never edit by hand.",
@@ -183,6 +206,7 @@ function record({ channel, rustDigest, pgDigest, crates }) {
     `postgres_image = "${postgres}"`,
     `crates = ${crates.count}`,
     `crates_sha256 = "${crates.sha256}"`,
+    ...(ollama ? [`ollama_image = "${ollama}"`, `ollama_upstream = "${OLLAMA_UPSTREAM}"`] : []),
     "",
   ].join("\n");
   writeFileSync(join(HERE, "image.toml"), toml);
@@ -216,8 +240,43 @@ async function pushFromRunner(runner, local, remote) {
   return digest;
 }
 
+/** The values image.toml records now (for --only-ollama). */
+function recorded() {
+  const text = readFileSync(join(HERE, "image.toml"), "utf8");
+  const get = (key) => {
+    const m = new RegExp(`^${key} = "?([^"\n]+)"?$`, "m").exec(text);
+    if (!m) fail(`ops/ci-image/image.toml has no ${key}: run without --only-ollama first`);
+    return m[1];
+  };
+  return {
+    channel: get("rust_channel"),
+    rustDigest: get("rust_image"),
+    pgDigest: get("postgres_image"),
+    crates: { count: Number(get("crates")), sha256: get("crates_sha256") },
+  };
+}
+
+/** Copies OLLAMA_UPSTREAM into the test registry; returns its digest there. */
+async function mirrorOllama(runner) {
+  await run("docker", ["exec", runner, "podman", "pull", "-q", "--", OLLAMA_UPSTREAM], { timeoutMs: 60 * MIN });
+  const digest = await pushFromRunner(runner, OLLAMA_UPSTREAM, `${REGISTRY}/ci/ollama:${OLLAMA_TAG}`);
+  await run("docker", ["exec", runner, "podman", "rmi", "--force", "--", OLLAMA_UPSTREAM], { timeoutMs: 5 * MIN });
+  return digest;
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.onlyOllama) {
+    const kept = recorded();
+    const runner = await runnerContainer();
+    const ollamaDigest = await mirrorOllama(runner);
+    record({ ...kept, ollamaDigest });
+    process.stdout.write(
+      `service image ${REGISTRY}/ci/ollama@${ollamaDigest} (from ${OLLAMA_UPSTREAM})\n` +
+        "written       .forge-ci.yml (digest), ops/ci-image/image.toml: commit both\n",
+    );
+    return;
+  }
   const channel = toolchainChannel();
   const pinned = dockerfileRustVersion();
   if (channel !== pinned) {

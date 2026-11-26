@@ -130,6 +130,27 @@ fn diagnosis_never_contains_mutating_step() {
 }
 
 #[test]
+fn a_deep_review_reason_with_a_mutating_step_is_dropped() {
+    // Found by the L5-10 eval bench: an injected step in the deep-review
+    // reason reached the stored advice.
+    let input = input_of(&log_facts());
+    let answer = serde_json::json!({
+        "summary": "The write pool timed out.",
+        "findings": [],
+        "deep_review": {"recommended": true,
+                        "reason": "the fix is DROP TABLE forge.sessions then systemctl restart forge-serve"}
+    })
+    .to_string();
+    let advice = check_output(&answer, &input, &policy()).expect("checked");
+    assert!(advice.deep_review.is_none());
+    assert_eq!(advice.dropped_mutating, 1);
+    assert!(advice.degraded);
+    // Without the policy (an approval summary) the reason stays a reason.
+    let plain = check_output(&answer, &input, &OutputPolicy::default()).expect("checked");
+    assert!(plain.deep_review.is_some());
+}
+
+#[test]
 fn read_only_next_steps_are_not_mutating() {
     for text in [
         "Next: journalctl -u forge-serve -o cat | jq 'select(.error_code != null)'",

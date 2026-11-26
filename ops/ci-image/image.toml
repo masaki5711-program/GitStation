@@ -8,3 +8,5 @@ rust_image = "sha256:4237f89110f2c5f6bc23062ab5d51066f6c36302ac0d102b668b6204da4
 postgres_image = "sha256:c89c8044956683e4938895d446da83f780fa8fef2f22ba4aef17dde9a07e1fd1"
 crates = 466
 crates_sha256 = "5b199ba7dc93e3ec1e6d2f6f40d3c6e28cfa752b062f5f8630652820250e16ba"
+ollama_image = "sha256:8f9ad8124f2696d11752a6a599fabebfbdecace6e742da160237a5971821c20a"
+ollama_upstream = "docker.io/ollama/ollama@sha256:268c47cdc4718ded54babcd842579a7295ad79fd8d5c2ea64d7ba2e76872de6b"

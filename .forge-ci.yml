@@ -9,7 +9,7 @@
 # Every job builds from scratch (no shared target/, debuginfo off): the
 # runner's work_dir must hold about 6.2 GB (ops/ci-image/README.md).
 version: 1
-stages: [check]
+stages: [check, eval]
 
 jobs:
   lint:
@@ -78,3 +78,40 @@ jobs:
       # docs/errors/ from errors.toml; docs/authz/ from the permission matrix.
       - cargo run --locked -q -p forge-errors --bin gen-catalog -- --check
       - cargo run --locked -q -p forge-web --bin gen-authz -- --check
+
+  # Plan 19 L5-10 (ADR-0039 Amendment 2026-11-26, ADR-0034): the local LLM's
+  # eval sets (crates/forge-llm/evals) on the GPU runner. The model runs in
+  # the `ollama` service with the runner's GPU and its read-only model store
+  # (P17-1; the store holds the Ollama models directory of evals/bench.toml's
+  # model at /models); llm-bench checks the model digest, runs every case and
+  # writes eval-report.json, which forge/ai-eval compares with
+  # evals/baselines/<models>.json at the merge base. On main and the nightly
+  # schedule only (merge requests that change a prompt, the eval sets or the
+  # model attach a hand-run report until a changed-paths rule exists).
+  # `node ops/ci-image/build-and-push.mjs --only-ollama` pins the service image.
+  llm-eval:
+    stage: eval
+    image: registry:5000/ci/rust@sha256:4237f89110f2c5f6bc23062ab5d51066f6c36302ac0d102b668b6204da48297a
+    timeout: 3h
+    tags: [gpu-eval]
+    services:
+      - name: ollama
+        image: registry:5000/ci/ollama@sha256:8f9ad8124f2696d11752a6a599fabebfbdecace6e742da160237a5971821c20a
+        gpu: true
+        env:
+          OLLAMA_HOST: 127.0.0.1:11434
+          OLLAMA_MODELS: /models
+          # The store is read-only: never prune or pull into it.
+          OLLAMA_NOPRUNE: "1"
+          HOME: /tmp
+        tmpfs: [/tmp]
+    script:
+      - export CARGO_BUILD_JOBS=4
+      - export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+      - timeout 300 bash -c 'until (echo > /dev/tcp/127.0.0.1/11434) 2>/dev/null; do sleep 1; done'
+      - cargo run --locked -q -p forge-llm --bin llm-bench -- --endpoint http://127.0.0.1:11434 --out eval-report.json
+    artifacts:
+      paths: [eval-report.json]
+    rules:
+      branches: [main]
+      merge_requests: false

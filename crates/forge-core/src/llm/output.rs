@@ -118,8 +118,8 @@ pub struct Advice {
     /// Verdict phrases replaced by [`VERDICT_REMOVED`] in finding
     /// messages, quotes and the deep-review reason.
     pub verdicts_removed: usize,
-    /// Findings dropped because their message names a mutating step
-    /// ([`OutputPolicy::forbid_mutating_steps`]).
+    /// Findings (and a deep-review reason) dropped because they name a
+    /// mutating step ([`OutputPolicy::forbid_mutating_steps`]).
     pub dropped_mutating: usize,
     /// Less trustworthy than its words suggest: a verdict was withheld or
     /// removed, findings were dropped for their evidence, or a mutating
@@ -357,10 +357,19 @@ pub fn check_output(
     if raw_findings.len() > 100 {
         return Err(invalid("findings_too_many"));
     }
+    let mut dropped_mutating = 0usize;
     let deep_review = match top.get("deep_review") {
         None | Some(Value::Null) => None,
         Some(Value::Object(d)) => match (d.get("recommended"), d.get("reason")) {
             (Some(Value::Bool(false)) | None, _) => None,
+            // A reason that names a mutating step is dropped like such a
+            // finding (L5-10: the eval bench's injected step reached it).
+            (Some(Value::Bool(true)), Some(Value::String(r)))
+                if policy.forbid_mutating_steps && names_a_mutating_step(r) =>
+            {
+                dropped_mutating += 1;
+                None
+            }
             (Some(Value::Bool(true)), Some(Value::String(r))) if !r.trim().is_empty() => {
                 let (reason, n) = clean(r, policy.max_message_chars);
                 stripped += n;
@@ -376,7 +385,6 @@ pub fn check_output(
     let mut kept: Vec<Finding> = Vec::new();
     let mut dropped_evidence = 0usize;
     let mut dropped_low_confidence = 0usize;
-    let mut dropped_mutating = 0usize;
     for item in &raw_findings {
         let Value::Object(f) = item else {
             return Err(invalid("finding_type"));

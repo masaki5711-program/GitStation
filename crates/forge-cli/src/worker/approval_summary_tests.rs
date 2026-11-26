@@ -20,6 +20,16 @@ use forge_llm::{DbRecords, GatewayConfig};
 
 use super::*;
 
+#[test]
+fn the_worker_asks_with_the_policy_the_bench_measures() {
+    // One policy (forge_llm::prompts), the same cap as the facts' display.
+    assert_eq!(policy(), forge_llm::prompts::approval_summary_policy());
+    assert_eq!(
+        policy().max_summary_chars,
+        forge_deploy::summary::MAX_SUMMARY_CHARS
+    );
+}
+
 fn rid(s: &str) -> RequestId {
     RequestId::parse(s).expect("request id")
 }

@@ -29,9 +29,7 @@ use forge_core::llm::{OutputPolicy, Purpose, SubjectKind};
 use forge_core::{telemetry, ProjectId, RequestId};
 use forge_db::deploy::{SummaryCandidate, SummaryOutcome};
 use forge_db::Db;
-use forge_deploy::summary::{
-    log_range, should_ask, summary_input, MAX_ASKS, MAX_SUMMARY_CHARS, RETRY_AFTER_SECS,
-};
+use forge_deploy::summary::{log_range, should_ask, summary_input, MAX_ASKS, RETRY_AFTER_SECS};
 use forge_deploy::Deploy;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_llm::{Gateway, Outcome, Submission};
@@ -89,12 +87,9 @@ impl Memory {
 }
 
 /// The policy of an approval summary: words only, no findings.
+/// The same policy the eval bench measures (`forge_llm::prompts`).
 pub(crate) fn policy() -> OutputPolicy {
-    OutputPolicy {
-        max_findings: 0,
-        max_summary_chars: MAX_SUMMARY_CHARS,
-        ..OutputPolicy::default()
-    }
+    forge_llm::prompts::approval_summary_policy()
 }
 
 /// One pass (module docs).

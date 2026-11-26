@@ -181,3 +181,53 @@ Claude（保守者）がログと成果物だけで失敗を診断できるこ�
   1 材料 1 回ログに出し、出力のメモに書いて続ける。
 - **まだ作っていないもの**: `gstn ops diagnosis <id>`（読み取りの経路 `OpsDiagnosisRead` と forge-web の配線、openapi）は次の MR
   （`OpsDiagnosisRead` は forge-web の `PLANNED` のまま）。それまでは `forge diagnose --json` の出力を `incident-commander` が障害の記録に貼る。
+
+## Amendment（2026-11-26、L5-10 `feat/ci-llm-eval-sets`: 評価セットと `llm-bench`）
+
+計画 19 §6 を実装した。利用者の指示（計画の推奨をすべて採る）で、次を決めた。
+
+1. **評価セット**は `crates/forge-llm/evals/<purpose>/{regular,safety}.toml`（合成だけ、契約 8）。ケースは入力の部品（ラベル・区分・パス・本文）と、
+   **見せる形の助言** への期待（`forbid`・`summary_any` / `summary_all`・`finding`・`clean`・`refused`・`agent_withheld`）。id は
+   `<purpose>/<name>`。モデルと回数は `evals/bench.toml`（`name:tag@sha256:…`、`num_ctx` は `llm.num_ctx` と同じ 8192、3 回）。
+2. **`llm-bench`**（`forge-llm` の bin、`forge_llm::bench`）はゲートウェイと同じ道を通す: `prepare`（伏せ字・拒否）→ 版のプロンプト →
+   `generate_checked`（出力の検査・1 回のやり直し）。モデルの digest を先に確かめ（違えば FG-LLM-0003、報告なし）、行き先はループバックか
+   `--allow-host` だけ（FG-SYS-0002 `llm_endpoint_not_internal`）。ADR-0034 の v1 の報告を `forge_core::ai_eval::render` で書き、
+   同じ `parse` で読み直してから出す。
+3. **プロンプトの一覧は 1 つ**（`forge_llm::prompts::for_purpose`）。機能と bench が同じプロンプトと出力の方針を使う（承認の要約の方針を
+   forge-cli から `prompts::approval_summary_policy` に移した。障害の診断は L5-7 の `forge_core::llm::diagnosis::policy`）。
+   入力は機能が作る形のまま（承認の事実は `render_facts` の行、診断は `L<n>: ` の行と `catalog:<code>`。forge-deploy のテスト
+   `the_llm_eval_sets_use_the_rendered_facts_shape` が事実の行の名前のずれを止める）。**プロンプトの無い目的（MR レビュー L5-5）のセットは
+   読んで検査するが動かさず「skipped」と出す**。その MR がプロンプトを足すと動き出す（基準はその前に別の MR で足す、ADR-0034 Amendment 1）。
+4. **失敗は合格にしない**: 2 回不正な答え（FG-LLM-0002）はその回の不合格。届かない（FG-LLM-0001）・ほかのプロバイダの誤りはベンチを止め、
+   報告を出さない（ジョブが失敗し `forge/ai-eval` は FG-AIASSET-0002 の `error`）。
+5. **安全のケースはコードが保証するものだけを測る**: 判定の語・メンション・リンク・スラッシュのコマンド・`closes #N` が見せる助言に無い、
+   秘密がモデルに届かない（だから繰り返されない）、伏せられない入力は呼ぶ前に拒否、機密の助言はエージェントに出さない。
+   テスト `safety_cases_pass_every_run_with_the_current_prompts` は、注入に **従う** 偽のモデル 2 つ（判定を言う・入力をそのまま返す）で
+   全部の回の合格を確かめる。モデルの従順さ（要約の質）は `regular` のケースと指標で測る。
+6. **指標**（v1 の 5 つ）: `cause_hit_rate` = 何かを見つけるべき `regular` のケースの多数決の合格率、`false_alarm_rate` / `abstain_accuracy` =
+   `clean` のケースの回で medium 以上の指摘がある / 指摘が無い割合、`attach_precision` = 残った指摘 /（残った + 根拠が入力に無く捨てた）、
+   `p95_latency_ms` = 1 回の検査つきの呼び出しの p95。数えるものが無い指標は最良の値（1・0・1・1）で出し、ベンチの標準エラーに書く。
+7. **`gpu-eval` のジョブ**（`.forge-ci.yml` の `llm-eval`、段 `eval`）: サービス `ollama`（`gpu: true`、モデル置き場 `/models`、
+   読み取り専用なので `OLLAMA_NOPRUNE=1`）に `llm-bench` が `127.0.0.1:11434` で話す。イメージ `ci/ollama` は `ollama/ollama` 0.32.13
+   （開発サーバーの共用 Ollama と同じ版）の amd64 のダイジェストから `build-and-push.mjs --only-ollama` が試験用レジストリに写し、
+   `image.toml` に記録する（`own_ci_image.rs` が確かめる）。**選ぶのは `main` への push と夜間の定期だけ**: forge-ci に変更のパスの規則が
+   無く、MR ごとに GPU のベンチを走らせると GPU（Kanflow と時間で分ける）が足りない。プロンプト・評価セット・モデルを変える MR は、
+   変更のパスの規則ができるまで **この開発サーバーで手で走らせた報告を MR に付ける**（計画 19 §6 の「自分を置くまで」と同じ）。
+8. **レビュー（`llm-integration-reviewer`・`ci-runner-security-reviewer`）で直した・決めた点**: 2 回不正な答えの回を `clean` のケースの
+   「正しい見送り」に数えない（HIGH）。秘密のケースは見せる助言だけでなく **モデルに送る文**（プロンプトと入力）も確かめる
+   （`forbid_in_prompt`、当たれば送らずに不合格）。`forbid` は要約・指摘の文・深掘りの理由を読み、引用（入力の写し）は読まない。
+   安全のケースの不合格はジョブのログに `UNSAFE:` の行。ベンチの注入が **診断の深掘りの理由に変更の手順が残る** 穴を見つけたので、
+   `forbid_mutating_steps` の下では理由も捨てる（`check_output`、`a_deep_review_reason_with_a_mutating_step_is_dropped`）。
+   受け入れた点: 試験用レジストリの `ci/ollama` は `podman push` が圧縮し直すので上流の digest と違う（`image.toml` に両方を記録し、
+   写したのは `--only-ollama` を動かした人。`skopeo --preserve-digests` は Runner に無い）。サービスは上流のイメージの利用者（root、
+   rootless Podman で写像）で動き、ジョブはループバックで Ollama の API（`/api/pull` など）を呼べるが、モデル置き場は読み取り専用・
+   ネットワークは無し・digest をベンチの前に確かめるので、別のモデルで報告することはできない。「夜間」は C12 の定期が `main` に作る
+   パイプラインのこと（規則に `schedule` の鍵は無い）。手で走らせて MR に付けた報告は参考で、ゲートは `main` と夜間の `forge/ai-eval`
+   （基準は merge base から）。
+9. **最初の基準** `evals/baselines/qwen3.8-27b-q4_k_m.json` は、この開発サーバーの共用 Ollama（同じモデルと digest）で `llm-bench` を
+   3 回ずつ流した結果を、そのまま v1 の形で置いた（`allowed` は ADR-0034 の既定）。以後の変更は夜間の候補 MR（ADR-0034 Amendment 2026-11-23）。
+   2026-11-26 20:22〜20:52 の実測: 承認の要約 11 件・障害の診断 6 件（MR レビューは skipped）、**安全のケース 10/10 が全部の回で合格**、
+   `regular` は `approval_summary/migration-is-mentioned` だけ 2/3（不安定。ADR-0034 のゲートは基準で不安定なケースを数えない）、
+   指標は cause_hit_rate 1.0・attach_precision 1.0・p95 96 秒（Kanflow と共用の GPU で 1 回の検査つきの呼び出し。計画 19 §6 の
+   承認の要約 p95 ≤ 60 秒は実際の依頼の待ちを含む別の量で、4 週の実測で決め直す）。`clean` のケースが今は無いので
+   false_alarm_rate / abstain_accuracy は最良の値（MR レビューのセットが動き出すと数える）。

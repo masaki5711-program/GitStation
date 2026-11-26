@@ -58,6 +58,10 @@
    今の `attempt` の `eval-report.json` が無ければ `report_missing`。ジョブの `artifacts: { paths }` に **ちょうど `eval-report.json`**（ルート）が
    あるか、ベンチがそのパスに書いたかを確かめる（`out/eval-report.json` は宣言にならない）。
 4. ジョブの失敗: `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>`、ログは `gstn pipeline log`。
+   GitStation 自身の `llm-eval`（計画 19 L5-10、`llm-bench`）はログの最後の行が `llm-bench: error_code=… reason=…`:
+   FG-LLM-0001（サービス `ollama` に届かない・時間切れ）、FG-LLM-0003（`reason=model_missing` / `digest_mismatch`: モデル置き場に
+   `crates/forge-llm/evals/bench.toml` の `model` が無い・違う）、FG-SYS-0002 `config_key=llm_bench.*`（評価セット・`bench.toml` の誤り。
+   `detail` がファイルとケースの番号）。
    GPU の Runner: `forge admin runner list`（タグ `gpu-eval` の Runner が `online` か）、runbook `ci-runner`。
    ジョブが FG-CI-0029（GPU の無い Runner がタグ `gpu-eval` を持つ）・FG-CI-0030（モデル置き場がマニフェストと合わない、**alert**）で
    終わったなら、runbook `ci-runner`（GPU の Runner とモデル置き場）と、モデルを入れ替えている途中なら runbook `ai-model-update`。

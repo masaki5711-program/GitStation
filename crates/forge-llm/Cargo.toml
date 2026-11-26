@@ -20,9 +20,18 @@ forge-errors.workspace = true
 # roots, no proxy, no redirect, a timeout on every call (the same 0.12 as
 # forge-oidc / forge-integ). MIT OR Apache-2.0.
 reqwest.workspace = true
+# The eval sets and bench.toml of `llm-bench` (plan 19 L5-10).
+serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+# The eval bench (plan 19 §6, L5-10): runs crates/forge-llm/evals against an
+# Ollama and writes the ADR-0034 eval-report.json (the gpu-eval job).
+[[bin]]
+name = "llm-bench"
+path = "src/bin/llm_bench.rs"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
