@@ -855,6 +855,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The gstn binaries this server distributes (only the targets present), with version, SHA-256, size and download path */
+        get: operations["get_api_v1_clients"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clients/gstn/{target}/binary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download one gstn binary (target windows-x86_64 or linux-x86_64; application/octet-stream, X-Checksum-Sha256; 404 FG-WEB-0012 when not shipped) */
+        get: operations["get_api_v1_clients_gstn_target_binary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/groups": {
         parameters: {
             query?: never;
@@ -4392,6 +4426,27 @@ export interface components {
             tags: string[];
             /** Format: int32 */
             timeout_s: number;
+        };
+        /** @description One distributed binary. */
+        ClientItem: {
+            /** @description Where to `GET` the bytes (same credentials). */
+            download_path: string;
+            /** @description Always `gstn`. */
+            name: string;
+            /** @description Lower-case hex SHA-256 of the file. */
+            sha256: string;
+            /**
+             * Format: int64
+             * @description Bytes.
+             */
+            size: number;
+            /** @description `windows-x86_64` or `linux-x86_64`. */
+            target: string;
+            version: string;
+        };
+        /** @description `200` of the list. */
+        ClientList: {
+            items: components["schemas"]["ClientItem"][];
         };
         /** @description One CODEOWNERS rule the changed paths need. */
         CodeownerStatusBody: {
@@ -10868,6 +10923,57 @@ export interface operations {
                     "application/json": components["schemas"]["SessionsRevoked"];
                 };
             };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_clients: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_clients_gstn_target_binary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {

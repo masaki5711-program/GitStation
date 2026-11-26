@@ -257,6 +257,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::OrgUnitNotInMaster
         | ErrorCode::OrgBindingRoleAboveCap
         | ErrorCode::PortalWidgetSettingInvalid
+        | ErrorCode::ClientBinaryNotFound
+        | ErrorCode::ClientDistributionInvalid
         | ErrorCode::LoginNotPermitted
         | ErrorCode::IdentityLinkConflict
         | ErrorCode::IdentityProviderUnavailable

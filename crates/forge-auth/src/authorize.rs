@@ -886,6 +886,10 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // was checked above); the handler shows the principal's own data.
         (Action::UserSelfRead, Resource::Instance) => Ok(()),
 
+        // Every active signed-in user downloads the CLI (the scope was
+        // checked above; CI and acting for a person were refused above).
+        (Action::ClientDownload, Resource::Instance) => Ok(()),
+
         // Every active user reads their own session (a token was refused
         // above); the handler shows the principal's own session only.
         (Action::SessionRead, Resource::Instance) => Ok(()),
@@ -1878,6 +1882,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::UserOrgAdminRead
             | Action::AuditRead
             | Action::UserSelfRead
+            | Action::ClientDownload
             | Action::SessionRead
             | Action::SessionList
             | Action::SessionRevoke

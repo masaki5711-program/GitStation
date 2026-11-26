@@ -664,6 +664,12 @@ actions! {
     /// user; `read_api` on a token). Decided on the instance: there is no
     /// other user to see.
     UserSelfRead,
+    /// `GET /api/v1/clients`, `GET /api/v1/clients/gstn/{target}/binary`:
+    /// the list of the `gstn` binaries this server distributes and their
+    /// bytes. Any active signed-in user (`read_api` on a token, an agent's
+    /// included); never acting for a person, never a runner or a job.
+    /// Decided on the instance: the files are the same for everyone.
+    ClientDownload,
     /// `GET /api/v1/session`: the caller's own web session — who it stands
     /// for and its CSRF token (M2 MR3, ADR-0021 §6, §17). Sessions only: a
     /// token is `FG-AUTH-0002 reason=session_required` (a token has no
@@ -1045,6 +1051,7 @@ impl Action {
             | Action::UserOrgAdminRead
             | Action::AuditRead
             | Action::UserSelfRead
+            | Action::ClientDownload
             | Action::PathResolve
             | Action::MergeRequestRead
             | Action::MergeRequestList
@@ -1329,6 +1336,7 @@ impl Action {
             | Action::RunnerJobComplete
             | Action::AuditRead
             | Action::UserSelfRead
+            | Action::ClientDownload
             | Action::SessionRead
             | Action::SessionList
             | Action::SessionRevoke
@@ -1515,6 +1523,7 @@ impl Action {
             | Action::PipelinePlayProtected
             | Action::AuditRead
             | Action::UserSelfRead
+            | Action::ClientDownload
             | Action::SessionRead
             | Action::SessionList
             | Action::SessionRevoke

@@ -296,3 +296,20 @@
     min-width: 44px;
   }
 }
+
+/* The gstn downloads: a SHA-256 is long and selected whole to compare. */
+.hash {
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.steps {
+  margin: 0 0 var(--gs-space-3);
+  padding-left: var(--gs-space-5);
+}
+
+.steps li {
+  margin-bottom: var(--gs-space-1);
+}
