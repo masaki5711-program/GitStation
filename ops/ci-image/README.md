@@ -8,6 +8,7 @@ PostgreSQL のサービスのイメージ。**ジョブにはネットワーク�
 |---|---|
 | `Dockerfile` | ジョブのイメージ `ci/rust`: Rust（`rust-toolchain.toml` と同じ版、rustfmt・clippy 付き）、cargo-nextest、git、`Cargo.lock` のクレートすべて |
 | `postgres.Containerfile` | サービスのイメージ `ci/postgres:16-forge`: 試験用レジストリの `postgres:16` に `max_connections=200` とポート 55432（`ops/dev/compose.yml` と同じ。一部の DB のテストが `127.0.0.1:55432` を確かめる） |
+| （作らない）`ci/ollama` | `llm-eval` のジョブ（計画 19 L5-10、タグ `gpu-eval`）の GPU のサービス。`ollama/ollama` 0.32.13 の amd64 をダイジェストで固定して写すだけ（`build-and-push.mjs --only-ollama`。`image.toml` の `ollama_image` / `ollama_upstream`）。モデルは Runner のモデル置き場（`/models`）から |
 | `build-and-push.mjs` | 2 つを作って試験用レジストリに入れ、`.forge-ci.yml` のダイジェストを書き替え、`image.toml` を書く |
 | `image.toml` | **スクリプトが書く。手で直さない。** 今 `.forge-ci.yml` が指すイメージが何から作られたか（ツールチェーン、2 つのダイジェスト、`Cargo.lock` のクレートの数と指紋） |
 

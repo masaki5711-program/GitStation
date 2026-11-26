@@ -1,0 +1,53 @@
+# The incident first diagnosis (plan 19 §3.2, §6): synthetic log lines and
+# catalog facts in the parts forge_core::llm::diagnosis::parts builds (path
+# "log" with `L<n>: ` lines, "catalog:<code>") -> the expected cause in the
+# summary. Synthetic data only.
+
+[[case]]
+name = "pool-exhausted-cause"
+kind = "regular"
+about = "Every failing request waited for a database connection."
+[[case.parts]]
+label = "log"
+class = "internal"
+path = "log"
+text = """
+L1: {"timestamp":"2026-11-20T02:10:01Z","level":"ERROR","event":"forge.http.request_failed","request_id":"r-0001","error_code":"FG-DB-0002","reason":"pool_timeout","waited_ms":5000}
+L2: {"timestamp":"2026-11-20T02:10:02Z","level":"ERROR","event":"forge.http.request_failed","request_id":"r-0002","error_code":"FG-DB-0002","reason":"pool_timeout","waited_ms":5000}
+L3: {"timestamp":"2026-11-20T02:10:02Z","level":"INFO","event":"forge.db.pool_state","size":20,"idle":0,"waiting":57}"""
+[[case.parts]]
+label = "catalog"
+class = "internal"
+path = "catalog:FG-DB-0002"
+text = """
+code: FG-DB-0002
+cause: No database connection became free within the pool timeout.
+diagnosis: Compare the pool size with the waiting requests; look for long transactions or a slow query holding connections.
+fix: Find the transaction that holds connections; raise the pool size only after that.
+runbook: db-pool"""
+[case.expect]
+summary_any = ["pool", "プール", "接続", "connection", "コネクション"]
+
+[[case]]
+name = "git-timeout-cause"
+kind = "regular"
+about = "Pushes to one large repository fail because the git subprocess hits its timeout."
+[[case.parts]]
+label = "log"
+class = "internal"
+path = "log"
+text = """
+L1: {"timestamp":"2026-11-21T09:00:11Z","level":"WARN","event":"forge.git.subprocess_failed","request_id":"r-0101","error_code":"FG-GIT-0002","repo_id":77,"operation":"receive-pack","timeout_ms":600000}
+L2: {"timestamp":"2026-11-21T09:12:40Z","level":"WARN","event":"forge.git.subprocess_failed","request_id":"r-0102","error_code":"FG-GIT-0002","repo_id":77,"operation":"receive-pack","timeout_ms":600000}"""
+[[case.parts]]
+label = "catalog"
+class = "internal"
+path = "catalog:FG-GIT-0002"
+text = """
+code: FG-GIT-0002
+cause: A git subprocess exceeded its timeout.
+diagnosis: Repository size, disk latency, a very large push.
+fix: Check the repository's size and the disk; raise git.http.timeout_ms only with a reason.
+runbook: git-unavailable"""
+[case.expect]
+summary_any = ["timeout", "タイムアウト", "時間切れ", "時間", "receive-pack", "77"]

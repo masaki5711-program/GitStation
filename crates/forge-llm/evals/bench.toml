@@ -1,0 +1,11 @@
+# llm-bench (plan 19 §6, L5-10): the model the eval sets are measured with.
+# The same model and num_ctx as `llm.model` / `llm.num_ctx` (shared with
+# Kanflow). Changing the model is one merge request (runbook
+# llm-model-update): this file and the server's llm.model, after the new
+# baseline evals/baselines/<models>.json has merged on its own
+# (ADR-0034 Amendment 1).
+models = "qwen3.8-27b-q4_k_m"
+model = "qwen3.8:27b-q4_K_M@sha256:25b843619e944cd0ae6069f94ff4e5e26a16e109ccbc0a66a0f05979ed70098e"
+num_ctx = 8192
+runs = 3
+timeout_ms = 180000

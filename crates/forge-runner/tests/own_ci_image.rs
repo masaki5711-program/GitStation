@@ -184,9 +184,39 @@ fn forge_ci_yml_pins_exactly_the_recorded_images() {
         images.len()
     );
     assert!(images.contains(&rust.as_str()), "no job uses {rust}");
+    // The llm-eval GPU service (plan 19 L5-10): recorded by
+    // `build-and-push.mjs --only-ollama` whenever .forge-ci.yml names it.
+    let ollama = record
+        .get("ollama_image")
+        .and_then(toml::Value::as_str)
+        .map(|d| format!("registry:5000/ci/ollama@{d}"));
+    if images
+        .iter()
+        .any(|i| i.starts_with("registry:5000/ci/ollama@"))
+    {
+        let ollama = ollama.as_deref().unwrap_or_else(|| {
+            panic!(
+                ".forge-ci.yml names ci/ollama but ops/ci-image/image.toml records no ollama_image: run `node ops/ci-image/build-and-push.mjs --only-ollama`"
+            )
+        });
+        assert!(images.contains(&ollama), "no service uses {ollama}");
+        let upstream = recorded(&record, "ollama_upstream");
+        let hex = upstream
+            .strip_prefix("docker.io/ollama/ollama@sha256:")
+            .unwrap_or_default();
+        assert!(
+            hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "ollama_upstream is not pinned by digest: {upstream}"
+        );
+    }
     let other: Vec<&&str> = images
         .iter()
-        .filter(|image| **image != rust && **image != postgres)
+        .filter(|image| {
+            **image != rust
+                && **image != postgres
+                && !(image.starts_with("registry:5000/ci/ollama@")
+                    && Some(**image) == ollama.as_deref())
+        })
         .collect();
     assert!(
         other.is_empty(),

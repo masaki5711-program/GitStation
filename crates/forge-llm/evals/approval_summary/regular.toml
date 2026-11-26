@@ -1,0 +1,140 @@
+# The approval summary (plan 19 §3.4): facts as forge_deploy::summary renders
+# them -> the summary must name the risky fact. Synthetic data only.
+
+[[case]]
+name = "migration-is-mentioned"
+kind = "regular"
+about = "A database migration is the one risky fact."
+[[case.parts]]
+label = "deployment_approval_facts"
+class = "internal"
+text = """
+environment: prod
+commit: 3f1c2a9d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a39
+previous deployment: 9a8b7c6d5e4f
+range: read
+commits: 4
+merge requests: 2
+- !41 注文の一覧に出荷日の列を足す (forge/risk: medium)
+- !42 Fix the typo on the order page (forge/risk: low)
+migrations: 1
+- migrations/20261120100000_orders_add_ship_date.sql
+protected paths: 0
+ci/deploy configuration: 0
+permission code: 0
+forge/risk of the commit: medium
+failed checks: 0
+freeze windows: 0
+"""
+[case.expect]
+summary_any = ["マイグレーション", "migration", "データベース", "ship_date"]
+
+[[case]]
+name = "protected-path-is-mentioned"
+kind = "regular"
+about = "A protected deploy script changed."
+[[case.parts]]
+label = "deployment_approval_facts"
+class = "internal"
+text = """
+environment: prod
+commit: 7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c
+previous deployment: 1a2b3c4d5e6f
+range: read
+commits: 2
+merge requests: 1
+- !57 Restart the worker after deploy (forge/risk: high)
+migrations: 0
+protected paths: 1
+- ops/deploy/restart.sh (ops/deploy/**)
+ci/deploy configuration: 1
+- ops/deploy/restart.sh
+permission code: 0
+forge/risk of the commit: high
+failed checks: 0
+freeze windows: 0
+"""
+[case.expect]
+summary_any = ["保護", "protected", "restart.sh", "スクリプト", "再起動"]
+
+[[case]]
+name = "failed-check-is-mentioned"
+kind = "regular"
+about = "A failed check is in the facts."
+[[case.parts]]
+label = "deployment_approval_facts"
+class = "internal"
+text = """
+environment: stg
+commit: 0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d
+previous deployment: 5e6f7a8b9c0d
+range: read
+commits: 1
+merge requests: 1
+- !63 在庫の引当を並列にする (forge/risk: high)
+migrations: 0
+protected paths: 0
+ci/deploy configuration: 0
+permission code: 0
+forge/risk of the commit: high
+failed checks: 1
+- ci/pipeline (failure)
+freeze windows: 0
+"""
+[case.expect]
+summary_any = ["失敗", "fail", "エラー", "ci/pipeline"]
+
+[[case]]
+name = "freeze-window-is-mentioned"
+kind = "regular"
+about = "A freeze window is configured for the environment."
+[[case.parts]]
+label = "deployment_approval_facts"
+class = "internal"
+text = """
+environment: prod
+commit: 2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b
+previous deployment: 6a7b8c9d0e1f
+range: read
+commits: 1
+merge requests: 1
+- !71 Update the footer text (forge/risk: low)
+migrations: 0
+protected paths: 0
+ci/deploy configuration: 0
+permission code: 0
+forge/risk of the commit: low
+failed checks: 0
+freeze windows: 1
+- 2026-12-28T00:00:00Z/2027-01-04T00:00:00Z
+"""
+[case.expect]
+summary_any = ["凍結", "freeze", "12-28", "12月28日", "年末"]
+
+[[case]]
+name = "permission-code-is-mentioned"
+kind = "regular"
+about = "The authorization code changed."
+[[case.parts]]
+label = "deployment_approval_facts"
+class = "internal"
+text = """
+environment: prod
+commit: 5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a
+previous deployment: 0f1e2d3c4b5a
+range: read
+commits: 3
+merge requests: 1
+- !80 Let reporters read the deploy history (forge/risk: high)
+migrations: 0
+protected paths: 1
+- src/auth/authorize.rs (src/auth/**)
+ci/deploy configuration: 0
+permission code: 1
+- src/auth/authorize.rs
+forge/risk of the commit: high
+failed checks: 0
+freeze windows: 0
+"""
+[case.expect]
+summary_any = ["権限", "認可", "permission", "authoriz", "アクセス"]

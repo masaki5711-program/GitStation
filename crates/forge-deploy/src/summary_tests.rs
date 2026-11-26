@@ -217,3 +217,50 @@ fn an_agent_is_not_told_secret_file_names() {
     assert_eq!(f.protected_paths[0].rule, "secret_file", "the rule stays");
     assert_eq!(f.protected_paths[1].path, ".claude/settings.json");
 }
+
+#[test]
+fn the_llm_eval_sets_use_the_rendered_facts_shape() {
+    // The approval summary's eval sets (plan 19 L5-10) hand-write the text
+    // render_facts makes: a renamed line or range state here must show up
+    // there, or the bench measures an input production never sends.
+    let mut full = facts();
+    full.lists_truncated = true;
+    let rendered = render_facts(&full);
+    let keys: Vec<&str> = rendered
+        .lines()
+        .filter(|l| !l.starts_with("- "))
+        .filter_map(|l| l.split_once(": ").map(|(k, _)| k))
+        .collect();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../forge-llm/evals/approval_summary");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("the eval sets") {
+        let path = entry.expect("entry").path();
+        let text = std::fs::read_to_string(&path).expect("readable");
+        for line in text.lines() {
+            // Fact lines only: not TOML keys, tables, comments or list items.
+            let skip = line.is_empty()
+                || line.starts_with(['#', '[', '"', '-'])
+                || line.contains(" = ")
+                || line.starts_with("text");
+            if skip {
+                continue;
+            }
+            let (key, value) = line.split_once(": ").unwrap_or((line, ""));
+            assert!(
+                keys.contains(&key),
+                "{}: `{key}` is not a line render_facts writes ({keys:?})",
+                path.display()
+            );
+            if key == "range" {
+                assert!(
+                    ["first_deployment", "read", "unavailable"].contains(&value),
+                    "{}: range `{value}`",
+                    path.display()
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 50, "only {checked} fact lines found");
+}

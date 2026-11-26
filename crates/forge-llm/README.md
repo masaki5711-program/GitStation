@@ -25,6 +25,17 @@ checked retry, `ModelRef`) is pure and lives in `forge_core::llm`.
 - `records::DbRecords` (`forge.llm_requests` / `forge.llm_advice`).
 - `prompts::approval_summary()` (`prompts/approval_summary.v1.txt`, L5-8): the
   versioned prompts, compiled in; a new text is a new file and version.
+  `prompts::for_purpose` is the one list of prompts and output policies in
+  use (the worker asks with them, the bench measures them).
+- `bench` and the bin `llm-bench` (L5-10): the synthetic eval sets
+  `evals/<purpose>/*.toml` and `evals/bench.toml` run through `prepare` →
+  prompt → `generate_checked`, scored into the ADR-0034 `eval-report.json`
+  (`.forge-ci.yml` job `llm-eval`, tag `gpu-eval`). By hand on the
+  development server: `cargo run -p forge-llm --bin llm-bench --
+  --endpoint http://127.0.0.1:11434 --out eval-report.json`. Exit 1 with
+  `error_code=…` and no report when the model is unreachable (FG-LLM-0001),
+  not the pinned digest (FG-LLM-0003) or the inputs are invalid
+  (FG-SYS-0002 `config_key=llm_bench.*`).
 
 **Owned error codes**: FG-LLM-0001 LlmUnavailable, FG-LLM-0003
 LlmModelDigestMismatch (alert), FG-LLM-0004 LlmQueueDeadline; it logs
