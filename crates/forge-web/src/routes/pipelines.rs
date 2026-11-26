@@ -208,6 +208,10 @@ pub struct PipelineBody {
     /// The jobs (only on `GET …/{pipeline_id}` and the changes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jobs: Option<Vec<PipelineJobBody>>,
+    /// Plan 19 §3.3 (L5-9): when it was read (UTC, RFC 3339); only on
+    /// `GET …/{pipeline_id}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
 }
 
 /// `GET …/pipelines`.
@@ -218,6 +222,8 @@ pub struct PipelinePage {
     /// Pass as `before` for the next page; `null` on the last.
     #[schema(required = true, minimum = 1)]
     pub next_before: Option<i64>,
+    /// Plan 19 §3.3 (L5-9): when the page was read (UTC, RFC 3339).
+    pub as_of: String,
 }
 
 /// `GET …/jobs/{job_id}/log`: one page of a job attempt's log.
@@ -371,6 +377,7 @@ fn body(p: StoredPipeline, jobs: Option<Vec<StoredJob>>) -> PipelineBody {
         updated_at: p.updated_at,
         finished_at: p.finished_at,
         jobs: jobs.map(|jobs| jobs.into_iter().map(job_body).collect()),
+        as_of: None,
     }
 }
 
@@ -484,26 +491,57 @@ fn ids(raw_path: &str) -> Result<(ProjectId, Tail), ForgeError> {
 /// `…/pipelines[/{pipeline_id}[/cancel|/retry]]`: the project.
 pub struct PipelinesOf {
     tail: u8,
+    /// Plan 19 §3.3 (ADR-0025 Amendment L5-4/L5-9): the route answers
+    /// kanflow's read tools acting for a person (the list and one pipeline
+    /// only; logs, diagnosis, artifacts and writes never).
+    act_as: bool,
 }
 
 /// `GET|POST …/pipelines`.
-pub const OF_LIST: PipelinesOf = PipelinesOf { tail: 0 };
+pub const OF_LIST: PipelinesOf = PipelinesOf {
+    tail: 0,
+    act_as: true,
+};
 /// `GET …/pipelines/{pipeline_id}`.
-pub const OF_ONE: PipelinesOf = PipelinesOf { tail: 1 };
+pub const OF_ONE: PipelinesOf = PipelinesOf {
+    tail: 1,
+    act_as: true,
+};
 /// `POST …/cancel`.
-pub const OF_CANCEL: PipelinesOf = PipelinesOf { tail: 2 };
+pub const OF_CANCEL: PipelinesOf = PipelinesOf {
+    tail: 2,
+    act_as: false,
+};
 /// `POST …/retry`.
-pub const OF_RETRY: PipelinesOf = PipelinesOf { tail: 3 };
+pub const OF_RETRY: PipelinesOf = PipelinesOf {
+    tail: 3,
+    act_as: false,
+};
 /// `GET …/jobs/{job_id}/log`.
-pub const OF_LOG: PipelinesOf = PipelinesOf { tail: 4 };
+pub const OF_LOG: PipelinesOf = PipelinesOf {
+    tail: 4,
+    act_as: false,
+};
 /// `GET …/diagnosis`.
-pub const OF_DIAGNOSIS: PipelinesOf = PipelinesOf { tail: 5 };
+pub const OF_DIAGNOSIS: PipelinesOf = PipelinesOf {
+    tail: 5,
+    act_as: false,
+};
 /// `GET …/jobs/{job_id}/artifacts` (M4 C6).
-pub const OF_ARTIFACTS: PipelinesOf = PipelinesOf { tail: 6 };
+pub const OF_ARTIFACTS: PipelinesOf = PipelinesOf {
+    tail: 6,
+    act_as: false,
+};
 /// `GET …/jobs/{job_id}/artifacts/{artifact_id}` (M4 C6).
-pub const OF_ARTIFACT: PipelinesOf = PipelinesOf { tail: 7 };
+pub const OF_ARTIFACT: PipelinesOf = PipelinesOf {
+    tail: 7,
+    act_as: false,
+};
 /// `POST …/jobs/{job_id}/play` (M4 C12).
-pub const OF_PLAY: PipelinesOf = PipelinesOf { tail: 8 };
+pub const OF_PLAY: PipelinesOf = PipelinesOf {
+    tail: 8,
+    act_as: false,
+};
 
 impl PipelinesOf {
     async fn lookup(
@@ -511,6 +549,7 @@ impl PipelinesOf {
         state: &AppState,
         parts: &Parts,
         viewer: Option<UserId>,
+        read: bool,
     ) -> Result<Lookup<ProjectCtx>, ForgeError> {
         let (id, tail) = ids(parts.uri.path())?;
         if tail.kind() != self.tail {
@@ -525,8 +564,18 @@ impl PipelinesOf {
                 .with_context("project_id", id.get())
                 .with_context("loaded_project_id", record.id.get()));
         }
+        let ctx = ProjectCtx::new(projects::loaded(&record));
+        // Plan 19 §3.3 (ADR-0025 Amendment L5-4/L5-9): only the list and
+        // one pipeline answer kanflow's read tools acting for a person;
+        // every other pipeline route (logs, diagnosis, artifacts, writes)
+        // loads no act-as facts and stays `act_as_facts_missing`.
+        let ctx = if read && self.act_as {
+            crate::routes::act_as::project_ctx(state, parts, ctx, id).await?
+        } else {
+            ctx
+        };
         Ok(Lookup::Found {
-            ctx: ProjectCtx::new(projects::loaded(&record)),
+            ctx,
             canonical: None,
             tombstone: None,
             project: Some(record),
@@ -543,7 +592,7 @@ impl Loader<AppState> for PipelinesOf {
         parts: &'a Parts,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, ProjectCtx> {
-        Box::pin(self.lookup(state, parts, viewer))
+        Box::pin(self.lookup(state, parts, viewer, true))
     }
 }
 
@@ -556,7 +605,7 @@ impl BodyLoader<AppState, NewPipelineRun> for PipelinesOf {
         _: &'a NewPipelineRun,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, ProjectCtx> {
-        Box::pin(self.lookup(state, parts, viewer))
+        Box::pin(self.lookup(state, parts, viewer, false))
     }
 }
 
@@ -639,6 +688,7 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
     let w = request.into_write();
     let built = async {
         let (git_ref, before, limit) = list_query(query.as_deref())?;
+        let as_of = crate::routes::ai_tools::as_of_now()?;
         let rows = bounded(
             &state,
             "pipelines_list",
@@ -654,6 +704,7 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
         json(PipelinePage {
             pipelines: rows.into_iter().map(|p| body(p, None)).collect(),
             next_before,
+            as_of,
         })
     }
     .await;
@@ -672,13 +723,16 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let w = request.into_write();
     let built = async {
         let id = pipeline_id(&path)?;
+        let as_of = crate::routes::ai_tools::as_of_now()?;
         let got = bounded(
             &state,
             "pipeline_read",
             pipelines(&state)?.get(&w.proof, id),
         )
         .await?;
-        json(detail_body(got.ok_or_else(not_found)?))
+        let mut answer = detail_body(got.ok_or_else(not_found)?);
+        answer.as_of = Some(as_of);
+        json(answer)
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)

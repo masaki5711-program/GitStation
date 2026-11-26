@@ -1208,6 +1208,13 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/search",
         Coverage::Command("search"),
     ),
+    // M5 L5-9: kanflow's AI chat tool pack (each tool is a route covered
+    // by its own row).
+    (
+        "GET",
+        "/api/v1/ai-tools",
+        Coverage::NotForCli("kanflow's AI chat tool pack, read by kanflow's service account; each tool is an API route gstn already covers"),
+    ),
     // M5 L5-8: the approval facts and summary.
     (
         "GET",

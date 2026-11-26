@@ -106,6 +106,8 @@ mod matrix_rows_spec_refs;
 mod matrix_rows_repo_copy;
 // Plan 20 K3 (ADR-0040): the cross search.
 mod matrix_rows_search;
+// Plan 19 L5-9: kanflow's tool pack list.
+mod matrix_rows_ai_tools;
 // Plan 20 W1 (ADR-0040 §5): the project wiki link.
 mod matrix_rows_wiki;
 // The CLI distribution (`gstn` downloads).

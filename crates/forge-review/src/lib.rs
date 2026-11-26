@@ -536,6 +536,30 @@ impl Review {
         review::list(&self.db, project, state, before, limit).await
     }
 
+    /// `project`'s merge requests openly linked to the work item
+    /// `reference` of the project's binding (plan 19 §3.3, L5-9), as
+    /// [`Self::merge_requests`] otherwise. `None`: the project is not
+    /// bound; `Some((None, []))`: forge never saw the reference;
+    /// `Some((Some(confidential), rows))` otherwise — the caller withholds
+    /// a confidential work item from an agent audience.
+    pub async fn merge_requests_of_work_item(
+        &self,
+        project: ProjectId,
+        reference: &forge_core::WorkItemRef,
+        state: Option<MergeRequestState>,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<Option<(Option<bool>, Vec<StoredMergeRequest>)>, ForgeError> {
+        let Some(found) = self.work_item_context(project, reference, 0).await? else {
+            return Ok(None);
+        };
+        let Some(item) = found.work_item else {
+            return Ok(Some((None, Vec::new())));
+        };
+        let rows = review::list_linked(&self.db, project, item.id, state, before, limit).await?;
+        Ok(Some((Some(item.confidential), rows)))
+    }
+
     /// The employee numbers of `users` (people with one only), for a
     /// caller the shared rule lets see them
     /// ([`Principal::personal_disclosure`]: a token holding

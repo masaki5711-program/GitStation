@@ -639,6 +639,15 @@
     "word": "fixed"
   },
   {
+    "action": "AiToolList",
+    "method": "GET",
+    "path": "/api/v1/ai-tools",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ClientDownload",
     "method": "GET",
     "path": "/api/v1/clients",

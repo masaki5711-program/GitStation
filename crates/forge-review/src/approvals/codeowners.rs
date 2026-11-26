@@ -407,6 +407,17 @@ fn folded(path: &str) -> Vec<Vec<char>> {
         .collect()
 }
 
+/// Whether the CODEOWNERS `pattern` matches `path` (plan 19 §5, L5-9: an
+/// agent audience is not shown a pattern naming a confidential file). A
+/// pattern that does not compile matches every path: a caller withholding
+/// by it fails closed.
+pub fn pattern_matches(pattern: &str, path: &str) -> bool {
+    match compile(pattern) {
+        Ok(segs) => matches(&segs, &folded(path)),
+        Err(_) => true,
+    }
+}
+
 /// [`Codeowners::owned_lines`].
 pub fn owned_lines(
     file: &Codeowners,

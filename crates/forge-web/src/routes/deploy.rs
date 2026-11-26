@@ -285,6 +285,8 @@ pub struct DeploymentBody {
 #[serde(deny_unknown_fields)]
 pub struct DeploymentList {
     pub deployments: Vec<DeploymentBody>,
+    /// Plan 19 §3.3 (L5-9): when the list was read (UTC, RFC 3339).
+    pub as_of: String,
 }
 
 fn target_body(t: StoredTarget) -> TargetBody {
@@ -401,8 +403,51 @@ fn path_of(raw_path: &str) -> Result<(ProjectId, Shape), ForgeError> {
 /// The project of a deployment route.
 pub struct DeployOf;
 
-/// Every project-scoped deployment route.
+/// Every project-scoped deployment route but the list.
 pub const OF_PROJECT: DeployOf = DeployOf;
+
+/// `GET …/deployments`: the project with the act-as facts (plan 19 §3.3,
+/// ADR-0025 Amendment L5-4/L5-9) — the only deployment route kanflow's read
+/// tools reach acting for a person. The environments (target host keys)
+/// and approvers (people's names) load none and stay
+/// `act_as_facts_missing`.
+pub struct DeploymentsOf;
+
+/// See [`DeploymentsOf`].
+pub const OF_DEPLOYMENTS: DeploymentsOf = DeploymentsOf;
+
+impl Loader<AppState> for DeploymentsOf {
+    type Ctx = ProjectCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, ProjectCtx> {
+        Box::pin(async move {
+            let found = DeployOf.lookup(state, parts, viewer).await?;
+            let Lookup::Found {
+                ctx,
+                canonical,
+                tombstone,
+                project,
+                group,
+            } = found
+            else {
+                return Ok(found);
+            };
+            let id = path_of(parts.uri.path())?.0;
+            let ctx = crate::routes::act_as::project_ctx(state, parts, ctx, id).await?;
+            Ok(Lookup::Found {
+                ctx,
+                canonical,
+                tombstone,
+                project,
+                group,
+            })
+        })
+    }
+}
 
 impl DeployOf {
     async fn lookup(
@@ -656,14 +701,29 @@ pub async fn put_target(state: AppState, request: Dispatched<ProjectCtx, PutTarg
 pub async fn deployments(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let w = request.into_write();
     let built = async {
+        let as_of = crate::routes::ai_tools::as_of_now()?;
         let rows = bounded(
             &state,
             "deployment_list",
             deploy(&state)?.deployments(&w.proof),
         )
         .await?;
+        // Plan 19 §3.3 (L5-9): kanflow's AI chat acting for a person is no
+        // person reading — the commit author's name and address stay out of it.
+        let acting = w.proof.principal().act_as_credential().is_some();
         json(DeploymentList {
-            deployments: rows.into_iter().map(deployment_body).collect(),
+            deployments: rows
+                .into_iter()
+                .map(deployment_body)
+                .map(|mut d| {
+                    if acting {
+                        d.commit_author_name = None;
+                        d.commit_author_email = None;
+                    }
+                    d
+                })
+                .collect(),
+            as_of,
         })
     }
     .await;
