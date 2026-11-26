@@ -1624,6 +1624,21 @@ fix = "Follow runbook backup-restore. Repositories older than the database: rest
 runbook = "backup-restore"
 test = "a_database_behind_the_repositories_is_detected"
 
+# ── Plan 19 L5-7: forge diagnose (the incident first diagnosis) ──
+
+[[error]]
+code = "FG-SYS-0010"
+name = "DiagnoseSourceUnreadable"
+http_status = 500
+severity = "warn"
+user_message_ja = "診断の材料の一部を読めませんでした。読めた材料だけで診断を続けます。"
+user_message_en = "Part of the diagnosis material could not be read. The diagnosis goes on with what could be read."
+user_message_id = "Sebagian bahan diagnosis tidak dapat dibaca. Diagnosis dilanjutkan dengan bahan yang dapat dibaca."
+cause = "`forge diagnose` (plan 19 L5-7, the incident first diagnosis; an operator command on the server, read-only) could not read one of its fact sources and went on without it: `source` = `logs` (the file given with `--logs`, or stdin with `--logs -`: missing, unreadable, larger than 64 MiB, or not read within 60 s — `reason` `unreadable` / `too_large` / `timeout`), `runbooks` (the runbook directory: `--runbooks`, else `share/runbooks` next to the release's `bin/forge`; `reason=missing` when there is none), `incidents` (the incident memory `records.jsonl`: `--incidents`, else `share/incidents/records.jsonl`), `recent_changes` (the deployments and migrations of the window, or the database itself: `reason` starts with the failing code — an FG-DB code from the pool, logged on its own too, or `FG-SYS-0001 diagnosis_not_read_only` when the session was not `forge_ro` read-only), `doctor` (`forge doctor --json` did not finish within 120 s, `reason=timeout`), or a part withheld because a secret in it could not be redacted (`source=part`, `reason` = `FG-LLM-0005 <reason> label=<label>`, `path` = the part). Nothing stops (exit 0): the fact bundle names the missing source (`--json`: `notes`, `complete=false`) and the diagnosis uses the rest; nothing on the server is affected. `reason=not_given`: `--logs` was not passed."
+diagnosis = "The command prints the source and the reason in the fact bundle (`notes`) and logs this code once per source with `source`, `reason` and `path`. Check the path it names: `ls -l <path>`, the permissions of the `forge` user, and that the logs were piped (`journalctl -u forge-serve -u forge-worker --since -2h -o cat | forge diagnose --request-id <id> --logs -`). Logs live in journald; forge writes no log file (ops/linux/README.md)."
+fix = "Give the source explicitly (`--logs <file>|-`, `--runbooks <dir>`, `--incidents <file>`) or install it with the release (`share/runbooks`, `share/incidents/records.jsonl`); for `recent_changes`, follow the FG-DB code in `source`. Run the command again — it only reads."
+test = "unreadable_logs_are_noted_and_the_diagnosis_goes_on"
+
 # ── DB ───────────────────────────────────────────────────────────────────
 # FG-DB-0003 / 0004: migrations (ADR-0014);
 # FG-DB-0005: the Outbox sequencer lag (ADR-0016 §7, defined below);

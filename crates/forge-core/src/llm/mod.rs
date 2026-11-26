@@ -23,14 +23,15 @@
 use std::fmt;
 use std::time::Duration;
 
+pub mod diagnosis;
 pub mod input;
 pub mod output;
 pub mod provider;
 
 pub use input::{prepare, InputLimits, InputPart, PreparedInput};
 pub use output::{
-    check_output, Advice, DeepReview, Finding, FindingSeverity, OutputPolicy, VERDICT_REMOVED,
-    WITHHELD_SUMMARY,
+    check_output, names_a_mutating_step, next_look_is_read_only, Advice, DeepReview, Finding,
+    FindingSeverity, OutputPolicy, MUTATING_WITHHELD, VERDICT_REMOVED, WITHHELD_SUMMARY,
 };
 pub use provider::{generate_checked, ChatFuture, ChatReply, ChatRequest, Generated, LlmProvider};
 

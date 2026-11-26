@@ -22,7 +22,7 @@ GitStation（バイナリ `forge`）を、PFS（IoT 基盤）と同じ Linux サ
 | `nginx/gitstation.conf` | `/etc/nginx/conf.d/` | TLS のリバースプロキシ |
 | `postgresql/` | — | PostgreSQL の置き方（専用インスタンス推奨）、メモリを絞った設定、コンテナの compose |
 
-リリースの tar.gz では、上が `share/` の下に入り、DB の bootstrap の SQL（`share/db/bootstrap/`）と runbook（`share/runbooks/`）も同梱する。
+リリースの tar.gz では、上が `share/` の下に入り、DB の bootstrap の SQL（`share/db/bootstrap/`）と runbook（`share/runbooks/`）、障害の記憶（`share/incidents/records.jsonl`、`forge diagnose` が読む）も同梱する。
 
 ## サーバーの配置
 
@@ -41,6 +41,7 @@ GitStation（バイナリ `forge`）を、PFS（IoT 基盤）と同じ Linux サ
 
 ログは **journald**（forge は JSON を stderr に出す）。ファイルのログのディレクトリは無い:
 `journalctl -u forge-serve -o cat | jq 'select(.error_code != null)'`。
+障害の一次診断はこの出力を渡す: `journalctl -u forge-serve -u forge-worker --since -2h -o cat | forge diagnose --request-id <番号> --logs -`。
 
 ## 設計の判断
 
