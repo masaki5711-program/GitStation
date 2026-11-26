@@ -736,7 +736,31 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
         ))),
     ))));
     // ADR-0036: the PFS portal's home widgets; plan 20 W2: the wiki.
-    wiki_routes(portal_widget_routes(all))
+    notes_routes(wiki_routes(portal_widget_routes(all)))
+}
+
+/// A person's notes (plan 20 N1, ADR-0040 §6): create them, read the
+/// pointer. A quick note is the simple editor's commit on the notes.
+fn notes_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::notes as n;
+    registry
+        .route(
+            Verb::Get,
+            n::PATH,
+            Action::ProjectList,
+            "The caller's notes — the private project <user>/notes, proved ProjectRead with the caller's own credential: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again)",
+            n::read,
+        )
+        .responds::<n::NotesBody>(Verb::Get, n::PATH)
+        .route_with(
+            Verb::Post,
+            n::PATH,
+            Action::PersonalNotesCreate,
+            "Create the caller's notes in one step: the private project <user>/notes in their own namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/note.yml with owner_kind: user, README.md), then the pointer; a stale pointer (FG-KNOW-0005) is replaced. The person only (never an agent, a service account, acting for a person or CI), api; 409 FG-KNOW-0006 refused (already exists, name taken), 500 FG-KNOW-0007 when a step after the creation failed (no pointer written)",
+            n::OwnNamespace,
+            n::create,
+        )
+        .responds_created::<n::CreatedNotesBody>(Verb::Post, n::PATH)
 }
 
 /// A project's wiki (plan 20 W2, ADR-0040 §5): create and link, unlink;

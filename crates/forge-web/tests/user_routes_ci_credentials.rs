@@ -337,6 +337,14 @@ const ROUTES: &[(&str, &str, &str, Option<&str>)] = &[
         "/api/v1/user/activity",
         None,
     ),
+    // Plan 20 N1: a person's notes.
+    ("GET", "/api/v1/user/notes", "/api/v1/user/notes", None),
+    (
+        "POST",
+        "/api/v1/user/notes",
+        "/api/v1/user/notes",
+        Some("{}"),
+    ),
 ];
 
 /// Token creations whose body the route would refuse (`FG-WEB-0006`): the

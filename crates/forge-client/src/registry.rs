@@ -1794,6 +1794,42 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["DELETE /api/v1/projects/{id}/wiki"],
         output: r#"{"type":"object","required":["project_id","wiki_project_id"],"properties":{"project_id":{"type":"integer"},"wiki_project_id":{"type":"integer"}}}"#,
     },
+    // ── plan 20 N1: a person's notes ──
+    CommandSpec {
+        name: "note show",
+        summary: "Show your notes: the private project <you>/notes (id, path, owner, branch). 404 FG-REPO-0005 when you have none; 404 FG-KNOW-0005 when the notes project was moved or deleted (gstn note create makes new ones).",
+        args: &[],
+        examples: &["gstn note show", "gstn note show --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/user/notes"],
+        output: r#"{"type":"object","required":["project_id","path","owner","default_branch"],"properties":{"project_id":{"type":"integer"},"path":{"type":"string"},"owner":{"type":"string"},"default_branch":{"type":"string"}}}"#,
+    },
+    CommandSpec {
+        name: "note create",
+        summary: "Create your notes in one step: the private project <you>/notes with the note type (.forge/doctypes/note.yml, owner_kind: user) on main. Yours only (a person, never an agent or a service account); 409 FG-KNOW-0006 when they exist or the name is taken, 500 FG-KNOW-0007 when a step after the creation failed.",
+        args: &[],
+        examples: &["gstn note create"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/user/notes"],
+        output: r#"{"type":"object","required":["project_id","path","owner","default_branch","commit","replaced_project_id"],"properties":{"project_id":{"type":"integer"},"path":{"type":"string"},"owner":{"type":"string"},"default_branch":{"type":"string"},"commit":{"type":"string"},"replaced_project_id":{"type":["integer","null"]}}}"#,
+    },
+    CommandSpec {
+        name: "note new",
+        summary: "Save a quick note: one direct commit of N-YYYYMMDD-HHMMSS.md (UTC, doctype note, owner = you) on your notes' main, from --body or standard input. Checked like a push (secrets refused, FG-GIT-0022).",
+        args: &[
+            arg("--title", "option", false, "The note's title (default: the body's first line)."),
+            arg("--body", "option", false, "The note's text (default: standard input)."),
+        ],
+        examples: &["gstn note new --body \"打ち合わせのメモ\"", "gstn note new --title Ideas < ideas.md"],
+        scopes: &["read_api", "write_repository"],
+        routes: &[
+            "GET /api/v1/user/notes",
+            "GET /api/v1/projects/{id}/repository/resolve",
+            "GET /api/v1/projects/{id}/repository/blob",
+            "POST /api/v1/projects/{id}/repository/commits/single-file",
+        ],
+        output: r#"{"type":"object","required":["commit_sha","parent_sha","branch","branch_created","path","blob_sha","merge_request","merge_request_error"]}"#,
+    },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {
         name: "admin service-account list",

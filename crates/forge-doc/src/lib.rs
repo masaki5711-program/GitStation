@@ -13,6 +13,8 @@ pub mod legacy;
 pub mod lint;
 pub mod render;
 pub mod spec_doc;
+// Plan 20 N1 (ADR-0040 §6): a person's notes project and one note.
+pub mod note;
 // Plan 20 W2 (ADR-0040 §5): a project wiki's first commit.
 pub mod wiki;
 pub mod yaml;

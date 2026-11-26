@@ -14,6 +14,9 @@ the wiki's own (it lives in the same namespace).
 |------|---------|------------|
 | FG-KNOW-0003 WikiLinkRefused | link refused (`already_linked`, `wiki_already_linked`, `chain`, `self`, `name_taken`, `not_linked`) | read `reason`; nothing was written |
 | FG-KNOW-0004 WikiProvisionFailed | the wiki project was created but its repository, first commit or protection could not be made; **no link was written** | read `step` and the chained cause; see "A half-made wiki project" |
+| FG-KNOW-0005 NotesProjectMissing | a person's notes pointer names a project moved out of `<user>/notes` or pending deletion | see "Personal notes" |
+| FG-KNOW-0006 NotesCreateRefused | notes refused (`already_exists`, `name_taken`); nothing written | read `reason` |
+| FG-KNOW-0007 NotesProvisionFailed | `<user>/notes` was created but its repository or first commit could not be made; **no pointer was written** | read `step`; see "Personal notes" |
 
 ## Checks (read-only)
 
@@ -68,3 +71,40 @@ A failure after the creation leaves an unlinked project named in the error's
 No tool: `git clone <gitlab>/<path>.wiki.git`, push it to the wiki project
 (Developer), then `gstn doc fmt` adds the front matter (`doctype: wiki.page`,
 `id: WIKI-NNNN`).
+
+## Personal notes (plan 20 N1, ADR-0040 §6)
+
+A person's notes are the **private** project `<user>/notes` in their own
+namespace, pointed at by one row of `forge.user_notes` (`user_id` →
+`project_id`). `POST /api/v1/user/notes` (`gstn note create`) creates the
+project, provisions its repository, writes the first commit
+(`.forge/doctypes/note.yml` with `owner_kind: user`, `README.md`) and only
+then the pointer. A quick note (`gstn note new`) is one direct commit of
+`N-YYYYMMDD-HHMMSS.md` through the simple editor's commit.
+
+```sql
+-- A person's pointer and its project's state (read-only).
+SELECT n.project_id, p.deleted_at, ns.parent_id, ns.segment
+  FROM forge.user_notes n
+  JOIN forge.projects p ON p.id = n.project_id
+  LEFT JOIN forge.namespaces ns ON ns.kind = 'project' AND ns.owner_id = p.id
+ WHERE n.user_id = $1;
+```
+
+- **FG-KNOW-0005 `moved`**: the person renamed or moved the notes project
+  (e.g. into a group to share it). It keeps working as an ordinary project;
+  The move left a tombstone (redirect) at `<user>/notes`: the person
+  releases it (`POST /api/v1/namespaces/tombstones/release`,
+  `{"path": "<user>/notes"}`), then `gstn note create` makes new
+  `<user>/notes` and replaces the pointer.
+- **FG-KNOW-0005 `deleted`**: the project is pending deletion. Restore it
+  (`gstn project restore`, within the grace period), or wait for the purge
+  (it removes the pointer and frees the path) and create the notes again —
+  until then the path `notes` is taken (`FG-KNOW-0006 reason=name_taken`).
+- **FG-KNOW-0007**: fix the chained cause (repository-provisioning,
+  git-process-failed, db-unavailable); the person deletes the half-made
+  private project `<user>/notes` (human approval in production) and runs
+  `gstn note create` again.
+- Notes are private: nobody but the person (and administrators, who read
+  every project) sees them in the project list, browse or search; sharing
+  means adding members to the project.

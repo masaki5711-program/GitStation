@@ -94,6 +94,15 @@ actions! {
     /// actions on the wiki project (`RepoBrowse`, `RepoPush`), whose role
     /// the owner project's members inherit (`forge_db::roles`).
     ProjectWikiLink,
+    /// `POST /api/v1/user/notes` (plan 20 N1, ADR-0040 §6): create the
+    /// caller's notes — the private project `<user>/notes` — and point at
+    /// it. Decided on the caller's own personal namespace: only its owner,
+    /// a person (never an agent, a service account, a bot, acting for a
+    /// person or CI — administrators included, for another's namespace),
+    /// `api`. Creating the project is also `ProjectCreate` there, decided
+    /// again by the command. Reading and writing notes are the existing
+    /// actions on the project (`RepoBrowse`, `RepoPush`).
+    PersonalNotesCreate,
     ProjectRestore,
     ProtectedRefManage,
     MemberManage,
@@ -891,6 +900,7 @@ impl Action {
                 | Action::ProjectRestore
                 // Plan 20 W1: a wiki is linked by a person.
                 | Action::ProjectWikiLink
+                | Action::PersonalNotesCreate
                 | Action::MemberManage
                 | Action::UserDisable
                 // ADR-0021 amendment 2026-11-20: another person's positions
@@ -1096,6 +1106,7 @@ impl Action {
             | Action::ProjectDelete
             | Action::ProjectRestore
             | Action::ProjectWikiLink
+            | Action::PersonalNotesCreate
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::GroupCreateTopLevel
@@ -1220,6 +1231,7 @@ impl Action {
             | Action::ProjectDelete
             | Action::ProjectRestore
             | Action::ProjectWikiLink
+            | Action::PersonalNotesCreate
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::MemberList
@@ -1417,6 +1429,7 @@ impl Action {
             | Action::ProjectDelete
             | Action::ProjectRestore
             | Action::ProjectWikiLink
+            | Action::PersonalNotesCreate
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::MemberList

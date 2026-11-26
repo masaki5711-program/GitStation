@@ -187,6 +187,8 @@ pub mod agent_marketplace;
 pub mod llm;
 // Plan 20 W1 (ADR-0040 §5): a project's wiki link.
 pub mod wikis;
+// Plan 20 N1 (ADR-0040 §6): a person's notes pointer.
+pub mod notes;
 // ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

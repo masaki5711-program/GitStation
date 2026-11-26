@@ -30,20 +30,16 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use forge_auth::{prove, Action, ProjectCtx};
-use forge_core::{
-    parse_positive_id, ObjectId, ProjectId, PushApplied, PushRecord, PushUpdateKind, PushedCommits,
-    PushedRef, Pusher, RefName, RepoId, RepositoryState, UserId,
-};
+use forge_core::{parse_positive_id, ObjectId, ProjectId, RepoId, RepositoryState, UserId};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::file_commit::{FilePath, RootFiles};
 use forge_hosting::wiki::{CreatedWiki, MarkReady, NewWikiFields, WIKI_BRANCH};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, WriteParts};
+use crate::routes::first_commit::{self, FirstCommit};
 use crate::routes::git::SmartHttp;
-use crate::routes::git_push::{record_applied, PushLog};
 use crate::routes::projects::{self, PREFIX};
 use crate::routes::write::{absent, hosting, json, no_store, write_request};
 
@@ -53,8 +49,6 @@ pub const ONE: &str = "/api/v1/projects/{id}/wiki";
 pub const MAX_BODY: usize = 4 * 1024;
 /// The route name in logs.
 const ROUTE: &str = "wiki_create";
-/// Each git step of the first commit.
-const GIT_TIMEOUT: Duration = Duration::from_secs(20);
 /// The repository's creation (git init, configuration) as a whole.
 const PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Marking the repository ready.
@@ -262,89 +256,23 @@ async fn seed(
     created: &CreatedWiki,
     user: UserId,
 ) -> Result<ObjectId, ForgeError> {
-    let repo = created.project.repository_id;
-    let review = state.review.as_deref().ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal).with_context("reason", "review_unconfigured")
-    })?;
-    let author = review.commit_identity(user).await?;
-    let seeded = forge_doc::wiki::seed(&created.display_name, &created.owner_namespace);
-    let files = seeded
-        .iter()
-        .map(|(path, content)| Ok((FilePath::parse(path)?, content.as_bytes())))
-        .collect::<Result<Vec<_>, ForgeError>>()?;
-    let branch = RefName::parse(WIKI_BRANCH)?;
+    let files = forge_doc::wiki::seed(&created.display_name, &created.owner_namespace);
     let message = format!("Create the wiki of {}", created.owner_namespace);
-    let commit = smart
-        .git
-        .commit_root_files(
-            &smart.storage,
-            repo,
-            &RootFiles {
-                branch: &branch,
-                files: &files,
-                message: &message,
-                author: &author,
-            },
-            GIT_TIMEOUT,
-        )
-        .await;
-    // Whatever the outcome, the ref may have changed.
-    smart.browse.invalidate(repo);
-    let commit = commit?;
-    if let Some(push) = smart.push.clone() {
-        let record = PushRecord {
-            repository_id: repo,
-            updates: vec![PushedRef {
-                name: branch,
-                old: ObjectId::parse(&"0".repeat(commit.as_str().len()))?,
-                new: commit.clone(), // clone: the record owns its ids
-                kind: PushUpdateKind::Create,
-                commits: vec![commit.clone()], // clone: as above
-                total_commits: 1,
-                total_commits_partial: false,
-            }],
-        };
-        let pusher = Pusher {
-            request_id: w.ctx.request_id.clone(), // clone: the record keeps its own
-            user,
-            kind: w.proof.principal().account_kind(),
-            credential_id: w.credential_id,
-            source_ip: None,
-            user_agent: None,
-        };
-        let log = PushLog {
-            request_id: w.ctx.request_id.clone(), // clone: as above
-            project_id: created.project.project_id,
-            repo_id: repo.get(),
-            lang: w.ctx.lang,
+    first_commit::commit(
+        state,
+        smart,
+        w,
+        &FirstCommit {
+            project: created.project.project_id,
+            repo: created.project.repository_id,
+            branch: WIKI_BRANCH,
+            files: &files,
+            message: &message,
             route: ROUTE,
-        };
-        let line = PushApplied::new(&pusher, created.project.project_id, &record);
-        if let Err(err) = line.log_as("final", ROUTE) {
-            log.failure(err);
-        }
-        let commits = PushedCommits {
-            commits: vec![commit.clone()], // clone: the record task owns it
-            complete: true,
-        };
-        let recorder = Arc::clone(&push.recorder);
-        let guard = smart.push_tasks.start();
-        let recorded = tokio::spawn(async move {
-            let _guard = guard;
-            record_applied(&*recorder, &pusher, &record, &commits, &log).await;
-        });
-        if let Err(e) = recorded.await {
-            tracing::warn!(
-                target: "forge_web",
-                event = "forge.wiki.seed_record_failed",
-                request_id = %w.ctx.request_id,
-                error_code = ErrorCode::PushRecordFailed.id(),
-                detail = %e,
-                "the first commit of a wiki could not be recorded as a push"
-            );
-        }
-    }
-    Ok(commit)
+        },
+        user,
+    )
+    .await
 }
 
 /// `POST …/wiki` → `201` the wiki.

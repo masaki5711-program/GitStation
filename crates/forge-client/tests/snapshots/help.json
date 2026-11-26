@@ -9632,6 +9632,139 @@
     {
       "args": [],
       "examples": [
+        "gstn note show",
+        "gstn note show --json"
+      ],
+      "name": "note show",
+      "output": {
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "owner",
+          "default_branch"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notes"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show your notes: the private project <you>/notes (id, path, owner, branch). 404 FG-REPO-0005 when you have none; 404 FG-KNOW-0005 when the notes project was moved or deleted (gstn note create makes new ones)."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn note create"
+      ],
+      "name": "note create",
+      "output": {
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "replaced_project_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "owner",
+          "default_branch",
+          "commit",
+          "replaced_project_id"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/user/notes"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create your notes in one step: the private project <you>/notes with the note type (.forge/doctypes/note.yml, owner_kind: user) on main. Yours only (a person, never an agent or a service account); 409 FG-KNOW-0006 when they exist or the name is taken, 500 FG-KNOW-0007 when a step after the creation failed."
+    },
+    {
+      "args": [
+        {
+          "description": "The note's title (default: the body's first line).",
+          "kind": "option",
+          "name": "--title",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The note's text (default: standard input).",
+          "kind": "option",
+          "name": "--body",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn note new --body \"打ち合わせのメモ\"",
+        "gstn note new --title Ideas < ideas.md"
+      ],
+      "name": "note new",
+      "output": {
+        "required": [
+          "commit_sha",
+          "parent_sha",
+          "branch",
+          "branch_created",
+          "path",
+          "blob_sha",
+          "merge_request",
+          "merge_request_error"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notes",
+        "GET /api/v1/projects/{id}/repository/resolve",
+        "GET /api/v1/projects/{id}/repository/blob",
+        "POST /api/v1/projects/{id}/repository/commits/single-file"
+      ],
+      "scopes": [
+        "read_api",
+        "write_repository"
+      ],
+      "summary": "Save a quick note: one direct commit of N-YYYYMMDD-HHMMSS.md (UTC, doctype note, owner = you) on your notes' main, from --body or standard input. Checked like a push (secrets refused, FG-GIT-0022)."
+    },
+    {
+      "args": [],
+      "examples": [
         "gstn admin service-account list --json"
       ],
       "name": "admin service-account list",

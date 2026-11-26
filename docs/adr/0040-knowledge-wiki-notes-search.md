@@ -107,3 +107,17 @@ M6（計画 20）は Wiki・個人ノート・横断検索（と最小の Issue�
 - **Wiki の失敗で主プロジェクトを止めない（HIGH）**: `check.spec_index` の Wiki の読み（結び付け・プロジェクト・git・時間切れ）が失敗しても、ジョブは失敗にしない。参照は確かめず（`read_failed`）、要約に 1 行、ログ `forge.doc_lint.wiki_unavailable`（warn、元のコードと `request_id`）。文書の API でも Wiki の git が読めなければ参照を `unreadable` にして 200 で答え、`forge.documents.wiki_unavailable` を残す。
 - **検査の結果から Wiki を漏らさない（MEDIUM）**: ジョブはシステムの権限で読み、結果は主プロジェクトを読める全員が読む。だから要約・注記に Wiki のプロジェクトの id・パス・リポジトリの状態を書かない。Wiki が主プロジェクトより非公開（主が `internal`、Wiki が `private`）なら Wiki を読まず、ID ごとの `wiki_ref_broken` を出さずに「Wiki の参照は確かめていません（Wiki がこのプロジェクトより非公開のため）」の 1 行だけにする。
 - **`no_wiki` と `unreadable` の区別（MEDIUM）**: `no_wiki` は結び付けを扱える人（主プロジェクトで `prove(ProjectWikiLink)` が通る Maintainer、結び付けは元々見える）にだけ返す。それ以外の人には、結び付けが無いときも読めない Wiki のときも同じ `unreadable`。拒否の枝は `forge.documents.wiki_denied`（debug、`request_id`）。
+
+## Amendment N1（2026-11-26、個人ノート）
+
+計画 20 の推奨（N-B）どおりに作った。決めたこと:
+
+- **表**: `forge.user_notes`（`user_id` PK、`project_id` UNIQUE、`created_at`）。台帳は `derived`（指す先だけ。プロジェクトの作成は `project.created` で監査される）。プロジェクトの完全削除が行を消す。
+- **Action `PersonalNotesCreate`**: 呼び出し側自身の個人の名前空間で判定。本人だけ（管理者も他人の名前空間には作れない）、人だけ（エージェント・サービスアカウント・ボット・代理・CI は不可）、`api`。作成はさらに名前空間での `ProjectCreate` を呼び出し側で `prove` し、作成のトランザクションで決め直す（W2 と同じ形）。
+- **ルート**: `POST /api/v1/user/notes`（作成 → リポジトリをその場で作る → 最初のコミット `.forge/doctypes/note.yml`・`README.md` → **最後に** 指す行）、`GET /api/v1/user/notes`（registry ではインスタンスの `ProjectList` で判定し、その後でノートのプロジェクトの `ProjectRead` を呼び出し側の資格情報で `prove` する — W4 の読みと同じ形。無ければ `404 FG-REPO-0005`）。保護は付けない（本人が Owner で唯一のメンバー、すばやいメモは `main` への直接のコミット）。最初のコミットの書き込みと push としての記録は W2 と共通の `routes::first_commit` に移した。
+- **すばやいメモは新しいルートにしない**: 既存の簡単な編集のコミット（`RepoPush`、秘密の検査つき）で `N-YYYYMMDD-HHMMSS.md`（UTC）を 1 つ直接コミットする。ID と本文の組み立ては純粋な `forge_doc::note`（`gstn note new`、N2 の画面も同じ形）。同じ秒の 2 つめは上書きしない（`gstn` は先端にそのファイルが無いことを確かめてからコミットし、その後に別の書き込みが作ったものはサーバーが `FG-GIT-0027` で断る）。
+- **`owner_kind: user`**: doctype の新しいキー（値は `user` だけ、ほかは `doctype_owner_kind_invalid`）。lint は純粋なので「本人か」までは見られず、`owner` が 1 人のログイン名の形（1 つの区切り、英数字と `.`・`_`・`-`）でなければ `owner_not_user`。
+- **古い指す先（KNOW-f、`FG-KNOW-0005`）**: 指す先が `<user>/notes` から移動・改名された（`moved`）か削除の猶予中（`deleted`）なら、`GET` は `404 FG-KNOW-0005`。この判定は registry の判定の後（ハンドラー）で行う（独立のセキュリティレビューの MEDIUM: loader で答えると、無効な資格情報や範囲の足りないトークンにも KNOW-f が先に返った）。答えるのは呼び出し側自身の指す先のことだけで、他人の物は何も分からない。`POST` は古い指す先を新しい `<user>/notes` で置き換える（見た古い id と一致するときだけ、同時の作成は 1 つだけ勝つ）。移動の後は古いパスに tombstone（転送）が残るので、本人がそれを解放してから作り直す（自動では解放しない — 解放は `NamespaceTombstoneRelease` という別の判定で、転送を消すかは本人が決める）。削除の猶予中はパス `notes` が残るので、戻すか完全削除まで作り直しは `FG-KNOW-0006 reason=name_taken`。
+- **エラーコード**: `FG-KNOW-0005` NotesProjectMissing（404、info）、`FG-KNOW-0006` NotesCreateRefused（409、info: `already_exists`・`name_taken`）、`FG-KNOW-0007` NotesProvisionFailed（500、warn: `step=provision|seed|link`、指す行は書かない）。runbook `knowledge`「Personal notes」。
+- **検索（K4）**: ノートは非公開のプロジェクトなので、検索の 1 件ずつの判定（`ProjectRead` / `RepoBrowse`）で他人には出ない（`notes_not_in_others_search`）。管理者はすべてのプロジェクトを読めるので管理者の検索には出る — 既存の読みの規則のまま受け入れる。
+- **`gstn note show|create|new`**: `docs/api/agent-tools.toml` ではどれも `excluded`（本人の物で、エージェントの道具にしない）。

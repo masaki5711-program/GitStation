@@ -55,8 +55,10 @@ pub mod notifications;
 pub mod registry;
 pub mod review;
 pub mod search;
-// Plan 20 W2: a project's wiki.
 pub mod specs;
+// Plan 20 N1: a person's notes.
+pub mod note;
+// Plan 20 W2: a project's wiki.
 pub mod wiki;
 // M3 X5: the context API and the MCP server; its tools are the agent tools
 // manifest (docs/api/agent-tools.toml).

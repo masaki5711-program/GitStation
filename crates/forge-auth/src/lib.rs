@@ -110,6 +110,8 @@ mod matrix_rows_search;
 mod matrix_rows_ai_tools;
 // Plan 20 W1 (ADR-0040 §5): the project wiki link.
 mod matrix_rows_wiki;
+// Plan 20 N1 (ADR-0040 §6): a person's notes.
+mod matrix_rows_notes;
 // The CLI distribution (`gstn` downloads).
 mod matrix_rows_clients;
 mod spec_ref;

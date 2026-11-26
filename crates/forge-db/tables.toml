@@ -1127,3 +1127,11 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── Plan 20 N1 (20270111100000, ADR-0040 §6): a person's notes pointer —
+# the notes project's creation is audited (`project.created`); the purge of
+# the project removes the row under `project.purged` ──
+[tables.user_notes]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
