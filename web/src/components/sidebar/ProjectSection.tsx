@@ -45,6 +45,7 @@ export function ProjectSection({
     item(['documents'], 'documents', 'documents', t('docs.title')),
     item(['wiki'], 'wiki', 'wiki', t('wiki.title')),
     item(['pipelines'], 'pipelines', 'pipelines', t('pipelines.title')),
+    item(['deployments'], 'deployments', 'deployments', t('deploy.title')),
     item(['members'], 'members', 'members', t('members.title')),
     ...(canManage
       ? [

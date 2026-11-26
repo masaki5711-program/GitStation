@@ -82,6 +82,7 @@ describe('sidebar in a project', () => {
       ['文書', '/acme/forge-web/-/documents'],
       ['Wiki', '/acme/forge-web/-/wiki'],
       ['パイプライン', '/acme/forge-web/-/pipelines'],
+      ['デプロイ', '/acme/forge-web/-/deployments'],
       ['メンバー', '/acme/forge-web/-/members'],
     ]);
     // The top page is the current one, and only it.

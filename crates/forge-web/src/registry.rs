@@ -247,6 +247,7 @@ impl ScopedRoute {
                 RouteWord::Edit => "/{namespace}/-/edit/{*rest}",
                 RouteWord::New => "/{namespace}/-/new/{*rest}",
                 RouteWord::Wiki => "/{namespace}/-/wiki/{*rest}",
+                RouteWord::Deployments => "/{namespace}/-/deployments/{*rest}",
             },
             ScopedRoute::Git(g) => match g {
                 GitRoute::InfoRefsUploadPack | GitRoute::InfoRefsReceivePack => {

@@ -81,6 +81,10 @@ pub enum RouteWord {
     /// A project's linked wiki (`/-/wiki[/{id}[/edit|/history]]`; plan 20
     /// W4, ADR-0040 §5 releases ADR-0015's reservation of the word).
     Wiki,
+    /// A project's deployments and one deployment's approval screen
+    /// (`/-/deployments`, `/-/deployments/{id}`; plan 19 L5-6, ADR-0039
+    /// amendment L5-6; its data: the deployment API, project readers).
+    Deployments,
 }
 
 impl RouteWord {
@@ -107,6 +111,7 @@ impl RouteWord {
         Self::Edit,
         Self::New,
         Self::Wiki,
+        Self::Deployments,
     ];
 
     /// The URL word (also the log / manifest form).
@@ -133,6 +138,7 @@ impl RouteWord {
             Self::Edit => "edit",
             Self::New => "new",
             Self::Wiki => "wiki",
+            Self::Deployments => "deployments",
         }
     }
 
