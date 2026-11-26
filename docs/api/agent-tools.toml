@@ -500,6 +500,38 @@ params = [
   { name = "job_id", in = "path", type = "integer", required = true, description = "The manual job's id (get_pipeline)." },
 ]
 
+# ── read: knowledge search (plan 20 X1, ADR-0040 Amendment X1) ──
+# One search over projects, merge requests and the default branch's
+# documents (wiki pages and personal notes are documents of their own
+# projects). gstn mcp declares the agent audience, so the server leaves
+# every confidential row out of the read: neither shown nor counted.
+
+[[tool]]
+name = "search_knowledge"
+gstn = "search"
+read_only = true
+method = "GET"
+path = "/api/v1/search"
+description = "Search what you may read across GitStation: projects (path, name, description), merge requests (title, description) and the default branch's documents, wiki pages and notes (title, ids, headings, text). Japanese is matched by 2 characters, other words whole, the last word as a prefix. Each hit has its kind, project, title, iid or document path and a snippet; follow up with get_merge_request or get_document. Confidential documents are never returned. There is no total; a page may be short while has_more is true: pass next_cursor as cursor for the next page."
+params = [
+  { name = "query", in = "query", wire = "q", type = "string", max_bytes = 800, required = true, description = "The search words, 2..=200 characters; keep it short (at most 32 terms, every 2 Japanese characters count as one)." },
+  { name = "scope", in = "query", type = "string", max_bytes = 64, description = "Only these kinds, comma-separated: project, merge_request, document (default every kind)." },
+  { name = "project_id", in = "query", wire = "project", type = "integer", description = "Only hits of this project (gstn project list); for a wiki, its wiki_project_id (get_project_wiki)." },
+  { name = "limit", in = "query", type = "integer", maximum = 50, description = "At most this many hits, 1..=50 (default 20)." },
+  { name = "cursor", in = "query", type = "string", max_bytes = 128, description = "The previous answer's next_cursor: the next page (same query and filters)." },
+]
+
+[[tool]]
+name = "get_project_wiki"
+gstn = "wiki show"
+read_only = true
+method = "GET"
+path = "/api/v1/projects/{id}/wiki"
+description = "A project's wiki, if it has one you may read: its own project id and path (wiki_project_id, wiki_path), name and default branch. Its pages are documents of that project: search_knowledge with project_id, list_documents, get_document."
+params = [
+  { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
+]
+
 # ── kept for people: never a tool (plan 06 §4.5, plan 01 §3.11 C-9, ADR-0017 §4.0, ADR-0025 §4) ──
 # `gstn` names a command; `action` an authz action with no command yet. The
 # gate also refuses a tool on any route of an excluded command (unless a
@@ -590,10 +622,6 @@ reason = "Resolving a discussion changes a merge condition (ADR-0024 #2): people
 gstn = "activity"
 reason = "A person's own activity feed (plan 15 MR 8): the server refuses an agent token (ActivityRead is people_only)."
 
-[[deferred]]
-gstn = "wiki show"
-reason = "Finding a project's wiki (plan 20 W4) joins the knowledge search tool (X1), which reads the wiki's pages for an agent; an agent token can call GET /api/v1/projects/{id}/wiki meanwhile."
-
 [[excluded]]
 gstn = "wiki create"
 reason = "Creating and linking a wiki is a person's decision (plan 20 W1, ADR-0040 §5): the owner project's members gain a role on it, so ProjectWikiLink is people_only and the server refuses an agent token."
@@ -601,10 +629,6 @@ reason = "Creating and linking a wiki is a person's decision (plan 20 W1, ADR-00
 [[excluded]]
 gstn = "wiki unlink"
 reason = "Unlinking a wiki removes the members' inherited role (plan 20 W1): ProjectWikiLink is people_only; the server refuses an agent token."
-
-[[deferred]]
-gstn = "search"
-reason = "The knowledge search tool (plan 20 X1) waits for the wiki sources of the M6 W track (documents arrived with K4), so an agent gets one search over all of them; an agent token can call GET /api/v1/search meanwhile (confidential rows are left out for it)."
 
 [[excluded]]
 action = "DeployApprove"

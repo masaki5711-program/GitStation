@@ -214,7 +214,9 @@ pub(crate) fn parse(raw: Option<&str>) -> Result<Request, ForgeError> {
     }
     let query = SearchQuery::parse(&text).map_err(|r| param_invalid("q", r.as_str()))?;
     let mut kinds: Vec<SourceKind> = Vec::new();
-    if let Some(scope) = scope {
+    if let Some(raw_scope) = scope {
+        // Clients percent-encode the comma (`%2C`, gstn and `gstn mcp`).
+        let scope = percent_decode(raw_scope).ok_or_else(|| param_invalid("scope", "malformed"))?;
         for name in scope.split(',') {
             let kind =
                 SourceKind::parse(name).ok_or_else(|| param_invalid("scope", "invalid_value"))?;
@@ -671,7 +673,10 @@ pub async fn search(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
     let mut res = Json(page).into_response();
     let headers = res.headers_mut();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
-    headers.insert(VARY, HeaderValue::from_static("Authorization, Cookie"));
+    headers.insert(
+        VARY,
+        HeaderValue::from_static("Authorization, Cookie, Forge-Context-Audience"),
+    );
     res
 }
 
