@@ -98,6 +98,8 @@ mod matrix_rows_repo_copy;
 mod matrix_rows_search;
 // Plan 20 W1 (ADR-0040 §5): the project wiki link.
 mod matrix_rows_wiki;
+// The CLI distribution (`gstn` downloads).
+mod matrix_rows_clients;
 mod spec_ref;
 // ── end M3 X1 ──
 

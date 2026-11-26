@@ -33,6 +33,18 @@ pub enum Coverage {
 
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
+    // The gstn distribution: read by `gstn self-update` (reserved, not
+    // implemented yet) and by the desktop setup tool.
+    (
+        "GET",
+        "/api/v1/clients",
+        Coverage::Planned("gstn self-update"),
+    ),
+    (
+        "GET",
+        "/api/v1/clients/gstn/{target}/binary",
+        Coverage::Planned("gstn self-update"),
+    ),
     // M2 MR6: tokens, sessions, users.
     ("GET", "/api/v1/user/tokens", Coverage::Command("token list")),
     (

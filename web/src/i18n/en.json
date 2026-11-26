@@ -741,6 +741,23 @@
       "readOnly": "Only a Maintainer (or higher) can change this."
     }
   },
+  "cli": {
+    "title": "Download the CLI (gstn)",
+    "explain": "gstn lets you use this server from the command line. Pick the one that matches your PC.",
+    "setupLink": "Setup steps",
+    "none": "This server does not distribute gstn. Ask the administrator.",
+    "target": "Platform",
+    "version": "Version",
+    "size": "Size",
+    "sha256": "SHA-256",
+    "download": "Download for {{target}}",
+    "windows": "Windows (x86_64)",
+    "linux": "Linux (x86_64)",
+    "setupTitle": "Setup steps",
+    "stepPlace": "Put the downloaded file in a folder on your PATH (gstn.exe on Windows, gstn on Linux; on Linux make it executable with chmod +x gstn).",
+    "stepVerify": "Check that the file's SHA-256 matches the table above (Windows: certutil -hashfile gstn.exe SHA256, Linux: sha256sum gstn).",
+    "stepLogin": "Save a token made with \"Create a token\" above to a file and sign in with the commands below."
+  },
   "tokens": {
     "active": "Active",
     "agent": "For an AI agent",

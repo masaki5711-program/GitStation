@@ -24,6 +24,8 @@ mod ci;
 mod database;
 // M4 C11: `deploy.*`.
 mod deploy;
+// `clients.*`: the distributed `gstn` binaries.
+mod clients;
 // M3 I1c: `feed.*`.
 mod feed;
 mod git_http;
@@ -72,6 +74,7 @@ pub use auth::{AuthConfig, OidcClaimsSource, OidcConfig, OidcSigningAlg};
 pub use auto_merge::AutoMergeConfig;
 pub use backup::{BackupConfig, BackupKey};
 pub use ci::{CiConfig, GpuEvalPolicy};
+pub use clients::{ClientsConfig, DIR_KEY as CLIENTS_DIR_KEY};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use deploy::{DeployConfig, SSH_KEY_FILE_KEY as DEPLOY_SSH_KEY_FILE_KEY};
 pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};
@@ -109,6 +112,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_HOSTING_",
     // M3 R2: `review.*`.
     "FORGE_REVIEW_",
+    // `clients.*`.
+    "FORGE_CLIENTS_",
     // M3 I1c: `feed.*`.
     "FORGE_FEED_",
     // M3 O3: `maintenance.*`.
@@ -235,6 +240,8 @@ pub struct Config {
     pub merge_queue: MergeQueueConfig,
     /// `auto_merge.*` (the auto-merge worker's safety-net period, plan 18 S3).
     pub auto_merge: AutoMergeConfig,
+    /// `clients.*` (the distributed `gstn` binaries).
+    pub clients: ClientsConfig,
     /// `feed.*` (the integrations' event feed, M3 I1c).
     pub feed: FeedConfig,
     /// `maintenance.*` (the repository maintenance, M3 O3).
@@ -525,6 +532,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         jobs: JobsConfig::load(get)?,
         merge_queue: MergeQueueConfig::load(get)?,
         auto_merge: AutoMergeConfig::load(get)?,
+        clients: ClientsConfig::load(get)?,
         feed: FeedConfig::load(get)?,
         maintenance: MaintenanceConfig::load(get)?,
         notify: NotifyConfig::load(get)?,

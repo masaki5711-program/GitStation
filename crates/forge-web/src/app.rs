@@ -178,6 +178,10 @@ pub struct AppState {
     /// at once and per minute, all persons together (`FG-WEB-0010
     /// route=portal_widgets`), taken before the token is verified.
     pub portal_gate: Arc<routes::portal_widgets::WidgetGate>,
+    /// The `gstn` binaries this server distributes (`clients.dir`;
+    /// `forge serve` always sets it; without it the client routes answer
+    /// `FG-SYS-0001 reason=clients_unconfigured`).
+    pub clients: Option<Arc<routes::clients::ClientDist>>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -244,7 +248,15 @@ impl AppState {
             ssh_info: None,
             portal: None,
             portal_gate: Arc::default(),
+            clients: None,
         }
+    }
+
+    /// The `gstn` distribution directory (runbook cli-distribution).
+    #[must_use]
+    pub fn with_clients(mut self, clients: routes::clients::ClientDist) -> Self {
+        self.clients = Some(Arc::new(clients));
+        self
     }
 
     /// The PFS portal's widget authenticator (ADR-0036).
@@ -613,6 +625,22 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::users::me,
         )
         .responds::<routes::users::UserSelf>(Verb::Get, routes::users::PATH)
+        // The `gstn` CLI distribution (runbook cli-distribution).
+        .route(
+            Verb::Get,
+            routes::clients::LIST,
+            Action::ClientDownload,
+            "The gstn binaries this server distributes (only the targets present), with version, SHA-256, size and download path",
+            routes::clients::list,
+        )
+        .responds::<routes::clients::ClientList>(Verb::Get, routes::clients::LIST)
+        .route(
+            Verb::Get,
+            routes::clients::BINARY,
+            Action::ClientDownload,
+            "Download one gstn binary (target windows-x86_64 or linux-x86_64; application/octet-stream, X-Checksum-Sha256; 404 FG-WEB-0012 when not shipped)",
+            routes::clients::binary,
+        )
         // M2 MR3: the browser session and its CSRF token (sessions only).
         .route(
             Verb::Get,

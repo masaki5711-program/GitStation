@@ -3740,6 +3740,34 @@ fix = "The portal's settings form sends only the declared values; a 422 means th
 test = "a_bad_widget_setting_is_422"
 
 [[error]]
+code = "FG-WEB-0012"
+name = "ClientBinaryNotFound"
+http_status = 404
+severity = "info"
+user_message_ja = "この環境向けの gstn はこのサーバーで配布していません。設定画面の「CLI（gstn）をダウンロード」で配布中のものを確認してください。"
+user_message_en = "This server does not distribute gstn for that platform. See \"Download the CLI (gstn)\" in the settings for the available ones."
+user_message_id = "Server ini tidak menyediakan gstn untuk platform tersebut. Lihat \"Unduh CLI (gstn)\" di pengaturan untuk yang tersedia."
+cause = "`GET /api/v1/clients/gstn/{target}/binary` named a target that is not one of the known ones (`windows-x86_64`, `linux-x86_64`), or a known target that this installation does not ship: the client directory (`clients.dir`, default `<install>/share/forge/clients`) has no manifest entry for it, or the entry's file is missing. The listing `GET /api/v1/clients` omits such targets."
+diagnosis = "The log event carries `reason` (`unknown_target` with `target` cut to 32 characters, `not_in_manifest`, `no_manifest`, `file_missing`) and `target`. On the server (read-only): list the client directory and read its `manifest.json` (runbook cli-distribution)."
+fix = "The caller picks a target the listing shows. If a target should be shipped, the image build (ops/gitlab-trial/Dockerfile, stage `gstn`) must produce it; redeploy an image that contains it (runbook cli-distribution)."
+runbook = "cli-distribution"
+test = "an_unknown_or_absent_target_is_404"
+
+[[error]]
+code = "FG-WEB-0013"
+name = "ClientDistributionInvalid"
+http_status = 500
+severity = "warn"
+user_message_ja = "CLI の配布ファイルに問題があり、ダウンロードできません。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The CLI distribution on the server is broken, so it cannot be downloaded. Contact the administrator with the request ID."
+user_message_id = "Distribusi CLI di server rusak sehingga tidak dapat diunduh. Hubungi administrator dengan ID permintaan."
+cause = "The client directory's `manifest.json` (written by the image build) could not be used: unreadable, larger than 64 KiB, not the expected JSON (`{\"clients\":[{\"name\":\"gstn\",\"target\",\"version\",\"sha256\",\"size\"}]}`), an unknown target or name, a sha256 that is not 64 lower-case hex digits, a duplicate target; or a shipped file whose size differs from the manifest (a partial copy, or a file replaced without a new manifest); or reading the directory timed out. Nothing is served for an entry that does not match."
+diagnosis = "The log event carries `reason` (`manifest_unreadable`, `manifest_too_large`, `manifest_invalid` with `rule`, `size_mismatch` with `target`, `expected`, `actual`, `timeout` with `operation`, `read_failed`) and `dir`. Read-only: `ls -l` the client directory and compare each file's size and `sha256sum` with `manifest.json` (runbook cli-distribution)."
+fix = "Redeploy an image built by the pipeline (the build writes the binaries and the manifest together). Never edit the manifest by hand on the server (runbook cli-distribution)."
+runbook = "cli-distribution"
+test = "a_size_mismatch_is_a_broken_distribution"
+
+[[error]]
 code = "FG-INT-0022"
 name = "PortalNewsAttemptFailed"
 http_status = 502

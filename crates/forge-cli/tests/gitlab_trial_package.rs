@@ -248,7 +248,12 @@ fn the_worker_is_configured_to_deploy_over_ssh() {
     let compose = read("ops/gitlab-trial/compose.yml");
     assert!(compose.contains("FORGE_DEPLOY_ALLOWED_NETWORKS: ${DEPLOY_ALLOWED_NETWORKS:-}"));
     let dockerfile = read("ops/gitlab-trial/Dockerfile");
-    let install = dockerfile
+    // The runtime stage's install (the gstn build stage installs mingw-w64).
+    let runtime = dockerfile
+        .split_once(" AS runtime")
+        .expect("the runtime stage")
+        .1;
+    let install = runtime
         .lines()
         .find(|l| l.contains("apt-get install"))
         .expect("the runtime apt-get install");
@@ -526,4 +531,28 @@ fn the_dispatcher_accepts_only_script_verb_sha() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// The image ships the gstn binaries and their manifest at forge's default
+/// `clients.dir` (`/usr/local/bin/forge` → `/usr/local/share/forge/clients`):
+/// both targets built in the image, the manifest written beside them.
+#[test]
+fn the_image_ships_gstn_at_the_default_clients_dir() {
+    let dockerfile = read("ops/gitlab-trial/Dockerfile");
+    let code = code_lines(&dockerfile);
+    assert!(code.contains("FROM forge AS gstn"));
+    assert!(code.contains("cargo build --release --locked -p forge-client --bin gstn \\"));
+    assert!(code.contains("--target x86_64-pc-windows-gnu"));
+    assert!(code.contains("gcc-mingw-w64-x86-64"));
+    for file in [
+        "gstn-linux-x86_64",
+        "gstn-windows-x86_64.exe",
+        "manifest.json",
+    ] {
+        assert!(code.contains(&format!("/out/clients/{file}")), "{file}");
+    }
+    assert!(code.contains("COPY --from=forge /out/forge /usr/local/bin/forge"));
+    assert!(code.contains("COPY --from=gstn /out/clients /usr/local/share/forge/clients"));
+    // forge.toml leaves clients.dir to the default.
+    assert!(!read("ops/gitlab-trial/forge.toml").contains("[clients]"));
 }

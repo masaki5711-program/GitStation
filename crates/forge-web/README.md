@@ -149,6 +149,15 @@ caller's SSH keys: `GET|POST /api/v1/user/ssh-keys`, `DELETE
   is_agent, token_scopes }` from the principal and what the authenticator
   read with the token (`TokenIdentity`, no second lookup); `is_admin` is the
   account flag. `Cache-Control: private, no-store`.
+- Routes (`src/routes/clients.rs`, runbook cli-distribution): `GET /api/v1/clients`
+  and `GET /api/v1/clients/gstn/{target}/binary` (`ClientDownload`,
+  `read_api`, any active signed-in user, never CI or act-as): the `gstn`
+  binaries of `AppState::clients` (`clients.dir`, default
+  `<forge dir>/../share/forge/clients`; `manifest.json` written by the image
+  build). `{target}` is a closed enum (`windows-x86_64`, `linux-x86_64`),
+  never a path; the file name is fixed per target. Unknown / not shipped:
+  `404 FG-WEB-0012`; a broken manifest or a size mismatch: `500
+  FG-WEB-0013`. Every file operation and streamed chunk is bounded (10 s).
 - Routes (M1 phase 8b MR7b, `src/routes/lists.rs`): `GET|HEAD /api/v1/projects`
   (`ProjectList`) and `/api/v1/groups` (`GroupList`), `read_api`, any active
   signed-in user. Every row is decided again by `authorize()` (projects:

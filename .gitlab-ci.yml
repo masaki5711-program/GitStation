@@ -57,6 +57,10 @@ build:image:
       --label "io.gitstation.pipeline=$CI_PIPELINE_ID" --label io.gitstation.trial=1
       -t "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" .
     - docker run --rm --entrypoint /usr/local/bin/forge "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" --version
+    # The distributed gstn binaries (runbook cli-distribution): the manifest
+    # is there and the linux binary runs.
+    - docker run --rm --entrypoint /bin/cat "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" /usr/local/share/forge/clients/manifest.json
+    - docker run --rm --entrypoint /usr/local/share/forge/clients/gstn-linux-x86_64 "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" --version
     # Bounded disk: keep this commit's image, any image a container uses, and the 3 newest others.
     # The runner shell uses pipefail, so a filter that may match nothing ends in `|| true`.
     - |

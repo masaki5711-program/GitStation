@@ -1972,6 +1972,62 @@
         ],
         "type": "object"
       },
+      "ClientItem": {
+        "additionalProperties": false,
+        "description": "One distributed binary.",
+        "properties": {
+          "download_path": {
+            "description": "Where to `GET` the bytes (same credentials).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Always `gstn`.",
+            "type": "string"
+          },
+          "sha256": {
+            "description": "Lower-case hex SHA-256 of the file.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "description": "`windows-x86_64` or `linux-x86_64`.",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "target",
+          "version",
+          "sha256",
+          "size",
+          "download_path"
+        ],
+        "type": "object"
+      },
+      "ClientList": {
+        "additionalProperties": false,
+        "description": "`200` of the list.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ClientItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "CodeownerStatusBody": {
         "additionalProperties": false,
         "description": "One CODEOWNERS rule the changed paths need.",
@@ -16758,6 +16814,64 @@
         },
         "summary": "A user's active web sessions (administrators)",
         "x-forge-action": "AdminSessionList"
+      }
+    },
+    "/api/v1/clients": {
+      "get": {
+        "operationId": "get_api_v1_clients",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The gstn binaries this server distributes (only the targets present), with version, SHA-256, size and download path",
+        "x-forge-action": "ClientDownload"
+      }
+    },
+    "/api/v1/clients/gstn/{target}/binary": {
+      "get": {
+        "operationId": "get_api_v1_clients_gstn_target_binary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Download one gstn binary (target windows-x86_64 or linux-x86_64; application/octet-stream, X-Checksum-Sha256; 404 FG-WEB-0012 when not shipped)",
+        "x-forge-action": "ClientDownload"
       }
     },
     "/api/v1/groups": {
