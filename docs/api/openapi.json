@@ -26840,8 +26840,8 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "The caller's notes — the private project <user>/notes: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again)",
-        "x-forge-action": "ProjectRead"
+        "summary": "The caller's notes — the private project <user>/notes, proved ProjectRead with the caller's own credential: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again)",
+        "x-forge-action": "ProjectList"
       },
       "post": {
         "operationId": "post_api_v1_user_notes",

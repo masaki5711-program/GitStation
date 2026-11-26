@@ -2376,7 +2376,7 @@
     "word": "fixed"
   },
   {
-    "action": "ProjectRead",
+    "action": "ProjectList",
     "method": "GET",
     "path": "/api/v1/user/notes",
     "people_only": false,
