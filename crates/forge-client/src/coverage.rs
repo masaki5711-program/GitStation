@@ -33,17 +33,17 @@ pub enum Coverage {
 
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
-    // The gstn distribution: read by `gstn self-update` (reserved, not
-    // implemented yet) and by the desktop setup tool.
+    // The gstn distribution: the browser download and the desktop setup
+    // tool fetch it; `gstn self-update` is reserved, not implemented.
     (
         "GET",
         "/api/v1/clients",
-        Coverage::Planned("gstn self-update"),
+        Coverage::NotForCli("the gstn binaries themselves, for the browser download and the desktop setup tool (gstn self-update is reserved, not built)"),
     ),
     (
         "GET",
         "/api/v1/clients/gstn/{target}/binary",
-        Coverage::Planned("gstn self-update"),
+        Coverage::NotForCli("the gstn binaries themselves, for the browser download and the desktop setup tool (gstn self-update is reserved, not built)"),
     ),
     // M2 MR6: tokens, sessions, users.
     ("GET", "/api/v1/user/tokens", Coverage::Command("token list")),
