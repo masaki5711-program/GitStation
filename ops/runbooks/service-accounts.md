@@ -177,4 +177,6 @@ FROM forge.users WHERE kind = 'service_account';
 
 - `act_as` は **連携（kanflow）のサービスアカウントのトークンだけ** に付けられる。人のトークンに付けると `FG-AUTH-0008 reason=act_as_requires_service_account`、エージェントと宣言したトークン（`is_agent`）と同時には `FG-AUTH-0008 reason=act_as_agent_token`。何も書かない。
 - `act_as` はほかのどのスコープも満たさず、どのスコープにも満たされない（`api`・`admin` でも）。kanflow の承認には `act_as` と `merge_approve` の両方が要る（`read_api` も、読み取りのため）。
+- **kanflow 連携のトークンのスコープは `read_api`、`api`、`act_as`**（kanflow から MR を承認するなら、さらに `merge_approve`）。**AI エージェント用のトークンではない**: 発行の画面の「AI エージェント用」は付けない（付けると `act_as` は選べず、API では `act_as_agent_token` で断られる）。管理画面（設定 → サービスアカウント → トークンを発行）でも B の API でも同じ: `scopes: ['read_api', 'api', 'act_as']`（承認するなら `'merge_approve'` を足す）、`is_agent` は付けないか `false`。
+- 結びつけの検索（`RepositorySearch`、`act_as_rule=list_as_person`）が `forge.auth.act_as outcome=refused error_code=FG-AUTH-0002` で断られたら、そのトークンに `act_as` が無い（`token_scopes` に出る）。上のスコープで新しいトークンを発行して差し替え（C の手順）、古いものを失効させる。`act_as` があれば、検索は本人の権限で決まる（一覧は誰でも、候補は本人が Maintainer のプロジェクトだけ）。
 - 代理の診断・鍵・止め方は runbook act-as。

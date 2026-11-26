@@ -89,6 +89,9 @@ describe('service accounts: who sees them', () => {
     await screen.findByText('You have no tokens.');
     expect(screen.queryByRole('link', { name: 'Service accounts' })).toBeNull();
     expect(server.to('GET', LIST)).toHaveLength(0);
+    // Acting for a person is a service account's only (ADR-0025 §2).
+    expect(screen.getByLabelText('read_api')).toBeTruthy();
+    expect(screen.queryByLabelText('act_as')).toBeNull();
   });
 
   it('an administrator has the tab and the list', async () => {
@@ -246,6 +249,74 @@ describe('service accounts: tokens', () => {
     expect(screen.queryByTestId('token-secret')).toBeNull();
     expect(document.body.textContent).not.toContain('SYNTHETICSECRET');
     await backToListReadAgain(server);
+  });
+
+  it('offers act_as with its description, and an AI-agent token never gets it', async () => {
+    const { server } = backend({ [`POST ${ONE}/tokens`]: () => json(201, issued) });
+    await renderApp({ fetch: server.fetch, path: `${PATH}&account=3`, lang: 'en' });
+    await screen.findByRole('row', { name: /ci/ });
+    const actAs = screen.getByLabelText<HTMLInputElement>('act_as');
+    expect(actAs.disabled).toBe(false);
+    expect(screen.getByText(/on behalf of a person \(searching and confirming links/)).toBeTruthy();
+    fireEvent.click(actAs);
+    expect(actAs.checked).toBe(true);
+    fireEvent.click(screen.getByLabelText('For an AI agent'));
+    expect(actAs.checked).toBe(false);
+    expect(actAs.disabled).toBe(true);
+    expect(screen.getByText('An AI agent token cannot act on behalf of a person, so act_as cannot be chosen.')).toBeTruthy();
+    expect(actAs.getAttribute('aria-describedby')).toContain('sa-actas-agent');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'kf' } });
+    click('Issue token');
+    await screen.findByTestId('token-secret');
+    expect(server.to('POST', `${ONE}/tokens`)[0]?.body).toEqual({
+      name: 'kf',
+      scopes: ['read_repository'],
+      expires_in_days: 90,
+      is_agent: true,
+    });
+  });
+
+  it('turning the agent mark off lets act_as be chosen again, and sends it', async () => {
+    const { server } = backend({ [`POST ${ONE}/tokens`]: () => json(201, issued) });
+    await renderApp({ fetch: server.fetch, path: `${PATH}&account=3`, lang: 'en' });
+    await screen.findByRole('row', { name: /ci/ });
+    const agent = screen.getByLabelText('For an AI agent');
+    fireEvent.click(agent);
+    fireEvent.click(agent);
+    const actAs = screen.getByLabelText<HTMLInputElement>('act_as');
+    expect(actAs.disabled).toBe(false);
+    expect(screen.queryByText(/An AI agent token cannot act/)).toBeNull();
+    fireEvent.click(screen.getByLabelText('read_api'));
+    fireEvent.click(screen.getByLabelText('api'));
+    fireEvent.click(actAs);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'kanflow' } });
+    click('Issue token');
+    await screen.findByTestId('token-secret');
+    expect(server.to('POST', `${ONE}/tokens`)[0]?.body).toEqual({
+      name: 'kanflow',
+      scopes: ['read_repository', 'read_api', 'api', 'act_as'],
+      expires_in_days: 90,
+      is_agent: false,
+    });
+  });
+
+  it('more than 8 scopes is refused before sending, and exactly 8 is sent', async () => {
+    const { server } = backend({ [`POST ${ONE}/tokens`]: () => json(201, issued) });
+    await renderApp({ fetch: server.fetch, path: `${PATH}&account=3`, lang: 'en' });
+    await screen.findByRole('row', { name: /ci/ });
+    for (const s of ['write_repository', 'read_api', 'api', 'merge_execute', 'merge_approve', 'user_email', 'user_employee_number', 'act_as']) {
+      fireEvent.click(screen.getByLabelText(s));
+    }
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'all' } });
+    click('Issue token');
+    expect((await screen.findAllByText('A token can have at most 8 scopes.')).length).toBeGreaterThan(0);
+    expect(server.to('POST', `${ONE}/tokens`)).toHaveLength(0);
+    fireEvent.click(screen.getByLabelText('user_email'));
+    click('Issue token');
+    await screen.findByTestId('token-secret');
+    const sent = server.to('POST', `${ONE}/tokens`);
+    expect(sent).toHaveLength(1);
+    expect((sent[0]?.body as { scopes: string[] }).scopes).toHaveLength(8);
   });
 
   it('a refused issue shows the reason and the request id, and no secret', async () => {
