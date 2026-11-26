@@ -15,7 +15,9 @@
 
 mod act_as;
 mod act_as_ctx;
+// Plan 16 A5: the marketplace's publishing routes.
 mod action;
+mod agent_ctx;
 mod authorize;
 mod auto_merge;
 // M4 C14: the autofix bot's arm.
@@ -120,6 +122,7 @@ mod spec_ref;
 pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action, CiRule};
+pub use agent_ctx::{AgentPartCtx, AgentPartTarget};
 pub use authorize::{authorize, group_seen, GroupSeen};
 pub use auto_merge::{auto_merge_may, AutoMergeCtx};
 pub use autofix::{autofix_may, AutofixCtx};

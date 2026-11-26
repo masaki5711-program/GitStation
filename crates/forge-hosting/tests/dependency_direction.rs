@@ -128,6 +128,21 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-errors",
         ],
     ),
+    // Plan 16 A5 (contract 9, ADR-0032 Amendment A5): the agent marketplace
+    // — reads the parts repository with forge-git, records through
+    // forge-db, decided in forge-auth, the pure part checks of forge-agent;
+    // never another feature crate.
+    (
+        "forge-marketplace",
+        &[
+            "forge-auth",
+            "forge-git",
+            "forge-db",
+            "forge-core",
+            "forge-agent",
+            "forge-errors",
+        ],
+    ),
     // Plan 19 L5-3 (ADR-0039): the local LLM gateway — records through
     // forge-db, the pure contract in forge-core; never another feature crate.
     // L5-7b: the diagnosis read is decided in forge-auth (authorize_advice).
@@ -153,6 +168,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-deploy",
             // Plan 19 L5-7b: the diagnosis read route serves forge-llm advice.
             "forge-llm",
+            "forge-marketplace",
             "forge-auth",
             "forge-git",
             "forge-core",
@@ -173,6 +189,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-notify",
             "forge-pipelines",
             "forge-deploy",
+            "forge-marketplace",
             "forge-llm",
             "forge-auth",
             "forge-git",

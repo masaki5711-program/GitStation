@@ -274,7 +274,7 @@ impl Browser {
     /// The refs of `repo` that may name one of `candidates` (full names):
     /// the cached list when it is complete, else git asked for exactly
     /// those names.
-    async fn lookup(
+    pub(super) async fn lookup(
         &self,
         repo: RepoId,
         candidates: &[RefName],

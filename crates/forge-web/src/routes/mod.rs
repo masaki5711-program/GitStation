@@ -5,6 +5,8 @@
 
 // M3 S2: the act-as confirmation and claim (ADR-0025 §5).
 pub mod act_as;
+// Plan 16 A5: the agent marketplace.
+pub mod agent_parts;
 pub mod assets;
 pub mod auth;
 // M4 C9: auto-merge's mode and emergency stops.

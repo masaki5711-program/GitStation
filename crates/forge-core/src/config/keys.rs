@@ -417,6 +417,10 @@ pub const KEYS: &[Key] = &[
     boolean("org.allow_large_shrink", "FORGE_ORG_ALLOW_LARGE_SHRINK"),
     // Plan 16 A3: the agent marketplace's signing keys (ADR-0032, ADR-0013).
     text("agent.signing_keys_file", "FORGE_AGENT_SIGNING_KEYS_FILE"),
+    // Plan 16 A5: the parts repository and the MCP allow-list of the publish
+    // step's scan (ADR-0032 Amendment A5).
+    text("agent.parts_repository", "FORGE_AGENT_PARTS_REPOSITORY"),
+    text("agent.mcp_allowed_hosts", "FORGE_AGENT_MCP_ALLOWED_HOSTS"),
     // Plan 19 L5-3 (ADR-0039): the local LLM gateway.
     boolean("llm.enabled", "FORGE_LLM_ENABLED"),
     text("llm.endpoint", "FORGE_LLM_ENDPOINT"),

@@ -160,6 +160,76 @@ impl AgentKeyFile {
     }
 }
 
+/// The seed of the key that signs new versions (the file's highest kid),
+/// for the marketplace's publish step only (plan 16 A5, ADR-0032
+/// Amendment A5). forge-core still never signs: it hands the seed to the
+/// one caller `clippy.toml` allows ([`read_signing_seed`] is a disallowed
+/// method elsewhere), which signs and drops it at once. The seed is
+/// zeroized on drop; `Debug` shows the kid only.
+pub struct SigningSeed {
+    kid: u32,
+    seed: Zeroizing<[u8; 32]>,
+}
+
+impl SigningSeed {
+    /// The key id the signature names (the lock's `key_id`).
+    pub fn kid(&self) -> u32 {
+        self.kid
+    }
+
+    /// The 32-byte Ed25519 seed.
+    pub fn seed(&self) -> &[u8; 32] {
+        &self.seed
+    }
+}
+
+impl std::fmt::Debug for SigningSeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SigningSeed")
+            .field("kid", &self.kid)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Read `agent.signing_keys_file` at `path` like [`AgentKeyFile::read`]
+/// (the same checks and the same `FG-AGENT-0014` reasons) and return the
+/// signing key's seed (module docs; [`SigningSeed`]).
+pub fn read_signing_seed(path: &Path) -> Result<SigningSeed, ForgeError> {
+    let text = Zeroizing::new(
+        crate::config::read_secret_text(SIGNING_KEYS_KEY, path, MAX_KEYS_BYTES)
+            .map_err(from_secret_error)?,
+    );
+    check_owner(path)?;
+    let file = AgentKeyFile::parse(&text).map_err(|e| e.with_context("path", path.display()))?;
+    signing_seed_of(&text, file.signing_kid())
+}
+
+/// The seed of `kid` in a file [`AgentKeyFile::parse`] accepted.
+fn signing_seed_of(text: &str, kid: u32) -> Result<SigningSeed, ForgeError> {
+    let wanted = kid.to_string();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        if parts.next() != Some(wanted.as_str()) {
+            continue;
+        }
+        let bytes = Zeroizing::new(
+            parts
+                .next()
+                .and_then(crate::config::decode_hex)
+                .filter(|b| b.len() == 32)
+                .ok_or_else(|| key_file_invalid("signing_key_invalid").with_context("kid", kid))?,
+        );
+        let mut seed = Zeroizing::new([0u8; 32]);
+        seed.copy_from_slice(&bytes);
+        return Ok(SigningSeed { kid, seed });
+    }
+    Err(key_file_invalid("signing_key_invalid").with_context("kid", kid))
+}
+
 /// Linux: the file belongs to the user forge runs as (`/proc/self` is
 /// owned by the process's effective user). Another owner could replace
 /// the key; refused as `insecure_permissions` with `rule=owner`.

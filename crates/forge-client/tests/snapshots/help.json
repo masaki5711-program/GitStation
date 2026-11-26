@@ -7337,6 +7337,181 @@
       "summary": "Check the repository's Claude Code configuration on this computer: every managed file (.claude/, CLAUDE.md, .mcp.json) must match .gitstation/agent.lock.json (FG-AGENT-0007), and every part's digest and Ed25519 signature must verify with the local public keys (FG-AGENT-0002; a missing or stale key list is FG-AGENT-0003). With --part, check one part directory instead: part.toml, install paths (FG-AGENT-0001), the static scan for undeclared commands, network or permissions (FG-AGENT-0005) and MCP hosts outside the list (FG-AGENT-0013), and print its digest. Exit 1 with the most serious problem's code. Local only: revocation is not checked."
     },
     {
+      "args": [],
+      "examples": [
+        "gstn agent keys",
+        "gstn agent keys --json"
+      ],
+      "name": "agent keys",
+      "output": {
+        "required": [
+          "keys"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/agent-keys"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The public keys that sign agent parts (kid, base64 public key, created, retired, revoked). --json prints the agent-keys.json that `gstn agent verify` reads from the gstn configuration directory."
+    },
+    {
+      "args": [
+        {
+          "description": "skill, agent, rule, hook, command, mcp or adapter.",
+          "kind": "option",
+          "name": "--kind",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "beta or stable.",
+          "kind": "option",
+          "name": "--channel",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A part of the slug.",
+          "kind": "option",
+          "name": "--q",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn part list --kind hook --channel stable --json"
+      ],
+      "name": "part list",
+      "output": {
+        "required": [
+          "parts"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/agent-parts"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The agent parts catalog (plan 16): each part with its newest version that is not revoked (slug, version, channel, state, digest, capabilities). Every signed-in account."
+    },
+    {
+      "args": [
+        {
+          "description": "The part's slug.",
+          "kind": "positional",
+          "name": "slug",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "One version (x.y.z).",
+          "kind": "positional",
+          "name": "version",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn part view guard-hook",
+        "gstn part view guard-hook 1.2.0 --json"
+      ],
+      "name": "part view",
+      "output": {
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/agent-parts/{slug}",
+        "GET /api/v1/agent-parts/{slug}/versions/{version}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "One agent part's published versions, newest first; with a version, that version with its files (path, mode, sha256, size), its source commit, digest, signature and key id."
+    },
+    {
+      "args": [
+        {
+          "description": "The part's slug.",
+          "kind": "positional",
+          "name": "slug",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn part publish guard-hook"
+      ],
+      "name": "part publish",
+      "output": {
+        "required": [
+          "action",
+          "web_session_only",
+          "page"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Publishing a tag is decided only in a web session of a person (a token is refused, ADR-0032 Amendment A4): prints the marketplace page to open. Nothing is sent."
+    },
+    {
+      "args": [
+        {
+          "description": "The part's slug.",
+          "kind": "positional",
+          "name": "slug",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn part promote guard-hook"
+      ],
+      "name": "part promote",
+      "output": {
+        "required": [
+          "action",
+          "web_session_only",
+          "page"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Moving a version from beta to stable is decided only in a web session of a person: prints the marketplace page to open. Nothing is sent."
+    },
+    {
+      "args": [
+        {
+          "description": "The part's slug.",
+          "kind": "positional",
+          "name": "slug",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn part revoke guard-hook"
+      ],
+      "name": "part revoke",
+      "output": {
+        "required": [
+          "action",
+          "web_session_only",
+          "page"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Revoking a version is decided only in a web session of a person: prints the marketplace page to open. Nothing is sent."
+    },
+    {
       "args": [
         {
           "description": "The release file ({manifest, digest, key_id, signature}).",

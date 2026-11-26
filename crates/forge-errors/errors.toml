@@ -3158,6 +3158,45 @@ fix = "Nothing on the server: another Maintainer of the publishing group (or an 
 test = "publish_denied_for_tag_author"
 
 [[error]]
+code = "FG-AGENT-0004"
+name = "PartChecksNotGreen"
+http_status = 409
+severity = "info"
+user_message_ja = "この部品の版は、まだ公開できる状態ではありません（CI が成功していない、または main に入っていないコミットの tag です）。CI を緑にしてから、もう一度公開してください。"
+user_message_en = "This part version cannot be published yet (its CI has not succeeded, or the tag names a commit that is not on the default branch). Make CI green, then publish again."
+user_message_id = "Versi bagian ini belum dapat diterbitkan (CI-nya belum berhasil, atau tag menunjuk commit yang tidak ada di cabang default). Buat CI hijau, lalu terbitkan lagi."
+cause = "Plan 16 A5 (ADR-0032 Amendment A5): `POST /api/v1/agent-parts/{slug}/versions` refused the tag because what it names has not been checked: `reason=not_on_default_branch` (the tagged commit is not reachable from the parts repository's default branch: it never went through a merge request), `pipeline_missing` (no pipeline of the parts project ran on that commit), `pipeline_not_green` (the newest pipeline on that commit is not `success`; `status` names it). Decided after `authorize()` and before anything is signed or written. Nothing was published."
+diagnosis = "The route's log event carries `slug`, `version`, `tag`, `sha`, `reason`, `pipeline_id` and `status`. `gstn ci list --project <parts project>` shows the commit's pipelines; `git merge-base --is-ancestor <sha> <default branch>` on the parts repository tells whether the commit was merged."
+fix = "Nothing on the server: merge the part's change through a merge request, wait for (or re-run) its pipeline on the tagged commit until it succeeds, then publish again. A tag made on an unmerged commit is deleted and made again on the merged one."
+test = "publish_refused_when_pipeline_not_green"
+
+[[error]]
+code = "FG-AGENT-0006"
+name = "PartVersionRevoked"
+http_status = 409
+severity = "warn"
+user_message_ja = "この部品の版は取り消されています。取り消した版は戻せません。新しい版を公開してください。"
+user_message_en = "This part version has been revoked. A revoked version is final: publish a new version."
+user_message_id = "Versi bagian ini telah dicabut. Versi yang dicabut bersifat final: terbitkan versi baru."
+cause = "Plan 16 A5 (ADR-0032 Amendment A5): a promotion (`POST …/versions/{v}/promote`) or a second revocation (`POST …/versions/{v}/revoke`) named a version whose state is `revoked` (a revoked version is final, the A3 guard). `reason`: `revoked`. Nothing was changed. From A7 the builder and `forge/agent-lock` raise the same code when a lock names a revoked version."
+diagnosis = "The route's log event carries `slug`, `version` and `request_id`; `gstn part view <slug> <version>` shows the state, who revoked it and why."
+fix = "Nothing on the server: publish a fixed version with a new version number (a revoked version is never restored), and promote that one."
+test = "promote_of_a_revoked_version_is_refused"
+
+[[error]]
+code = "FG-AGENT-0012"
+name = "PartVersionExists"
+http_status = 409
+severity = "info"
+user_message_ja = "この部品のこの版はもう公開されています。公開した版は変えられません。版の番号を上げて、新しい tag を作ってください。"
+user_message_en = "This version of the part is already published, and a published version never changes. Raise the version number and make a new tag."
+user_message_id = "Versi bagian ini sudah diterbitkan, dan versi yang sudah diterbitkan tidak pernah berubah. Naikkan nomor versi dan buat tag baru."
+cause = "Plan 16 A5 (ADR-0032 Amendment A5, plan 16 §3): `POST /api/v1/agent-parts/{slug}/versions` named a version already in `forge.agent_part_versions` (unique (part, version)). A published version is frozen at publication — moving the tag afterwards changes nothing (`moved_tag_after_publish_has_no_effect`). `reason`: `version_exists`. Also `reason=kind_changed` / `source_changed` when the part's `part.toml` names another kind, or the tag is in another project, than the part's first version. Nothing was written."
+diagnosis = "The route's log event carries `slug`, `version`, `tag` and `request_id`; `gstn part view <slug>` lists the published versions with their source commit and digest."
+fix = "Nothing on the server: bump `version` in `part.toml`, merge it, tag `<slug>/v<new version>` and publish that tag."
+test = "moved_tag_after_publish_has_no_effect"
+
+[[error]]
 code = "FG-AGENT-0010"
 name = "LessonNotConfirmed"
 http_status = 409

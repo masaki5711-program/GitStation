@@ -339,6 +339,14 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 )),
                 crate::worker::deploy::target_policy(cfg),
             ))
+            // Plan 16 A5: the agent marketplace reads the parts repository
+            // through the same browse API (limits, caches) and signs with
+            // `agent.signing_keys_file` at publication only.
+            .with_marketplace(forge_marketplace::Marketplace::new(
+                db.clone(),                // clone: the pool handle is shared
+                smart_http.browse.clone(), // clone: shares the ref cache
+                cfg.agent.clone(),         // clone: the marketplace owns its settings
+            ))
             // M3 I1c: the integrations' event feed seals its cursors with
             // the same keys as the lists (another purpose, so neither opens
             // the other's).

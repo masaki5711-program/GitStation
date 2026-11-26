@@ -44,7 +44,7 @@
 2. `insecure_permissions`: `chmod 600` と `chown`。ファイルが他の人に読まれていた期間があれば、鍵の盗難として扱い、
    新しい kid を足して古い kid を失効する判断を Runbook `agent-supply-chain` で行う。
 3. `keys_invalid`: 行を直す（鍵の中身はログに出ない。`line` で場所が分かる）。
-4. `key_not_registered`: 新しい kid の公開鍵を登録してから署名に使う（A5 の `forge admin agent-key`。保守の接続 `database.maint_url` の
+4. `key_not_registered`: 新しい kid の公開鍵を登録してから署名に使う（`forge admin agent-key register --kid <N>`、退役は `retire --kid <N>`、失効は `revoke --kid <N> --reason <理由>`。保守の接続 `database.maint_url` の
    forge_maint だけが `forge.agent_signing_key_manage` を実行できる。forge_app は鍵の表を読むだけ）。
 5. `key_mismatch`: ファイルの種が登録した公開鍵と合わない。取り違えか偽のファイル。説明がつかなければ改ざんの疑い:
    Runbook `agent-supply-chain`。

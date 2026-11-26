@@ -32,6 +32,30 @@ pub enum Coverage {
 }
 
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
+    // Plan 16 A5 (ADR-0032 Amendment A5): the agent marketplace.
+    ("GET", "/api/v1/agent-parts", Coverage::Command("part list")),
+    ("GET", "/api/v1/agent-parts/{slug}", Coverage::Command("part view")),
+    (
+        "GET",
+        "/api/v1/agent-parts/{slug}/versions/{version}",
+        Coverage::Command("part view"),
+    ),
+    (
+        "POST",
+        "/api/v1/agent-parts/{slug}/versions",
+        Coverage::BrowserOnly("sessions only: a person publishes in the browser (FG-AUTH-0002 session_required); gstn part publish names the page"),
+    ),
+    (
+        "POST",
+        "/api/v1/agent-parts/{slug}/versions/{version}/promote",
+        Coverage::BrowserOnly("sessions only: a person promotes in the browser (FG-AUTH-0002 session_required); gstn part promote names the page"),
+    ),
+    (
+        "POST",
+        "/api/v1/agent-parts/{slug}/versions/{version}/revoke",
+        Coverage::BrowserOnly("sessions only: a person revokes in the browser (FG-AUTH-0002 session_required); gstn part revoke names the page"),
+    ),
+    ("GET", "/api/v1/agent-keys", Coverage::Command("agent keys")),
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
     // The gstn distribution: the browser download and the desktop setup
     // tool fetch it; `gstn self-update` is reserved, not implemented.
@@ -1312,6 +1336,18 @@ pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
     (
         "agent verify",
         "plan 16 A1: checks the working tree's agent configuration against agent.lock.json and the part signatures with forge-agent and local keys; nothing is sent",
+    ),
+    (
+        "part publish",
+        "plan 16 A5: publishing is a web session's (a token is refused); prints the page, nothing is sent",
+    ),
+    (
+        "part promote",
+        "plan 16 A5: promoting is a web session's (a token is refused); prints the page, nothing is sent",
+    ),
+    (
+        "part revoke",
+        "plan 16 A5: revoking is a web session's (a token is refused); prints the page, nothing is sent",
     ),
     ("help", "describes the commands from the registry"),
     ("schema", "describes one command from the registry"),

@@ -226,6 +226,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Doc { command } => crate::doc::doc(cli, command, env, io),
         Command::Ci { command } => crate::ci::ci(cli, command, env, io),
         Command::Agent { command } => crate::agent::agent(cli, command, env, io),
+        Command::Part { command } => crate::part::part(cli, command, env, io),
         Command::Edge { command } => crate::edge::edge(cli, command, env, io),
         Command::AiAsset { command } => crate::ai_asset::ai_asset(cli, command, env, io),
         Command::Deploy { command } => crate::deploy::deploy(cli, command, env, io),

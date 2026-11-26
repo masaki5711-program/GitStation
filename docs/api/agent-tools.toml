@@ -1008,6 +1008,30 @@ reason = "A read tool for an agent waits for the asset releases (plan 17 P17-7);
 gstn = "edge release verify"
 reason = "Local only: verifies a signed edge release file (and its blobs) with local edge keys (plan 21 E1)."
 
+[[deferred]]
+gstn = "agent keys"
+reason = "The builder's tools come with plan 16 A7; gstn shows the keys meanwhile."
+
+[[deferred]]
+gstn = "part list"
+reason = "The builder's tools (recommend, preview) come with plan 16 A7; gstn and the marketplace page show the catalog meanwhile."
+
+[[deferred]]
+gstn = "part view"
+reason = "The builder's tools come with plan 16 A7; gstn shows a part meanwhile."
+
+[[not_api]]
+gstn = "part publish"
+reason = "A web session's only (plan 16 A5): prints the page, never an agent's."
+
+[[not_api]]
+gstn = "part promote"
+reason = "A web session's only (plan 16 A5): prints the page, never an agent's."
+
+[[not_api]]
+gstn = "part revoke"
+reason = "A web session's only (plan 16 A5): prints the page, never an agent's."
+
 [[not_api]]
 gstn = "agent verify"
 reason = "Local only: checks .claude/ against agent.lock.json and part signatures with local keys (plan 16 A1)."

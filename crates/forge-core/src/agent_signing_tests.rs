@@ -127,3 +127,21 @@ fn key_file_insecure_permissions_refused() {
     let keys = AgentKeyFile::read(&path).expect("owner only");
     assert_eq!(keys.signing_kid(), 1);
 }
+
+/// Plan 16 A5: the publish step gets the highest kid's seed (the one the
+/// public key list names first), and its Debug never shows the seed.
+#[test]
+fn the_signing_seed_is_the_highest_kids() {
+    let text = format!("1 {SEED_1}\n2 {SEED_2}\n");
+    let file = AgentKeyFile::parse(&text).expect("keys");
+    let signer = signing_seed_of(&text, file.signing_kid()).expect("seed");
+    assert_eq!(signer.kid(), 2);
+    assert_eq!(signer.seed(), &seed(SEED_2));
+    let shown = format!("{signer:?}");
+    assert!(
+        shown.contains("kid: 2") && !shown.contains("0202"),
+        "{shown}"
+    );
+    let missing = signing_seed_of(&text, 3).expect_err("no kid 3");
+    assert_eq!(reason(&missing), "signing_key_invalid");
+}

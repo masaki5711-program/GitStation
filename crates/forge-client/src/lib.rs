@@ -25,11 +25,13 @@ pub mod activity;
 pub mod admin;
 // Plan 16 A1 (ADR-0032): `gstn agent verify`, local only.
 pub mod agent;
+// Plan 16 A5: `gstn part`, `gstn agent keys`.
 pub mod ai_asset;
 pub mod app;
 pub mod browse;
 pub mod checks;
 pub mod ci;
+pub mod part;
 // Plan 21 E1 (ADR-0041): `gstn edge release verify`, local only.
 pub mod cli;
 pub mod config;

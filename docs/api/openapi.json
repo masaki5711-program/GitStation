@@ -124,6 +124,316 @@
         ],
         "type": "object"
       },
+      "AgentKeyBody": {
+        "additionalProperties": false,
+        "description": "One registered public key (`agent-keys.json`, ADR-0032 §7).",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "kid": {
+            "type": "string"
+          },
+          "public_key": {
+            "description": "Base64 of the 32-byte Ed25519 public key.",
+            "type": "string"
+          },
+          "retired_at": {
+            "description": "Signs nothing new; still verifies what it signed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revoked_at": {
+            "description": "Its signatures are refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kid",
+          "public_key",
+          "created_at",
+          "retired_at",
+          "revoked_at"
+        ],
+        "type": "object"
+      },
+      "AgentKeyListBody": {
+        "additionalProperties": false,
+        "description": "The registered public keys.",
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/AgentKeyBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "type": "object"
+      },
+      "AgentPartBody": {
+        "additionalProperties": false,
+        "description": "One part: every version, newest first.",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/AgentPartVersionBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "slug",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "AgentPartFileBody": {
+        "additionalProperties": false,
+        "description": "One file of a version.",
+        "properties": {
+          "mode": {
+            "description": "`100644` or `100755`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The install path (`.claude/…`, `CLAUDE.md`, `.mcp.json`).",
+            "type": "string"
+          },
+          "sha256": {
+            "description": "Lower-case hex of the content's SHA-256.",
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "mode",
+          "sha256",
+          "size"
+        ],
+        "type": "object"
+      },
+      "AgentPartListBody": {
+        "additionalProperties": false,
+        "description": "The catalog.",
+        "properties": {
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/AgentPartSummaryBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
+      },
+      "AgentPartPromoteBody": {
+        "additionalProperties": false,
+        "description": "`POST …/promote` → whether it changed and the version.",
+        "properties": {
+          "changed": {
+            "description": "`false`: it was on stable already.",
+            "type": "boolean"
+          },
+          "version": {
+            "$ref": "#/components/schemas/AgentPartVersionDetailBody"
+          }
+        },
+        "required": [
+          "changed",
+          "version"
+        ],
+        "type": "object"
+      },
+      "AgentPartSummaryBody": {
+        "additionalProperties": false,
+        "description": "One part of the catalog.",
+        "properties": {
+          "deprecated": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "latest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentPartVersionBody",
+                "description": "The newest version that is not revoked (on the asked channel)."
+              }
+            ]
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "kind",
+          "deprecated",
+          "latest"
+        ],
+        "type": "object"
+      },
+      "AgentPartVersionBody": {
+        "additionalProperties": false,
+        "description": "One published version.",
+        "properties": {
+          "capabilities": {
+            "description": "exec, network, permissions, fs-write.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "channel": {
+            "description": "`beta` or `stable`.",
+            "type": "string"
+          },
+          "ci_pipeline_id": {
+            "description": "The pipeline that succeeded on the commit.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "digest": {
+            "description": "`sha256:<hex>` (ADR-0032 §3).",
+            "type": "string"
+          },
+          "key_id": {
+            "description": "The signing key's kid (`GET /api/v1/agent-keys`).",
+            "type": "string"
+          },
+          "kind": {
+            "description": "skill, agent, rule, hook, command, mcp or adapter.",
+            "type": "string"
+          },
+          "manifest": {
+            "description": "The part's manifest as published (slug, kind, version, requires,\ncapabilities, files).",
+            "type": "object"
+          },
+          "published_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revoked_at": {
+            "description": "UTC, RFC 3339.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revoked_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "revoked_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signature": {
+            "description": "Base64 of the Ed25519 signature of the digest.",
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "source_project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_sha": {
+            "description": "The commit the version was frozen from.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`published` or `revoked`.",
+            "type": "string"
+          },
+          "tag": {
+            "description": "The tag it was published from (`<slug>/v<version>`).",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "kind",
+          "version",
+          "channel",
+          "state",
+          "source_project_id",
+          "source_sha",
+          "tag",
+          "digest",
+          "signature",
+          "key_id",
+          "capabilities",
+          "manifest",
+          "published_by",
+          "ci_pipeline_id",
+          "revoked_reason",
+          "revoked_by",
+          "revoked_at",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "AgentPartVersionDetailBody": {
+        "additionalProperties": false,
+        "description": "One version with its files.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/AgentPartFileBody"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/AgentPartVersionBody"
+          }
+        },
+        "required": [
+          "version",
+          "files"
+        ],
+        "type": "object"
+      },
       "AiAssetsBody": {
         "additionalProperties": false,
         "description": "A project's `ai_assets.enabled`.",
@@ -10132,6 +10442,20 @@
         ],
         "type": "object"
       },
+      "PublishBody": {
+        "additionalProperties": false,
+        "description": "`POST …/versions`.",
+        "properties": {
+          "tag": {
+            "description": "The tag to publish: `<slug>/v<version>` in the parts repository.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "type": "object"
+      },
       "PurgeVersionRefs": {
         "additionalProperties": false,
         "description": "`POST …/merge-requests/{iid}/version-refs/purge`.",
@@ -11604,6 +11928,20 @@
           "reverted_iid",
           "commit_sha",
           "parent_sha"
+        ],
+        "type": "object"
+      },
+      "RevokeBody": {
+        "additionalProperties": false,
+        "description": "`POST …/revoke`.",
+        "properties": {
+          "reason": {
+            "description": "Why (1..=500 characters, shown with the version).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
         ],
         "type": "object"
       },
@@ -17624,6 +17962,334 @@
         },
         "summary": "A user's active web sessions (administrators)",
         "x-forge-action": "AdminSessionList"
+      }
+    },
+    "/api/v1/agent-keys": {
+      "get": {
+        "operationId": "get_api_v1_agent_keys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentKeyListBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The public keys that sign agent parts (kid, base64 public key, created, retired, revoked): the agent-keys.json gstn agent verify reads (every signed-in account)",
+        "x-forge-action": "AgentKeyRead"
+      }
+    },
+    "/api/v1/agent-parts": {
+      "get": {
+        "operationId": "get_api_v1_agent_parts",
+        "parameters": [
+          {
+            "description": "Only parts of this kind: skill, agent, rule, hook, command, mcp or adapter",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only parts whose newest live version is on this channel: beta or stable",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only parts whose slug contains this text (1..=64 characters)",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPartListBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The agent parts catalog by slug (kind, channel, q): each part with its newest version that is not revoked (every signed-in account)",
+        "x-forge-action": "AgentPartList"
+      }
+    },
+    "/api/v1/agent-parts/{slug}": {
+      "get": {
+        "operationId": "get_api_v1_agent_parts_slug",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPartBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One agent part: every published version, newest first (channel, state, source commit, digest, signature, key id, capabilities); 404 FG-REPO-0005 without the part (every signed-in account)",
+        "x-forge-action": "AgentPartRead"
+      }
+    },
+    "/api/v1/agent-parts/{slug}/versions": {
+      "post": {
+        "operationId": "post_api_v1_agent_parts_slug_versions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPartVersionDetailBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Publish the tag <slug>/v<version> of the parts repository ({\"tag\"}): the commit the tag names now is read with git, linted and scanned (forge-agent), must be on the default branch with its newest pipeline succeeded (409 FG-AGENT-0004), signed with the server key and frozen as a beta version (201); 409 FG-AGENT-0012 when the version exists. A Maintainer of the publishing group in a web session, a person who did not push, tag or author it (403 FG-AGENT-0009); a part using the network: an administrator",
+        "x-forge-action": "AgentPartPublish",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/agent-parts/{slug}/versions/{version}": {
+      "get": {
+        "operationId": "get_api_v1_agent_parts_slug_versions_version",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPartVersionDetailBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One published agent part version with its files (path, mode, sha256, size); 404 FG-REPO-0005 without it (every signed-in account)",
+        "x-forge-action": "AgentPartRead"
+      }
+    },
+    "/api/v1/agent-parts/{slug}/versions/{version}/promote": {
+      "post": {
+        "operationId": "post_api_v1_agent_parts_slug_versions_version_promote",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPartPromoteBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Move a published version from beta to stable (200, also when it was stable); 409 FG-AGENT-0006 when it is revoked. The same people as publishing, decided on the facts the publication recorded",
+        "x-forge-action": "AgentPartPromote"
+      }
+    },
+    "/api/v1/agent-parts/{slug}/versions/{version}/revoke": {
+      "post": {
+        "operationId": "post_api_v1_agent_parts_slug_versions_version_revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPartVersionDetailBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Revoke a published version ({\"reason\"}, 1..=500 characters): final, 409 FG-AGENT-0006 when it was revoked already (a Maintainer of the publishing group or an administrator, a person in a web session)",
+        "x-forge-action": "AgentPartRevoke",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/ai-tools": {

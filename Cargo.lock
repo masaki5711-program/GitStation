@@ -1138,6 +1138,7 @@ dependencies = [
  "forge-hosting",
  "forge-integ",
  "forge-llm",
+ "forge-marketplace",
  "forge-notify",
  "forge-oidc",
  "forge-pipelines",
@@ -1342,7 +1343,6 @@ dependencies = [
 name = "forge-llm"
 version = "0.1.0"
 dependencies = [
- "forge-auth",
  "forge-core",
  "forge-db",
  "forge-errors",
@@ -1352,6 +1352,24 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "forge-marketplace"
+version = "0.1.0"
+dependencies = [
+ "forge-agent",
+ "forge-auth",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "forge-git",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1481,7 +1499,7 @@ dependencies = [
  "forge-git",
  "forge-hosting",
  "forge-integ",
- "forge-llm",
+ "forge-marketplace",
  "forge-notify",
  "forge-oidc",
  "forge-pipelines",

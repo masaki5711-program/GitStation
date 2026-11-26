@@ -666,6 +666,69 @@
     "word": "fixed"
   },
   {
+    "action": "AgentKeyRead",
+    "method": "GET",
+    "path": "/api/v1/agent-keys",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentPartList",
+    "method": "GET",
+    "path": "/api/v1/agent-parts",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentPartRead",
+    "method": "GET",
+    "path": "/api/v1/agent-parts/{slug}",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentPartPublish",
+    "method": "POST",
+    "path": "/api/v1/agent-parts/{slug}/versions",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentPartRead",
+    "method": "GET",
+    "path": "/api/v1/agent-parts/{slug}/versions/{version}",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentPartPromote",
+    "method": "POST",
+    "path": "/api/v1/agent-parts/{slug}/versions/{version}/promote",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentPartRevoke",
+    "method": "POST",
+    "path": "/api/v1/agent-parts/{slug}/versions/{version}/revoke",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "AiToolList",
     "method": "GET",
     "path": "/api/v1/ai-tools",
@@ -3177,30 +3240,6 @@
   },
   {
     "action": "LlmResume",
-    "planned": true
-  },
-  {
-    "action": "AgentPartRead",
-    "planned": true
-  },
-  {
-    "action": "AgentPartList",
-    "planned": true
-  },
-  {
-    "action": "AgentPartPublish",
-    "planned": true
-  },
-  {
-    "action": "AgentPartPromote",
-    "planned": true
-  },
-  {
-    "action": "AgentPartRevoke",
-    "planned": true
-  },
-  {
-    "action": "AgentKeyRead",
     "planned": true
   },
   {

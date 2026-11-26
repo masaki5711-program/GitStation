@@ -44,6 +44,8 @@ getrandom.workspace = true
 forge-deploy.workspace = true
 # Plan 19 L5-7b: the stored incident diagnosis (read-only route).
 forge-llm.workspace = true
+# Plan 16 A5: the agent marketplace.
+forge-marketplace.workspace = true
 url.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).
