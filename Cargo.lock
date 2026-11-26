@@ -1138,6 +1138,7 @@ dependencies = [
  "forge-hosting",
  "forge-integ",
  "forge-llm",
+ "forge-marketplace",
  "forge-notify",
  "forge-oidc",
  "forge-pipelines",
@@ -1352,6 +1353,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-marketplace"
+version = "0.1.0"
+dependencies = [
+ "forge-agent",
+ "forge-auth",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "forge-git",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "forge-notify"
 version = "0.1.0"
 dependencies = [
@@ -1478,6 +1497,7 @@ dependencies = [
  "forge-git",
  "forge-hosting",
  "forge-integ",
+ "forge-marketplace",
  "forge-notify",
  "forge-oidc",
  "forge-pipelines",

@@ -12,6 +12,8 @@ use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 mod admin;
 // M3 I1c: `forge admin events new-epoch`.
 mod admin_events;
+// Plan 16 A5: the agent marketplace's signing keys.
+mod admin_agent_key;
 // ── D5 MR5 ──
 mod admin_namespace;
 // ── end D5 MR5 ──
@@ -286,7 +288,40 @@ enum AdminCommand {
         command: SshHostKeyCommand,
     },
     // ── end M4 C13 ──
+    // ── Plan 16 A5 ──
+    /// The agent marketplace's signing keys (runbook agent-signing-key; an
+    /// approved runbook step; needs database.maint_url).
+    AgentKey {
+        #[command(subcommand)]
+        command: AgentKeyCommand,
+    },
+    // ── end Plan 16 A5 ──
 }
+
+// ── Plan 16 A5 ──
+#[derive(Subcommand)]
+enum AgentKeyCommand {
+    /// Register the public key of kid N of agent.signing_keys_file (before
+    /// it is the file's highest kid, the one that signs).
+    Register {
+        #[arg(long)]
+        kid: u32,
+    },
+    /// Stop kid N signing (it still verifies what it signed).
+    Retire {
+        #[arg(long)]
+        kid: u32,
+    },
+    /// Refuse every signature of kid N (runbook agent-supply-chain).
+    Revoke {
+        #[arg(long)]
+        kid: u32,
+        /// Why (1..=500 characters; kept with the key).
+        #[arg(long)]
+        reason: String,
+    },
+}
+// ── end Plan 16 A5 ──
 
 // ── M4 C13 ──
 #[derive(Subcommand)]
@@ -632,7 +667,9 @@ fn main() -> ExitCode {
                 }
                 | AdminCommand::SshHostKey {
                     command: SshHostKeyCommand::Generate,
-                },
+                }
+                // Plan 16 A5: a mutating runbook step.
+                | AdminCommand::AgentKey { .. },
         }
         // M3 O1: backup and the mutating restore steps.
         | Command::Search { .. }
@@ -785,6 +822,18 @@ fn main() -> ExitCode {
                     command: ActAsCommand::ClaimedMac { value, kid },
                 },
         } => config().and_then(|cfg| admin::act_as_claimed_mac(&cfg, &value, kid)),
+        Command::Admin {
+            command: AdminCommand::AgentKey { command },
+        } => config().and_then(|cfg| {
+            let command = match command {
+                AgentKeyCommand::Register { kid } => admin_agent_key::KeyCommand::Register { kid },
+                AgentKeyCommand::Retire { kid } => admin_agent_key::KeyCommand::Retire { kid },
+                AgentKeyCommand::Revoke { kid, reason } => {
+                    admin_agent_key::KeyCommand::Revoke { kid, reason }
+                }
+            };
+            admin_agent_key::run(&cfg, &command, &request_id)
+        }),
         Command::Admin {
             command: AdminCommand::SshHostKey { command },
         } => config().and_then(|cfg| match command {

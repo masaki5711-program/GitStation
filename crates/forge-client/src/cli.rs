@@ -191,6 +191,12 @@ pub enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// The agent marketplace (plan 16 A5): the catalog of published parts.
+    #[command(disable_help_subcommand = true)]
+    Part {
+        #[command(subcommand)]
+        command: PartCommand,
+    },
     /// Edge distribution (plan 21): verify a signed edge release file and
     /// its blobs on this computer.
     #[command(disable_help_subcommand = true)]
@@ -2491,6 +2497,50 @@ pub enum AgentCommand {
         /// exact host, or .suffix for its subdomains).
         #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "A,B", requires = "part")]
         mcp_allowed_hosts: Option<Vec<String>>,
+    },
+    /// The public keys that sign agent parts (GET /api/v1/agent-keys);
+    /// --json prints the agent-keys.json `verify` reads.
+    Keys,
+}
+
+/// `gstn part` (plan 16 A5, ADR-0032 Amendment A5): the marketplace's
+/// catalog. Publishing, promoting and revoking happen in a web session of
+/// a person only; gstn names the page.
+#[derive(Subcommand, Debug)]
+pub enum PartCommand {
+    /// The catalog: each part with its newest live version.
+    List {
+        /// skill, agent, rule, hook, command, mcp or adapter.
+        #[arg(long, value_parser = parse_text)]
+        kind: Option<String>,
+        /// beta or stable.
+        #[arg(long, value_parser = parse_text)]
+        channel: Option<String>,
+        /// A part of the slug.
+        #[arg(long, value_parser = parse_text)]
+        q: Option<String>,
+    },
+    /// A part's versions, or one version with its files.
+    View {
+        #[arg(value_parser = parse_text)]
+        slug: String,
+        #[arg(value_parser = parse_text)]
+        version: Option<String>,
+    },
+    /// Publish a tag (web session only: prints the page).
+    Publish {
+        #[arg(value_parser = parse_text)]
+        slug: String,
+    },
+    /// Move a version from beta to stable (web session only: prints the page).
+    Promote {
+        #[arg(value_parser = parse_text)]
+        slug: String,
+    },
+    /// Revoke a version (web session only: prints the page).
+    Revoke {
+        #[arg(value_parser = parse_text)]
+        slug: String,
     },
 }
 

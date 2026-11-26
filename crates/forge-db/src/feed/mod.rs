@@ -923,7 +923,7 @@ pub async fn retention(db: &Db) -> Result<Option<RetentionHealth>, ForgeError> {
 /// connection for an approved runbook step (`forge admin events new-epoch`).
 #[derive(Debug)]
 pub struct MaintConn {
-    conn: PgConnection,
+    pub(crate) conn: PgConnection,
 }
 
 impl MaintConn {

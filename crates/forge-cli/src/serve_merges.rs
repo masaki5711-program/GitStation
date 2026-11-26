@@ -419,6 +419,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // injection), never a merge run's.
         | ErrorCode::PublishSelfApproval
         | ErrorCode::LessonNotConfirmed
+        // Plan 16 A5: the publish / promote / revoke routes' refusals.
+        | ErrorCode::PartChecksNotGreen
+        | ErrorCode::PartVersionRevoked
+        | ErrorCode::PartVersionExists
         // Plan 21 E1: edge releases are linted and verified by forge-edge
         // (`gstn edge release verify` only), never by a merge.
         | ErrorCode::EdgeReleaseDefinitionInvalid

@@ -855,6 +855,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agent-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The public keys that sign agent parts (kid, base64 public key, created, retired, revoked): the agent-keys.json gstn agent verify reads (every signed-in account) */
+        get: operations["get_api_v1_agent_keys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The agent parts catalog by slug (kind, channel, q): each part with its newest version that is not revoked (every signed-in account) */
+        get: operations["get_api_v1_agent_parts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-parts/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One agent part: every published version, newest first (channel, state, source commit, digest, signature, key id, capabilities); 404 FG-REPO-0005 without the part (every signed-in account) */
+        get: operations["get_api_v1_agent_parts_slug"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-parts/{slug}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish the tag <slug>/v<version> of the parts repository ({"tag"}): the commit the tag names now is read with git, linted and scanned (forge-agent), must be on the default branch with its newest pipeline succeeded (409 FG-AGENT-0004), signed with the server key and frozen as a beta version (201); 409 FG-AGENT-0012 when the version exists. A Maintainer of the publishing group in a web session, a person who did not push, tag or author it (403 FG-AGENT-0009); a part using the network: an administrator */
+        post: operations["post_api_v1_agent_parts_slug_versions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-parts/{slug}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One published agent part version with its files (path, mode, sha256, size); 404 FG-REPO-0005 without it (every signed-in account) */
+        get: operations["get_api_v1_agent_parts_slug_versions_version"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-parts/{slug}/versions/{version}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a published version from beta to stable (200, also when it was stable); 409 FG-AGENT-0006 when it is revoked. The same people as publishing, decided on the facts the publication recorded */
+        post: operations["post_api_v1_agent_parts_slug_versions_version_promote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-parts/{slug}/versions/{version}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke a published version ({"reason"}, 1..=500 characters): final, 409 FG-AGENT-0006 when it was revoked already (a Maintainer of the publishing group or an administrator, a person in a web session) */
+        post: operations["post_api_v1_agent_parts_slug_versions_version_revoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients": {
         parameters: {
             query?: never;
@@ -3757,6 +3876,104 @@ export interface components {
             has_more: boolean;
             items: components["schemas"]["AdminUser"][];
             next_cursor: string | null;
+        };
+        /** @description One registered public key (`agent-keys.json`, ADR-0032 §7). */
+        AgentKeyBody: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            kid: string;
+            /** @description Base64 of the 32-byte Ed25519 public key. */
+            public_key: string;
+            /** @description Signs nothing new; still verifies what it signed. */
+            retired_at: string | null;
+            /** @description Its signatures are refused. */
+            revoked_at: string | null;
+        };
+        /** @description The registered public keys. */
+        AgentKeyListBody: {
+            keys: components["schemas"]["AgentKeyBody"][];
+        };
+        /** @description One part: every version, newest first. */
+        AgentPartBody: {
+            slug: string;
+            versions: components["schemas"]["AgentPartVersionBody"][];
+        };
+        /** @description One file of a version. */
+        AgentPartFileBody: {
+            /** @description `100644` or `100755`. */
+            mode: string;
+            /** @description The install path (`.claude/…`, `CLAUDE.md`, `.mcp.json`). */
+            path: string;
+            /** @description Lower-case hex of the content's SHA-256. */
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+        };
+        /** @description The catalog. */
+        AgentPartListBody: {
+            parts: components["schemas"]["AgentPartSummaryBody"][];
+        };
+        /** @description `POST …/promote` → whether it changed and the version. */
+        AgentPartPromoteBody: {
+            /** @description `false`: it was on stable already. */
+            changed: boolean;
+            version: components["schemas"]["AgentPartVersionDetailBody"];
+        };
+        /** @description One part of the catalog. */
+        AgentPartSummaryBody: {
+            deprecated: boolean;
+            kind: string;
+            latest: null | components["schemas"]["AgentPartVersionBody"];
+            slug: string;
+        };
+        /** @description One published version. */
+        AgentPartVersionBody: {
+            /** @description exec, network, permissions, fs-write. */
+            capabilities: string[];
+            /** @description `beta` or `stable`. */
+            channel: string;
+            /**
+             * Format: int64
+             * @description The pipeline that succeeded on the commit.
+             */
+            ci_pipeline_id: number;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** @description `sha256:<hex>` (ADR-0032 §3). */
+            digest: string;
+            /** @description The signing key's kid (`GET /api/v1/agent-keys`). */
+            key_id: string;
+            /** @description skill, agent, rule, hook, command, mcp or adapter. */
+            kind: string;
+            /**
+             * @description The part's manifest as published (slug, kind, version, requires,
+             *     capabilities, files).
+             */
+            manifest: Record<string, never>;
+            /** Format: int64 */
+            published_by: number;
+            /** @description UTC, RFC 3339. */
+            revoked_at: string | null;
+            /** Format: int64 */
+            revoked_by: number | null;
+            revoked_reason: string | null;
+            /** @description Base64 of the Ed25519 signature of the digest. */
+            signature: string;
+            slug: string;
+            /** Format: int64 */
+            source_project_id: number;
+            /** @description The commit the version was frozen from. */
+            source_sha: string;
+            /** @description `published` or `revoked`. */
+            state: string;
+            /** @description The tag it was published from (`<slug>/v<version>`). */
+            tag: string;
+            version: string;
+        };
+        /** @description One version with its files. */
+        AgentPartVersionDetailBody: {
+            files: components["schemas"]["AgentPartFileBody"][];
+            version: components["schemas"]["AgentPartVersionBody"];
         };
         /** @description A project's `ai_assets.enabled`. */
         AiAssetsBody: {
@@ -7312,6 +7529,11 @@ export interface components {
         ProtectedRefRules: {
             rules: components["schemas"]["ProtectedRefBody"][];
         };
+        /** @description `POST …/versions`. */
+        PublishBody: {
+            /** @description The tag to publish: `<slug>/v<version>` in the parts repository. */
+            tag: string;
+        };
         /** @description `POST …/merge-requests/{iid}/version-refs/purge`. */
         PurgeVersionRefs: {
             /**
@@ -7937,6 +8159,11 @@ export interface components {
              * @description The merged merge request it reverts.
              */
             reverted_iid: number;
+        };
+        /** @description `POST …/revoke`. */
+        RevokeBody: {
+            /** @description Why (1..=500 characters, shown with the version). */
+            reason: string;
         };
         /**
          * @description A role in a request.
@@ -11023,6 +11250,237 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionsRevoked"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_agent_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentKeyListBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_agent_parts: {
+        parameters: {
+            query?: {
+                /** @description Only parts of this kind: skill, agent, rule, hook, command, mcp or adapter */
+                kind?: string;
+                /** @description Only parts whose newest live version is on this channel: beta or stable */
+                channel?: string;
+                /** @description Only parts whose slug contains this text (1..=64 characters) */
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPartListBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_agent_parts_slug: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPartBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_agent_parts_slug_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPartVersionDetailBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_agent_parts_slug_versions_version: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPartVersionDetailBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_agent_parts_slug_versions_version_promote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPartPromoteBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_agent_parts_slug_versions_version_revoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeBody"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPartVersionDetailBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

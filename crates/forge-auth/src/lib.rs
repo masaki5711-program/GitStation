@@ -15,6 +15,8 @@
 
 mod act_as;
 mod act_as_ctx;
+// Plan 16 A5: the marketplace's publishing routes.
+mod agent_ctx;
 mod action;
 mod authorize;
 mod auto_merge;
@@ -117,6 +119,7 @@ pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action, CiRule};
 pub use authorize::{authorize, group_seen, GroupSeen};
+pub use agent_ctx::{AgentPartCtx, AgentPartTarget};
 pub use auto_merge::{auto_merge_may, AutoMergeCtx};
 pub use autofix::{autofix_may, AutofixCtx};
 pub use ci_output::{authorize_ci_artifact, authorize_ci_output, CiOutputAllowed};

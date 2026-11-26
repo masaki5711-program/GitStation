@@ -90,6 +90,10 @@ pub struct AppState {
     /// Deployments (M4 C11; `forge serve` always sets them; without them
     /// those routes answer `FG-SYS-0001 reason=deploy_unconfigured`).
     pub deploy: Option<Arc<forge_deploy::Deploy>>,
+    /// The agent marketplace (plan 16 A5; `forge serve` always sets it;
+    /// without it those routes answer `FG-SYS-0001
+    /// reason=marketplace_unconfigured`).
+    pub marketplace: Option<Arc<forge_marketplace::Marketplace>>,
     /// The integrations' event feed (M3 I1c, ADR-0016 §7; `forge serve`
     /// always sets it; without it the feed routes answer `FG-SYS-0001
     /// reason=feed_unconfigured`).
@@ -218,6 +222,7 @@ impl AppState {
             doc_revisions: None,
             pipelines: None,
             deploy: None,
+            marketplace: None,
             feed: None,
             webhooks: None,
             push_mirrors: None,
@@ -382,6 +387,13 @@ impl AppState {
         self
     }
 
+    /// The agent marketplace (plan 16 A5).
+    #[must_use]
+    pub fn with_marketplace(mut self, marketplace: forge_marketplace::Marketplace) -> Self {
+        self.marketplace = Some(Arc::new(marketplace));
+        self
+    }
+
     /// The push mirror's administration (M3 O2).
     #[must_use]
     pub fn with_push_mirrors(mut self, mirrors: forge_integ::mirror::PushMirrors) -> Self {
@@ -493,14 +505,8 @@ pub const PLANNED: &[Action] = &[
     Action::OpsDiagnosisRead,
     Action::LlmPause,
     Action::LlmResume,
-    // Plan 16 §4 (A4): the marketplace's and the builder's routes land
-    // with A5, A7 and A10.
-    Action::AgentPartRead,
-    Action::AgentPartList,
-    Action::AgentPartPublish,
-    Action::AgentPartPromote,
-    Action::AgentPartRevoke,
-    Action::AgentKeyRead,
+    // Plan 16 §4 (A4): the builder's routes land with A7 and A10 (the
+    // marketplace's with A5).
     Action::AgentBuilderRecommend,
     Action::AgentBuilderDryRun,
     Action::AgentBuilderCompile,
@@ -725,8 +731,83 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             )))),
         ))),
     ))));
-    // ADR-0036: the PFS portal's home widgets; plan 20 W2: the wiki.
-    wiki_routes(portal_widget_routes(all))
+    // ADR-0036: the PFS portal's home widgets; plan 20 W2: the wiki;
+    // plan 16 A5: the agent marketplace.
+    agent_part_routes(wiki_routes(portal_widget_routes(all)))
+}
+
+/// The agent marketplace (plan 16 §6 A5, ADR-0032 Amendment A5): the
+/// catalog and the public keys for every signed-in account; publishing,
+/// promoting and revoking in a person's web session.
+fn agent_part_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::agent_parts as m;
+    registry
+        .route_with(
+            Verb::Get,
+            m::LIST,
+            Action::AgentPartList,
+            "The agent parts catalog by slug (kind, channel, q): each part with its newest version that is not revoked (every signed-in account)",
+            m::Catalog,
+            m::list,
+        )
+        .responds::<m::AgentPartListBody>(Verb::Get, m::LIST)
+        .queries(Verb::Get, m::LIST, m::LIST_QUERY)
+        .route_with(
+            Verb::Get,
+            m::ONE,
+            Action::AgentPartRead,
+            "One agent part: every published version, newest first (channel, state, source commit, digest, signature, key id, capabilities); 404 FG-REPO-0005 without the part (every signed-in account)",
+            m::Catalog,
+            m::read,
+        )
+        .responds::<m::AgentPartBody>(Verb::Get, m::ONE)
+        .route_with(
+            Verb::Get,
+            m::VERSION,
+            Action::AgentPartRead,
+            "One published agent part version with its files (path, mode, sha256, size); 404 FG-REPO-0005 without it (every signed-in account)",
+            m::Catalog,
+            m::read_version,
+        )
+        .responds::<m::AgentPartVersionDetailBody>(Verb::Get, m::VERSION)
+        .route_with_body(
+            Verb::Post,
+            m::VERSIONS,
+            Action::AgentPartPublish,
+            "Publish the tag <slug>/v<version> of the parts repository ({\"tag\"}): the commit the tag names now is read with git, linted and scanned (forge-agent), must be on the default branch with its newest pipeline succeeded (409 FG-AGENT-0004), signed with the server key and frozen as a beta version (201); 409 FG-AGENT-0012 when the version exists. A Maintainer of the publishing group in a web session, a person who did not push, tag or author it (403 FG-AGENT-0009); a part using the network: an administrator",
+            m::MAX_BODY,
+            m::ToPublish,
+            m::publish,
+        )
+        .responds_created::<m::AgentPartVersionDetailBody>(Verb::Post, m::VERSIONS)
+        .route_with(
+            Verb::Post,
+            m::PROMOTE,
+            Action::AgentPartPromote,
+            "Move a published version from beta to stable (200, also when it was stable); 409 FG-AGENT-0006 when it is revoked. The same people as publishing, decided on the facts the publication recorded",
+            m::TO_PROMOTE,
+            m::promote,
+        )
+        .responds::<m::AgentPartPromoteBody>(Verb::Post, m::PROMOTE)
+        .route_with_body(
+            Verb::Post,
+            m::REVOKE,
+            Action::AgentPartRevoke,
+            "Revoke a published version ({\"reason\"}, 1..=500 characters): final, 409 FG-AGENT-0006 when it was revoked already (a Maintainer of the publishing group or an administrator, a person in a web session)",
+            m::MAX_BODY,
+            m::TO_REVOKE,
+            m::revoke,
+        )
+        .responds::<m::AgentPartVersionDetailBody>(Verb::Post, m::REVOKE)
+        .route_with(
+            Verb::Get,
+            m::KEYS,
+            Action::AgentKeyRead,
+            "The public keys that sign agent parts (kid, base64 public key, created, retired, revoked): the agent-keys.json gstn agent verify reads (every signed-in account)",
+            m::Catalog,
+            m::keys,
+        )
+        .responds::<m::AgentKeyListBody>(Verb::Get, m::KEYS)
 }
 
 /// A project's wiki (plan 20 W2, ADR-0040 §5): create and link, unlink;

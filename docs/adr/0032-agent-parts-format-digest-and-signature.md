@@ -212,3 +212,72 @@ diagnosis / fix に書いた。
   ローダーの試験（Reporter のサービスアカウント + Developer の本人 → Developer）を足す。
 - 行を足した: 目録と公開鍵のサービスアカウントの allow、昇格の Owner の allow と Guest の deny、取り消しの無効なアカウント、
   Dry-Run と compile の Guest、押した人が自分・押した人が不明、Kanflow のサービスアカウントが役を持たない教訓。
+
+## Amendment（2026-11-26、A5 `feat/core-marketplace-publish`: 公開・昇格・取り消し・`gstn part`）
+
+計画 16 A5 を入れた。新しい機能のクレート **`forge-marketplace`**（契約 9: forge-web / forge-cli → forge-marketplace →
+forge-auth / forge-git / forge-db → forge-core → forge-agent）。利用者は不在で「推奨を選ぶ」と言っているので、計画に書かれていない
+点は次のとおり決めた。
+
+1. **部品のリポジトリ**は設定 `agent.parts_repository`（既定 `marketplace/parts`、計画 16 §9.4）。公開のグループはそのプロジェクトの
+   親のグループ（`AgentPartView::group_role` はそのグループでの呼び手の役）。版の元のプロジェクトがいまの設定と違う版は、昇格・取り消しの
+   ローダーで 404（設定を変えても古い部品を別のグループに渡さない）。
+2. **公開の経路** `POST /api/v1/agent-parts/{slug}/versions` `{"tag": "<slug>/v<version>"}`。ローダー（`load_for_publish`）が tag を
+   git で引き、**そのとき tag が指すコミットを固定**して `AgentPartTarget` に入れる。公開はその固定したコミットの `<slug>/` を読み直す
+   （同じコミットなので同じ中身）。公開した版は DB に固まり、後で tag を動かしても効かない。同じ版の再公開は **FG-AGENT-0012**
+   （`moved_tag_after_publish_has_no_effect`）。最初の版と違う `kind`・違うプロジェクトからの版も FG-AGENT-0012（`kind_changed`・
+   `source_changed`）。
+3. **tag を押した人**は push の監査（`repository.pushed` の監査の行で、その tag をその object に更新したもの、いちばん新しい行）の
+   `actor_kind = 'user'` の人だけ。行が無い・100 を超える ref の push で載っていない・再生した push・サービスアカウントや代理の push は
+   `None` で、A4 の `tag_pusher_unknown` で断る（閉じる側）。A4 の Amendment は「ボット・CI のジョブの push は持ち主・始めた人として
+   記録する」としたが、その対応づけは A5 では作らず、より厳しい「公開できない」にした（部品の tag は人が押す）。
+4. **tag の裏の人**（`tag_authors`）: 注釈つきの tag の tagger、コミットの author と committer のメールを、大文字・小文字を区別せずに
+   アカウントに当てる（当たらないものは除く）。
+5. **ローダーで部品の lint が通らない**とき `network` は `false` とし、問題は判定の後に返す（何も公開されないので、能力の印で誰が
+   見られるかは決まらない）。公開のときに能力がローダーと違えば内部の誤り（同じコミットなので起きない）。
+6. **公開の前の確かめ**（判定の後、署名の前、どれも **FG-AGENT-0004**）: tag のコミットが既定の枝の先から届くこと
+   （`not_on_default_branch`: MR を通っていないコミット）、そのコミットの最新のパイプラインが `succeeded` であること（`pipeline_missing`・
+   `pipeline_not_green`、`status` つき。push・MR・手動のどれでもよい）。そのパイプラインの id を `ci_pipeline_id` に入れる。
+7. **サーバーが決めたフックの試験のジョブ（ダイジェスト固定、ネットワークなし）は A5 では作らない（A5b に分ける）**。パイプラインは
+   `.forge-ci.yml` からだけ計画され、ランナーも同じ定義を読むので、サーバーのジョブを足すには forge-pipelines の計画と runner の両方を
+   変える（`ci-runner-security-reviewer` の範囲）。それまでの守りは、二人の目（A4）・静的な検査（A1）・既定の枝と緑のパイプライン（6）・
+   beta の期間。計画 16 §8 の表の「サーバーが決めたフックのテスト」は A5b が入るまで無い。
+8. **署名**: `forge_core::agent_signing::read_signing_seed`（鍵ファイルを `AgentKeyFile::read` と同じに確かめ、いちばん大きい kid の種を
+   `Zeroizing` で返す。`Debug` は kid だけ）を forge-marketplace の公開の 1 か所だけが呼ぶ。kid が登録済みで退役も失効もしておらず、
+   種の公開鍵が登録した公開鍵と同じでなければ **FG-AGENT-0014**（`key_not_registered`・`signing_key_retired`・`key_revoked`・
+   `key_mismatch`。鍵ファイルが無い設定は `not_configured`）。署名した直後に登録した公開鍵で確かめる。`forge-core` は今も署名しない。
+   **残す点**: `read_signing_seed` を `clippy.toml` の `disallowed-methods` に足す変更は、エージェントモデルの設定の保護のフックが
+   `clippy.toml` の書き換えを止めたため入れていない（人が足す。`sign_digest` の禁止は今までどおり効いている）。
+9. **昇格**（beta → stable、`AgentPartPromote`）は公開の監査の行（`agent_part.version_published`）が記録した押した人・裏の人で判定する
+   （マイグレーションを足さない。監査の行は追記だけ）。行が無ければ押した人は `None` で断る。すでに stable なら何も書かず `changed: false`。
+   **取り消し**（`AgentPartRevoke`）は理由 1〜500 文字（制御文字なし）、最終。取り消した版の昇格・2 回目の取り消しは **FG-AGENT-0006**
+   （`revoked`）。どちらも版の行を `FOR UPDATE` で押さえて状態を確かめ、監査の行（`agent_part.version_promoted` / `.version_revoked`）を
+   同じトランザクションで書く。役の判定はローダーの時点のもの（トランザクションの中で役を読み直さない。セッションだけの人の操作で、
+   役を外された直後の 1 回だけが通りうる）。
+10. **読み取り**: `GET /api/v1/agent-parts`（`kind`・`channel`・`q`、部品ごとに取り消していない最新の版）、`…/{slug}`、
+    `…/{slug}/versions/{v}`（ファイルの path・mode・sha256・大きさ。中身は返さない。A7 の生成が DB から読む）、
+    `GET /api/v1/agent-keys`（`{"keys":[{kid, public_key, created_at, retired_at, revoked_at}]}`、§7 の `agent-keys.json` と同じ形）。
+11. **gstn**: `gstn part list|view` と `gstn agent keys`（`--json` がそのまま `agent-keys.json`）。`gstn part publish|promote|revoke` は
+    A4 の 8 のとおりトークンでは呼べないので、何も送らずに画面の URL（`/-/marketplace/<slug>`、画面は A8）を出す。
+12. **`forge admin agent-key register|retire|revoke --kid N`**（保守の接続、`forge.agent_signing_key_manage`。`register` は
+    `agent.signing_keys_file` の kid N の公開鍵を登録する。種は forge-core から出ない）。HTTP には出さない。
+13. **設定** `agent.mcp_allowed_hosts`（カンマ区切り、空は全部断る）を公開の `scan` の許可の一覧に使う。
+
+### A5 の独立レビュー（2026-11-26、security-reviewer・authz-matrix-auditor）で変えた点
+
+- （HIGH、直した）公開のローダーが判定の前に git を読んでいた（部品の中身まで）。ローダーは**公開のグループの Maintainer 以上の
+  呼び手にだけ** tag と人を git・監査から読み、他の呼び手には git を読まない事実（押した人なし、何も固定しない）を渡して、判定が
+  グループ・役で断る。部品は判定の前には読まない: 上の 5 を改め、`network` は公開の手順が固定したコミットの部品を読んだ後に
+  **`authorize()` をもう一度呼んで**決める（署名・確かめの前。テスト `a_network_part_is_decided_again_before_signing`）。tree や blob を
+  指す tag は 404。
+- （MEDIUM、直した）押した人は、その tag をその object に更新した **全部の** push の監査の行から（古い順）。最初の人が `tag_pusher`、
+  他の人は `tag_authors` に入る（後から同じ tag を押し直しても最初の人は消えない）。人でない push が 1 つでもあれば `None`（閉じる側）。
+  上の 3 を改める。
+- （LOW、直した）昇格の二人の目に公開した人も入れる（公開した人だけで stable にしない）。
+- （LOW、直した）`gstn part view` は slug と版を API のパスに入れる前に確かめる。
+- （MEDIUM、受け入れ・後の MR）tag の裏の人はメール（自己申告）とアカウントの今のメールの一致だけで当てる。MR の作者・承認者・
+  push の監査から範囲のコミットを押した人を足すのは A7（MR を作る側）と合わせて行う。
+- （MEDIUM、残す）`read_signing_seed` の `clippy.toml` の禁止は 8 のとおり人が足す。
+- （MEDIUM、受け入れ）目録の読み取りはインスタンス全体（A4 の LOW のとおり）。
+- （LOW、受け入れ）部品のリポジトリの設定を変えると、古い版は昇格・取り消しのローダーで 404 になる（閉じる側。設定を戻すか、
+  A9 で管理者の取り消しの道を足す）。

@@ -65,6 +65,9 @@ pub fn agent(cli: &Cli, cmd: &AgentCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> 
             keys,
             ..
         } => verify_repo(cli, env, io, lock.as_deref(), keys.as_deref()),
+        // Plan 16 A5: the server's public keys (the one `agent` subcommand
+        // that calls the server).
+        AgentCommand::Keys => crate::part::keys(cli, env, io),
     }
 }
 

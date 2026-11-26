@@ -74,6 +74,8 @@ use crate::gate::{GatePermit, KeyedGate};
 use crate::refs_cache::RefSnapshotCache;
 use crate::storage::StorageRoot;
 
+// Plan 16 A5: the marketplace's publish reads.
+mod agent_part;
 mod blame;
 mod branches;
 mod content;
@@ -86,6 +88,7 @@ mod refs;
 mod scan;
 mod tree;
 
+pub use agent_part::{PartEntry, PartListing, TagIdentities};
 pub use blame::{Blame, BlameCommit, BlameHunk};
 pub use content::{ArchiveFormat, Blob, RawBlob, RawBody, SmallFile};
 pub use diff::{Diff, DiffFile, DiffStatus, PatchOmitted};
