@@ -8,6 +8,7 @@
   { "action": "ProjectRead", "allow": 18, "deny": 39, "public": false, "git_operation": false },
   { "action": "ProjectList", "allow": 6, "deny": 14, "public": false, "git_operation": false },
   { "action": "SearchQuery", "allow": 9, "deny": 15, "public": false, "git_operation": false },
+  { "action": "AiToolList", "allow": 6, "deny": 14, "public": false, "git_operation": false },
   { "action": "ProjectCreate", "allow": 13, "deny": 33, "public": false, "git_operation": false },
   { "action": "ProjectUpdate", "allow": 5, "deny": 25, "public": false, "git_operation": false },
   { "action": "ProjectVisibilityChange", "allow": 4, "deny": 31, "public": false, "git_operation": false },

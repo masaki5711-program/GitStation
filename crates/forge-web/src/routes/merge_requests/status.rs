@@ -169,9 +169,16 @@ pub struct StatusApprovalsBody {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StatusCodeownerBody {
+    /// Empty when `withheld`.
     pub pattern: String,
     pub owners: Vec<String>,
     pub satisfied: bool,
+    /// Plan 19 §5 (L5-9, added within `schema_version` 1): an agent
+    /// audience (an agent's token, a service account, acting for a person)
+    /// is not shown a pattern matching a file confidential at the head, the
+    /// target's tip or the default branch ("機密のため表示しません"); the
+    /// owners stay.
+    pub withheld: bool,
 }
 
 /// One required check and its run on the head.
@@ -348,6 +355,9 @@ pub struct MergeRequestStatusBody {
     pub codeowners: StatusCodeownersBody,
     /// What the caller could do now (added within `schema_version` 1, U2).
     pub viewer: StatusViewerBody,
+    /// Plan 19 §3.3 (L5-9, added within `schema_version` 1): when the
+    /// status was read (UTC, RFC 3339).
+    pub as_of: String,
 }
 
 pub(super) fn status_body(
@@ -421,6 +431,7 @@ pub(super) fn status_body(
                     pattern: c.pattern.clone(), // clone: as above
                     owners: c.owners.clone(),   // clone: as above
                     satisfied: c.satisfied,
+                    withheld: false,
                 })
                 .collect(),
         }),
@@ -463,7 +474,58 @@ pub(super) fn status_body(
                 requires_assertion: a.requires_assertion,
             }),
         },
+        as_of: String::new(),
     }
+}
+
+/// The detail of a withheld `codeowner_approval_missing`: the owners only.
+fn withheld_detail(owners: &[String]) -> String {
+    format!("pattern_withheld=confidential owners={}", owners.join(","))
+}
+
+/// Plan 19 §5 (L5-9): for an agent audience, every CODEOWNERS pattern
+/// (in the approvals and in a `codeowner_approval_missing` reason's
+/// detail) that matches a file `marked` confidential is withheld; when the
+/// confidential read left documents unread, every pattern is (fail
+/// closed). The reasons, their order and `mergeable` are unchanged.
+pub(super) fn withhold_marked_patterns(
+    body: &mut MergeRequestStatusBody,
+    reasons: &[BlockReason],
+    marked: &forge_checks::confidential::Confidential,
+) {
+    let names = |pattern: &str| {
+        marked.is_partial()
+            || marked.any_path(|path| {
+                forge_review::approvals::codeowners::pattern_matches(pattern, path)
+            })
+    };
+    if let Some(approvals) = body.approvals.as_mut() {
+        for c in &mut approvals.codeowners {
+            if names(&c.pattern) {
+                c.pattern = String::new();
+                c.withheld = true;
+            }
+        }
+    }
+    for (shown, reason) in body.reasons.iter_mut().zip(reasons) {
+        if let BlockReason::CodeownerApprovalMissing { pattern, owners } = reason {
+            if names(pattern) {
+                shown.detail = Some(withheld_detail(owners));
+            }
+        }
+    }
+}
+
+/// Whether the status names a CODEOWNERS pattern at all (nothing to
+/// measure otherwise).
+fn names_patterns(body: &MergeRequestStatusBody) -> bool {
+    body.approvals
+        .as_ref()
+        .is_some_and(|a| !a.codeowners.is_empty())
+        || body
+            .reasons
+            .iter()
+            .any(|r| r.reason == StatusReasonName::CodeownerApprovalMissing)
 }
 
 /// M4 C10: whether the caller's revert of this merge request would be
@@ -520,12 +582,16 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
     // Owned before the first await: the request (its body) is not `Sync`.
     let repo = repository(&request);
     let record = request.project().cloned();
+    let audience = crate::routes::context::audience(&request);
+    let target = crate::routes::browse::Target::of(&state, &request);
     let w = request.into_write();
     let built = async {
         let (project, iid) = *w.proof.id();
         let iid = iid.ok_or_else(|| {
             ForgeError::new(ErrorCode::Internal).with_context("reason", "proof_without_iid")
         })?;
+        let audience = audience?;
+        let as_of = crate::routes::ai_tools::as_of_now()?;
         let review = review(&state)?;
         let answer = review
             .merge_status(&w.ctx.request_id, &w.proof, repo?, None)
@@ -552,7 +618,20 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
         });
         let act_as = w.proof.ctx().act_as_viewer(principal);
         let mut body = status_body(iid, &answer, viewer, principal.user(), act_as);
-        if let Some(approvals) = body.approvals.as_mut() {
+        // Plan 19 §3.3 (ADR-0025 Amendment L5-9): kanflow's AI chat acting
+        // for a person gets no approver's name or department — the ids and
+        // whether each counts answer "why is it stopped".
+        let acting = principal.act_as_credential().is_some();
+        if acting {
+            for a in body
+                .approvals
+                .iter_mut()
+                .flat_map(|r| r.approvals.iter_mut())
+            {
+                a.username = String::new();
+            }
+        }
+        if let Some(approvals) = body.approvals.as_mut().filter(|_| !acting) {
             let ids: Vec<UserId> = approvals
                 .approvals
                 .iter()
@@ -571,6 +650,40 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
         }
         body.viewer.can_revert = can_revert(principal, w.proof.ctx(), record.as_ref(), iid);
         body.viewer.can_run_pipeline = can_run_pipeline(principal, record.as_ref());
+        body.as_of = as_of;
+        // Plan 19 §5 (L5-9): an agent audience is never shown a CODEOWNERS
+        // pattern naming a confidential file — marked at the head, at the
+        // target's tip (a file the change deletes or renames) or at the
+        // default branch; a failed read refuses, it never serves.
+        if audience.is_agent() && names_patterns(&body) {
+            let t = target?;
+            let mut commits: Vec<String> = answer
+                .head_sha
+                .iter()
+                .map(|h| h.as_str().to_owned())
+                .collect();
+            let target_ref = w.proof.ctx().merge_request().target_branch.as_str();
+            match t
+                .smart
+                .browse
+                .resolve_ref(t.repository.id, target_ref, &t.principal)
+                .await
+            {
+                Ok(tip) => commits.push(tip.commit),
+                // A target that is gone has no tip to measure.
+                Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => {}
+                Err(e) => return Err(e),
+            }
+            let commits: Vec<&str> = commits.iter().map(String::as_str).collect();
+            let marked = crate::routes::context::marked_files(
+                &t.smart.browse,
+                t.repository.id,
+                &t.principal,
+                &commits,
+            )
+            .await?;
+            withhold_marked_patterns(&mut body, &answer.reasons, &marked);
+        }
         json(body)
     }
     .await;

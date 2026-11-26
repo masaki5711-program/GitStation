@@ -615,6 +615,16 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
         )
         .responds::<routes::search::SearchPage>(Verb::Get, routes::search::PATH)
         .queries(Verb::Get, routes::search::PATH, routes::search::QUERY)
+        // Plan 19 §3.3 (L5-9): kanflow's read-only tool pack; each tool is
+        // a route of its own, decided there acting for the person.
+        .route(
+            Verb::Get,
+            routes::ai_tools::PATH,
+            Action::AiToolList,
+            "Kanflow's read-only tool pack (plan 02 §6 F-18): each tool's name, description, JSON Schema arguments and route, called acting for the person who asked (Forge-Act-As, no assertion), and the plain words of every state name the tools answer (read_api; never acting for a person)",
+            routes::ai_tools::list,
+        )
+        .responds::<routes::ai_tools::AiToolPackBody>(Verb::Get, routes::ai_tools::PATH)
         .route(
             Verb::Get,
             routes::users::PATH,
@@ -1246,8 +1256,8 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             d::DEPLOYMENTS,
             Action::DeployRead,
-            "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers)",
-            d::OF_PROJECT,
+            "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target and as_of (project readers; also acting for a person: kanflow's tool, without the commit author's name and address)",
+            d::OF_DEPLOYMENTS,
             d::deployments,
         )
         .responds::<d::DeploymentList>(Verb::Get, d::DEPLOYMENTS)
@@ -1302,7 +1312,7 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             p::LIST,
             Action::PipelineRead,
-            "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit (project readers; metadata only)",
+            "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit and as_of (project readers, also acting for a person: kanflow's tool; metadata only)",
             p::OF_LIST,
             p::list,
         )
@@ -1322,7 +1332,7 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             p::ONE,
             Action::PipelineRead,
-            "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt); 404 FG-REPO-0005 when the project has no such pipeline (project readers; metadata only)",
+            "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt) and as_of; 404 FG-REPO-0005 when the project has no such pipeline (project readers, also acting for a person: kanflow's tool; metadata only)",
             p::OF_ONE,
             p::one,
         )

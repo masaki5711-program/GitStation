@@ -319,8 +319,15 @@ impl Principal {
     /// hand such a caller a work item or a specification marked
     /// confidential. Not an authorization decision: the caller was allowed
     /// to read the project; this only narrows what one answer carries.
+    ///
+    /// Plan 19 §3.3 / §5 (L5-9, ADR-0039 decision 6): a request acting for
+    /// a person (`Forge-Act-As`) is a delegated tool, not the person — an
+    /// agent audience too, so kanflow's AI chat is never handed what an
+    /// agent is not.
     pub fn is_agent_audience(&self) -> bool {
-        self.agent || self.kind != AccountKind::Human
+        self.agent
+            || self.kind != AccountKind::Human
+            || matches!(self.credential, Credential::ActAs(_))
     }
 
     pub fn user(&self) -> Option<UserId> {

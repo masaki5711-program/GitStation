@@ -38,6 +38,8 @@ pub mod merge_requests;
 pub mod moves;
 pub mod repo_copy;
 pub mod search;
+// Plan 19 L5-9: kanflow's read-only tool pack.
+pub mod ai_tools;
 // Plan 20 W2 (ADR-0040 §5): a project's wiki.
 pub mod wiki;
 // M3 N1: the caller's notification settings.

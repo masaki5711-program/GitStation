@@ -535,3 +535,42 @@ Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 �
 - （LOW、直した）MR の助言への評価は `MergeRequestRead` と同じく枝の名前も確かめる。見えない主体（エージェントを含む）は
   人だけの断りより先に 404（行を足した）。`DeployRead` の代理の min のロールの allow の行と、内部の MR の役の無い人の
   `AiReviewRerun` の 403 の行を足した。
+
+## Amendment（2026-11-26、M5 L5-9 `feat/cross-kanflow-question-tools`: Kanflow の質問の道具のパック）
+
+計画 19 §3.3（W14-6）・02 §6（F-18）を実装した。L5-4 の Amendment の条件（代理の事実は道具が要る経路だけ）に従う。
+
+1. **道具 = 既存の読み取りの経路 1 本ずつ**（`gstn mcp` の agent-tools と同じ考え。道具ごとの新しい判定点を作らない）。
+   `GET /api/v1/ai-tools`（新しい Action `AiToolList`、`SearchQuery` と同じ行: 有効な利用者・`read_api`・エージェント・サービス
+   アカウント。**代理と CI は `Denied`**）が、Kanflow の道具の形（名前・説明・JSON Schema の引数）と、引数の置き場所
+   （path / query）、状態の名前の対訳（ja / en、08）を返す。道具は 5 つ:
+   `get_merge_request_blocked_reasons`（MR の `…/status`、`evaluate_merge()` の理由の一覧そのまま）、
+   `list_merge_requests`（MR の一覧に `work_item=PBI-<n>` の絞り込みを足した: その PBI に開いた結びつきのある MR）、
+   `list_pipelines`・`get_pipeline`（メタデータだけ。ログ・診断・成果物は含めない）、`list_deployments`。
+   Kanflow のサービスアカウントは **`Forge-Act-As: user:<聞いた人>` で、主張なし**に呼ぶ（すべて `ReadWithoutAssertion`）。
+   決めたこと（推奨案を採用）: 02 §6 の `POST /api/v1/ai-tools/{name}/invoke` は作らない（中継の判定点が増えるだけ）。
+2. **代理の事実を足した経路はちょうど 3 本**: パイプラインの一覧と 1 件（`PipelinesOf` の `OF_LIST` / `OF_ONE` の GET だけ）、
+   デプロイの一覧（新しいローダー `DeploymentsOf`）。環境（ホストの指紋）・承認者（人の名前）・予定（`schedules`）・CI の
+   ログ / 診断 / 成果物・すべての書き込みは代理の事実を読み込まず `FG-AUTH-0003 reason=act_as_facts_missing` のまま
+   （テスト `act_as_reaches_no_other_pipeline_or_deployment_route`）。
+3. **`as_of`**: 道具の答え（MR の状況・MR の一覧・パイプラインの一覧と 1 件・デプロイの一覧）に、読む前の時刻（UTC、RFC 3339）
+   を足した（各契約の版の中での追加）。
+4. **代理はエージェントの読み手**: `Principal::is_agent_audience()` が `Credential::ActAs` で真になった（ADR-0039 決定 6 と
+   同じ扱いを、文書・文脈・検索・MR の差分などすべての読みに広げる。狭めるだけで、許可は変わらない）。ログの `audience` は
+   `act_as`。
+   影響: 代理で読める内容の経路は MR の読み（`MergeRequestRead` の差分・文脈など）だけで、そこで機密のファイルは伏せられる
+   （Kanflow の既存の代理の流れ — 承認・結びつけ・リポジトリの検索 — は内容を読まないので変わらない）。
+5. **機密のパスの名前**: エージェントの読み手（代理を含む）には、MR の状況の CODEOWNERS のパターン（承認の欄と
+   `codeowner_approval_missing` の detail）のうち、head か既定の枝の先で機密のファイルに当たるものを出さない
+   （`withheld: true`、`pattern` は空、持ち主は残す。機密の読みが途中で切れたら全部伏せる。読めなければ断る）。PBI が機密なら
+   `work_item=` の一覧はエージェントに空（知らない PBI と同じ。機密の PBI の有無を当てさせない、ログだけ）。代理の MR の状況は
+   承認者の名前と部署を出さない（利用者 ID と数えたかだけ）。CODEOWNERS の持ち主（`@名前`）は「誰の承認が足りないか」
+   のため残す。代理のデプロイの一覧はコミットの作者の名前とメールを出さない（依頼者・承認者は利用者 ID だけで、名前は出ない — ID は受け入れた。承認者の一覧の経路は代理に閉じたまま）。パイプラインの `problems` は定義の検査の文（場所と規則）で、ファイルの本文は含まない。
+6. 権限の表: `matrix_rows_ai_tools.rs`（allow 6・deny 5。代理と CI の deny は生成）。経路ごとの代理の allow / deny は
+   `tests/kanflow_tool_routes.rs`（`tool_answer_hides_invisible_project`、`blocked_reasons_equal_evaluate_merge`、
+   `confidential_path_names_not_in_tool_answer_for_agent`）。
+7. ブランチ名: 計画の `feat/integ-…` は領域 `integ` がブランチの規則に無いため `feat/cross-kanflow-question-tools`。
+8. **Kanflow の側（KF-19a、Kanflow の計画）**: 道具の振り分け表に GitStation のパックを足す — 起動時と定期に
+   `GET /api/v1/ai-tools` を自分のトークンで読み、各道具を Kanflow の道具（JSON Schema）として登録し、実行は `bindings` に
+   従って経路を組み立て、聞いた人の GitStation の利用者 ID で `Forge-Act-As` を付けて呼ぶ（人の対応は SSO の `sub` / 社員番号）。
+   404・403 は「見えないか、権限がありません」とだけ答え、`as_of` と `terms` の対訳を答えに添える。数字は道具の値をそのまま使う。

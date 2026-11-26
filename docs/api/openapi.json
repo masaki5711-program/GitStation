@@ -178,6 +178,142 @@
         ],
         "type": "object"
       },
+      "AiTermBody": {
+        "additionalProperties": false,
+        "description": "One state name and its plain words (plan 08).",
+        "properties": {
+          "en": {
+            "type": "string"
+          },
+          "ja": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`merge_request_state`, `block_reason`, `pipeline_status`,\n`deployment_status`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name as the answers spell it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "ja",
+          "en"
+        ],
+        "type": "object"
+      },
+      "AiToolBindingBody": {
+        "additionalProperties": false,
+        "description": "One argument's place in the request.",
+        "properties": {
+          "in": {
+            "$ref": "#/components/schemas/ArgumentIn"
+          },
+          "name": {
+            "description": "The argument's name (a property of `parameters`).",
+            "type": "string"
+          },
+          "wire": {
+            "description": "The name on the wire (`{id}` of the path, a query key).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "in",
+          "wire"
+        ],
+        "type": "object"
+      },
+      "AiToolBody": {
+        "additionalProperties": false,
+        "description": "One tool.",
+        "properties": {
+          "bindings": {
+            "description": "Where each argument goes.",
+            "items": {
+              "$ref": "#/components/schemas/AiToolBindingBody"
+            },
+            "type": "array"
+          },
+          "description": {
+            "description": "What the model reads to choose the tool.",
+            "type": "string"
+          },
+          "method": {
+            "description": "Always `GET`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The tool's name for the model (`snake_case`).",
+            "type": "string"
+          },
+          "parameters": {
+            "description": "The arguments as a JSON Schema object (kanflow's tool form).",
+            "type": "object"
+          },
+          "path": {
+            "description": "As in `openapi.json`: `{wire}` for each path argument.",
+            "type": "string"
+          },
+          "read_only": {
+            "description": "Always `true`: the pack has no writes (plan 19 §3.3).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "read_only",
+          "method",
+          "path",
+          "parameters",
+          "bindings"
+        ],
+        "type": "object"
+      },
+      "AiToolPackBody": {
+        "additionalProperties": false,
+        "description": "`GET /api/v1/ai-tools`.",
+        "properties": {
+          "act_as_header": {
+            "description": "How a tool is called: the service account's token, acting for the\nperson who asked (`Forge-Act-As: user:<id>`, no assertion).",
+            "type": "string"
+          },
+          "pack": {
+            "description": "Always `gitstation`: kanflow's routing table adds it as a pack.",
+            "type": "string"
+          },
+          "schema_version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/AiTermBody"
+            },
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/AiToolBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "pack",
+          "act_as_header",
+          "tools",
+          "terms"
+        ],
+        "type": "object"
+      },
       "AnnotationBody": {
         "additionalProperties": false,
         "description": "One annotation as stored.",
@@ -703,6 +839,14 @@
           "environments"
         ],
         "type": "object"
+      },
+      "ArgumentIn": {
+        "description": "Where an argument goes on the wire.",
+        "enum": [
+          "path",
+          "query"
+        ],
+        "type": "string"
       },
       "ArtifactBody": {
         "additionalProperties": false,
@@ -3899,6 +4043,10 @@
         "additionalProperties": false,
         "description": "`GET …/deployments`.",
         "properties": {
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9): when the list was read (UTC, RFC 3339).",
+            "type": "string"
+          },
           "deployments": {
             "items": {
               "$ref": "#/components/schemas/DeploymentBody"
@@ -3907,7 +4055,8 @@
           }
         },
         "required": [
-          "deployments"
+          "deployments",
+          "as_of"
         ],
         "type": "object"
       },
@@ -7522,6 +7671,10 @@
         "additionalProperties": false,
         "description": "One page of a project's merge requests, newest first.",
         "properties": {
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9): when the page was read (UTC, RFC 3339).",
+            "type": "string"
+          },
           "merge_requests": {
             "items": {
               "$ref": "#/components/schemas/MergeRequestBody"
@@ -7538,7 +7691,8 @@
           }
         },
         "required": [
-          "merge_requests"
+          "merge_requests",
+          "as_of"
         ],
         "type": "object"
       },
@@ -7632,6 +7786,10 @@
                 "description": "`null` before the first version."
               }
             ]
+          },
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9, added within `schema_version` 1): when the\nstatus was read (UTC, RFC 3339).",
+            "type": "string"
           },
           "carried_from_target_sha": {
             "description": "Plan 18 S4 (added within `schema_version` 1): the target tip the\nmergeability result was computed against, when it answers for the\ntarget's current tip only because it was carried forward — every\nlanding since touched no path this merge request's change can\ninteract with. `null`: computed against the current tip (or no\nresult answers for it). The decision is the same either way; the\nmerge queue merges the change again before anything lands.",
@@ -7735,7 +7893,8 @@
           "discussions",
           "work_item_link",
           "codeowners",
-          "viewer"
+          "viewer",
+          "as_of"
         ],
         "type": "object"
       },
@@ -8704,6 +8863,13 @@
         "additionalProperties": false,
         "description": "A pipeline (with its jobs on the one-pipeline routes).",
         "properties": {
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9): when it was read (UTC, RFC 3339); only on\n`GET …/{pipeline_id}`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "copy_mark": {
             "description": "The confidential marks at `sha` when it was created: `open`,\n`confidential`, `undecided` (ADR-0029 decision 5).",
             "type": "string"
@@ -8920,6 +9086,10 @@
         "additionalProperties": false,
         "description": "`GET …/pipelines`.",
         "properties": {
+          "as_of": {
+            "description": "Plan 19 §3.3 (L5-9): when the page was read (UTC, RFC 3339).",
+            "type": "string"
+          },
           "next_before": {
             "description": "Pass as `before` for the next page; `null` on the last.",
             "format": "int64",
@@ -8938,7 +9108,8 @@
         },
         "required": [
           "pipelines",
-          "next_before"
+          "next_before",
+          "as_of"
         ],
         "type": "object"
       },
@@ -12690,16 +12861,22 @@
             "type": "array"
           },
           "pattern": {
+            "description": "Empty when `withheld`.",
             "type": "string"
           },
           "satisfied": {
+            "type": "boolean"
+          },
+          "withheld": {
+            "description": "Plan 19 §5 (L5-9, added within `schema_version` 1): an agent\naudience (an agent's token, a service account, acting for a person)\nis not shown a pattern matching a file confidential at the head, the\ntarget's tip or the default branch (\"機密のため表示しません\"); the\nowners stay.",
             "type": "boolean"
           }
         },
         "required": [
           "pattern",
           "owners",
-          "satisfied"
+          "satisfied",
+          "withheld"
         ],
         "type": "object"
       },
@@ -16819,6 +16996,35 @@
         "x-forge-action": "AdminSessionList"
       }
     },
+    "/api/v1/ai-tools": {
+      "get": {
+        "operationId": "get_api_v1_ai_tools",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiToolPackBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Kanflow's read-only tool pack (plan 02 §6 F-18): each tool's name, description, JSON Schema arguments and route, called acting for the person who asked (Forge-Act-As, no assertion), and the plain words of every state name the tools answer (read_api; never acting for a person)",
+        "x-forge-action": "AiToolList"
+      }
+    },
     "/api/v1/groups": {
       "get": {
         "operationId": "get_api_v1_groups",
@@ -19566,7 +19772,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers)",
+        "summary": "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target and as_of (project readers; also acting for a person: kanflow's tool, without the commit author's name and address)",
         "x-forge-action": "DeployRead"
       },
       "post": {
@@ -20997,6 +21203,15 @@
               "maximum": 9223372036854775807,
               "minimum": 1,
               "type": "integer"
+            }
+          },
+          {
+            "description": "PBI-<n>: only the merge requests openly linked to that work item of the project's binding (plan 19 L5-9)",
+            "in": "query",
+            "name": "work_item",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -23397,7 +23612,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit (project readers; metadata only)",
+        "summary": "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit and as_of (project readers, also acting for a person: kanflow's tool; metadata only)",
         "x-forge-action": "PipelineRead"
       },
       "post": {
@@ -23498,7 +23713,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt); 404 FG-REPO-0005 when the project has no such pipeline (project readers; metadata only)",
+        "summary": "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt) and as_of; 404 FG-REPO-0005 when the project has no such pipeline (project readers, also acting for a person: kanflow's tool; metadata only)",
         "x-forge-action": "PipelineRead"
       }
     },

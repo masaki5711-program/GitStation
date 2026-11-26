@@ -107,6 +107,12 @@ impl Confidential {
         self.paths.is_empty() && self.partial.is_empty()
     }
 
+    /// Whether `f` holds for one of the marked paths (rules 1 and 2; a
+    /// partial answer's unread files are [`Self::is_partial`]'s).
+    pub fn any_path(&self, mut f: impl FnMut(&str) -> bool) -> bool {
+        self.paths.iter().any(|p| f(p))
+    }
+
     /// Some confidential paths (at most `n`, in order) — for a log line.
     pub fn first(&self, n: usize) -> Vec<&str> {
         self.paths.iter().take(n).map(String::as_str).collect()

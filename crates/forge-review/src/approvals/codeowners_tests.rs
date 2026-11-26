@@ -417,3 +417,17 @@ fn every_combining_mark_is_refused() {
     // A spacing letter of the same scripts is a plain character.
     parse("ทดสอบ/ @a\n".as_bytes()).expect("Thai letters");
 }
+
+/// Plan 19 §5 (L5-9): one pattern against one path, as a rule matches;
+/// a pattern that does not compile matches everything (fail closed).
+#[test]
+fn pattern_matches_as_a_rule_and_an_invalid_pattern_matches_all() {
+    assert!(pattern_matches("/secret/plan.md", "secret/plan.md"));
+    assert!(pattern_matches("/secret/", "secret/plan.md"));
+    assert!(pattern_matches("*.md", "docs/a/plan.md"));
+    assert!(pattern_matches("SECRET/", "secret/plan.md"));
+    assert!(!pattern_matches("/src/", "secret/plan.md"));
+    assert!(!pattern_matches("/secret/other.md", "secret/plan.md"));
+    assert!(pattern_matches("[bad", "anything.txt"));
+    assert!(pattern_matches("!negated", "anything.txt"));
+}

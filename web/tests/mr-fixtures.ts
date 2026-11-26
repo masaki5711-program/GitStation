@@ -39,6 +39,7 @@ export function status(
 ): MergeStatus {
   return {
     schema_version: 1,
+    as_of: '2026-11-26T00:00:00Z',
     iid: 3,
     head_sha: 'b'.repeat(40),
     merge_result_sha: null,

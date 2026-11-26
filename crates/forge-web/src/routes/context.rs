@@ -147,6 +147,9 @@ pub(crate) fn audience<R: ResourceCtx>(request: &Dispatched<R>) -> Result<Audien
     let principal = request.principal();
     Ok(if principal.is_agent() {
         Audience::Agent("agent_token")
+    } else if principal.act_as_credential().is_some() {
+        // Plan 19 §3.3 (L5-9): kanflow's AI chat acting for a person.
+        Audience::Agent("act_as")
     } else if principal.account_kind() == AccountKind::ServiceAccount {
         Audience::Agent("service_account")
     } else if principal.account_kind() == AccountKind::Bot {

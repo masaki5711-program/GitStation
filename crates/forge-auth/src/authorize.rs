@@ -901,6 +901,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // Plan 20 K3 (ADR-0040): searching is open like listing; every hit
         // is decided again with `ProjectRead` / `MergeRequestList`.
         (Action::SearchQuery, Resource::Instance) => Ok(()),
+        // Plan 19 §3.3 (L5-9): the tool pack is static data; each tool is
+        // a route decided on its own resource.
+        (Action::AiToolList, Resource::Instance) => Ok(()),
 
         // --- merge requests (M3 R1a, ADR-0024 §12) ---
         // Listing and reading as the repository browse API.
@@ -1763,6 +1766,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::ProjectRead
             | Action::ProjectList
             | Action::SearchQuery
+            | Action::AiToolList
             | Action::ProjectCreate
             | Action::ProjectUpdate
             | Action::ProjectVisibilityChange
@@ -1951,6 +1955,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
 fn audience_of(principal: &Principal) -> &'static str {
     if principal.is_agent() {
         return "agent_token";
+    }
+    if principal.act_as_credential().is_some() {
+        return "act_as";
     }
     match principal.account_kind() {
         AccountKind::ServiceAccount => "service_account",
