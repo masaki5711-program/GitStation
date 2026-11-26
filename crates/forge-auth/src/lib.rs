@@ -22,6 +22,8 @@ mod auto_merge;
 mod autofix;
 // ADR-0036: the PFS portal's arm.
 mod codeowners_ctx;
+// Plan 17 P17-5: the improvement-draft token (`pfs-ai-bot`).
+mod improve_draft;
 mod portal;
 // M4 C5: the CI outputs (ADR-0029 decision 5).
 mod ci_output;
@@ -78,6 +80,8 @@ mod matrix_rows_autofix;
 mod matrix_rows_portal;
 // Plan 17 P17-3: ai_assets.enabled.
 mod matrix_rows_ai_assets;
+// Plan 17 P17-5: the improvement-draft token (`pfs-ai-bot`).
+mod matrix_rows_pfs_ai_bot;
 // M5 L5-4 (plan 19 §8.2): the local LLM's actions.
 mod matrix_rows_llm;
 // ADR-0038 §2: org bindings.

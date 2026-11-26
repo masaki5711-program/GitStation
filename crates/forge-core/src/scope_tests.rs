@@ -1,6 +1,6 @@
 use crate::Scope;
 
-const ALL: [(Scope, &str); 10] = [
+const ALL: [(Scope, &str); 11] = [
     (Scope::ReadRepository, "read_repository"),
     (Scope::WriteRepository, "write_repository"),
     (Scope::ReadApi, "read_api"),
@@ -11,6 +11,7 @@ const ALL: [(Scope, &str); 10] = [
     (Scope::UserEmail, "user_email"),
     (Scope::UserEmployeeNumber, "user_employee_number"),
     (Scope::ActAs, "act_as"),
+    (Scope::ImproveDraft, "improve_draft"),
 ];
 
 #[test]
@@ -132,4 +133,18 @@ fn act_as_scope_satisfies_only_itself() {
         assert!(!other.satisfies(Scope::ActAs), "{other:?}");
     }
     assert!(Scope::ActAs.satisfies(Scope::ActAs));
+}
+
+/// Plan 17 P17-5: `improve_draft` satisfies only itself; no other scope —
+/// `api`, `write_repository` and `admin` included — satisfies it.
+#[test]
+fn improve_draft_scope_satisfies_only_itself() {
+    for other in Scope::ALL {
+        if other == Scope::ImproveDraft {
+            continue;
+        }
+        assert!(!Scope::ImproveDraft.satisfies(other), "{other:?}");
+        assert!(!other.satisfies(Scope::ImproveDraft), "{other:?}");
+    }
+    assert!(Scope::ImproveDraft.satisfies(Scope::ImproveDraft));
 }

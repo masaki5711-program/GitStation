@@ -114,8 +114,9 @@ fn is_unique_violation(e: &sqlx::Error, constraint: &str) -> bool {
 /// Add a key for `new.user`: one `ssh_key.added` audit row. The owner's
 /// row is locked (`FOR UPDATE`) so concurrent adds keep the per-user
 /// limit. Errors (nothing written): `FG-AUTH-0023` with `reason` =
-/// `title_invalid`, `owner_disabled`, `limit`, `duplicate` (the
-/// fingerprint is registered to anyone); `FG-REPO-0005` for an unknown
+/// `title_invalid`, `owner_disabled`, `improve_draft_account` (plan 17
+/// P17-5: the owner holds an improvement-draft token), `limit`,
+/// `duplicate` (the fingerprint is registered to anyone); `FG-REPO-0005` for an unknown
 /// owner.
 pub async fn add(db: &Db, ctx: &ChangeContext, new: &NewSshKey) -> Result<SshKeyInfo, ForgeError> {
     let user = new.user;
@@ -150,6 +151,24 @@ pub async fn add(db: &Db, ctx: &ChangeContext, new: &NewSshKey) -> Result<SshKey
         }
         if state != "active" {
             return Err(refuse("owner_disabled"));
+        }
+        // Plan 17 P17-5: an account holding an improvement-draft token
+        // (`pfs-ai-bot`) gets no SSH key — a key would push past its arm.
+        let draft_live: i64 = tx
+            .step(|c| async move {
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM forge.tokens WHERE user_id = $1 \
+                     AND revoked_at IS NULL AND expires_at > now() \
+                     AND 'improve_draft' = ANY (scopes)",
+                )
+                .bind(user.get())
+                .fetch_one(c)
+                .await
+                .map_err(|e| query_error("ssh_keys.add.improve_draft", e))
+            })
+            .await?;
+        if draft_live > 0 {
+            return Err(refuse("improve_draft_account"));
         }
         let held: i64 = tx
             .step(|c| async move {

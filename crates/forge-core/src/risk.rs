@@ -632,6 +632,12 @@ const AGENT_CONFIG_DIRS: &[&str] = &[".CLAUDE", ".GITSTATION"];
 /// are not; each as the developer's file system reads it ([`names`]), so
 /// `.Claude/`, `.claude./` and `.cl<U+200B>aude/` are.
 fn is_agent_config(path: &str) -> bool {
+    is_agent_config_path(path)
+}
+
+/// [`is_agent_config`] for other crates' path rules (plan 17 P17-5: an
+/// improvement draft never changes agent configuration).
+pub fn is_agent_config_path(path: &str) -> bool {
     let name = basename(path);
     AGENT_CONFIG_FILES.iter().any(|n| names(name, n))
         || components(path).any(|c| AGENT_CONFIG_DIRS.iter().any(|d| names(c, d)))

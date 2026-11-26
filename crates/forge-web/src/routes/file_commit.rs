@@ -352,6 +352,9 @@ async fn commit_inner(
             ForgeError::new(ErrorCode::Internal).with_context("reason", "proof_without_project")
         );
     };
+    // Plan 17 P17-5: an improvement-draft token (`pfs-ai-bot`) changes no
+    // protected path, and what it opens is a draft.
+    let improve_draft = request.principal().is_improve_draft();
     let peer = request.peer();
     let agent = user_agent(&request);
     // Nothing of the request (not `Sync`) is held across an await.
@@ -372,6 +375,13 @@ async fn commit_inner(
     let input = &w.input;
     let checked = check(input, smart.limits.push_max_blob_bytes).map_err(fail)?;
     scan(&input.content, &checked.path, &log).map_err(fail)?;
+    if improve_draft && forge_core::improve_draft::is_protected_path(checked.path.as_str()) {
+        return Err(fail(
+            ForgeError::new(ErrorCode::PushProtectedPath)
+                .with_context("path", checked.path.as_str())
+                .with_context("rule", "protected_path"),
+        ));
+    }
 
     // Step 3: the ref update decided like a push's, before git writes.
     let rules = bounded(
@@ -546,7 +556,7 @@ async fn open_merge_request(
                 iid: None,
                 author: user,
                 state: MergeRequestState::Open,
-                draft: false,
+                draft: w.proof.principal().is_improve_draft(),
                 source_branch: checked.target.clone(), // clone: the context owns it
                 target_branch: checked.branch.clone(), // clone: as above
             },

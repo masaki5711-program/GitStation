@@ -363,6 +363,12 @@ fn only_people_only_actions_refuse_by_account_kind() {
                             e.code() == ErrorCode::Forbidden
                                 && matches!(r.actor, crate::matrix::Actor::ActAs(_))
                         }
+                        // Plan 17 P17-5: the improvement-draft token is a
+                        // service account's only.
+                        (AccountKind::Bot, "improve_draft_not_service_account") => {
+                            e.code() == ErrorCode::Forbidden
+                                && matches!(r.actor, crate::matrix::Actor::PfsAiBot(_))
+                        }
                         // ADR-0036: the portal's widgets are a person's
                         // (the portal arm's not_a_person).
                         (AccountKind::ServiceAccount | AccountKind::Bot, "not_a_person") => {

@@ -41,11 +41,19 @@ pub enum Scope {
     /// (`api` and `admin` included); an act-as action needs it **and** the
     /// action's own scope.
     ActAs,
+    /// An improvement-draft token (plan 17 P17-5, ADR-0035 Amendment
+    /// P17-5): a service account's — `pfs-ai-bot` — that may only read its
+    /// member projects, push `refs/heads/improve/*` (create or
+    /// fast-forward, no protected path), open **draft** merge requests from
+    /// such a branch and comment. Issued alone (never with another scope);
+    /// satisfies no other scope and no other scope satisfies it.
+    /// `authorize()` decides such a token in its own arm, closed by default.
+    ImproveDraft,
 }
 
 impl Scope {
     /// Every scope, in declaration order.
-    pub const ALL: [Scope; 10] = [
+    pub const ALL: [Scope; 11] = [
         Scope::ReadRepository,
         Scope::WriteRepository,
         Scope::ReadApi,
@@ -56,6 +64,7 @@ impl Scope {
         Scope::UserEmail,
         Scope::UserEmployeeNumber,
         Scope::ActAs,
+        Scope::ImproveDraft,
     ];
 
     /// The scope named `name` (its `as_str`); `None` for any other string.
@@ -75,6 +84,7 @@ impl Scope {
             Scope::UserEmail => "user_email",
             Scope::UserEmployeeNumber => "user_employee_number",
             Scope::ActAs => "act_as",
+            Scope::ImproveDraft => "improve_draft",
         }
     }
 
