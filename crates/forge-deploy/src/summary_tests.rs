@@ -1,5 +1,8 @@
 //! The approval summary's pure parts (M5 L5-8): the facts' lists, their
 //! text and hash, staleness and when to ask again.
+//!
+//! A synthetic private-key header for the redaction test (no real key):
+//! forge:allow-secret (the push secret check, FG-GIT-0022).
 
 use forge_core::risk::{ChangeStatus, ChangedFile};
 

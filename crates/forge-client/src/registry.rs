@@ -1451,6 +1451,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["id","environment","sha","status"]}"#,
     },
     CommandSpec {
+        name: "deploy summary",
+        summary: "A deployment's approval facts, made by code and always listed in full (merge requests since the last succeeded deployment, migrations, protected paths, CI and deploy config, permission code, forge/risk, failed checks, freeze windows), and apart from them the local LLM's summary as advice (none, shown, or withheld from an agent when confidential; stale when made for other facts). Approving never depends on it (M5 L5-8).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("deployment_id", "positional", true, "The deployment id."),
+        ],
+        examples: &["gstn deploy summary --project 7 12 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/deployments/{deployment_id}/approval-summary"],
+        output: r#"{"type":"object","required":["deployment","facts","summary"]}"#,
+    },
+    CommandSpec {
         name: "deploy approvers",
         summary: "Each deployment environment's approvers (ADR-0038 §3.4): named users, groups, organisation selectors, how many approvals a deployment needs and whether a delegate may approve; unrestricted = any Maintainer (project readers).",
         args: &[arg("--project", "option", true, "The project id.")],

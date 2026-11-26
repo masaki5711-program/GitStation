@@ -511,6 +511,10 @@ gstn = "mr approve"
 reason = "Approval is a person's judgement (C-9); the server refuses an agent token (people_only)."
 
 [[deferred]]
+gstn = "deploy summary"
+reason = "M5 L5-8: Kanflow's approval card reads the approval facts with its own credential; an agent tool (L5-9 question tools) decides then whether an agent needs them."
+
+[[deferred]]
 gstn = "deploy approvers"
 reason = "ADR-0038 step C: reading who approves a deploy environment is a settings read; an agent tool waits for a use."
 
