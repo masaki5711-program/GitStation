@@ -121,3 +121,14 @@ M6（計画 20）は Wiki・個人ノート・横断検索（と最小の Issue�
 - **エラーコード**: `FG-KNOW-0005` NotesProjectMissing（404、info）、`FG-KNOW-0006` NotesCreateRefused（409、info: `already_exists`・`name_taken`）、`FG-KNOW-0007` NotesProvisionFailed（500、warn: `step=provision|seed|link`、指す行は書かない）。runbook `knowledge`「Personal notes」。
 - **検索（K4）**: ノートは非公開のプロジェクトなので、検索の 1 件ずつの判定（`ProjectRead` / `RepoBrowse`）で他人には出ない（`notes_not_in_others_search`）。管理者はすべてのプロジェクトを読めるので管理者の検索には出る — 既存の読みの規則のまま受け入れる。
 - **`gstn note show|create|new`**: `docs/api/agent-tools.toml` ではどれも `excluded`（本人の物で、エージェントの道具にしない）。
+
+## Amendment N2（2026-11-26、ノートの画面）
+
+計画 20 の推奨どおりに作った（利用者の不在中、推奨を採った）。決めたこと:
+
+- **置き場所**: 自分の作業のサイドバー（計画 15）の最後に「ノート」（`/-/notes`、SPA の殻のルート `NOTES_PAGE`、`Action::WebShell`）。プロジェクトのサイドバーには出さない（ノートは人に付く）。
+- **状態**: `GET /api/v1/user/notes` の 404 をコードで分ける（コードは画面に出さず、言葉を選ぶだけ）。`FG-REPO-0005` は「ノートはまだありません — ノートを始める」、`FG-KNOW-0005` は「置き場所が見つかりません（移動か削除）— 作り直す」と問い合わせ番号。ほかの失敗は `user_message` + `request_id` と再試行。
+- **すばやいメモ**: 題名は任意（空なら本文の 1 行目、`gstn note new` と同じ）。保存は 1 クリック（または Ctrl / ⌘ + Enter）。手順は `gstn note new` と同じ: 先端を解決 → そのファイルが無いことを確かめる → 簡単な編集のコミット（`main` へ直接、`start_sha` つき）。本文は `forge_doc::note::quick_note` とバイト単位で同じものをブラウザで組む（`features/noteText.ts`、テストで形を固定）。同じ秒のメモが先端にある、またはその後に書かれた（`FG-GIT-0027`）ときは上書きせず「もう一度保存」を出す。保存の後は本文を空にしてフォーカスを本文に戻し、「保存しました — 開く」を `role=status` で伝える。
+- **一覧**: 文書の API（`doctype=note`）を読む。API は ID の昇順なので、新しい順に並べるために全ページ（100 件 × 最大 20 ページ = 2000 件）を読んで逆にする。上限に当たったら「一部だけ」と出し、検索へ案内する（降順の API は今は足さない — 計ってから）。保存の直後は一覧を読み直すので、すぐ出る。
+- **検索**: 既存の検索 API に `scope=document&project=<ノートのプロジェクト>` を付けて使う（新しいルートは無い）。索引は push の後に追いつくので、結果なしのときは「保存したばかりのメモは 1 分ほどで出ます」と「一覧に戻る」を出す。
+- **E2E**: 計画の `quick_note_saved_and_found` は、ほかの画面と同じく vitest のジャーニー（本物のクライアント + 模擬のルート表 + axe）で書いた。本物のサーバーでの Playwright は未了（`e2e-runner` の項目）。

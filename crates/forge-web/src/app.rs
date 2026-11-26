@@ -3635,6 +3635,15 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: search results",
                 shell,
             )
+            // The caller's notes (plan 20 N2): the "My work" sidebar's
+            // notes page, reloaded or opened from a bookmark.
+            .route(
+                verb,
+                NOTES_PAGE,
+                Action::WebShell,
+                "SPA shell: the caller's notes",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -3882,3 +3891,6 @@ pub const MY_ACTIVITY_PAGE: &str = "/-/activity";
 pub const ADMIN_PAGE: &str = "/-/admin";
 /// The search results page (plan 20 K5; the API is `GET /api/v1/search`).
 pub const SEARCH_PAGE: &str = "/-/search";
+/// The "My work" sidebar's notes page (plan 20 N2; the API is
+/// `GET`/`POST /api/v1/user/notes`).
+pub const NOTES_PAGE: &str = "/-/notes";

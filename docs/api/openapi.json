@@ -15573,6 +15573,44 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/-/notes": {
+      "get": {
+        "operationId": "get_notes",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's notes",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_notes",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's notes",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/notifications": {
       "get": {
         "operationId": "get_notifications",

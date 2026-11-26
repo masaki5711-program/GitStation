@@ -1,0 +1,169 @@
+/* /-/notes (plan 20 N2). Tokens only; the head is ui/PageHeader. The quick
+ * note is the one thing to do here, so it leads: a card with the accent rule
+ * on its top edge. My notes follow as a calm list, newest first. */
+.page {
+  max-width: var(--gs-content-max-width);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gs-space-6);
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .layout {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  }
+}
+
+.sectionTitle {
+  margin: 0 0 var(--gs-space-3);
+  color: var(--gs-color-heading);
+  font-size: var(--gs-font-size-lg);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.quick {
+  composes: card from '../../ui/surfaces.module.css';
+  padding: var(--gs-space-4) var(--gs-space-5);
+  border-top: var(--gs-accent-border-width) solid var(--gs-color-accent);
+}
+
+.body {
+  min-height: var(--gs-editor-min-height);
+  resize: vertical;
+  font-family: var(--gs-font-body);
+  line-height: var(--gs-line-height);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-3);
+}
+
+.shortcut {
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+/* The saved line: what happened and where to look (empty until a save). */
+.saved {
+  margin: var(--gs-space-3) 0 0;
+  color: var(--gs-color-success-text);
+  font-size: var(--gs-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.saved:empty {
+  margin: 0;
+}
+
+.saveError {
+  margin: 0 0 var(--gs-space-3);
+}
+
+.inlineError {
+  margin: 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-danger-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.mine {
+  min-width: 0;
+}
+
+.searchForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin-bottom: var(--gs-space-3);
+}
+
+.searchInput {
+  flex: 1 1 12rem;
+  min-width: 0;
+  min-height: var(--gs-tap-target);
+}
+
+.status {
+  margin: 0 0 var(--gs-space-2);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.list {
+  composes: card from '../../ui/surfaces.module.css';
+  margin: 0 0 var(--gs-space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border-bottom: 1px solid var(--gs-color-border-subtle);
+}
+
+.item:last-child {
+  border-bottom: none;
+}
+
+.itemTitle {
+  font-weight: var(--gs-font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.itemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  margin: var(--gs-space-1) 0 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.badge {
+  composes: badge from '../../components/controls.module.css';
+  font-size: var(--gs-font-size-xs);
+}
+
+.snippet {
+  margin: var(--gs-space-2) 0 0;
+  padding-left: var(--gs-space-3);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-accent);
+  font-size: var(--gs-font-size-sm);
+  line-height: var(--gs-line-height);
+  overflow-wrap: anywhere;
+}
+
+.cutBefore::before,
+.cutAfter::after {
+  content: '…';
+  color: var(--gs-color-text-muted);
+}
+
+.mark {
+  padding: 0 1px;
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.note {
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-xs);
+}
+
+.more {
+  display: flex;
+  justify-content: center;
+}

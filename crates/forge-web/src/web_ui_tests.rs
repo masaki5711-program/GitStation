@@ -161,6 +161,8 @@ const SHELL_PATHS: &[&str] = &[
     "/-/admin",
     // The search results (plan 20 K5).
     "/-/search",
+    // The caller's notes (plan 20 N2).
+    "/-/notes",
 ];
 
 #[tokio::test]
@@ -369,6 +371,7 @@ fn the_shell_route_gate_reads_the_spa_route_tables() {
         "/-/merge-requests",
         "/-/activity",
         "/-/search",
+        "/-/notes",
         "/-/notifications",
         "/-/projects/1",
         "/-/confirm/projects/1/merge-requests/1",

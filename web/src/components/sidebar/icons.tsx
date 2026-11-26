@@ -101,6 +101,12 @@ export const ICONS = {
       <path d="M9 9h6M9 13h6M9 17h3" />
     </Icon>
   ),
+  notes: (
+    <Icon>
+      <path d="M5 4h10l4 4v12H5Z" />
+      <path d="M15 4v4h4M8 12h8M8 16h5" />
+    </Icon>
+  ),
   wiki: (
     <Icon>
       <path d="M4 5a1 1 0 0 1 1-1h5a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H5a1 1 0 0 1-1-1Z" />
