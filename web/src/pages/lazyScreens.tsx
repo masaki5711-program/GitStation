@@ -120,6 +120,7 @@ export function loadAllScreens(): Promise<unknown[]> {
 export const BlameScreen = screen(() => loaders.blame().then((m) => m.BlameScreen));
 export const CompareScreen = screen(() => loaders.compare().then((m) => m.CompareScreen));
 export const SearchScreen = screen(() => loaders.search().then((m) => m.SearchScreen));
+export const NotesScreen = screen(() => loaders.notes().then((m) => m.NotesScreen));
 // The full activity list is opened from Home's "see all" now and then;
 // split out to keep the first load within its budget (plan 20 K5).
 export const Activity = screen(() => loaders.activity().then((m) => m.Activity));

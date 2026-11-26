@@ -22,6 +22,7 @@ export const loaders = {
   blame: () => import('./repo/BlameScreen'),
   compare: () => import('./repo/CompareScreen'),
   search: () => import('./search/SearchScreen'),
+  notes: () => import('./notes/NotesScreen'),
   activity: () => import('./Activity'),
   wiki: () => import('./wiki/WikiScreen'),
 };

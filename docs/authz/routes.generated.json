@@ -200,6 +200,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/notes",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/notes",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/notifications",
     "people_only": false,
     "public": true,

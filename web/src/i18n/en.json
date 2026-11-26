@@ -81,7 +81,8 @@
     "showAll": "See everything inside",
     "mergeRequests": "Merge requests",
     "mrBadge": ", {{shown}} to act on",
-    "activity": "Activity"
+    "activity": "Activity",
+    "notes": "Notes"
   },
   "myMrs": {
     "title": "Merge requests",
@@ -2147,5 +2148,54 @@
     "backToPage": "Back to the page",
     "readerHint": "Pages are created by people who can edit (Developer or above).",
     "noHistory": "There is no history yet."
+  },
+  "notes": {
+    "title": "My notes",
+    "subtitle": "Notes only you can read. Save one and find it later in the list or by searching.",
+    "openProject": "Open as a project",
+    "start": {
+      "reason": "You have no notes yet.",
+      "hint": "This creates a private project only you can read, and your notes are saved there.",
+      "create": "Start my notes",
+      "creating": "Creating…",
+      "missing": "Your notes cannot be found (they were moved or deleted).",
+      "missingHint": "Create them again to keep saving notes in a new place.",
+      "recreate": "Create my notes again",
+      "requestId": "Request ID: {{id}}"
+    },
+    "quick": {
+      "title": "Quick note",
+      "titleLabel": "Title (optional)",
+      "titleHelp": "Left empty, the first line of the text becomes the title.",
+      "bodyLabel": "Text",
+      "bodyHelp": "Markdown works here.",
+      "bodyRequired": "Write some text first.",
+      "tooLong": "Too long. Keep it under {{kib}} KiB.",
+      "save": "Save",
+      "saving": "Saving…",
+      "shortcut": "Ctrl + Enter saves too",
+      "saved": "Saved “{{title}}”.",
+      "open": "Open",
+      "sameSecond": "A note from this very second already exists. Press Save again."
+    },
+    "list": {
+      "title": "Recent notes",
+      "empty": "No notes yet. Write a quick note and save it.",
+      "write": "Write a note",
+      "capped": "Only part of your notes is listed. Search to find older ones."
+    },
+    "search": {
+      "title": "Search notes",
+      "label": "Search notes",
+      "submit": "Search",
+      "clear": "Stop searching",
+      "tooShort": "Type at least {{n}} characters.",
+      "shown_one": "Showing {{count}} note",
+      "shown_other": "Showing {{count}} notes",
+      "none": "No notes match “{{q}}”.",
+      "lag": "A note you just saved shows up in search after about a minute.",
+      "more": "Search further",
+      "backToList": "Back to the list"
+    }
   }
 }
