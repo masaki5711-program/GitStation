@@ -473,6 +473,15 @@ async fn finish_steps(
         "projects.purge.finish.project_wikis",
     )
     .await?;
+    // Plan 20 N1: the notes pointer at this project (the person keeps no
+    // notes; the next creation makes new ones).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.user_notes WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.user_notes",
+    )
+    .await?;
     let members_removed = delete_rows(
         tx,
         "DELETE FROM forge.project_members WHERE project_id = $1",

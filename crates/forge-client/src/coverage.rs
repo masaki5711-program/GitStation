@@ -1238,6 +1238,9 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/wiki",
         Coverage::Command("wiki unlink"),
     ),
+    // Plan 20 N1: a person's notes.
+    ("GET", "/api/v1/user/notes", Coverage::Command("note show")),
+    ("POST", "/api/v1/user/notes", Coverage::Command("note create")),
 ];
 
 /// Commands that call no API route, and why: local work only (C-1 counts

@@ -3448,6 +3448,51 @@
         },
         "type": "object"
       },
+      "CreatedNotesBody": {
+        "additionalProperties": false,
+        "description": "The created notes.",
+        "properties": {
+          "commit": {
+            "description": "The first commit (`.forge/doctypes/note.yml`, `README.md`).",
+            "type": "string"
+          },
+          "default_branch": {
+            "description": "`main`.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The person's login: a note's `owner`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "`<user>/notes`.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "replaced_project_id": {
+            "description": "The stale notes project the pointer named before, now replaced\n(`null` for first notes).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "owner",
+          "default_branch",
+          "commit",
+          "replaced_project_id"
+        ],
+        "type": "object"
+      },
       "CreatedToken": {
         "additionalProperties": false,
         "description": "A created token: the secret, shown this once.",
@@ -8227,6 +8272,37 @@
           "author",
           "body",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "NotesBody": {
+        "additionalProperties": false,
+        "description": "The caller's notes.",
+        "properties": {
+          "default_branch": {
+            "description": "`main`: quick notes are direct commits on it.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The person's login: a note's `owner`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The notes project's full path (`<user>/notes`).",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The notes project.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "owner",
+          "default_branch"
         ],
         "type": "object"
       },
@@ -26723,6 +26799,62 @@
         },
         "summary": "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found, truncated when the scan bound was reached with candidates left)",
         "x-forge-action": "UserMergeRequestList"
+      }
+    },
+    "/api/v1/user/notes": {
+      "get": {
+        "operationId": "get_api_v1_user_notes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotesBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's notes — the private project <user>/notes: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again)",
+        "x-forge-action": "ProjectRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_user_notes",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedNotesBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create the caller's notes in one step: the private project <user>/notes in their own namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/note.yml with owner_kind: user, README.md), then the pointer; a stale pointer (FG-KNOW-0005) is replaced. The person only (never an agent, a service account, acting for a person or CI), api; 409 FG-KNOW-0006 refused (already exists, name taken), 500 FG-KNOW-0007 when a step after the creation failed (no pointer written)",
+        "x-forge-action": "PersonalNotesCreate"
       }
     },
     "/api/v1/user/notification-preferences": {

@@ -3384,6 +3384,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's notes — the private project <user>/notes: {project_id, path, owner, default_branch}; 404 FG-REPO-0005 without notes, 404 FG-KNOW-0005 when the notes project was moved out of <user>/notes or is pending deletion (create them again) */
+        get: operations["get_api_v1_user_notes"];
+        put?: never;
+        /** Create the caller's notes in one step: the private project <user>/notes in their own namespace (also ProjectCreate there), its first commit on main (.forge/doctypes/note.yml with owner_kind: user, README.md), then the pointer; a stale pointer (FG-KNOW-0005) is replaced. The person only (never an agent, a service account, acting for a person or CI), api; 409 FG-KNOW-0006 refused (already exists, name taken), 500 FG-KNOW-0007 when a step after the creation failed (no pointer written) */
+        post: operations["post_api_v1_user_notes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user/notification-preferences": {
         parameters: {
             query?: never;
@@ -4920,6 +4938,25 @@ export interface components {
              *     `<owner segment>-wiki`.
              */
             path?: string | null;
+        };
+        /** @description The created notes. */
+        CreatedNotesBody: {
+            /** @description The first commit (`.forge/doctypes/note.yml`, `README.md`). */
+            commit: string;
+            /** @description `main`. */
+            default_branch: string;
+            /** @description The person's login: a note's `owner`. */
+            owner: string;
+            /** @description `<user>/notes`. */
+            path: string;
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * Format: int64
+             * @description The stale notes project the pointer named before, now replaced
+             *     (`null` for first notes).
+             */
+            replaced_project_id: number | null;
         };
         /** @description A created token: the secret, shown this once. */
         CreatedToken: {
@@ -6716,6 +6753,20 @@ export interface components {
             created_at: string;
             /** Format: int64 */
             id: number;
+        };
+        /** @description The caller's notes. */
+        NotesBody: {
+            /** @description `main`: quick notes are direct commits on it. */
+            default_branch: string;
+            /** @description The person's login: a note's `owner`. */
+            owner: string;
+            /** @description The notes project's full path (`<user>/notes`). */
+            path: string;
+            /**
+             * Format: int64
+             * @description The notes project.
+             */
+            project_id: number;
         };
         /** @description Who added a binding. */
         OrgBindingAuthorBody: {
@@ -17300,6 +17351,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserMergeRequestCounts"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotesBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_user_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedNotesBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

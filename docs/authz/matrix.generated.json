@@ -14,6 +14,7 @@
   { "action": "ProjectTransfer", "allow": 11, "deny": 44, "public": false, "git_operation": false },
   { "action": "ProjectDelete", "allow": 3, "deny": 18, "public": false, "git_operation": false },
   { "action": "ProjectWikiLink", "allow": 4, "deny": 22, "public": false, "git_operation": false },
+  { "action": "PersonalNotesCreate", "allow": 5, "deny": 23, "public": false, "git_operation": false },
   { "action": "ProjectRestore", "allow": 2, "deny": 19, "public": false, "git_operation": false },
   { "action": "ProtectedRefManage", "allow": 8, "deny": 33, "public": false, "git_operation": false },
   { "action": "MemberManage", "allow": 20, "deny": 56, "public": false, "git_operation": false },

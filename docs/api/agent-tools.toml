@@ -598,6 +598,18 @@ reason = "Creating and linking a wiki is a person's decision (plan 20 W1, ADR-00
 gstn = "wiki unlink"
 reason = "Unlinking a wiki removes the members' inherited role (plan 20 W1): ProjectWikiLink is people_only; the server refuses an agent token."
 
+[[excluded]]
+gstn = "note show"
+reason = "A person's own notes (plan 20 N1, ADR-0040 §6): the notes are the person's private project; an agent reads them only through the documents/search tools with the person's own grant, never by asking for 'my notes' (the pointer is per person, not per project)."
+
+[[excluded]]
+gstn = "note create"
+reason = "Creating a person's notes is the person's own decision (plan 20 N1): PersonalNotesCreate is people_only and refuses an agent token, a service account and acting for a person."
+
+[[excluded]]
+gstn = "note new"
+reason = "A quick note is a person's own direct commit to their private notes (plan 20 N1); an agent with write access to a project uses the single-file commit tool there, never a person's notes."
+
 [[deferred]]
 gstn = "search"
 reason = "The knowledge search tool (plan 20 X1) waits for the wiki sources of the M6 W track (documents arrived with K4), so an agent gets one search over all of them; an agent token can call GET /api/v1/search meanwhile (confidential rows are left out for it)."

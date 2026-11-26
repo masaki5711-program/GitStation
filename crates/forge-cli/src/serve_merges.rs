@@ -235,6 +235,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // Plan 20 W1/W2: the wiki link (never a merge's).
         | ErrorCode::WikiLinkRefused
         | ErrorCode::WikiProvisionFailed
+        // Plan 20 N1: personal notes (never a merge's).
+        | ErrorCode::NotesProjectMissing
+        | ErrorCode::NotesCreateRefused
+        | ErrorCode::NotesProvisionFailed
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

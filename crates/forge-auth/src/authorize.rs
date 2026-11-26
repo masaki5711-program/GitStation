@@ -523,6 +523,21 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             need(Role::Maintainer, p.role)
         }
 
+        // Plan 20 N1 (ADR-0040 §6): a person creates their own notes, in
+        // their own namespace only — nobody else's, administrators
+        // included (a person's notes are theirs alone).
+        (Action::PersonalNotesCreate, Resource::Namespace { owner, owner_kind }) => {
+            people_only()?;
+            if *owner_kind != AccountKind::Human {
+                return Err(refused("non_person_namespace"));
+            }
+            if *owner == user {
+                Ok(())
+            } else {
+                Err(deny(ErrorCode::Forbidden).with_context("reason", "foreign_namespace"))
+            }
+        }
+
         (Action::ProjectVisibilityChange, Resource::VisibilityChange { project, .. }) => {
             // Exposing a project to every signed-in user is a person's
             // decision (ADR-0017 amendment, M1 phase 8b MR7a): an agent's
@@ -1769,6 +1784,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::ProjectTransfer
             | Action::ProjectDelete
             | Action::ProjectWikiLink
+            | Action::PersonalNotesCreate
             | Action::ProjectRestore
             | Action::ProtectedRefManage
             | Action::MemberManage

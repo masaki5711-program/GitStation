@@ -18,8 +18,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::doctype::{
-    duration_ok, parse_doctype, Doctype, DoctypeProblem, Pattern, Rule, ValueDef, ValueType,
-    BASE_FIELDS, DEFAULT_BLOCK_ID,
+    duration_ok, parse_doctype, user_owner_ok, Doctype, DoctypeProblem, OwnerKind, Pattern, Rule,
+    ValueDef, ValueType, BASE_FIELDS, DEFAULT_BLOCK_ID,
 };
 use crate::document::{
     parse_document, Block, Classification, Document, MetaField, Problem, Value,
@@ -327,6 +327,7 @@ fn doctype_rule(reason: &'static str) -> &'static str {
         "rule_unknown" => "doctype_rule_unknown",
         "pattern_invalid" => "doctype_pattern_invalid",
         "type_unknown" => "doctype_type_unknown",
+        "owner_kind_invalid" => "doctype_owner_kind_invalid",
         _ => "doctype_invalid",
     }
 }
@@ -410,6 +411,17 @@ fn check_meta(
             "confidential" => {
                 if !matches!(f.value.as_text(), Some("true" | "false")) {
                     report.push(f.line, "classification_invalid");
+                }
+            }
+            // Plan 20 N1 (ADR-0040 §6): a type with `owner_kind: user` (a
+            // personal note) names one person, never a group path.
+            "owner" => {
+                if ty.and_then(|t| t.owner_kind) == Some(OwnerKind::User)
+                    && f.value
+                        .as_text()
+                        .is_some_and(|o| !o.trim().is_empty() && !user_owner_ok(o))
+                {
+                    report.push(f.line, "owner_not_user");
                 }
             }
             "review_cycle" => {
