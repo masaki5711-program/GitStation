@@ -179,5 +179,22 @@ Claude（保守者）がログと成果物だけで失敗を診断できるこ�
 - **失敗**: LLM が使えない・一時停止・off・DB に届かないときも、事実の束を出して exit 0（「診断の道具は止まらない」）。助言が無い理由は
   コード（FG-LLM-0001 など）と問い合わせ番号で出す。材料が読めないときは新しいコード **FG-SYS-0010 DiagnoseSourceUnreadable**（warn。診断のコマンドのログは warn 以上を出すため）で
   1 材料 1 回ログに出し、出力のメモに書いて続ける。
-- **まだ作っていないもの**: `gstn ops diagnosis <id>`（読み取りの経路 `OpsDiagnosisRead` と forge-web の配線、openapi）は次の MR
+- **まだ作っていないもの**（L5-7b で作った。下の Amendment）: `gstn ops diagnosis <id>`（読み取りの経路 `OpsDiagnosisRead` と forge-web の配線、openapi）は次の MR
   （`OpsDiagnosisRead` は forge-web の `PLANNED` のまま）。それまでは `forge diagnose --json` の出力を `incident-commander` が障害の記録に貼る。
+
+## Amendment（2026-11-26、L5-7b `feat/ops-llm-diagnosis-route`: 診断を読む経路）
+
+L5-7 で残した読み取りの経路を作った（計画 19 §3.2「`gstn ops diagnosis <id>` で読む（管理者だけ）」、§8.2 `OpsDiagnosisRead`）。
+選んだこと（計画の推奨どおり）:
+
+- 経路 `GET /api/v1/admin/diagnoses/{advice_id}`（`OpsDiagnosisRead`、インスタンス）。`OpsDiagnosisRead` を forge-web の `PLANNED` から
+  外した。allow / deny の行は L5-4 の `matrix_rows_llm.rs` のまま（管理者・`admin` スコープのトークン・管理者のエージェントのトークンは allow、
+  管理者でない人・`admin` の無いトークンは 404、匿名は 401）。
+- 読み取りは機能のクレート `forge-llm::diagnoses`（forge-web → forge-llm → forge-auth / forge-db、契約 9 の向きのまま）。助言は
+  `advice_decided` で **その助言自身の対象** を読み、対象が `incident`（`subject_id` なし）で目的が `incident_diagnosis` のものだけを返す。
+  ほかの助言の id は 404（この経路から MR・デプロイの助言は開けない）。対象の上で `authorize_advice` をもう一度通し、エージェント
+  （エージェントのトークン・`Forge-Context-Audience: agent`）には `confidential` の診断の本文を出さない（`state = withheld`、計画 §11 の問い 6）。
+- 応答はラベル「AI の助言（提案）」・モデル・プロンプトの版・時刻（`StoredAdvice` に `model` / `prompt_version` / `created_at` を足した）・
+  要約・候補（最大 3、根拠つき）・`degraded`・`superseded_by`。
+- `gstn ops diagnosis <id>`（トークンは `read_api` と `admin`）。エージェントの MCP の道具は `deferred`（障害の指揮は gstn で読む）。forge-client の網羅の表は `Command("ops diagnosis")`。表示する文字はすべて `sanitize` を通す
+  （モデルの文なので）。

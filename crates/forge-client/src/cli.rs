@@ -212,6 +212,13 @@ pub enum Command {
         #[command(subcommand)]
         command: DeployCommand,
     },
+    /// Operator reads (plan 19 L5-7b): a stored incident first diagnosis
+    /// (administrators; a token needs the admin scope).
+    #[command(disable_help_subcommand = true)]
+    Ops {
+        #[command(subcommand)]
+        command: OpsCommand,
+    },
     /// Your delegation of approvals (ADR-0038 §3.5).
     #[command(disable_help_subcommand = true)]
     Delegation {
@@ -2674,6 +2681,20 @@ pub enum DeployCommand {
         /// A delegate may approve for a named person.
         #[arg(long)]
         allow_delegation: bool,
+    },
+}
+
+/// `gstn ops` (plan 19 L5-7b): operator reads.
+#[derive(Subcommand, Debug)]
+pub enum OpsCommand {
+    /// A stored incident first diagnosis (`forge diagnose` on the server):
+    /// the local LLM's advice, at most three cause candidates with their
+    /// evidence and a read-only next look; withheld from an agent when
+    /// confidential.
+    Diagnosis {
+        /// The diagnosis (advice) id `forge diagnose` printed.
+        #[arg(value_parser = parse_id, value_name = "ID")]
+        id: i64,
     },
 }
 

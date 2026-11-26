@@ -40,6 +40,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 pub mod background;
+pub mod diagnoses;
 pub mod kanflow;
 pub mod metrics;
 pub mod ollama;

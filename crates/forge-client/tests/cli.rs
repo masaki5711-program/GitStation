@@ -971,6 +971,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "deploy summary",
             "deploy approvers",
             "deploy approvers-set",
+            "ops diagnosis",
             "delegation show",
             "context work-item",
             "context requirement",

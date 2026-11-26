@@ -95,6 +95,8 @@ pub mod job_fetch;
 pub mod ci_variables;
 // M4 C11: deployments.
 pub mod deploy;
+// Plan 19 L5-7b: a stored incident diagnosis.
+pub mod diagnoses;
 // M4 C12: a project's pipeline schedules.
 pub mod pipeline_schedules;
 // M4 C6: CI artifacts (a job's upload, its needs, the project's reads).

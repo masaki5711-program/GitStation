@@ -321,6 +321,12 @@ pub struct StoredAdvice {
     pub degraded: bool,
     pub input_class: InputClass,
     pub superseded_by: Option<i64>,
+    /// What labels it on a screen (plan 19 §4): the model (`name:tag`),
+    /// the prompt version and when it was made (UTC,
+    /// `YYYY-MM-DDTHH:MM:SSZ`).
+    pub model: String,
+    pub prompt_version: i32,
+    pub created_at: String,
 }
 
 /// What a reader gets for an advice.
@@ -349,6 +355,9 @@ type AdviceRow = (
     bool,
     String,
     Option<i64>,
+    String,
+    i32,
+    String,
 );
 
 fn stored_invalid(column: &'static str) -> ForgeError {
@@ -389,7 +398,9 @@ pub async fn advice_decided(
         .within(QUERY, async {
             sqlx::query_as(
                 "SELECT id, llm_request_id, purpose, subject_kind, subject_id, project_id, \
-                   head_sha, summary, findings, deep_review, degraded, input_class, superseded_by \
+                   head_sha, summary, findings, deep_review, degraded, input_class, superseded_by, \
+                   model, prompt_version, \
+                   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
                  FROM forge.llm_advice WHERE id = $1",
             )
             .bind(id)
@@ -412,6 +423,9 @@ pub async fn advice_decided(
         degraded,
         class,
         sup,
+        model,
+        prompt_version,
+        created_at,
     )) = row
     else {
         return Ok(None);
@@ -437,6 +451,9 @@ pub async fn advice_decided(
         degraded,
         input_class: decided.input_class,
         superseded_by: sup,
+        model,
+        prompt_version,
+        created_at,
     }))))
 }
 
