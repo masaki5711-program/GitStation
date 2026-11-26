@@ -190,6 +190,48 @@ impl World {
         }
     }
 
+    /// A GET with one extra header (M5 L5-8: the audience).
+    async fn call_with_header(&self, uri: &str, who: Principal, header: (&str, &str)) -> Answer {
+        let mut req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header(header.0, header.1)
+            .body(Body::empty())
+            .expect("request");
+        req.extensions_mut().insert(who);
+        let state = AppState::new(
+            "test",
+            Vec::new(),
+            Arc::new(self.t.db.clone()),
+            Lookups {
+                namespaces: Arc::new(self.t.db.clone()),
+                projects: Arc::new(self.t.db.clone()),
+            },
+        )
+        .with_deploy(forge_deploy::Deploy::new(
+            self.t.db.clone(),
+            Arc::new(OnMain),
+            forge_core::deploy::TargetPolicy::default(),
+        ));
+        let res = forge_web::app(state, AppConfig::default())
+            .expect("router")
+            .oneshot(req)
+            .await
+            .expect("infallible");
+        let status = res.status();
+        let raw = res
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .to_vec();
+        Answer {
+            status,
+            json: serde_json::from_slice(&raw).unwrap_or(Value::Null),
+        }
+    }
+
     fn uri(&self, tail: &str) -> String {
         format!("/api/v1/projects/{}/{tail}", self.web.get())
     }
@@ -545,5 +587,124 @@ async fn a_delegation_is_the_persons_own_and_set_in_a_session() {
         (long.status, long.code()),
         (StatusCode::BAD_REQUEST, "FG-WEB-0006")
     );
+    w.t.drop_now().await;
+}
+
+/// M5 L5-8: a confidential approval summary of deployment `id` (`sha`).
+async fn confidential_summary(w: &World, id: i64, sha: &str) {
+    use forge_core::llm::{InputClass, Priority, Purpose, SubjectKind};
+    let req = forge_db::llm::insert_request(
+        &w.t.db,
+        &forge_db::llm::NewRequest {
+            purpose: Purpose::ApprovalSummary,
+            priority: Priority::Interactive,
+            subject_kind: SubjectKind::Deployment,
+            subject_id: Some(id),
+            project: Some(w.web),
+            requested_by: None,
+            model: "qwen3:27b".to_owned(),
+            model_digest: Some("0".repeat(64)),
+            prompt_id: "approval_summary".to_owned(),
+            prompt_version: 1,
+            input_sha256: "0".repeat(64),
+            input_class: InputClass::Confidential,
+            request_id: RequestId::parse("req-llm").expect("id"),
+        },
+    )
+    .await
+    .expect("request");
+    forge_db::llm::insert_advice(
+        &w.t.db,
+        &forge_db::llm::NewAdvice {
+            llm_request_id: Some(req),
+            purpose: Purpose::ApprovalSummary,
+            subject_kind: SubjectKind::Deployment,
+            subject_id: Some(id),
+            project: Some(w.web),
+            head_sha: Some(sha.to_owned()),
+            summary: "顧客の表を変えます。".to_owned(),
+            findings: json!([]),
+            deep_review: None,
+            dropped_findings: 0,
+            degraded: false,
+            input_class: InputClass::Confidential,
+            model: "qwen3:27b".to_owned(),
+            prompt_version: 1,
+        },
+    )
+    .await
+    .expect("advice");
+}
+
+#[tokio::test]
+async fn the_approval_summary_lists_the_facts_and_withholds_confidential_words_from_agents() {
+    let w = World::new().await;
+    w.setup().await;
+    let d = w.request(session(w.developer, false), "prod", 'a').await;
+    let id = d.json["id"].as_i64().expect("id");
+    let uri = w.uri(&format!("deployments/{id}/approval-summary"));
+    // No summary yet: the facts alone, and the screen's sentence.
+    let a = w.call("GET", &uri, session(w.developer, false), None).await;
+    assert_eq!(a.status, StatusCode::OK, "{}", a.json);
+    assert_eq!(a.json["deployment"]["status"], "pending_approval");
+    assert_eq!(a.json["facts"]["range"], "first_deployment");
+    assert_eq!(a.json["summary"]["state"], "none");
+    assert_eq!(a.json["summary"]["note"], "AI の助言は今ありません");
+    assert_eq!(a.json["summary"]["label"], "AI の助言（提案）");
+    // A confidential summary: a person reads it, an agent never does.
+    confidential_summary(&w, id, &"a".repeat(40)).await;
+    let person = w.call("GET", &uri, session(w.developer, false), None).await;
+    assert_eq!(person.json["summary"]["state"], "shown", "{}", person.json);
+    assert_eq!(person.json["summary"]["text"], "顧客の表を変えます。");
+    assert_eq!(person.json["summary"]["model"], "qwen3:27b");
+    let agent = w
+        .call(
+            "GET",
+            &uri,
+            token(w.developer, &[Scope::ReadApi]).as_agent(true),
+            None,
+        )
+        .await;
+    assert_eq!(agent.status, StatusCode::OK, "{}", agent.json);
+    assert_eq!(agent.json["summary"]["state"], "withheld");
+    assert_eq!(agent.json["summary"]["text"], Value::Null);
+    assert!(
+        !agent.json.to_string().contains("顧客"),
+        "the words never reach an agent"
+    );
+    assert_eq!(
+        agent.json["facts"]["range"], "first_deployment",
+        "the facts do"
+    );
+    // A person's token that declares an agent audience is an agent too.
+    let declared = w
+        .call_with_header(
+            &uri,
+            token(w.developer, &[Scope::ReadApi]),
+            ("forge-context-audience", "agent"),
+        )
+        .await;
+    assert_eq!(
+        declared.json["summary"]["state"], "withheld",
+        "{}",
+        declared.json
+    );
+    // An unknown deployment is the invisible 404.
+    let none = w
+        .call(
+            "GET",
+            &w.uri("deployments/999999/approval-summary"),
+            session(w.developer, false),
+            None,
+        )
+        .await;
+    assert_eq!(
+        (none.status, none.code()),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005")
+    );
+    // The summary decides nothing: the approval works as before.
+    let ok = w.approve(session(w.maintainer, false), id).await;
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.json);
+    assert_eq!(ok.json["status"], "queued");
     w.t.drop_now().await;
 }

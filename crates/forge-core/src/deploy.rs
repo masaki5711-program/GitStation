@@ -439,6 +439,23 @@ pub enum DeployChange {
         required: i32,
         allow_delegation: bool,
     },
+    /// `deployment.approval_summarized` (M5 L5-8, plan 19 §3.4): the
+    /// worker asked the local LLM for the approval summary of a deployment
+    /// waiting for an approval. Ids, the SHA and the outcome only — never
+    /// the words (the one deploy change that is a domain event: Kanflow's
+    /// approval card reads the summary with its own credential).
+    ApprovalSummarized {
+        project: ProjectId,
+        deployment: i64,
+        tier: DeployTier,
+        sha: String,
+        /// The advice written (`None`: the LLM failed; the facts stand alone).
+        advice: Option<i64>,
+        /// The gateway's request row, if one was written.
+        llm_request: Option<i64>,
+        /// The LLM's failure (`FG-LLM-…`) when there is no advice.
+        error_code: Option<String>,
+    },
     /// The worker side (the system): `deployment.started` (`running`),
     /// `.succeeded`, `.failed`, `.rolled_back`, `.rollback_failed`,
     /// `.blocked`, `.abandoned` (a `failed` the sweep wrote).
@@ -463,6 +480,7 @@ impl DeployChange {
             Self::Requested { .. } => "deployment.requested",
             Self::Approved { .. } => "deployment.approved",
             Self::ApproversSet { .. } => "deploy_environment.approvers_set",
+            Self::ApprovalSummarized { .. } => "deployment.approval_summarized",
             Self::Progress {
                 abandoned: true, ..
             } => "deployment.abandoned",
@@ -487,7 +505,22 @@ impl DeployChange {
             | Self::Requested { project, .. }
             | Self::Approved { project, .. }
             | Self::ApproversSet { project, .. }
+            | Self::ApprovalSummarized { project, .. }
             | Self::Progress { project, .. } => *project,
+        }
+    }
+
+    /// The domain event of this change: only the approval summary is one
+    /// (M5 L5-8); every other deploy change is an audit row only.
+    pub fn event_type(&self) -> Option<crate::EventType> {
+        match self {
+            Self::ApprovalSummarized { .. } => Some(crate::EventType::DeploymentApprovalSummarized),
+            Self::EnvironmentSet { .. }
+            | Self::TargetSet { .. }
+            | Self::Requested { .. }
+            | Self::Approved { .. }
+            | Self::ApproversSet { .. }
+            | Self::Progress { .. } => None,
         }
     }
 
@@ -581,6 +614,24 @@ impl DeployChange {
                 "selectors": selectors,
                 "approvals_required": required,
                 "allow_delegation": allow_delegation,
+            }),
+            Self::ApprovalSummarized {
+                project,
+                deployment,
+                tier,
+                sha,
+                advice,
+                llm_request,
+                error_code,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "deployment_id": deployment,
+                "environment": tier.as_str(),
+                "sha": sha,
+                "summary": if advice.is_some() { "ready" } else { "unavailable" },
+                "advice_id": advice,
+                "llm_request_id": llm_request,
+                "error_code": error_code,
             }),
             Self::Progress {
                 project,

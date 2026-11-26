@@ -109,6 +109,8 @@ mod portal_news;
 mod org_master;
 // Plan 19 L5-3: the local LLM gateway and its records' upkeep.
 mod llm;
+// Plan 19 L5-8: approval summaries with the gateway.
+mod approval_summary;
 // ── end M3 N1 ──
 mod seal;
 // Plan 20 K4: the `search.index_documents` job.
@@ -229,7 +231,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
         });
         // Plan 19 L5-3: the LLM gateway (enabled only by llm.enabled) and the
         // records' upkeep (always).
-        let llm = llm::start(&cfg.llm, &db, &stopped)?;
+        let llm = llm::start(&cfg.llm, &db, &storage, &stopped)?;
         let purger = purge::Purger::new(&db, storage.root.clone()); // clone: the purge's own handle
         let purge = Some(PurgeTask {
             purger,

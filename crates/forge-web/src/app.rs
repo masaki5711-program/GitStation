@@ -1271,6 +1271,16 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<d::DeploymentBody>(Verb::Post, d::APPROVE)
         .queries(Verb::Post, d::APPROVE, d::APPROVE_QUERY)
+        // M5 L5-8 (plan 19 §3.4): the approval's facts and the LLM's summary.
+        .route_with(
+            Verb::Get,
+            d::APPROVAL_SUMMARY,
+            Action::DeployRead,
+            "A deployment's approval facts, made by code and always listed in full (the merge requests since the environment's last succeeded deployment, migrations, protected paths, CI and deploy configuration, permission code, forge/risk, failed checks, freeze windows), and apart from them the local LLM's summary as advice: state none (the LLM is off, down or has not answered), shown, or withheld (a confidential summary read by an agent); stale when made for other facts or a newer commit was requested. Approving never depends on it; 404 FG-REPO-0005 without the deployment; an act-as request is refused (project readers)",
+            d::OF_PROJECT,
+            d::approval_summary,
+        )
+        .responds::<d::ApprovalSummaryBody>(Verb::Get, d::APPROVAL_SUMMARY)
         // ADR-0038 §3.4–§3.6 (step C): the environments' approvers.
         .route_with(
             Verb::Get,
