@@ -7849,6 +7849,43 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        },
+        {
+          "description": "The deployment id.",
+          "kind": "positional",
+          "name": "deployment_id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn deploy summary --project 7 12 --json"
+      ],
+      "name": "deploy summary",
+      "output": {
+        "required": [
+          "deployment",
+          "facts",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/deployments/{deployment_id}/approval-summary"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A deployment's approval facts, made by code and always listed in full (merge requests since the last succeeded deployment, migrations, protected paths, CI and deploy config, permission code, forge/risk, failed checks, freeze windows), and apart from them the local LLM's summary as advice (none, shown, or withheld from an agent when confidential; stale when made for other facts). Approving never depends on it (M5 L5-8)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         }
       ],
       "examples": [

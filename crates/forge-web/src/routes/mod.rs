@@ -81,6 +81,8 @@ pub mod user_merge_requests;
 pub mod portal_widgets;
 pub mod user_sessions;
 pub mod users;
+// The `gstn` CLI distribution.
+pub mod clients;
 // ── M3 O2: the push mirror's administration ──
 pub mod push_mirror;
 // ── end M3 O2 ──

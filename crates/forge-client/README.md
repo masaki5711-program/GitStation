@@ -16,7 +16,12 @@ pure `forge-doc` (the document lint and format `gstn doc` shares with
 ### インストール
 
 `gstn`（Windows は `gstn.exe`）を PATH の通った場所に置きます。インストーラーやランタイムは要りません。
-配布（ポータルからのダウンロード、SHA-256 と署名、`gstn self-update`）は別の MR で足します。
+GitStation の画面（設定 → アクセストークン →「CLI（gstn）をダウンロード」）から、Windows（x86_64）と
+Linux（x86_64）の `gstn` をダウンロードできます。表の SHA-256 と、ダウンロードしたファイルの SHA-256
+（`certutil -hashfile gstn.exe SHA256` / `sha256sum gstn`）が同じことを確かめてください。
+API では `GET /api/v1/clients`（一覧）と `GET /api/v1/clients/gstn/{target}/binary`（`read_api` のトークン）。
+バイナリはイメージのビルドが作り、サーバーの `clients.dir` に置かれます（Runbook `cli-distribution`）。
+署名と `gstn self-update` は別の MR で足します（`self-update` の名前は予約済み）。
 
 ### 設定
 

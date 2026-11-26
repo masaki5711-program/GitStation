@@ -43,6 +43,7 @@ pub mod background;
 pub mod kanflow;
 pub mod metrics;
 pub mod ollama;
+pub mod prompts;
 pub mod records;
 pub mod sched;
 

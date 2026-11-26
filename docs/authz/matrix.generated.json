@@ -134,6 +134,7 @@
   { "action": "RunnerJobComplete", "allow": 2, "deny": 17, "public": false, "git_operation": false },
   { "action": "AuditRead", "allow": 4, "deny": 14, "public": false, "git_operation": false },
   { "action": "UserSelfRead", "allow": 5, "deny": 15, "public": false, "git_operation": false },
+  { "action": "ClientDownload", "allow": 5, "deny": 16, "public": false, "git_operation": false },
   { "action": "SessionRead", "allow": 3, "deny": 17, "public": false, "git_operation": false },
   { "action": "SessionList", "allow": 2, "deny": 16, "public": false, "git_operation": false },
   { "action": "SessionRevoke", "allow": 2, "deny": 20, "public": false, "git_operation": false },

@@ -58,6 +58,7 @@ fn job(name: &str, tags: &[&str]) -> NewCiJob {
         tags: tags.iter().map(|t| (*t).to_owned()).collect(),
         secrets: Vec::new(),
         manual: false,
+        artifacts_keep: false,
     }
 }
 

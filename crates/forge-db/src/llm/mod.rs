@@ -558,6 +558,152 @@ pub async fn review_mode(db: &Db, project: ProjectId) -> Result<ReviewMode, Forg
     }
 }
 
+/// The newest advice of a subject and purpose, with what labels it on a
+/// screen (plan 19 §4: the model, the prompt version, when) and the
+/// SHA-256 of the input it was made from (`None`: its request was swept),
+/// so a reader can tell whether the facts it summarized are still the
+/// facts (M5 L5-8). Its words are read with [`advice_decided`] only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdviceLabel {
+    pub id: i64,
+    pub llm_request_id: Option<i64>,
+    pub head_sha: Option<String>,
+    pub input_sha256: Option<String>,
+    pub model: String,
+    pub prompt_version: i32,
+    /// UTC, `YYYY-MM-DDTHH:MM:SSZ`.
+    pub created_at: String,
+}
+
+/// The newest advice of `purpose` about `kind` / `subject` (`None`: none).
+pub async fn latest_advice(
+    db: &Db,
+    kind: SubjectKind,
+    subject: i64,
+    purpose: Purpose,
+) -> Result<Option<AdviceLabel>, ForgeError> {
+    const QUERY: &str = "llm.latest_advice";
+    type Row = (
+        i64,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        String,
+        i32,
+        String,
+    );
+    let row: Option<Row> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT a.id, a.llm_request_id, a.head_sha, r.input_sha256, a.model, \
+                 a.prompt_version, \
+                 to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
+                 FROM forge.llm_advice a \
+                 LEFT JOIN forge.llm_requests r ON r.id = a.llm_request_id \
+                 WHERE a.subject_kind = $1 AND a.subject_id = $2 AND a.purpose = $3 \
+                 ORDER BY a.id DESC LIMIT 1",
+            )
+            .bind(kind.as_str())
+            .bind(subject)
+            .bind(purpose.as_str())
+            .fetch_optional(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(row.map(
+        |(id, llm_request_id, head_sha, input_sha256, model, prompt_version, created_at)| {
+            AdviceLabel {
+                id,
+                llm_request_id,
+                head_sha,
+                input_sha256,
+                model,
+                prompt_version,
+                created_at,
+            }
+        },
+    ))
+}
+
+/// The requests already made of `purpose` about `kind` / `subject` with
+/// one input (its SHA-256): what a feature reads before asking again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AskedBefore {
+    /// Queued, running or succeeded: asked, or answered.
+    pub live_or_answered: i64,
+    /// Failed or abandoned within the last `recent_secs`.
+    pub failed_recently: i64,
+    /// Every request of this input.
+    pub total: i64,
+}
+
+/// [`AskedBefore`] of one input.
+pub async fn asked_before(
+    db: &Db,
+    purpose: Purpose,
+    kind: SubjectKind,
+    subject: i64,
+    input_sha256: &str,
+    recent_secs: i64,
+) -> Result<AskedBefore, ForgeError> {
+    const QUERY: &str = "llm.asked_before";
+    let (live_or_answered, failed_recently, total): (i64, i64, i64) = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT count(*) FILTER (WHERE state IN ('queued', 'running', 'succeeded')), \
+                 count(*) FILTER (WHERE state IN ('failed', 'abandoned') \
+                 AND finished_at > now() - make_interval(secs => $5)), \
+                 count(*) \
+                 FROM forge.llm_requests \
+                 WHERE purpose = $1 AND subject_kind = $2 AND subject_id = $3 \
+                 AND input_sha256 = $4",
+            )
+            .bind(purpose.as_str())
+            .bind(kind.as_str())
+            .bind(subject)
+            .bind(input_sha256)
+            .bind(recent_secs as f64)
+            .fetch_one(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(AskedBefore {
+        live_or_answered,
+        failed_recently,
+        total,
+    })
+}
+
+/// The newest request of `purpose` about `kind` / `subject` with one input:
+/// its id and FG code (`None`: none). A feature that got the gateway's
+/// error back names the request with it (its own event, M5 L5-8).
+pub async fn last_request(
+    db: &Db,
+    purpose: Purpose,
+    kind: SubjectKind,
+    subject: i64,
+    input_sha256: &str,
+) -> Result<Option<(i64, Option<String>)>, ForgeError> {
+    const QUERY: &str = "llm.last_request";
+    db.within(QUERY, async {
+        sqlx::query_as(
+            "SELECT id, error_code FROM forge.llm_requests WHERE purpose = $1 \
+             AND subject_kind = $2 AND subject_id = $3 AND input_sha256 = $4 \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(purpose.as_str())
+        .bind(kind.as_str())
+        .bind(subject)
+        .bind(input_sha256)
+        .fetch_optional(db.write_pool())
+        .await
+        .map_err(|e| query_error(QUERY, e))
+    })
+    .await
+}
+
 /// Whether an interactive request is queued or running (younger than
 /// [`INTERACTIVE_STALE_SECS`]): the `gpu-eval` claim waits for it.
 pub async fn interactive_active(db: &Db) -> Result<bool, ForgeError> {

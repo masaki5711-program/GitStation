@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`; M3 R6: `merge_settings.codeowners_enforcement_changed`, `.codeowners_enforcement_restored`; M3 C1: `check.completed`; M3 I1b: `work_item.linked`, `.unlinked`; M3 I2: `webhook.disabled`; M4 work item relink: `merge_request.work_items_changed`, `merge_request.relink_requested`; M4 C10: `merge_request.revert_drafted`; M4 C14: `merge_request.autofix_finished`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`; M3 R6: `merge_settings.codeowners_enforcement_changed`, `.codeowners_enforcement_restored`; M3 C1: `check.completed`; M3 I1b: `work_item.linked`, `.unlinked`; M3 I2: `webhook.disabled`; M4 work item relink: `merge_request.work_items_changed`, `merge_request.relink_requested`; M4 C10: `merge_request.revert_drafted`; M4 C14: `merge_request.autofix_finished`; M5 L5-8: `deployment.approval_summarized`); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -240,11 +240,21 @@ pub enum EventType {
     /// stable `reason`). Actor `system`. Deduplicated by
     /// `merge_request_autofix_finished:<merge_request_id>:<attempt_id>`.
     MergeRequestAutofixFinished,
+    /// `deployment.approval_summarized` (M5 L5-8, plan 19 §3.4, ADR-0039
+    /// Amendment L5-8; integration class: a deployment is a project
+    /// reader's, `DeployRead`): the worker made (or failed to make) the
+    /// local LLM's approval summary of a deployment waiting for an
+    /// approval. Ids, the SHA and the outcome only — never the summary's
+    /// words (a reader fetches them with `GET
+    /// …/deployments/{deployment_id}/approval-summary`, which withholds a
+    /// confidential one from agents). Actor `system`; deduplicated by
+    /// `deployment_approval_summarized:<deployment_id>:<llm_request_id>`.
+    DeploymentApprovalSummarized,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 43] = [
+    pub const ALL: [EventType; 44] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -288,6 +298,7 @@ impl EventType {
         EventType::MergeRequestRevertDrafted,
         EventType::SpecReleased,
         EventType::MergeRequestAutofixFinished,
+        EventType::DeploymentApprovalSummarized,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -340,6 +351,7 @@ impl EventType {
             EventType::MergeRequestRevertDrafted => "merge_request.revert_drafted",
             EventType::SpecReleased => "spec.released",
             EventType::MergeRequestAutofixFinished => "merge_request.autofix_finished",
+            EventType::DeploymentApprovalSummarized => "deployment.approval_summarized",
         }
     }
 
@@ -377,7 +389,8 @@ impl EventType {
             | EventType::WorkItemUnlinked
             | EventType::SpecReleased
             | EventType::MergeRequestRevertDrafted
-            | EventType::MergeRequestAutofixFinished => VisibilityClass::Integration,
+            | EventType::MergeRequestAutofixFinished
+            | EventType::DeploymentApprovalSummarized => VisibilityClass::Integration,
             EventType::TokenCreated
             | EventType::TokenRevoked
             | EventType::ProjectPurged

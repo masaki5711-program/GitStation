@@ -112,6 +112,9 @@ impl NotificationKind {
             // M4 C12: a published specification version goes to the
             // integrations (Kanflow), not to a person's inbox.
             EventType::SpecReleased => None,
+            // M5 L5-8: an approval summary goes to Kanflow's approval card
+            // (the integration feed), not to a person's inbox.
+            EventType::DeploymentApprovalSummarized => None,
         }
     }
 }

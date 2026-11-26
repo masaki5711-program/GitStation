@@ -32,6 +32,73 @@ fn deployment_line(d: &Value) -> String {
     )
 }
 
+/// The approval facts and the summary as text (M5 L5-8): every fact list
+/// with its count, then the summary apart, labelled as advice.
+fn summary_text(out: &Value) -> String {
+    let empty = Value::Null;
+    let d = out.get("deployment").unwrap_or(&empty);
+    let f = out.get("facts").unwrap_or(&empty);
+    let s = out.get("summary").unwrap_or(&empty);
+    let list = |key: &str, field: Option<&str>| -> Vec<String> {
+        f.get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|v| match field {
+                Some(name) => text(v, name),
+                None => crate::error::sanitize(v.as_str().unwrap_or("")),
+            })
+            .collect()
+    };
+    let mut lines = vec![deployment_line(d)];
+    lines.push(format!(
+        "range: {} (base {}, {} commits)",
+        text(f, "range"),
+        text(f, "base_sha"),
+        text(f, "commits")
+    ));
+    let mrs: Vec<String> = f
+        .get("merge_requests")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|m| {
+            format!(
+                "!{} {} (forge/risk {})",
+                text(m, "iid"),
+                text(m, "title"),
+                text(m, "risk")
+            )
+        })
+        .collect();
+    for (name, items) in [
+        ("merge requests", mrs),
+        ("migrations", list("migrations", None)),
+        ("protected paths", list("protected_paths", Some("path"))),
+        ("ci/deploy config", list("ci_config", None)),
+        ("permission code", list("permissions", None)),
+        ("failed checks", list("failed_checks", Some("name"))),
+        ("freeze windows", list("freeze_windows", None)),
+    ] {
+        lines.push(format!("{name}: {}", items.len()));
+        lines.extend(items.into_iter().map(|i| format!("  - {i}")));
+    }
+    if f.get("lists_truncated") == Some(&Value::Bool(true)) {
+        lines.push("lists: truncated".to_owned());
+    }
+    let stale = if s.get("stale") == Some(&Value::Bool(true)) {
+        format!(" (stale: {})", text(s, "stale_reason"))
+    } else {
+        String::new()
+    };
+    let words = match s.get("state").and_then(Value::as_str) {
+        Some("shown") => text(s, "text"),
+        _ => text(s, "note"),
+    };
+    lines.push(format!("{}{stale}: {words}", text(s, "label")));
+    lines.join("\n")
+}
+
 /// One environment's approvers as a line.
 fn approvers_line(e: &Value) -> String {
     if e.get("unrestricted") == Some(&Value::Bool(true)) {
@@ -221,6 +288,24 @@ pub fn deploy(cli: &Cli, cmd: &DeployCommand, env: EnvFn<'_>, io: &mut Io<'_>) -
             } else {
                 lines.join("\n")
             };
+            emit(io, cli, out, &human)
+        }
+        DeployCommand::Summary {
+            project,
+            deployment,
+        } => {
+            let c = client(cli, env, io)?;
+            let out = call(
+                &c,
+                Method::Get,
+                &format!(
+                    "{}/deployments/{deployment}/approval-summary",
+                    base(*project)
+                ),
+                &[],
+                None,
+            )?;
+            let human = summary_text(&out);
             emit(io, cli, out, &human)
         }
         DeployCommand::Approvers { project } => {

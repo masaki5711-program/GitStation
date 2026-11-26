@@ -36,13 +36,18 @@ pub mod approvers;
 pub mod commits;
 pub mod portal;
 pub mod run;
+pub mod summary;
 pub mod transport;
 
 pub use approvers::{ApproverFact, ApproversSpec, GateFacts};
 pub use forge_db::deploy::{DeploymentApproval, EnvironmentApprovers};
 pub use forge_db::review::ApproverNames;
 
-pub use commits::{CommitFacts, CommitSource, FactsFuture, GitCommits};
+pub use commits::{CommitFacts, CommitSource, FactsFuture, GitCommits, RangeChanges, RangeFuture};
+pub use summary::{
+    ApprovalFacts, ApprovalSummary, CheckFact, MergeRequestFact, PathFact, RangeState, StaleReason,
+    SummaryView,
+};
 
 /// Who asked and with which credential (the audit row's).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -178,6 +178,10 @@ pub struct AppState {
     /// at once and per minute, all persons together (`FG-WEB-0010
     /// route=portal_widgets`), taken before the token is verified.
     pub portal_gate: Arc<routes::portal_widgets::WidgetGate>,
+    /// The `gstn` binaries this server distributes (`clients.dir`;
+    /// `forge serve` always sets it; without it the client routes answer
+    /// `FG-SYS-0001 reason=clients_unconfigured`).
+    pub clients: Option<Arc<routes::clients::ClientDist>>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -244,7 +248,15 @@ impl AppState {
             ssh_info: None,
             portal: None,
             portal_gate: Arc::default(),
+            clients: None,
         }
+    }
+
+    /// The `gstn` distribution directory (runbook cli-distribution).
+    #[must_use]
+    pub fn with_clients(mut self, clients: routes::clients::ClientDist) -> Self {
+        self.clients = Some(Arc::new(clients));
+        self
     }
 
     /// The PFS portal's widget authenticator (ADR-0036).
@@ -635,6 +647,22 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::users::me,
         )
         .responds::<routes::users::UserSelf>(Verb::Get, routes::users::PATH)
+        // The `gstn` CLI distribution (runbook cli-distribution).
+        .route(
+            Verb::Get,
+            routes::clients::LIST,
+            Action::ClientDownload,
+            "The gstn binaries this server distributes (only the targets present), with version, SHA-256, size and download path",
+            routes::clients::list,
+        )
+        .responds::<routes::clients::ClientList>(Verb::Get, routes::clients::LIST)
+        .route(
+            Verb::Get,
+            routes::clients::BINARY,
+            Action::ClientDownload,
+            "Download one gstn binary (target windows-x86_64 or linux-x86_64; application/octet-stream, X-Checksum-Sha256; 404 FG-WEB-0012 when not shipped)",
+            routes::clients::binary,
+        )
         // M2 MR3: the browser session and its CSRF token (sessions only).
         .route(
             Verb::Get,
@@ -1307,6 +1335,16 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<d::DeploymentBody>(Verb::Post, d::APPROVE)
         .queries(Verb::Post, d::APPROVE, d::APPROVE_QUERY)
+        // M5 L5-8 (plan 19 §3.4): the approval's facts and the LLM's summary.
+        .route_with(
+            Verb::Get,
+            d::APPROVAL_SUMMARY,
+            Action::DeployRead,
+            "A deployment's approval facts, made by code and always listed in full (the merge requests since the environment's last succeeded deployment, migrations, protected paths, CI and deploy configuration, permission code, forge/risk, failed checks, freeze windows), and apart from them the local LLM's summary as advice: state none (the LLM is off, down or has not answered), shown, or withheld (a confidential summary read by an agent); stale when made for other facts or a newer commit was requested. Approving never depends on it; 404 FG-REPO-0005 without the deployment; an act-as request is refused (project readers)",
+            d::OF_PROJECT,
+            d::approval_summary,
+        )
+        .responds::<d::ApprovalSummaryBody>(Verb::Get, d::APPROVAL_SUMMARY)
         // ADR-0038 §3.4–§3.6 (step C): the environments' approvers.
         .route_with(
             Verb::Get,

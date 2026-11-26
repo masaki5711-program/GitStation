@@ -106,6 +106,8 @@ mod matrix_rows_search;
 mod matrix_rows_wiki;
 // Plan 20 N1 (ADR-0040 §6): a person's notes.
 mod matrix_rows_notes;
+// The CLI distribution (`gstn` downloads).
+mod matrix_rows_clients;
 mod spec_ref;
 // ── end M3 X1 ──
 

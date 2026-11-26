@@ -2663,6 +2663,15 @@ pub enum DeployCommand {
         #[arg(value_parser = parse_oid)]
         sha: String,
     },
+    /// A waiting deployment's approval facts and the local LLM's summary
+    /// (M5 L5-8): the facts always in full; the summary is advice only.
+    Summary {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The deployment id.
+        #[arg(value_parser = parse_id, value_name = "DEPLOYMENT_ID")]
+        deployment: i64,
+    },
     /// Each environment's approvers (ADR-0038 §3.4).
     Approvers {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
