@@ -741,6 +741,23 @@
       "readOnly": "変更できるのはメンテナー以上です。"
     }
   },
+  "cli": {
+    "title": "CLI（gstn）をダウンロード",
+    "explain": "gstn はこのサーバーをコマンドから使うためのツールです。お使いの PC に合うものを選んでください。",
+    "setupLink": "セットアップの手順",
+    "none": "このサーバーでは gstn を配布していません。管理者に問い合わせてください。",
+    "target": "対象",
+    "version": "版",
+    "size": "大きさ",
+    "sha256": "SHA-256",
+    "download": "{{target}} 用をダウンロード",
+    "windows": "Windows（x86_64）",
+    "linux": "Linux（x86_64）",
+    "setupTitle": "セットアップの手順",
+    "stepPlace": "ダウンロードしたファイルを PATH の通ったフォルダーに置きます（Windows は gstn.exe、Linux は gstn。Linux では chmod +x gstn で実行できるようにします）。",
+    "stepVerify": "ファイルの SHA-256 が上の表と同じことを確かめます（Windows: certutil -hashfile gstn.exe SHA256、Linux: sha256sum gstn）。",
+    "stepLogin": "上の「トークンを作る」で作ったトークンをファイルに保存し、次のコマンドでログインします。"
+  },
   "tokens": {
     "active": "有効",
     "agent": "AI エージェント用",

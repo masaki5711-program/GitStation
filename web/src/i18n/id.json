@@ -741,6 +741,23 @@
       "readOnly": "Hanya Pemelihara (atau lebih tinggi) yang dapat mengubah ini."
     }
   },
+  "cli": {
+    "title": "Unduh CLI (gstn)",
+    "explain": "gstn memungkinkan Anda memakai server ini dari baris perintah. Pilih yang sesuai dengan PC Anda.",
+    "setupLink": "Langkah penyiapan",
+    "none": "Server ini tidak menyediakan gstn. Tanyakan kepada administrator.",
+    "target": "Platform",
+    "version": "Versi",
+    "size": "Ukuran",
+    "sha256": "SHA-256",
+    "download": "Unduh untuk {{target}}",
+    "windows": "Windows (x86_64)",
+    "linux": "Linux (x86_64)",
+    "setupTitle": "Langkah penyiapan",
+    "stepPlace": "Letakkan berkas yang diunduh di folder yang ada di PATH (gstn.exe di Windows, gstn di Linux; di Linux jadikan dapat dijalankan dengan chmod +x gstn).",
+    "stepVerify": "Pastikan SHA-256 berkas sama dengan tabel di atas (Windows: certutil -hashfile gstn.exe SHA256, Linux: sha256sum gstn).",
+    "stepLogin": "Simpan token yang dibuat dengan \"Buat token\" di atas ke berkas, lalu masuk dengan perintah di bawah."
+  },
   "tokens": {
     "active": "Aktif",
     "agent": "Untuk agen AI",

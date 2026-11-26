@@ -43,6 +43,7 @@ build:image:
     # Cheap checks first: the deploy scripts parse and the compose file is valid.
     - bash -n ops/gitlab-trial/deploy.sh
     - bash -n ops/gitlab-trial/setup-server.sh
+    - sh -n ops/gitlab-trial/check-clients.sh
     - IMAGE_TAG=check PUBLISH_ADDR=192.0.2.1 PUBLIC_URL=http://192.0.2.1:3306 OIDC_ISSUER=http://192.0.2.1:18180/realms/iotpf docker compose -p gitstation-trial-check -f ops/gitlab-trial/compose.yml config -q
     # Shared server: the build steps run inside dockerd's BuildKit, so the
     # Dockerfile itself runs npm and cargo under `nice -n 10` with 3 cargo
@@ -57,6 +58,9 @@ build:image:
       --label "io.gitstation.pipeline=$CI_PIPELINE_ID" --label io.gitstation.trial=1
       -t "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" .
     - docker run --rm --entrypoint /usr/local/bin/forge "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" --version
+    # The distributed gstn binaries (runbook cli-distribution): both targets
+    # (the .exe included) exist and match manifest.json, the linux one runs.
+    - docker run --rm -i --entrypoint /bin/sh "$GS_IMAGE_REPO:$CI_COMMIT_SHORT_SHA" -s < ops/gitlab-trial/check-clients.sh
     # Bounded disk: keep this commit's image, any image a container uses, and the 3 newest others.
     # The runner shell uses pipefail, so a filter that may match nothing ends in `|| true`.
     - |

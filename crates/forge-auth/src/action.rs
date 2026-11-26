@@ -664,6 +664,12 @@ actions! {
     /// user; `read_api` on a token). Decided on the instance: there is no
     /// other user to see.
     UserSelfRead,
+    /// `GET /api/v1/clients`, `GET /api/v1/clients/gstn/{target}/binary`:
+    /// the list of the `gstn` binaries this server distributes and their
+    /// bytes. Any active signed-in user (`read_api` on a token, an agent's
+    /// included); never acting for a person, never a runner or a job.
+    /// Decided on the instance: the files are the same for everyone.
+    ClientDownload,
     /// `GET /api/v1/session`: the caller's own web session — who it stands
     /// for and its CSRF token (M2 MR3, ADR-0021 §6, §17). Sessions only: a
     /// token is `FG-AUTH-0002 reason=session_required` (a token has no
@@ -749,6 +755,47 @@ actions! {
     LlmPause,
     /// Resume the paused gateway. As `LlmPause`.
     LlmResume,
+    // --- the agent marketplace and builder (plan 16 §4, ADR-0032
+    // Amendment A4) ---
+    /// `GET /api/v1/agent-parts/{slug}` and a version of it: every
+    /// signed-in account (a person, a bot, an agent's token, a service
+    /// account), `read_api`, on the instance.
+    AgentPartRead,
+    /// `GET /api/v1/agent-parts`: as `AgentPartRead`.
+    AgentPartList,
+    /// Publish a part version from its tag (plan 16 §2.1): a Maintainer of
+    /// the part's publishing group (`marketplace`), a person, in a web
+    /// session only, never one of the people behind the tag
+    /// (`FG-AGENT-0009`, administrators included); a part declaring the
+    /// `network` capability an administrator only.
+    AgentPartPublish,
+    /// beta → stable. As `AgentPartPublish`.
+    AgentPartPromote,
+    /// Revoke a published version: a Maintainer of the publishing group or
+    /// an administrator, a person, in a web session only (no token).
+    AgentPartRevoke,
+    /// `GET /api/v1/agent-keys`: the public signing keys, every signed-in
+    /// account, `read_api`, on the instance. Managing the keys is never an
+    /// HTTP action (`forge admin agent-key` only).
+    AgentKeyRead,
+    /// `POST /api/v1/repos/{id}/agent-builder/recommend`: as `RepoRead`
+    /// on a whole copy of the default tip (`Resource::RepoCopy`, the specs
+    /// it reads): an AI agent audience only when the tip was measured open
+    /// (`FG-AUTH-0022`); `read_api`.
+    AgentBuilderRecommend,
+    /// `POST …/agent-builder/compile` with `dry_run: true` (and `GET
+    /// …/agent-builder`): a Developer, an agent's token included, `api`.
+    AgentBuilderDryRun,
+    /// `POST …/agent-builder/compile` that opens the builder's merge
+    /// request: a Developer, a person only — an agent never rewrites its
+    /// own guard rails — `api`.
+    AgentBuilderCompile,
+    /// `POST /api/v1/repos/{id}/rules/inject-lesson`: only kanflow acting
+    /// for a person (ADR-0025, `ActAsRule::ProposeWithoutAssertion`), the
+    /// person a Developer, the lesson confirmed (`FG-AGENT-0010`); any
+    /// other caller `FG-AUTH-0003 reason=act_as_required`. It only opens a
+    /// merge request (a person reviews it), `api`.
+    RuleInjectLesson,
     // --- the PFS portal (ADR-0036) ---
     /// `GET /api/portal-widgets/v1/**`: the portal's home widgets read for
     /// the person whose portal access token the portal forwards. Only a
@@ -810,6 +857,11 @@ impl Action {
                 | Action::GroupVisibilityChange
                 // Plan 19 §8.2: `llm.review` is a person's, in a session.
                 | Action::LlmSettingsManage
+                // Plan 16 §4: publishing, promoting and revoking a part is
+                // a person's, in the browser.
+                | Action::AgentPartPublish
+                | Action::AgentPartPromote
+                | Action::AgentPartRevoke
         )
     }
 
@@ -903,6 +955,12 @@ impl Action {
                 | Action::LlmSettingsManage
                 | Action::LlmPause
                 | Action::LlmResume
+                // Plan 16 §4: the marketplace's two-person rule and the
+                // builder's merge request are a person's.
+                | Action::AgentPartPublish
+                | Action::AgentPartPromote
+                | Action::AgentPartRevoke
+                | Action::AgentBuilderCompile
         )
     }
 
@@ -960,6 +1018,10 @@ impl Action {
             | Action::PortalWidgetRead
             // Plan 19 §8.2: session only (see `is_session_only`).
             | Action::LlmSettingsManage
+            // Plan 16 §4: session only (see `is_session_only`).
+            | Action::AgentPartPublish
+            | Action::AgentPartPromote
+            | Action::AgentPartRevoke
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -989,6 +1051,7 @@ impl Action {
             | Action::UserOrgAdminRead
             | Action::AuditRead
             | Action::UserSelfRead
+            | Action::ClientDownload
             | Action::PathResolve
             | Action::MergeRequestRead
             | Action::MergeRequestList
@@ -1013,6 +1076,11 @@ impl Action {
             | Action::CiArtifactRead
             | Action::DeployRead
             | Action::OpsDiagnosisRead
+            // Plan 16 §4: the catalog, the public keys, the recommendation.
+            | Action::AgentPartRead
+            | Action::AgentPartList
+            | Action::AgentKeyRead
+            | Action::AgentBuilderRecommend
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -1076,6 +1144,10 @@ impl Action {
             | Action::AiReviewRerun
             | Action::LlmPause
             | Action::LlmResume
+            // Plan 16 §4: the builder and the lesson's merge request.
+            | Action::AgentBuilderDryRun
+            | Action::AgentBuilderCompile
+            | Action::RuleInjectLesson
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge
@@ -1106,6 +1178,10 @@ impl Action {
             // them once its loader adds the act-as facts (L5-9); until
             // then `act_as_facts_missing`.
             Action::PipelineRead | Action::DeployRead => ActAsRule::ReadWithoutAssertion,
+            // Plan 16 §4 (ADR-0025 Amendment A4): kanflow injects a lesson
+            // the person confirmed there — only a merge request a person
+            // then reviews, decided on the person's own role.
+            Action::RuleInjectLesson => ActAsRule::ProposeWithoutAssertion,
             // F-36: a person approves from kanflow with an assertion they
             // confirmed in a forge session (§4, §5).
             Action::MergeRequestApprove => ActAsRule::RequiresAssertion(Intent::Approve),
@@ -1260,6 +1336,7 @@ impl Action {
             | Action::RunnerJobComplete
             | Action::AuditRead
             | Action::UserSelfRead
+            | Action::ClientDownload
             | Action::SessionRead
             | Action::SessionList
             | Action::SessionRevoke
@@ -1283,6 +1360,17 @@ impl Action {
             | Action::OpsDiagnosisRead
             | Action::LlmPause
             | Action::LlmResume
+            // Plan 16 §4: nothing of the marketplace or the builder is
+            // acted for but the lesson's merge request.
+            | Action::AgentPartRead
+            | Action::AgentPartList
+            | Action::AgentPartPublish
+            | Action::AgentPartPromote
+            | Action::AgentPartRevoke
+            | Action::AgentKeyRead
+            | Action::AgentBuilderRecommend
+            | Action::AgentBuilderDryRun
+            | Action::AgentBuilderCompile
             // ADR-0036: the portal's widgets are no act-as action.
             | Action::PortalWidgetRead => ActAsRule::Denied,
         }
@@ -1435,6 +1523,7 @@ impl Action {
             | Action::PipelinePlayProtected
             | Action::AuditRead
             | Action::UserSelfRead
+            | Action::ClientDownload
             | Action::SessionRead
             | Action::SessionList
             | Action::SessionRevoke
@@ -1464,6 +1553,17 @@ impl Action {
             | Action::OpsDiagnosisRead
             | Action::LlmPause
             | Action::LlmResume
+            // Plan 16 §4: nor anything of the marketplace or the builder.
+            | Action::AgentPartRead
+            | Action::AgentPartList
+            | Action::AgentPartPublish
+            | Action::AgentPartPromote
+            | Action::AgentPartRevoke
+            | Action::AgentKeyRead
+            | Action::AgentBuilderRecommend
+            | Action::AgentBuilderDryRun
+            | Action::AgentBuilderCompile
+            | Action::RuleInjectLesson
             // ADR-0036: nor the portal's widgets.
             | Action::PortalWidgetRead => CiRule::Denied,
         }
@@ -1488,6 +1588,12 @@ pub enum ActAsRule {
     /// are listed, and only of what the person could bind with an
     /// assertion.
     ListAsPerson,
+    /// A proposal the person confirmed in the integration itself, which
+    /// forge only opens as a merge request a person then reviews (plan 16
+    /// §4, ADR-0025 Amendment A4; `RuleInjectLesson` only): no assertion,
+    /// a bound project (`via_bound`), decided on the person's own role
+    /// (no administrator rights, no cap at the service account's role).
+    ProposeWithoutAssertion,
     /// Never performed acting for a person (`FG-AUTH-0003
     /// reason=act_as_not_allowed`).
     Denied,
@@ -1500,6 +1606,7 @@ impl ActAsRule {
             Self::ReadWithoutAssertion => "read_without_assertion",
             Self::RequiresAssertion(_) => "requires_assertion",
             Self::ListAsPerson => "list_as_person",
+            Self::ProposeWithoutAssertion => "propose_without_assertion",
             Self::Denied => "denied",
         }
     }

@@ -272,6 +272,7 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::NotificationPreferences { .. }
         | Resource::UserMergeRequests { .. }
         | Resource::UserActivity { .. }
+        | Resource::Agent(_)
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

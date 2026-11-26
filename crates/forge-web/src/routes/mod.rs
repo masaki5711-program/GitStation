@@ -22,6 +22,8 @@ pub mod doc_lint_migration;
 pub mod file_commit;
 // Plan 13 stage 3: the document API (the document view as JSON).
 pub mod documents;
+// Plan 20 W3: `[[wiki:…]]` resolved per viewer against the linked wiki.
+pub(crate) mod doc_wiki;
 // Plan 13 stage 4 part A: document revisions and edit claims.
 pub mod document_revisions;
 pub mod git;
@@ -76,6 +78,8 @@ pub mod user_merge_requests;
 pub mod portal_widgets;
 pub mod user_sessions;
 pub mod users;
+// The `gstn` CLI distribution.
+pub mod clients;
 // ── M3 O2: the push mirror's administration ──
 pub mod push_mirror;
 // ── end M3 O2 ──

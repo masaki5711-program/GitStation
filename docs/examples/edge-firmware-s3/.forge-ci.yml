@@ -1,0 +1,46 @@
+# ESP32-S3 のファームウェア（edge-fw/s3-io8）の CI。合成の例: イメージのダイジェストは社内のレジストリの値に置き換える。
+# 手引き: docs/guides/edge-release-pattern.md
+#
+# - config-schema: 設定のスキーマの追記だけの確かめ（HEAD^1 と比べる、fetch_depth: 2）。MR でも main でも動く。
+# - release-version: release の push でだけ、version.txt が前のリリースより上がったか（HEAD^1 と比べる）。
+# - firmware: ESP-IDF のビルド（target esp32s3、署名なし、再現できるビルド）と成果物。スキーマの確かめもビルドの前にもう一度。
+#   keep: true は保護ブランチ release の push のパイプラインでだけ効く（それ以外は 30 日。ジョブのログに 1 行）。
+# ジョブにネットワークは無い: ESP-IDF の部品は dependencies.lock と managed_components/ をリポジトリに入れる。
+version: 1
+stages: [check, build]
+jobs:
+  config-schema:
+    stage: check
+    image: registry.internal/library/python@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    timeout: 5m
+    fetch_depth: 2
+    script:
+      - python3 scripts/check-config-schema.py
+      - python3 tests/run-cases.py
+  firmware:
+    stage: build
+    # espressif/idf（サポート中の v5 系、ツールチェーンは esp32s3 の分だけ）を社内のレジストリに入れてダイジェストで固定。
+    image: registry.internal/espressif/idf-esp32s3@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    timeout: 45m
+    fetch_depth: 2
+    script:
+      # ルートは読み取り専用: HOME と ccache を書ける場所へ。イメージの入口は使われないので export.sh を読む。
+      - export HOME=/tmp/home IDF_CCACHE_ENABLE=0 IDF_COMPONENT_MANAGER=0 && mkdir -p "$HOME"
+      - . "$IDF_PATH/export.sh" > /dev/null
+      - python3 scripts/check-config-schema.py
+      - idf.py set-target esp32s3
+      - idf.py build
+      - python3 scripts/package.py
+    artifacts:
+      paths: [out/app.bin, out/config-schema.json, out/version.txt, out/SHA256SUMS]
+      keep: true
+  release-version:
+    stage: check
+    image: registry.internal/library/python@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    timeout: 5m
+    fetch_depth: 2
+    rules:
+      branches: [release]
+      merge_requests: false
+    script:
+      - python3 scripts/check-config-schema.py --version-bump

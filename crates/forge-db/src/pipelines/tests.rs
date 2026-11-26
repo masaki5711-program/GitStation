@@ -366,6 +366,7 @@ fn a_job(name: &str, needs: &[&str]) -> NewCiJob {
         tags: vec!["linux".to_owned()],
         secrets: Vec::new(),
         manual: false,
+        artifacts_keep: false,
     }
 }
 
@@ -803,6 +804,7 @@ async fn only_pending_and_running_pipelines_are_live() {
 fn a_manual_job(name: &str, needs: &[&str]) -> NewCiJob {
     NewCiJob {
         manual: true,
+        artifacts_keep: false,
         ..a_job(name, needs)
     }
 }

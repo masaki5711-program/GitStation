@@ -14,7 +14,7 @@ disallowed-methods = [
     { path = "forge_agent::sign_digest", reason = "only forge-marketplace's publish step signs agent parts (ADR-0032, plan 16 A3/A5)" },
     # Plan 21 E1 (ADR-0041 §3): the domain signer is called only by the
     # wrappers of each signed kind (forge_edge::sign_manifest), and edge
-    # manifests are signed only by forge-fleet's release builder (E4).
+    # manifests have no production signer (only the optional E4 builder).
     { path = "forge_agent::sign_digest_in", reason = "sign through the signed kind's own function (forge_agent::sign_digest, forge_edge::sign_manifest), never with a domain of your choosing (ADR-0041)" },
-    { path = "forge_edge::sign_manifest", reason = "only forge-fleet's release builder signs edge manifests (ADR-0041, plan 21 E4)" },
+    { path = "forge_edge::sign_manifest", reason = "no production caller signs edge manifests; only the optional plan 21 E4 release builder may (ADR-0041 Amendment 2026-11-25)" },
 ]

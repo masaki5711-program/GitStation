@@ -12,6 +12,11 @@
 //!   of this repository, broken, another repository's (resolved later), or
 //!   **hidden** — the target is more confidential than this document, so
 //!   only its id is shown (Q14, 2026-11-10).
+//! - `[[wiki:…]]` (plan 20 W3, ADR-0040 §5) resolves against the project's
+//!   linked wiki as the caller read it at its default-branch tip
+//!   ([`Resolver::wiki`]): found, hidden and broken as above, or
+//!   **unreadable** — the reader may not read the wiki, so only the id is
+//!   shown and nothing of the wiki was looked up — or **no wiki** linked.
 //!
 //! The view is versioned ([`VIEW_VERSION`]): a change that removes or
 //! renames a field raises it.
@@ -78,12 +83,19 @@ pub enum Target {
     Broken,
     /// Another repository's (`[[repo:ID]]`): resolved by the caller later.
     External,
+    /// `[[wiki:…]]` when the reader may not read the linked wiki: the id
+    /// only (whether the page exists is not looked up, so not told).
+    Unreadable,
+    /// `[[wiki:…]]` in a project with no linked wiki.
+    NoWiki,
 }
 
 /// A reference in the view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefView {
     pub repo: Option<String>,
+    /// `[[wiki:…]]` (plan 20 W3).
+    pub wiki: bool,
     pub doc: String,
     pub block: Option<String>,
     pub line: usize,
@@ -95,6 +107,22 @@ pub trait Resolver {
     /// The target document's title, classification and its blocks' kinds,
     /// when the reader may see it (`None`: absent or not visible).
     fn document(&self, id: &str) -> Option<TargetDoc>;
+
+    /// A page of the project's linked wiki (`[[wiki:ID]]`), as the caller
+    /// read it for this reader (plan 20 W3).
+    fn wiki(&self, id: &str) -> WikiLookup;
+}
+
+/// What the caller knows of a `[[wiki:ID]]` target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WikiLookup {
+    /// The project has no linked wiki.
+    NotLinked,
+    /// The reader may not read the linked wiki (decided per viewer by the
+    /// caller): nothing of it is shown.
+    Unreadable,
+    /// The wiki was read: the page, or `None` when it is not there.
+    Page(Option<TargetDoc>),
 }
 
 /// A document a reference may point at.
@@ -149,6 +177,7 @@ pub fn view(doc: &Document, ty: TypeDefault, resolver: &dyn Resolver) -> Documen
         .iter()
         .map(|r| RefView {
             repo: r.repo.clone(),
+            wiki: r.wiki,
             doc: r.doc.clone(),
             block: r.block.clone(),
             line: r.line,
@@ -184,7 +213,16 @@ fn resolve(r: &Reference, mine: Classification, resolver: &dyn Resolver) -> Targ
     if r.repo.is_some() {
         return Target::External;
     }
-    let Some(target) = resolver.document(&r.doc) else {
+    let found = if r.wiki {
+        match resolver.wiki(&r.doc) {
+            WikiLookup::NotLinked => return Target::NoWiki,
+            WikiLookup::Unreadable => return Target::Unreadable,
+            WikiLookup::Page(page) => page,
+        }
+    } else {
+        resolver.document(&r.doc)
+    };
+    let Some(target) = found else {
         return Target::Broken;
     };
     if target.classification > mine {
@@ -245,7 +283,7 @@ pub fn referrers(docs: &[&Document], target: &str, block: Option<&str>) -> Refer
         let refs: Vec<(usize, Option<String>)> = d
             .refs
             .iter()
-            .filter(|r| r.repo.is_none() && r.doc == target)
+            .filter(|r| r.is_local() && r.doc == target)
             .filter(|r| block.is_none_or(|b| r.block.as_deref() == Some(b)))
             .map(|r| (r.line, r.block.clone()))
             .collect();

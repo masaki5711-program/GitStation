@@ -212,6 +212,7 @@ fn jobs_of(plan: &forge_ci::Plan) -> Result<Vec<db::NewCiJob>, ForgeError> {
                 tags: j.tags.clone(),       // clone: as name
                 secrets: j.secrets.clone(), // clone: as name
                 manual: j.manual,
+                artifacts_keep: j.keep_artifacts,
             })
         })
         .collect()

@@ -968,6 +968,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "deploy target-set",
             "deploy list",
             "deploy request",
+            "deploy summary",
             "deploy approvers",
             "deploy approvers-set",
             "delegation show",

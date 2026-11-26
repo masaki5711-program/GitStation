@@ -11,6 +11,9 @@
 //!   Kanflow token are read now: a bad one stops the worker's start
 //!   (`FG-SYS-0002`).
 //!
+//!   With the gateway, the approval summaries of deployments waiting for
+//!   an approval ([`super::approval_summary`], plan 19 L5-8).
+//!
 //! Disabled (the default, and production until a GPU host is named): no
 //! gateway, no call to any model; the features that would ask fall back
 //! to their view without AI.
@@ -19,14 +22,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::config::LlmConfig;
+use forge_core::deploy::TargetPolicy;
 use forge_core::{telemetry, RequestId};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
+use forge_git::browse::{BrowseLimits, Browser};
 use forge_llm::background::{self, Background};
 use forge_llm::kanflow::{BusySource, KanflowGate, NoGate};
 use forge_llm::ollama::OllamaProvider;
 use forge_llm::{DbRecords, Gateway, GatewayConfig};
 use tokio::sync::watch;
+
+use super::provision::Storage;
 use tokio::task::JoinHandle;
 
 /// How often the records' upkeep runs.
@@ -52,6 +59,7 @@ impl LlmTasks {
 pub(crate) fn start(
     cfg: &LlmConfig,
     db: &Db,
+    storage: &Storage,
     stop: &watch::Receiver<bool>,
 ) -> Result<LlmTasks, ForgeError> {
     let mut handles = vec![spawn_upkeep(db.clone(), stop.clone())]; // clone: the task's own handles
@@ -80,6 +88,23 @@ pub(crate) fn start(
                 provider.clone(), // clone: the provider is also the model catalog
                 Arc::new(DbRecords(db.clone())), // clone: the records' own pool handle
             );
+            // Plan 19 L5-8: the approval summaries (the facts read with git).
+            let browse = Browser::new(
+                storage.git.clone(),  // clone: the browser owns its handles
+                storage.root.clone(), // clone: as git
+                BrowseLimits::default(),
+            );
+            let deploy = forge_deploy::Deploy::new(
+                db.clone(), // clone: the service's own pool handle
+                Arc::new(forge_deploy::GitCommits::new(db.clone(), browse)), // clone: as above
+                TargetPolicy::default(), // the facts never reach a target
+            );
+            handles.push(super::approval_summary::spawn(
+                gateway.clone(), // clone: the task's own handle
+                db.clone(),      // clone: the task's own pool handle
+                deploy,
+                stop.clone(), // clone: the task waits on its own receiver
+            ));
             handles.push(background::spawn(
                 gateway.clone(), // clone: the task's own handle
                 db.clone(),      // clone: the task's own pool handle

@@ -54,6 +54,8 @@ const defaults: Record<string, Handler> = {
   // settings' deploy approvers and the MR panel's "who can approve" (none).
   [`GET ${DELEGATION_PATH}`]: () => json(200, { mine: null, to_me: [] }),
   'GET /api/v1/projects/7/deploy/approvers': () => json(200, { environments: [] }),
+  // The access-token page's gstn downloads (none unless a test gives some).
+  'GET /api/v1/clients': () => json(200, { items: [] }),
   'GET /api/v1/projects/7/merge-requests/3/approvals': () =>
     json(200, {
       iid: 3,

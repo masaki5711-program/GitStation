@@ -23,6 +23,8 @@ checked retry, `ModelRef`) is pure and lives in `forge_core::llm`.
 - `background::spawn`: clock, Kanflow, `gpu-eval`, model digest (10 min),
   metrics snapshot (5 min).
 - `records::DbRecords` (`forge.llm_requests` / `forge.llm_advice`).
+- `prompts::approval_summary()` (`prompts/approval_summary.v1.txt`, L5-8): the
+  versioned prompts, compiled in; a new text is a new file and version.
 
 **Owned error codes**: FG-LLM-0001 LlmUnavailable, FG-LLM-0003
 LlmModelDigestMismatch (alert), FG-LLM-0004 LlmQueueDeadline; it logs

@@ -50,6 +50,44 @@ RUN --mount=type=cache,id=gitstation-trial-cargo-registry,target=/usr/local/carg
     && nice -n 10 cargo build --release --locked -p forge-cli --features embed-ui \
     && install -D -m 0755 target/release/forge /out/forge
 
+# ── 2b. gstn, the CLI the server distributes (GET /api/v1/clients) ──
+# Built after forge on the same toolchain and cargo cache (FROM forge: one
+# build at a time on the shared server). linux-x86_64 natively;
+# windows-x86_64 cross-compiled for x86_64-pc-windows-gnu with mingw-w64
+# (ring and the vendored libdbus are C: they need the matching gcc). The
+# manifest (version, sha256, size per target) is written here, next to the
+# binaries, and read by forge (runbook cli-distribution). The server never
+# builds anything.
+FROM forge AS gstn
+ARG GIT_COMMIT=unknown
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-pc-windows-gnu
+ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+RUN --mount=type=cache,id=gitstation-trial-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=gitstation-trial-gstn-target,target=/src/target \
+    set -eu \
+    && nice -n 10 cargo build --release --locked -p forge-client --bin gstn \
+    && nice -n 10 cargo build --release --locked -p forge-client --bin gstn --target x86_64-pc-windows-gnu \
+    && install -D -m 0755 target/release/gstn /out/clients/gstn-linux-x86_64 \
+    && install -D -m 0644 target/x86_64-pc-windows-gnu/release/gstn.exe /out/clients/gstn-windows-x86_64.exe \
+    && version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)+$(printf '%.12s' "$GIT_COMMIT")" \
+    && entry() { \
+         f="/out/clients/$2"; \
+         sum="$(sha256sum "$f" | cut -d' ' -f1)"; \
+         size="$(stat -c %s "$f")"; \
+         if ! printf '%s' "$sum" | grep -Eqx '[0-9a-f]{64}' \
+            || ! printf '%s' "$size" | grep -Eqx '[1-9][0-9]*' \
+            || ! printf '%s' "$version" | grep -Eqx '[0-9A-Za-z._+-]{1,64}'; then \
+           echo "gstn manifest: bad entry for $2 (sha256='$sum' size='$size' version='$version')" >&2; return 1; \
+         fi; \
+         printf '{"name":"gstn","target":"%s","version":"%s","sha256":"%s","size":%s}' "$1" "$version" "$sum" "$size"; } \
+    && linux="$(entry linux-x86_64 gstn-linux-x86_64)" \
+    && windows="$(entry windows-x86_64 gstn-windows-x86_64.exe)" \
+    && printf '{"clients":[%s,%s]}\n' "$linux" "$windows" > /out/clients/manifest.json \
+    && cat /out/clients/manifest.json
+
 # ── 3. runtime ──
 FROM ${RUNTIME_IMAGE} AS runtime
 ARG FORGE_UID=10001
@@ -69,6 +107,9 @@ RUN apt-get update \
     && useradd --uid "${FORGE_UID}" --gid "${FORGE_GID}" --create-home --home-dir /home/forge --shell /usr/sbin/nologin forge \
     && install -d -o forge -g forge -m 0750 /var/lib/forge /var/lib/forge/repositories
 COPY --from=forge /out/forge /usr/local/bin/forge
+# The distributed gstn binaries and their manifest, at forge's default
+# clients.dir (<dir of forge>/../share/forge/clients).
+COPY --from=gstn /out/clients /usr/local/share/forge/clients
 # The bootstrap SQL travels with the binary that needs it (deploy.sh reads
 # it from the checkout; kept here for a manual re-run).
 COPY ops/db/bootstrap /usr/local/share/forge/db/bootstrap

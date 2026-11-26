@@ -84,6 +84,8 @@ mod matrix_rows_ai_assets;
 mod matrix_rows_pfs_ai_bot;
 // M5 L5-4 (plan 19 §8.2): the local LLM's actions.
 mod matrix_rows_llm;
+// Plan 16 A4 (§4): the agent marketplace and builder.
+mod matrix_rows_agent;
 // ADR-0038 §2: org bindings.
 mod matrix_rows_org_bindings;
 // M4 C13: the SSH git transport and SSH keys (ADR-0033).
@@ -106,6 +108,8 @@ mod matrix_rows_repo_copy;
 mod matrix_rows_search;
 // Plan 20 W1 (ADR-0040 §5): the project wiki link.
 mod matrix_rows_wiki;
+// The CLI distribution (`gstn` downloads).
+mod matrix_rows_clients;
 mod spec_ref;
 // ── end M3 X1 ──
 
@@ -125,13 +129,13 @@ pub use llm::{advice_reader, authorize_advice, AdviceReader};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
-    ApproverGate, AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject,
-    CodeownersToggle, CopyMark, Credential, DeploymentView, GroupSight, IntegrationFeedView,
-    JobCredential, JobTokenState, MembershipChange, MembershipScope, MergeRequestEdit,
-    MergeRequestState, NamespaceView, PersonalDisclosure, PinnedCopy, PortalCredential, Principal,
-    ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential,
-    RunnerJob, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
-    ViaView, Visibility, SSH_KEY_SCOPES,
+    AgentPartView, AgentResource, ApproverGate, AssertionFacts, AssertionSubject, AutoMergeTarget,
+    AutofixTarget, BindingSubject, CodeownersToggle, CopyMark, Credential, DeploymentView,
+    GroupSight, IntegrationFeedView, JobCredential, JobTokenState, LessonView, MembershipChange,
+    MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView, PersonalDisclosure,
+    PinnedCopy, PortalCredential, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
+    ResolvedVia, Resource, Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView,
+    TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility, SSH_KEY_SCOPES,
 };
 pub use portal::{portal_admin_menu, portal_may, portal_reader, PortalWidgetCtx};
 pub use prove::{

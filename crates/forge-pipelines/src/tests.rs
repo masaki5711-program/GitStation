@@ -48,6 +48,7 @@ fn a_gpu_eval_job_of_an_unlisted_project_is_an_invalid_pipeline() {
         tags: tags.iter().map(|t| (*t).to_owned()).collect(),
         secrets: Vec::new(),
         manual: false,
+        artifacts_keep: false,
     };
     let planned = || db::Planned::Jobs(vec![job("unit", &[]), job("bench", &["gpu-eval"])]);
     let none = forge_core::config::GpuEvalPolicy::default();

@@ -5,7 +5,7 @@
 
 use super::{
     display_markdown, join_cjk_lines, referrers, view_with_body, Piece, Referrer, Resolver, Target,
-    TargetDoc, VIEW_VERSION,
+    TargetDoc, WikiLookup, VIEW_VERSION,
 };
 use crate::document::{parse_document, Classification, TypeDefault};
 
@@ -39,6 +39,10 @@ impl Resolver for Examples {
             }),
             _ => None,
         }
+    }
+
+    fn wiki(&self, _: &str) -> WikiLookup {
+        WikiLookup::NotLinked
     }
 }
 
@@ -314,4 +318,109 @@ fn a_document_whose_references_hit_the_cap_is_named() {
     assert_eq!(r.capped, vec![1]);
     assert_eq!(r.found.len(), 1);
     assert_eq!(r.found[0].doc, 0);
+}
+
+// ── plan 20 W3: references to the linked wiki ──────────────────────────
+
+const WIKI_TITLE: &str = "合成の Wiki ページ";
+
+/// A wiki as the server read it for one reader.
+struct Wiki(WikiLookup);
+
+impl Resolver for Wiki {
+    fn document(&self, _: &str) -> Option<TargetDoc> {
+        None
+    }
+
+    fn wiki(&self, id: &str) -> WikiLookup {
+        match &self.0 {
+            WikiLookup::Page(_) if id == "WIKI-0001" => self.0.clone(),
+            WikiLookup::Page(_) => WikiLookup::Page(None),
+            WikiLookup::NotLinked => WikiLookup::NotLinked,
+            WikiLookup::Unreadable => WikiLookup::Unreadable,
+        }
+    }
+}
+
+const WIKI_DOC: &str = "---
+doctype: note
+id: N-1
+title: T
+owner: o
+---
+
+[[wiki:WIKI-0001]] [[wiki:WIKI-0001#S-1]] [[wiki:WIKI-0001#S-9]] [[wiki:WIKI-0099]] [[N-2]]
+";
+
+fn wiki_targets(lookup: WikiLookup, mine: Classification) -> Vec<(bool, Target)> {
+    let ty = TypeDefault::Known(Some(mine));
+    view_with_body(
+        WIKI_DOC,
+        &parse_document(WIKI_DOC.as_bytes()),
+        ty,
+        &Wiki(lookup),
+    )
+    .refs
+    .into_iter()
+    .map(|r| (r.wiki, r.target))
+    .collect()
+}
+
+fn page(classification: Classification) -> WikiLookup {
+    WikiLookup::Page(Some(TargetDoc {
+        title: WIKI_TITLE.into(),
+        classification,
+        blocks: vec![("S-1".into(), "step".into())],
+    }))
+}
+
+#[test]
+fn unreadable_wiki_ref_shows_id_only() {
+    let got = wiki_targets(WikiLookup::Unreadable, Classification::Internal);
+    assert_eq!(
+        got,
+        vec![
+            (true, Target::Unreadable),
+            (true, Target::Unreadable),
+            (true, Target::Unreadable),
+            (true, Target::Unreadable),
+            (false, Target::Broken),
+        ]
+    );
+    // Nothing of the wiki is in the view: no title anywhere.
+    let v = view_with_body(
+        WIKI_DOC,
+        &parse_document(WIKI_DOC.as_bytes()),
+        TypeDefault::Known(None),
+        &Wiki(WikiLookup::Unreadable),
+    );
+    assert!(!format!("{v:?}").contains(WIKI_TITLE));
+}
+
+#[test]
+fn readable_wiki_ref_resolves_found_broken_hidden() {
+    let found = Target::Found {
+        title: WIKI_TITLE.into(),
+        block_kind: None,
+    };
+    let block = Target::Found {
+        title: WIKI_TITLE.into(),
+        block_kind: Some("step".into()),
+    };
+    assert_eq!(
+        wiki_targets(page(Classification::Internal), Classification::Internal),
+        vec![
+            (true, found),
+            (true, block),
+            (true, Target::Broken),
+            (true, Target::Broken),
+            (false, Target::Broken),
+        ]
+    );
+    // A page more confidential than this document: its id only (Q14).
+    let hidden = wiki_targets(page(Classification::Confidential), Classification::Public);
+    assert_eq!(hidden[0], (true, Target::Hidden));
+    // No wiki linked.
+    let none = wiki_targets(WikiLookup::NotLinked, Classification::Internal);
+    assert!(none[..4].iter().all(|t| *t == (true, Target::NoWiki)));
 }

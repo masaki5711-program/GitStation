@@ -74,8 +74,8 @@ fn purity() {
         "forge-edge must stay pure: {offenders:?}"
     );
 
-    // jiff without its system time zone or zoneinfo features (I/O): only
-    // the compiled-in database.
+    // jiff without its system time zone or zoneinfo features (I/O); since
+    // E1b it only parses the manifest's instant.
     let jiff = doc
         .get("dependencies")
         .and_then(|d| d.get("jiff"))
@@ -92,6 +92,10 @@ fn purity() {
     assert!(line.contains("default-features = false"), "{line}");
     for io_feature in ["tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] {
         assert!(!line.contains(io_feature), "{line}");
+    }
+    // Plan 21 E1b: no tz database either (only the instant is parsed).
+    for tzdb in ["tzdb-bundle-always", "tz-fat", "static"] {
+        assert!(!line.contains(&format!("\"{tzdb}\"")), "{line}");
     }
 
     // The source never reaches for I/O or the clock (tests.rs excluded:
