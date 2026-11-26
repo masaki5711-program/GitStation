@@ -20,7 +20,7 @@ The client directory's `manifest.json` (written by the image build) could not be
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason` (`manifest_unreadable`, `manifest_too_large`, `manifest_invalid` with `rule`, `size_mismatch` with `target`, `expected`, `actual`, `timeout` with `operation`, `read_failed`) and `dir`. Read-only: `ls -l` the client directory and compare each file's size and `sha256sum` with `manifest.json` (runbook cli-distribution).
+The log event carries `reason` (`manifest_unreadable`, `manifest_too_large`, `manifest_invalid` with `rule`, `size_mismatch` with `target`, `expected`, `actual`, `timeout` with `operation`, `read_failed`, `header_invalid`, `nothing_servable` with `entries`: the listing found a manifest but no entry it could serve, `clients_unconfigured`: the server was started without a client directory, a build defect) and `dir`. A download that failed after its 200 was sent is logged once as `forge.clients.download_incomplete` with `reason` (`read_failed` with `io_error`, `timeout`: one read took longer than 10 s, `deadline`: the whole download took longer than 10 minutes, `short_read`: the file ended before its manifest size, it was replaced meanwhile), `target_name`, `sent` and `expected`; the client got a truncated body. Read-only: `ls -l` the client directory and compare each file's size and `sha256sum` with `manifest.json` (runbook cli-distribution).
 
 ## 対処 (fix)
 

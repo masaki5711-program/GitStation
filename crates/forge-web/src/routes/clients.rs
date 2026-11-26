@@ -44,6 +44,8 @@ const MANIFEST_MAX: u64 = 64 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
 /// The default bound of one file operation (and of one streamed chunk).
 pub const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// The default bound of a whole download.
+pub const DEFAULT_DOWNLOAD_DEADLINE: Duration = Duration::from_secs(600);
 /// The only client name distributed.
 const NAME: &str = "gstn";
 
@@ -98,6 +100,7 @@ impl Target {
 pub struct ClientDist {
     dir: PathBuf,
     io_timeout: Duration,
+    download_deadline: Duration,
 }
 
 impl ClientDist {
@@ -105,7 +108,15 @@ impl ClientDist {
         Self {
             dir,
             io_timeout: DEFAULT_IO_TIMEOUT,
+            download_deadline: DEFAULT_DOWNLOAD_DEADLINE,
         }
+    }
+
+    /// The bound of a whole download (the stream ends with an error past it).
+    #[must_use]
+    pub fn with_download_deadline(mut self, deadline: Duration) -> Self {
+        self.download_deadline = deadline;
+        self
     }
 
     /// The bound of one file operation and of one streamed chunk.
@@ -283,7 +294,8 @@ pub struct ClientList {
 
 fn dist(state: &AppState) -> Result<&ClientDist, ForgeError> {
     state.clients.as_deref().ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal).with_context("reason", "clients_unconfigured")
+        ForgeError::new(ErrorCode::ClientDistributionInvalid)
+            .with_context("reason", "clients_unconfigured")
     })
 }
 
@@ -299,8 +311,23 @@ pub async fn list(state: AppState, request: Dispatched<InstanceCtx>) -> Response
     let ctx = request.ctx().clone(); // clone: the error path outlives the request
     let built = async {
         let dist = dist(&state)?;
+        let Some(entries) = dist.manifest().await? else {
+            // Nothing shipped is not an error for the caller, but an
+            // installation that should ship gstn must be able to see why.
+            tracing::warn!(
+                target: "forge_web",
+                event = "forge.clients.no_manifest",
+                request_id = %ctx.request_id,
+                error_code = ErrorCode::ClientBinaryNotFound.id(),
+                reason = "no_manifest",
+                dir = %dist.dir.display(),
+                "no client manifest; nothing is distributed"
+            );
+            return json(ClientList { items: Vec::new() });
+        };
+        let shipped = entries.len();
         let mut items = Vec::new();
-        for s in dist.manifest().await?.unwrap_or_default() {
+        for s in entries {
             match dist.file_size(s.target).await? {
                 Some(actual) if actual == s.size => items.push(ClientItem {
                     name: NAME.to_owned(),
@@ -325,7 +352,7 @@ pub async fn list(state: AppState, request: Dispatched<InstanceCtx>) -> Response
                         "client binary size differs from the manifest; not listed"
                     );
                 }
-                None => tracing::info!(
+                None => tracing::warn!(
                     target: "forge_web",
                     event = "forge.clients.entry_skipped",
                     request_id = %ctx.request_id,
@@ -335,6 +362,12 @@ pub async fn list(state: AppState, request: Dispatched<InstanceCtx>) -> Response
                     "client binary in the manifest is missing; not listed"
                 ),
             }
+        }
+        if shipped > 0 && items.is_empty() {
+            // Every entry of the manifest is broken: the distribution is.
+            return Err(dist
+                .broken("nothing_servable")
+                .with_context("entries", shipped));
         }
         json(ClientList { items })
     }
@@ -368,7 +401,7 @@ pub async fn binary(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
             .into_iter()
             .find(|s| s.target == target)
             .ok_or_else(|| not_found("not_in_manifest", target.as_str()))?;
-        stream(dist, shipped).await
+        stream(dist, shipped, ctx.request_id.clone()).await // clone: the body logs with it
     }
     .await;
     match built {
@@ -377,8 +410,11 @@ pub async fn binary(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
     }
 }
 
-async fn stream(dist: &ClientDist, s: Shipped) -> Result<Response, ForgeError> {
-    use tokio::io::AsyncReadExt as _;
+async fn stream(
+    dist: &ClientDist,
+    s: Shipped,
+    request_id: forge_core::RequestId,
+) -> Result<Response, ForgeError> {
     let path = dist.dir.join(s.target.file_name());
     let file = match dist
         .bounded("binary_open", tokio::fs::File::open(&path))
@@ -403,28 +439,23 @@ async fn stream(dist: &ClientDist, s: Shipped) -> Result<Response, ForgeError> {
     if actual != s.size {
         return Err(dist.mismatch(&s, actual));
     }
-    let timeout = dist.io_timeout;
-    // Never more than the manifest's size, each chunk bounded in time.
-    let limited = file.take(s.size);
-    let body = futures_util::stream::unfold(Some(limited), move |state| async move {
-        let mut f = state?;
-        let mut buf = vec![0u8; READ_CHUNK];
-        match tokio::time::timeout(timeout, f.read(&mut buf)).await {
-            Ok(Ok(0)) => None,
-            Ok(Ok(n)) => {
-                buf.truncate(n);
-                Some((Ok(axum::body::Bytes::from(buf)), Some(f)))
-            }
-            Ok(Err(e)) => Some((Err(e), None)),
-            Err(_) => Some((
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "client binary read timed out",
-                )),
-                None,
-            )),
-        }
-    });
+    // Built before the body: a header that cannot be sent is an error, never
+    // a download without its checksum.
+    let checksum = HeaderValue::from_str(&s.sha256).map_err(|_| {
+        dist.broken("header_invalid")
+            .with_context("target", s.target.as_str())
+    })?;
+    let body = body_stream(
+        file,
+        Transfer {
+            expected: s.size,
+            sent: 0,
+            io_timeout: dist.io_timeout,
+            deadline: tokio::time::Instant::now() + dist.download_deadline,
+            request_id,
+            target: s.target,
+        },
+    );
     let mut res = Body::from_stream(body).into_response();
     let h = res.headers_mut();
     h.insert(
@@ -447,11 +478,95 @@ async fn stream(dist: &ClientDist, s: Shipped) -> Result<Response, ForgeError> {
         }),
     );
     h.insert(header::CONTENT_LENGTH, HeaderValue::from(s.size));
-    // The manifest checked it is 64 lower-case hex digits.
-    if let Ok(v) = HeaderValue::from_str(&s.sha256) {
-        h.insert("x-checksum-sha256", v);
-    }
+    h.insert("x-checksum-sha256", checksum);
     Ok(res)
+}
+
+/// One download in flight: what it must send and how long it may take.
+struct Transfer {
+    expected: u64,
+    sent: u64,
+    io_timeout: Duration,
+    deadline: tokio::time::Instant,
+    request_id: forge_core::RequestId,
+    target: Target,
+}
+
+impl Transfer {
+    /// The one log event of a download that did not complete (the response
+    /// status is already sent, so the log is the only trace), and the error
+    /// that ends the body.
+    fn fail(&self, reason: &'static str, source: Option<&std::io::Error>) -> std::io::Error {
+        tracing::warn!(
+            target: "forge_web",
+            event = "forge.clients.download_incomplete",
+            request_id = %self.request_id,
+            error_code = ErrorCode::ClientDistributionInvalid.id(),
+            reason,
+            target_name = self.target.as_str(),
+            sent = self.sent,
+            expected = self.expected,
+            io_error = source.map(|e| e.kind().to_string()).unwrap_or_default(),
+            "client binary download ended before all bytes were sent"
+        );
+        let kind = match reason {
+            "timeout" | "deadline" => std::io::ErrorKind::TimedOut,
+            "short_read" => std::io::ErrorKind::UnexpectedEof,
+            _ => std::io::ErrorKind::Other,
+        };
+        std::io::Error::new(kind, reason)
+    }
+}
+
+/// The body: at most `expected` bytes in [`READ_CHUNK`] reads, each bounded
+/// by `io_timeout`, the whole by `deadline`; a read error, a timeout or a
+/// file that ends early is logged once and ends the body with an error.
+fn body_stream<R>(
+    reader: R,
+    transfer: Transfer,
+) -> impl futures_util::Stream<Item = std::io::Result<axum::body::Bytes>>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    use tokio::io::AsyncReadExt as _;
+    let limited = reader.take(transfer.expected);
+    futures_util::stream::unfold(Some((limited, transfer)), |state| async move {
+        let (mut f, mut t) = state?;
+        if t.sent == t.expected {
+            return None;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= t.deadline {
+            let e = t.fail("deadline", None);
+            return Some((Err(e), None));
+        }
+        let wait = t.io_timeout.min(t.deadline - now);
+        let mut buf = vec![0u8; READ_CHUNK];
+        match tokio::time::timeout(wait, f.read(&mut buf)).await {
+            Ok(Ok(0)) => {
+                let e = t.fail("short_read", None);
+                Some((Err(e), None))
+            }
+            Ok(Ok(n)) => {
+                buf.truncate(n);
+                t.sent += n as u64;
+                Some((Ok(axum::body::Bytes::from(buf)), Some((f, t))))
+            }
+            Ok(Err(e)) => {
+                let err = t.fail("read_failed", Some(&e));
+                Some((Err(err), None))
+            }
+            Err(_) => {
+                let reason = if tokio::time::Instant::now() >= t.deadline {
+                    "deadline"
+                } else {
+                    "timeout"
+                };
+                let e = t.fail(reason, None);
+                Some((Err(e), None))
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -487,6 +602,80 @@ mod unit {
                 format!("/api/v1/clients/gstn/{}/binary", t.as_str())
             );
         }
+    }
+
+    fn transfer(expected: u64, deadline: Duration) -> Transfer {
+        Transfer {
+            expected,
+            sent: 0,
+            io_timeout: Duration::from_secs(10),
+            deadline: tokio::time::Instant::now() + deadline,
+            request_id: forge_core::RequestId::generate(),
+            target: Target::LinuxX86_64,
+        }
+    }
+
+    async fn drain(
+        body: impl futures_util::Stream<Item = std::io::Result<axum::body::Bytes>>,
+    ) -> (u64, Option<std::io::ErrorKind>) {
+        use futures_util::StreamExt as _;
+        let mut body = std::pin::pin!(body);
+        let mut sent = 0;
+        while let Some(item) = body.next().await {
+            match item {
+                Ok(b) => sent += b.len() as u64,
+                Err(e) => return (sent, Some(e.kind())),
+            }
+        }
+        (sent, None)
+    }
+
+    #[tokio::test]
+    async fn a_complete_body_ends_cleanly_and_a_short_one_with_an_error() {
+        let bytes: &'static [u8] = b"0123456789";
+        assert_eq!(
+            drain(body_stream(bytes, transfer(10, Duration::from_secs(60)))).await,
+            (10, None)
+        );
+        // The file shrank after the size check: 10 bytes for 16 promised.
+        assert_eq!(
+            drain(body_stream(bytes, transfer(16, Duration::from_secs(60)))).await,
+            (10, Some(std::io::ErrorKind::UnexpectedEof))
+        );
+        // Never more than promised, even if the file grew.
+        assert_eq!(
+            drain(body_stream(bytes, transfer(4, Duration::from_secs(60)))).await,
+            (4, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_read_error_and_the_deadline_end_the_body_with_an_error() {
+        let failing = tokio_test_reader_error();
+        assert_eq!(
+            drain(body_stream(failing, transfer(10, Duration::from_secs(60)))).await,
+            (0, Some(std::io::ErrorKind::Other))
+        );
+        let bytes: &'static [u8] = b"0123456789";
+        assert_eq!(
+            drain(body_stream(bytes, transfer(10, Duration::ZERO))).await,
+            (0, Some(std::io::ErrorKind::TimedOut))
+        );
+    }
+
+    /// A reader whose every read fails.
+    fn tokio_test_reader_error() -> impl tokio::io::AsyncRead + Unpin + Send + 'static {
+        struct Failing;
+        impl tokio::io::AsyncRead for Failing {
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                _: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Err(std::io::Error::other("disk gone")))
+            }
+        }
+        Failing
     }
 
     #[test]

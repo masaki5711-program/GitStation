@@ -264,10 +264,33 @@ async fn a_size_mismatch_is_a_broken_distribution() {
         got.json()["error_code"],
         ErrorCode::ClientDistributionInvalid.id()
     );
-    // The listing leaves the broken entry out instead of failing.
+    // Every manifest entry is broken (linux short, windows missing): the
+    // listing says the distribution is broken instead of an empty 200.
     let list = get(dir.path(), Some(HUMAN), "/api/v1/clients").await;
-    assert_eq!(list.status, StatusCode::OK);
-    assert_eq!(list.json(), json!({"items": []}));
+    assert_eq!(list.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        list.json()["error_code"],
+        ErrorCode::ClientDistributionInvalid.id()
+    );
+    // One servable entry is enough: the broken one is left out.
+    let exe = b"MZ synthetic".to_vec();
+    std::fs::write(dir.path().join("gstn-windows-x86_64.exe"), &exe).expect("exe");
+    let manifest = json!({"clients": [
+        {"name": "gstn", "target": "linux-x86_64", "version": "0.1.0",
+         "sha256": hex(b"other"), "size": 999},
+        {"name": "gstn", "target": "windows-x86_64", "version": "0.1.0",
+         "sha256": hex(&exe), "size": exe.len()},
+    ]});
+    std::fs::write(
+        dir.path().join("manifest.json"),
+        serde_json::to_vec(&manifest).expect("json"),
+    )
+    .expect("manifest");
+    let partial = get(dir.path(), Some(HUMAN), "/api/v1/clients").await;
+    assert_eq!(partial.status, StatusCode::OK);
+    let items = partial.json()["items"].clone();
+    assert_eq!(items.as_array().map(Vec::len), Some(1));
+    assert_eq!(items[0]["target"], "windows-x86_64");
     // A malformed manifest is the same code.
     std::fs::write(dir.path().join("manifest.json"), b"{\"clients\": 1}").expect("bad");
     let bad = get(dir.path(), Some(HUMAN), "/api/v1/clients").await;

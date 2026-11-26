@@ -66,18 +66,26 @@ RUN apt-get update \
 RUN rustup target add x86_64-pc-windows-gnu
 ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
 RUN --mount=type=cache,id=gitstation-trial-cargo-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=gitstation-trial-cargo-target,target=/src/target \
+    --mount=type=cache,id=gitstation-trial-gstn-target,target=/src/target \
     set -eu \
     && nice -n 10 cargo build --release --locked -p forge-client --bin gstn \
     && nice -n 10 cargo build --release --locked -p forge-client --bin gstn --target x86_64-pc-windows-gnu \
     && install -D -m 0755 target/release/gstn /out/clients/gstn-linux-x86_64 \
     && install -D -m 0644 target/x86_64-pc-windows-gnu/release/gstn.exe /out/clients/gstn-windows-x86_64.exe \
     && version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)+$(printf '%.12s' "$GIT_COMMIT")" \
-    && entry() { printf '{"name":"gstn","target":"%s","version":"%s","sha256":"%s","size":%s}' \
-         "$1" "$version" "$(sha256sum "/out/clients/$2" | cut -d' ' -f1)" "$(stat -c %s "/out/clients/$2")"; } \
-    && printf '{"clients":[%s,%s]}\n' \
-         "$(entry linux-x86_64 gstn-linux-x86_64)" "$(entry windows-x86_64 gstn-windows-x86_64.exe)" \
-         > /out/clients/manifest.json \
+    && entry() { \
+         f="/out/clients/$2"; \
+         sum="$(sha256sum "$f" | cut -d' ' -f1)"; \
+         size="$(stat -c %s "$f")"; \
+         if ! printf '%s' "$sum" | grep -Eqx '[0-9a-f]{64}' \
+            || ! printf '%s' "$size" | grep -Eqx '[1-9][0-9]*' \
+            || ! printf '%s' "$version" | grep -Eqx '[0-9A-Za-z._+-]{1,64}'; then \
+           echo "gstn manifest: bad entry for $2 (sha256='$sum' size='$size' version='$version')" >&2; return 1; \
+         fi; \
+         printf '{"name":"gstn","target":"%s","version":"%s","sha256":"%s","size":%s}' "$1" "$version" "$sum" "$size"; } \
+    && linux="$(entry linux-x86_64 gstn-linux-x86_64)" \
+    && windows="$(entry windows-x86_64 gstn-windows-x86_64.exe)" \
+    && printf '{"clients":[%s,%s]}\n' "$linux" "$windows" > /out/clients/manifest.json \
     && cat /out/clients/manifest.json
 
 # ── 3. runtime ──

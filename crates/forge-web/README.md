@@ -157,7 +157,11 @@ caller's SSH keys: `GET|POST /api/v1/user/ssh-keys`, `DELETE
   build). `{target}` is a closed enum (`windows-x86_64`, `linux-x86_64`),
   never a path; the file name is fixed per target. Unknown / not shipped:
   `404 FG-WEB-0012`; a broken manifest or a size mismatch: `500
-  FG-WEB-0013`. Every file operation and streamed chunk is bounded (10 s).
+  FG-WEB-0013` (also an empty client directory configuration, and a
+  listing whose manifest entries are all unservable). Every file operation
+  and streamed chunk is bounded (10 s), a whole download by 10 minutes; a
+  download that fails after its 200 logs `forge.clients.download_incomplete`
+  once (`reason`, `sent`, `expected`).
 - Routes (M1 phase 8b MR7b, `src/routes/lists.rs`): `GET|HEAD /api/v1/projects`
   (`ProjectList`) and `/api/v1/groups` (`GroupList`), `read_api`, any active
   signed-in user. Every row is decided again by `authorize()` (projects:

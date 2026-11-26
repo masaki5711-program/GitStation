@@ -555,4 +555,19 @@ fn the_image_ships_gstn_at_the_default_clients_dir() {
     assert!(code.contains("COPY --from=gstn /out/clients /usr/local/share/forge/clients"));
     // forge.toml leaves clients.dir to the default.
     assert!(!read("ops/gitlab-trial/forge.toml").contains("[clients]"));
+    // Its own cargo cache (not forge's), and a manifest entry is checked
+    // before it is written.
+    assert!(code.contains("id=gitstation-trial-gstn-target,target=/src/target"));
+    assert!(code.contains("grep -Eqx '[0-9a-f]{64}'"));
+    // The pipeline validates the shipped files against the manifest.
+    let ci = code_lines(&read(".gitlab-ci.yml"));
+    assert!(ci.contains("-s < ops/gitlab-trial/check-clients.sh"));
+    let check = read("ops/gitlab-trial/check-clients.sh");
+    for file in [
+        "gstn-linux-x86_64",
+        "gstn-windows-x86_64.exe",
+        "manifest.json",
+    ] {
+        assert!(check.contains(file), "{file}");
+    }
 }

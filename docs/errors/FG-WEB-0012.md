@@ -20,7 +20,7 @@
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason` (`unknown_target` with `target` cut to 32 characters, `not_in_manifest`, `no_manifest`, `file_missing`) and `target`. On the server (read-only): list the client directory and read its `manifest.json` (runbook cli-distribution).
+The log event carries `reason` (`unknown_target` with `target` cut to 32 characters, `not_in_manifest`, `no_manifest`, `file_missing`) and `target`. The listing logs the same code as a warning when nothing can be listed for an installation reason: `forge.clients.no_manifest` (with `dir`) and `forge.clients.entry_skipped reason=file_missing` (with `target_name`). On the server (read-only): list the client directory and read its `manifest.json` (runbook cli-distribution).
 
 ## 対処 (fix)
 

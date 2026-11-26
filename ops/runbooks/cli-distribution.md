@@ -20,7 +20,10 @@ GitStation の画面（設定 → アクセストークン →「CLI（gstn）�
 ```
 
 - マニフェストにない対象、ファイルがない対象は一覧に出ない（ダウンロードは 404 `FG-WEB-0012`）。
-- ディレクトリかマニフェストがなければ「配布なし」（一覧は空、エラーではない）。
+- ディレクトリかマニフェストがなければ「配布なし」（一覧は空。警告のログ `forge.clients.no_manifest`、`FG-WEB-0012`）。
+- マニフェストに対象があるのに 1 つも配れない（すべて欠けている・大きさが違う）ときは、一覧が `500 FG-WEB-0013 reason=nothing_servable`。
+- ダウンロードの途中で失敗したとき（読み取りの失敗、1 回の読み取りが 10 秒・全体が 10 分を超えた、ファイルが途中で短くなった）は、
+  `forge.clients.download_incomplete`（`reason`、`sent`、`expected`）が 1 回だけ出る。利用者には途中で切れたファイルが届くので、SHA-256 の照合で気づける。
 - 起動時のログ `forge.serve.clients_dir` に、使うディレクトリが出る。
 
 ## Trigger
@@ -61,3 +64,8 @@ curl -fsS -H "Authorization: Bearer <read_api のトークン>" <base_url>/api/v
 ```
 
 で対象が並び、ダウンロードしたファイルの SHA-256 が `X-Checksum-Sha256` と一覧の `sha256` に一致する。
+
+## 未対応（open）
+
+- マニフェストの署名（Ed25519）と、Windows 版の Authenticode 署名はまだない。今は HTTPS とトークンでの配布と、一覧・ヘッダーの SHA-256 の照合だけで守っている。
+- サーバーは配るときにバイトを読み直して SHA-256 を計算しない（大きさだけ照らし合わせる）。マニフェストとファイルの一致はイメージのビルド（`entry()`）と `build:image` の `ops/gitlab-trial/check-clients.sh` で確かめている。
