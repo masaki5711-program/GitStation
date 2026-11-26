@@ -143,6 +143,10 @@ pub enum FindingKind {
     LargeBlob { size: u64 },
     /// A secret rule ([`secret_scan`]); never the value.
     Secret { rule: String },
+    /// A path an improvement-draft push may not change (plan 17 P17-5,
+    /// `forge_core::improve_draft::is_protected_path`); the finding's
+    /// `blob` is the path's new blob (its old one for a deletion).
+    ProtectedPath,
 }
 
 impl FindingKind {
@@ -151,6 +155,7 @@ impl FindingKind {
         match self {
             Self::LargeBlob { .. } => "large_blob",
             Self::Secret { rule } => rule,
+            Self::ProtectedPath => "protected_path",
         }
     }
 
@@ -158,6 +163,7 @@ impl FindingKind {
         match self {
             Self::LargeBlob { .. } => ErrorCode::PushBlobTooLarge,
             Self::Secret { .. } => ErrorCode::PushSecretDetected,
+            Self::ProtectedPath => ErrorCode::PushProtectedPath,
         }
     }
 }
@@ -851,6 +857,146 @@ fn split_batch(out: &[u8]) -> Result<Vec<&[u8]>, ForgeError> {
         rest = rest.get(start + size + 1..).unwrap_or_default();
     }
     Ok(blobs)
+}
+
+/// The most new commits an improvement-draft push may bring (plan 17
+/// P17-5): more is refused (`FG-GIT-0023 reason=protected_paths_unchecked`)
+/// — a draft is a few commits, and every one is diffed.
+pub const MAX_DRAFT_COMMITS: usize = 1000;
+
+fn unchecked(detail: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::PushCheckFailed)
+        .with_context("reason", "protected_paths_unchecked")
+        .with_context("detail", detail)
+}
+
+impl Git {
+    /// Plan 17 P17-5: every path the commits of the tips that the default
+    /// branch (`HEAD`) does not hold change (each commit against each of
+    /// its parents, a root commit against nothing) that
+    /// `is_protected` names, as `ProtectedPath` findings — the first
+    /// `max_findings`, and how many there are. Complete or an error
+    /// (`FG-GIT-0023`, fail closed): the deadline, a cut listing or more
+    /// than [`MAX_DRAFT_COMMITS`] commits refuse the push.
+    pub async fn protected_path_findings(
+        &self,
+        repo: &Path,
+        quarantine: Option<&Quarantine>,
+        tips: &[String],
+        limits: &ScanLimits,
+        is_protected: fn(&str) -> bool,
+    ) -> Result<(Vec<Finding>, usize), ForgeError> {
+        if !tips.iter().all(|t| is_object_id(t)) {
+            return Err(ForgeError::new(ErrorCode::PushCheckFailed)
+                .with_context("reason", "stdin_invalid")
+                .with_context("detail", "tip_not_an_object_id"));
+        }
+        if tips.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let scan = Scan {
+            git: self,
+            repo,
+            quarantine,
+            deadline: Instant::now() + limits.timeout,
+        };
+        let cap = self.config().max_output_bytes;
+        let Some(cmd) = scan.command("rev-list") else {
+            return Err(unchecked("deadline"));
+        };
+        // Every commit the tips hold that the default branch (HEAD) does
+        // not: a branch pointed at a person's unmerged commit is the bot's
+        // proposal all the same. An unborn HEAD is ignored (everything is
+        // new then).
+        let mut stdin = tips.iter().map(|t| format!("{t}\n")).collect::<String>();
+        stdin.push_str("--not\nHEAD\n");
+        let (out, truncated) = cmd
+            .arg("--ignore-missing")
+            .arg("--stdin")
+            .stdin(stdin.into_bytes())
+            .output_truncated(cap)
+            .await
+            .map_err(|e| git_failed("rev-list", e))?;
+        if truncated {
+            return Err(unchecked("commit_list_truncated"));
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let commits: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        if commits.len() > MAX_DRAFT_COMMITS {
+            return Err(unchecked("too_many_commits"));
+        }
+        let mut findings: Vec<Finding> = Vec::new();
+        let mut total = 0usize;
+        let mut seen: HashSet<Vec<u8>> = HashSet::new();
+        // Oldest first: a finding names the commit that brought the path.
+        for commit in commits.iter().rev() {
+            if !is_object_id(commit) {
+                return Err(unchecked("commit_list_invalid"));
+            }
+            let Some(cmd) = scan.command("diff-tree") else {
+                return Err(unchecked("deadline"));
+            };
+            let (out, truncated) = cmd
+                .arg("-r")
+                .arg("-m")
+                .arg("--root")
+                .arg("--no-commit-id")
+                .arg("--no-renames")
+                .arg("--raw")
+                .arg("-z")
+                .revision(Revision::object_id(commit)?)
+                .output_truncated(cap)
+                .await
+                .map_err(|e| git_failed("diff-tree", e))?;
+            if truncated {
+                return Err(unchecked("diff_truncated"));
+            }
+            for (blob, path) in raw_changes(&out.stdout)? {
+                let shown = String::from_utf8_lossy(&path).into_owned();
+                if !is_protected(&shown) || !seen.insert(path.clone()) {
+                    continue;
+                }
+                total += 1;
+                if findings.len() < limits.max_findings {
+                    findings.push(Finding {
+                        kind: FindingKind::ProtectedPath,
+                        blob,
+                        path: clean_path(&path),
+                        commit: Some((*commit).to_owned()),
+                    });
+                }
+            }
+        }
+        Ok((findings, total))
+    }
+}
+
+/// `diff-tree --raw -z` records (`:<old mode> <new mode> <old id> <new id>
+/// <status>` NUL `<path>` NUL; no renames): each change's blob (the new
+/// one, the old one for a deletion) and path.
+fn raw_changes(out: &[u8]) -> Result<Vec<(String, Vec<u8>)>, ForgeError> {
+    let mut changes = Vec::new();
+    let mut fields = out.split(|b| *b == 0).filter(|f| !f.is_empty());
+    while let Some(head) = fields.next() {
+        let head = std::str::from_utf8(head).map_err(|_| unchecked("diff_unreadable"))?;
+        let Some(meta) = head.strip_prefix(':') else {
+            return Err(unchecked("diff_unreadable"));
+        };
+        let parts: Vec<&str> = meta.split(' ').collect();
+        let (Some(old), Some(new)) = (parts.get(2), parts.get(3)) else {
+            return Err(unchecked("diff_unreadable"));
+        };
+        let Some(path) = fields.next() else {
+            return Err(unchecked("diff_unreadable"));
+        };
+        let deleted = new.bytes().all(|b| b == b'0');
+        let blob = if deleted { old } else { new };
+        if !is_object_id(blob) {
+            return Err(unchecked("diff_unreadable"));
+        }
+        changes.push(((*blob).to_owned(), path.to_vec()));
+    }
+    Ok(changes)
 }
 
 fn git_failed(subcommand: &'static str, e: ForgeError) -> ForgeError {

@@ -84,6 +84,11 @@ pub struct PushCheckPolicy {
     /// The one-time history import (serve found an open allowance and an
     /// empty repository): [`ScanMode::HistoryImport`].
     pub history_import: bool,
+    /// Plan 17 P17-5: the pusher holds an improvement-draft token, so a
+    /// change to a protected path
+    /// (`forge_core::improve_draft::is_protected_path`) refuses the push
+    /// (`FG-GIT-0039`).
+    pub protected_paths: bool,
 }
 
 /// The forge binary as the hook script runs it: absolute, UTF-8, without
@@ -252,6 +257,10 @@ impl Git {
         put(
             "history_import",
             if policy.history_import { "1" } else { "0" },
+        );
+        put(
+            "protected_paths",
+            if policy.protected_paths { "1" } else { "0" },
         );
         write_private(&dir.join("policy"), text.as_bytes()).map_err(|e| {
             failed("run_dir")
@@ -436,6 +445,7 @@ struct ReadPolicy {
     git_home: PathBuf,
     limits: ScanLimits,
     mode: ScanMode,
+    protected_paths: bool,
 }
 
 fn read_policy(dir: &Path) -> Result<ReadPolicy, ForgeError> {
@@ -478,6 +488,11 @@ fn read_policy(dir: &Path) -> Result<ReadPolicy, ForgeError> {
             "0" => ScanMode::Full,
             "1" => ScanMode::HistoryImport,
             _ => return Err(invalid("history_import")),
+        },
+        protected_paths: match get("protected_paths")?.as_str() {
+            "0" => false,
+            "1" => true,
+            _ => return Err(invalid("protected_paths")),
         },
     })
 }
@@ -564,14 +579,35 @@ async fn check(policy: &ReadPolicy, env: &HookEnv, stdin: &[u8]) -> Result<ScanR
     cfg.max_output_bytes = HOOK_MAX_OUTPUT;
     cfg.max_concurrency = 2;
     let git = Git::new(cfg);
-    git.scan_push_with(
-        &repo,
-        quarantine.as_ref(),
-        &tips,
-        &policy.limits,
-        policy.mode,
-    )
-    .await
+    let mut report = git
+        .scan_push_with(
+            &repo,
+            quarantine.as_ref(),
+            &tips,
+            &policy.limits,
+            policy.mode,
+        )
+        .await?;
+    // Plan 17 P17-5: an improvement-draft push changes no protected path
+    // (complete, or the push is refused).
+    if policy.protected_paths {
+        let (found, total) = git
+            .protected_path_findings(
+                &repo,
+                quarantine.as_ref(),
+                &tips,
+                &policy.limits,
+                forge_core::improve_draft::is_protected_path,
+            )
+            .await?;
+        report.total_findings += total;
+        let room = policy
+            .limits
+            .max_findings
+            .saturating_sub(report.findings.len());
+        report.findings.extend(found.into_iter().take(room));
+    }
+    Ok(report)
 }
 
 fn failed_outcome(e: &ForgeError) -> HookOutcome {
@@ -594,7 +630,7 @@ fn failed_outcome(e: &ForgeError) -> HookOutcome {
 fn decide(policy: &ReadPolicy, report: ScanReport) -> (HookOutcome, HookExit) {
     let lang = policy.lang;
     let mut stderr = String::new();
-    let accept = report.findings.is_empty();
+    let accept = report.findings.is_empty() && report.total_findings == 0;
     if accept {
         if report.incomplete.is_some() {
             let code = ErrorCode::PushCheckIncomplete;
@@ -702,6 +738,7 @@ pub fn finding_line(f: &Finding, limit: u64) -> String {
             format!("{path}{commit}: {size} bytes, over the limit of {limit} bytes")
         }
         FindingKind::Secret { rule } => format!("{path}{commit}: looks like a secret ({rule})"),
+        FindingKind::ProtectedPath => format!("{path}{commit}: a protected path"),
     }
 }
 
@@ -765,6 +802,7 @@ fn write_result(dir: &Path, nonce: &str, o: &HookOutcome) -> Result<(), ForgeErr
             let (kind, detail) = match &f.kind {
                 FindingKind::LargeBlob { size } => ("large_blob", size.to_string()),
                 FindingKind::Secret { rule } => ("secret", one_line(rule)),
+                FindingKind::ProtectedPath => ("protected_path", "-".to_owned()),
             };
             let _ = writeln!(
                 text,
@@ -876,6 +914,7 @@ fn finding_lines(text: &str, prefix: &str) -> Result<Vec<Finding>, ForgeError> {
             "secret" => FindingKind::Secret {
                 rule: detail.to_owned(),
             },
+            "protected_path" => FindingKind::ProtectedPath,
             _ => return Err(invalid()),
         };
         if !is_object_id(blob) || (commit != "-" && !is_object_id(commit)) {

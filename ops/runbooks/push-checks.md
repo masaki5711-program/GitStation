@@ -1,4 +1,4 @@
-# Runbook: push-checks（FG-GIT-0021 / 0022 / 0023 / 0024 / 0025 / 0026。関連: FG-GIT-0001、runbook secret-removal、smart-http）
+# Runbook: push-checks（FG-GIT-0021 / 0022 / 0023 / 0024 / 0025 / 0026 / 0039。関連: FG-GIT-0001、runbook secret-removal、smart-http）
 
 push の検査（M3 X8、ADR-0008 の追記 X8）は、receive-pack の **pre-receive フック**で、push が持ち込む新しいオブジェクト
 （新しい先端から辿れて、push の前にどの ref からも辿れなかったもの）だけを、git の隔離（quarantine）の中で調べる。
@@ -135,6 +135,24 @@ git の終了後、serve が `result` を読んでログに 1 行出し、run �
   - `reason=release_failed`: ref が反映されなかった push の確保を返せなかった。許可は閉じたまま（安全側）。取り込みをまだ行うなら
     `[MUTATING — needs approval]` もう一度 `forge admin repo allow-import`。
 - serve が push の途中で止まった場合も、確保は残り許可は閉じる。必要なら許可し直す（リポジトリが空のときだけ通る）。
+
+## 改善の下書きの push（`pfs-ai-bot`、FG-GIT-0039、計画 17 P17-5）
+
+`improve_draft` のトークン（PFS の連携のサービスアカウント `pfs-ai-bot`、ADR-0035 Amendment P17-5）の push だけ、フックは既定の
+ブランチ（`HEAD`）に無いコミットごとに親との差分を見て、保護パス（`forge_core::improve_draft::is_protected_path`: 移行・`.forge/`・
+`.forge-ci.yml`・CODEOWNERS・権限のコード、ビルドと道具の設定、エージェントの指示と設定（`.claude/`・`.mcp.json` など）、秘密らしい名前、`agents/`・`models/`・`bench/`・
+`evals/baselines/`・`thresholds/`）に触れれば push 全体を拒む（**FG-GIT-0039**、warn）。
+
+- 利用者（PFS の連携）の画面: `remote: FG-GIT-0039 …` とパス・コミットの行。ログ: `forge.git.push_checked`、`verdict=refused`、
+  `rules=protected_path`、`first_path`、`first_commit`。サーバーで直すものは無い。保護パスの変更が本当に要るなら、人が自分の MR で
+  保護パスの承認を受けて変える。
+- 差分を最後まで見られない（60 秒、一覧の上限、1000 を超えるコミット）ときは拒否（**FG-GIT-0023 `protected_paths_unchecked`**、
+  `detail` に `deadline` / `commit_list_truncated` / `too_many_commits` / `diff_truncated`）。下書きを小さくして push し直してもらう。
+- push の検査が無効のサーバー（`push_checks` の設定が無い）では、`improve_draft` の push はすべて **FG-GIT-0023
+  `checks_off_for_improve_draft`** で拒む。検査を有効にして再起動する（`[MUTATING — needs approval]`）。
+- アカウントの資格: 有効な `improve_draft` のトークンを持つアカウントには、ほかのトークンも SSH 鍵も発行・登録できない
+  （`FG-AUTH-0008` / `FG-AUTH-0023` の `reason=improve_draft_account`）。読み取り: `SELECT id, scopes, expires_at, revoked_at FROM
+  forge.tokens WHERE user_id = <pfs-ai-bot の id>`。
 
 ## Windows の注意
 

@@ -506,6 +506,7 @@ fn check_run(r: &Receiver) -> forge_git::push_hook::PushCheckRun {
                 repo_id: RepoId::new(9),
                 limits: ScanLimits::new(1),
                 history_import: false,
+                protected_paths: false,
             },
         )
         .expect("run")

@@ -386,6 +386,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PushSecretDetected
         | ErrorCode::PushCheckFailed
         | ErrorCode::PushCheckIncomplete
+        // Plan 17 P17-5: an improvement-draft push's paths, never a merge.
+        | ErrorCode::PushProtectedPath
         // E1: the simple editor's commit is a request, never a merge.
         | ErrorCode::FileCommitConflict
         | ErrorCode::FileCommitPathInvalid

@@ -627,3 +627,83 @@ async fn only_a_developer_with_write_repository_commits() {
     assert!(w.pushed_rows().await.is_empty());
     w.t.drop_now().await;
 }
+
+/// Plan 17 P17-5: `pfs-ai-bot` (a Developer service account with an
+/// `improve_draft` token) commits through the editor API only on an
+/// `improve/*` branch, never a protected path (FG-GIT-0039, nothing
+/// written), and the merge request it opens is a draft.
+#[tokio::test]
+async fn an_improvement_draft_commit_keeps_to_its_paths_and_opens_a_draft() {
+    let w = world().await;
+    let olga =
+        w.t.json_rows("SELECT id FROM forge.users WHERE username = 'olga'")
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .map(UserId::new)
+            .expect("olga");
+    let bot = forge_db::service_accounts::create(
+        &w.t.db,
+        &ctx("req-bot"),
+        &forge_db::service_accounts::NewServiceAccount {
+            username: "pfs-ai-bot".to_owned(),
+            display_name: "PFS AI".to_owned(),
+            owner: olga,
+            purpose: "improvement drafts from PFS".to_owned(),
+        },
+        olga,
+    )
+    .await
+    .expect("bot")
+    .user_id;
+    projects::add_member(
+        &w.t.db,
+        &ctx("req-bot-member"),
+        forge_core::ProjectId::new(w.project),
+        bot,
+        Role::Developer,
+    )
+    .await
+    .expect("member");
+    let caller = Caller {
+        principal: Principal::authenticated(
+            bot,
+            false,
+            true,
+            Credential::Token(vec![Scope::ImproveDraft]),
+            forge_auth::AccountKind::ServiceAccount,
+        ),
+        session: None,
+    };
+
+    // A protected path: refused, no branch, no push recorded.
+    let mut body = edit(&w.base, "x = 1\n");
+    body["create_branch"] = json!("improve/req-1");
+    body["path"] = json!("agents/allowlist.toml");
+    let (status, refused) = w.commit(&caller, body).await;
+    assert_eq!(
+        (status, code(&refused)),
+        (StatusCode::FORBIDDEN, "FG-GIT-0039"),
+        "{refused}"
+    );
+    assert!(w.pushed_rows().await.is_empty());
+
+    // Outside improve/*: refused like its push.
+    let (status, refused) = w.commit(&caller, edit(&w.base, "# Spec\n\nv2\n")).await;
+    assert_eq!(
+        (status, code(&refused)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{refused}"
+    );
+
+    // A case on improve/*: committed, and the merge request is a draft.
+    let mut body = edit(&w.base, "{}\n");
+    body["create_branch"] = json!("improve/req-2");
+    body["path"] = json!("evals/cases/step/c1.json");
+    let (status, answer) = w.commit(&caller, body).await;
+    assert_eq!(status, StatusCode::CREATED, "{answer}");
+    assert!(answer["merge_request_error"].is_null(), "{answer}");
+    assert_eq!(answer["merge_request"]["draft"], true, "{answer}");
+    assert_eq!(answer["merge_request"]["source_branch"], "improve/req-2");
+    w.t.drop_now().await;
+}

@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-A personal access token could not be issued because the request breaks a rule of forge_db::tokens::issue (ADR-0019): the expiry is under 1 day or over 365 days, no scope or an unknown scope, a name that is empty, over 100 characters or holds NUL or another control character, the admin scope for a non-admin owner or for an administrator granted by the identity provider's role (`users.admin_source = 'oidc'`, ADR-0021 amendment 2026-11-24: that flag is re-checked only at sign-ins and refresh checks, which a token never passes), a bot owner, a disabled owner, or the owner already holds 50 active tokens.
+A personal access token could not be issued because the request breaks a rule of forge_db::tokens::issue (ADR-0019): the expiry is under 1 day or over 365 days, no scope or an unknown scope, a name that is empty, over 100 characters or holds NUL or another control character, the admin scope for a non-admin owner or for an administrator granted by the identity provider's role (`users.admin_source = 'oidc'`, ADR-0021 amendment 2026-11-24: that flag is re-checked only at sign-ins and refresh checks, which a token never passes), a bot owner, a disabled owner, or the owner already holds 50 active tokens. Plan 17 P17-5 (ADR-0035 Amendment P17-5): `improve_draft_requires_service_account` (the improvement-draft scope for anything but a service account), `improve_draft_not_alone` (with another scope), `improve_draft_account_holds_other_credentials` (the account holds another live token or an SSH key), `improve_draft_account` (another scope for an account holding a live improvement-draft token).
 
 ## 調べ方 (diagnosis)
 

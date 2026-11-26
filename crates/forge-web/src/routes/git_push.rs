@@ -206,6 +206,9 @@ async fn receive_pack_inner(
             ForgeError::new(ErrorCode::Internal).with_context("reason", "git_route_without_user")
         );
     };
+    // Plan 17 P17-5: an improvement-draft token's push changes no
+    // protected path (the hook checks it, FG-GIT-0039).
+    let improve_draft = request.principal().is_improve_draft();
     let pusher = Pusher {
         request_id: ctx.request_id.clone(), // clone: the record keeps its own
         user,
@@ -360,9 +363,16 @@ async fn receive_pack_inner(
                             .limits
                             .unwrap_or_else(|| ScanLimits::new(limits.push_max_blob_bytes)),
                         history_import: history_import.is_some(),
+                        protected_paths: improve_draft,
                     },
                 )?,
             ),
+            // Without the hook nothing could hold an improvement draft to
+            // its paths: refused, never let through unchecked.
+            None if improve_draft => {
+                return Err(ForgeError::new(ErrorCode::PushCheckFailed)
+                    .with_context("reason", "checks_off_for_improve_draft"));
+            }
             None => None,
         };
 

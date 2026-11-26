@@ -312,6 +312,13 @@ impl Principal {
         self.agent
     }
 
+    /// The credential is an improvement-draft token (plan 17 P17-5,
+    /// `pfs-ai-bot`): its pushes change no protected path (the pre-receive
+    /// hook and the single-file commit check it, `FG-GIT-0039`).
+    pub fn is_improve_draft(&self) -> bool {
+        matches!(&self.credential, Credential::Token(scopes) if scopes.contains(&Scope::ImproveDraft))
+    }
+
     /// Whether the caller is an AI agent for the confidential boundary of
     /// plan 06 D-5 (M3 X5, ADR-0023 Amendment X5): a credential issued
     /// with `is_agent`, or an account that is no person (a service account

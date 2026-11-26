@@ -459,3 +459,138 @@ async fn act_as_scope_is_issued_to_a_service_account_only() {
     assert!(scopes.contains(&"act_as".to_owned()), "{scopes:?}");
     t.drop_now().await;
 }
+
+/// Plan 17 P17-5 (ADR-0035 Amendment P17-5): `improve_draft` goes to a
+/// service account only, alone in its token, and the account then holds
+/// no other live token and no SSH key — in either order; nothing is
+/// written by a refusal. The table refuses the scope with another one even
+/// past forge-db.
+#[tokio::test]
+async fn improve_draft_is_a_service_accounts_only_credential() {
+    // A synthetic public key (ssh-keygen, private half discarded).
+    const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAGuL+srU7BTyMdIqbgh4NRqXH1vOCQWfZxL4x1ZB/uN synthetic-ed25519";
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice", true).await;
+    let service = |name: &str| crate::service_accounts::NewServiceAccount {
+        username: name.to_owned(),
+        display_name: "PFS AI".to_owned(),
+        owner: alice,
+        purpose: "improvement drafts from PFS".to_owned(),
+    };
+    let bot =
+        crate::service_accounts::create(&t.db, &ctx("req-sa-1"), &service("pfs-ai-bot"), alice)
+            .await
+            .expect("service account")
+            .user_id;
+    let other =
+        crate::service_accounts::create(&t.db, &ctx("req-sa-2"), &service("kanflow-sync"), alice)
+            .await
+            .expect("service account")
+            .user_id;
+    let draft = [Scope::ImproveDraft];
+
+    let err = issue(&t.db, &ctx("req-person"), &request(alice, &draft))
+        .await
+        .expect_err("a person");
+    assert_reason(
+        &err,
+        ErrorCode::TokenRequestInvalid,
+        "improve_draft_requires_service_account",
+    );
+    let err = issue_for_service_account(
+        &t.db,
+        &ctx("req-wide"),
+        &request(bot, &[Scope::ImproveDraft, Scope::Api]),
+        alice,
+    )
+    .await
+    .expect_err("never with another scope");
+    assert_reason(
+        &err,
+        ErrorCode::TokenRequestInvalid,
+        "improve_draft_not_alone",
+    );
+    let mut su = t.superuser().await;
+    assert_eq!(count(&mut su, "SELECT count(*) FROM forge.tokens").await, 0);
+
+    // The bot's token; then nothing else for the bot.
+    issue_for_service_account(&t.db, &ctx("req-bot"), &request(bot, &draft), alice)
+        .await
+        .expect("the bot's token");
+    issue_for_service_account(&t.db, &ctx("req-bot-2"), &request(bot, &draft), alice)
+        .await
+        .expect("a second draft token");
+    let err = issue_for_service_account(
+        &t.db,
+        &ctx("req-bot-api"),
+        &request(bot, &[Scope::Api]),
+        alice,
+    )
+    .await
+    .expect_err("no other token");
+    assert_reason(
+        &err,
+        ErrorCode::TokenRequestInvalid,
+        "improve_draft_account",
+    );
+    let key = crate::ssh_keys::NewSshKey {
+        user: bot,
+        title: "bot".to_owned(),
+        key: forge_core::ssh_key::parse_public_key(KEY).expect("key"),
+    };
+    let err = crate::ssh_keys::add(&t.db, &ctx("req-bot-key"), &key)
+        .await
+        .expect_err("no SSH key");
+    assert_eq!(err.code(), ErrorCode::SshKeyInvalid, "{err}");
+    assert!(
+        err.context()
+            .iter()
+            .any(|(k, v)| *k == "reason" && v == "improve_draft_account"),
+        "{err}"
+    );
+
+    // The other order: an account with an API token or a key gets none.
+    issue_for_service_account(
+        &t.db,
+        &ctx("req-other"),
+        &request(other, &[Scope::Api]),
+        alice,
+    )
+    .await
+    .expect("an API token");
+    let err = issue_for_service_account(
+        &t.db,
+        &ctx("req-other-draft"),
+        &request(other, &draft),
+        alice,
+    )
+    .await
+    .expect_err("holds another token");
+    assert_reason(
+        &err,
+        ErrorCode::TokenRequestInvalid,
+        "improve_draft_account_holds_other_credentials",
+    );
+    assert_eq!(
+        count(
+            &mut su,
+            "SELECT count(*) FROM forge.tokens WHERE 'improve_draft' = ANY (scopes)"
+        )
+        .await,
+        2
+    );
+
+    // The table itself: the scope is never stored with another one.
+    let err = sqlx::query(
+        "UPDATE forge.tokens SET scopes = ARRAY['improve_draft', 'api'] \
+         WHERE 'improve_draft' = ANY (scopes)",
+    )
+    .execute(&mut su)
+    .await
+    .expect_err("check");
+    assert!(
+        err.to_string().contains("tokens_improve_draft_alone"),
+        "{err}"
+    );
+    t.drop_now().await;
+}

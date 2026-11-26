@@ -118,3 +118,39 @@ GitStation のリポジトリ `pfs-ai/assets` で直す。PFS の適合ゲート
 3. **設定を変えたら `forge/risk` をやり直す**（MEDIUM 3）。表に `version`（変更ごとに +1）を足し、変更と同じトランザクションで、開いている MR
    （新しい順に 500 件まで）の head ごとに `check.risk` のジョブを積む。重複の鍵は `risk:<project>:<head>:mr<id>:ai<version>` で、オフのときに
    評価した head も、オンにしたあと AI 資産の規則で評価し直される（逆も同じ）。
+
+## Amendment P17-5（2026-11-26、`pfs-ai-bot`: 改善の下書きだけの資格）
+
+計画 17 §3・P17-5。利用者の不在の間は計画の推奨をとる指示に従い、次のとおり決めた。
+
+1. **`pfs-ai-bot` はサービスアカウント**（`users.kind = service_account`）。種類 `bot` は所属を持てず（ADR-0017、DB のトリガー）、トークンも
+   持てない（`owner_bot`）ので、「`pfs-ai` グループの所属だけ」を満たせない。サービスアカウントは所属のプロジェクトだけが見える（内部の
+   プロジェクトも 404、M3 S0）。所属は運用で `pfs-ai` グループの Developer だけにする（P17-4 の立ち上げ）。
+2. **制限はトークンのスコープ `improve_draft`**（計画 §1.3 の「ボットのトークンは下書きの MR しか作れない」）。`authorize()` は
+   このスコープのトークンを自分の腕（`forge-auth/src/improve_draft.rs`、閉じる側）で判定する: サービスアカウントだけ
+   （`improve_draft_not_service_account`）→ 所属の無いプロジェクトは 404（`improve_draft_not_member`、内部も）→ 許す動作は
+   読む（`ProjectRead`・`PathResolve`・`RepoRead`・`RepoBrowse`・`MergeRequestList`・`MergeRequestRead`）、`RepoPush`、
+   `MergeRequestCreate`、`MergeRequestComment` だけ（ほかは `FG-AUTH-0002 improve_draft_not_allowed`: 準備完了を含む MR の更新・承認・
+   マージ・閉じる・リリース・デプロイ・設定のすべて）→ push は新しい `refs/heads/improve/*` の作成だけ（`improve_branch_only`・
+   `improve_draft_create_only`: 早送りもしない。人が準備完了・承認した MR にボットの続きが載らないよう、改訂は新しいブランチと新しい下書き）、MR は `improve/*` からの下書きだけ（`draft_only`）→ そのあと Developer の `api` + `write_repository` の
+   トークンとして一般の規則（役割・保護・削除待ち・エージェントの写しの印）。行は `matrix_rows_pfs_ai_bot.rs`（許さない動作は生成の deny 行）。
+3. **アカウントにほかの資格を持たせない**（forge-db `tokens::issue`・`ssh_keys::add`、利用者の行のロックの下）: このスコープは単独で
+   だけ発行（`improve_draft_not_alone`、表の CHECK `tokens_improve_draft_alone` も）、有効な `improve_draft` のトークンを持つアカウントには
+   ほかのスコープのトークンも SSH 鍵も出さない（`improve_draft_account`）、ほかのトークンか SSH 鍵を持つアカウントには出さない
+   （`improve_draft_account_holds_other_credentials`）。SSH 鍵の push はトークンの腕を通らないため。
+4. **保護パスは push の中身で拒む**（`FG-GIT-0039 PushProtectedPath`）。`authorize()` は中身が届く前に判定するので、push の検査
+   （pre-receive の hook、ADR-0008 Amendment X8）の方針に `protected_paths` を足し、`improve_draft` の push では既定のブランチ（`HEAD`）に
+   無いコミット（既存の人のコミットを指すブランチも含む）ごとに親との差分（`diff-tree -r -m --root`）を見て、`forge_core::improve_draft::is_protected_path`（forge 自身の保護パス
+   ＝`auto_merge::is_protected_path`、autofix の固定の拒否＝`autofix::fixed_denial`、エージェントの設定＝`risk::is_agent_config_path`（`.claude/`・`.gitstation/`・`.mcp.json`・`CLAUDE.md`）、計画 17 §2 の `agents/`・`models/`・`bench/`・
+   `evals/baselines/`・`thresholds/`。各部分は開発者のファイルシステムの読み方＝`risk::on_disk_upper` でも照合: 大文字小文字・末尾の点と空白・幅の無い文字を問わない）に当たれば push 全体を拒む。検査は完全か拒否（期限・切れた一覧・
+   1000 を超えるコミットは `FG-GIT-0023 protected_paths_unchecked`）。push の検査が無効のサーバーでは `improve_draft` の push を拒む
+   （`checks_off_for_improve_draft`）。単一ファイルのコミットの API も同じ判定で拒み、開く MR は下書きにする。
+5. **採らなかった案**: 種類 `bot` に所属を許す（ADR-0017 の不変条件と DB のトリガーを崩す）／`users` にアカウントの印の列を足して
+   すべての主体の組み立てに通す（入口が多く、漏れると制限が消える）／リポジトリごとの保護パスの設定（GitStation にまだ無い。
+   pfs-ai の保護パスは計画 §2 の固定の一覧で足りる）。
+6. **残り**: Web の管理画面のスコープの選択肢には `improve_draft` を出していない（API で発行する）。ボットは既存のコミット（人が
+   main に入れたもの）を指す `improve/*` を作れ、人の `improve/*` も早送りできる。そのコミットは「新しいコミット」ではないので
+   （→ `security-reviewer` の指摘で、push の検査は `HEAD` に無いコミットすべてに広げた。）単一ファイルのコミットの API は書くファイル 1 つだけを
+   見るので、人の未マージのブランチから `improve/*` を切ると、その差分も下書きの MR に載る（下書き止まり、人の確認が要る。受け入れ）。
+   自動の取り消し（C10）の下書きは、取り消す MR の作成者（ボットでも）のセッションの権利で作られる（中身はシステムの逆適用で、ボットは
+   選べない。受け入れ）。

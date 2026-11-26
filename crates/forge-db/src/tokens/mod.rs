@@ -208,7 +208,9 @@ fn validate(new: &NewToken) -> Result<(i64, Vec<Scope>), ForgeError> {
 /// `control_character`,
 /// `owner_bot`, `owner_disabled`, `admin_scope_requires_admin`,
 /// `act_as_requires_service_account`, `act_as_agent_token` (M3 S2),
-/// `active_limit` or (for [`issue_for_service_account`])
+/// `improve_draft_requires_service_account`, `improve_draft_not_alone`,
+/// `improve_draft_account_holds_other_credentials`, `improve_draft_account`
+/// (plan 17 P17-5), `active_limit` or (for [`issue_for_service_account`])
 /// `owner_not_service_account`; `FG-REPO-0005` for an unknown owner.
 pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issued, ForgeError> {
     issue_as(db, ctx, new, None).await
@@ -290,6 +292,42 @@ async fn issue_as(
         if new.is_agent {
             return Err(refuse("act_as_agent_token"));
         }
+    }
+    // Plan 17 P17-5 (ADR-0035 Amendment P17-5): an improvement-draft
+    // token is a service account's, alone in its token, and the account
+    // then holds nothing else — no other live token, no SSH key — so
+    // `pfs-ai-bot` cannot reach past its arm with another credential (the
+    // owner's row lock above serializes this with ssh_keys::add).
+    let draft = scopes.contains(&Scope::ImproveDraft);
+    if draft {
+        if kind != UserKind::ServiceAccount.as_str() {
+            return Err(refuse("improve_draft_requires_service_account"));
+        }
+        if scopes.len() != 1 {
+            return Err(refuse("improve_draft_not_alone"));
+        }
+    }
+    let (other_live, draft_live, keys): (i64, i64, i64) = tx
+        .step(|c| async move {
+            sqlx::query_as(
+                "SELECT \
+                   (SELECT count(*) FROM forge.tokens WHERE user_id = $1 AND revoked_at IS NULL \
+                      AND expires_at > now() AND NOT ('improve_draft' = ANY (scopes))), \
+                   (SELECT count(*) FROM forge.tokens WHERE user_id = $1 AND revoked_at IS NULL \
+                      AND expires_at > now() AND 'improve_draft' = ANY (scopes)), \
+                   (SELECT count(*) FROM forge.user_ssh_keys WHERE user_id = $1)",
+            )
+            .bind(user.get())
+            .fetch_one(c)
+            .await
+            .map_err(|e| crate::query_error("tokens.issue.improve_draft", e))
+        })
+        .await?;
+    if draft && (other_live > 0 || keys > 0) {
+        return Err(refuse("improve_draft_account_holds_other_credentials"));
+    }
+    if !draft && draft_live > 0 {
+        return Err(refuse("improve_draft_account"));
     }
     let active: i64 = tx
         .step(|c| async move {

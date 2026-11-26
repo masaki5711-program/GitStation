@@ -40,6 +40,25 @@ async fn fixture() -> Fixture {
 }
 
 impl Fixture {
+    /// Plan 17 P17-5: armed for an improvement-draft push.
+    fn run_draft(&self) -> PushCheckRun {
+        let exe = std::env::current_exe().expect("exe");
+        self.git
+            .push_check_run(
+                &self.root,
+                &exe,
+                &PushCheckPolicy {
+                    request_id: "req-p175-test".to_owned(),
+                    lang: Lang::En,
+                    repo_id: self.id,
+                    limits: crate::push_scan::ScanLimits::new(1 << 20),
+                    history_import: false,
+                    protected_paths: true,
+                },
+            )
+            .expect("run")
+    }
+
     fn run(&self, max_blob_bytes: u64) -> PushCheckRun {
         let exe = std::env::current_exe().expect("exe");
         self.git
@@ -52,6 +71,7 @@ impl Fixture {
                     repo_id: self.id,
                     limits: crate::push_scan::ScanLimits::new(max_blob_bytes),
                     history_import: false,
+                    protected_paths: false,
                 },
             )
             .expect("run")
@@ -170,6 +190,7 @@ fn policy(f: &Fixture) -> PushCheckPolicy {
         repo_id: f.id,
         limits: crate::push_scan::ScanLimits::new(1),
         history_import: false,
+        protected_paths: false,
     }
 }
 
@@ -281,6 +302,7 @@ impl Fixture {
                 &exe,
                 &PushCheckPolicy {
                     history_import: true,
+                    protected_paths: false,
                     limits: crate::push_scan::ScanLimits::new(1 << 20),
                     ..policy(self)
                 },
@@ -347,3 +369,115 @@ fn a_long_path_is_cut_for_display() {
     };
     assert!(finding_line(&f, 1).chars().count() < 200);
 }
+
+/// Plan 17 P17-5: an improvement-draft push (`pfs-ai-bot`) that changes a
+/// protected path — added, changed or deleted, in any new commit — is
+/// refused whole with FG-GIT-0039; the commits already on `main` are not
+/// its own; skills and cases pass; the same push by anyone else passes.
+#[tokio::test]
+async fn bot_cannot_touch_protected_path() {
+    let f = fixture().await;
+    let base = commit(
+        &f.path,
+        &[
+            ("agents/allowlist.toml", b"x = 1\n"),
+            ("skills/pe-a.md", b"a\n"),
+        ],
+        None,
+    );
+    let status = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(&f.path)
+        .args(["update-ref", "refs/heads/main", &base])
+        .status()
+        .expect("update-ref");
+    assert!(status.success());
+
+    // A skill and a case on top of main: accepted.
+    let skill = commit(
+        &f.path,
+        &[
+            ("agents/allowlist.toml", b"x = 1\n"),
+            ("skills/pe-a.md", b"a2\n"),
+            ("cases/c1.json", b"{}\n"),
+        ],
+        Some(&base),
+    );
+    let run = f.run_draft();
+    let stdin = format!("{ZERO} {skill} refs/heads/improve/req-1\n");
+    let exit = run_pre_receive(env_of(&run), stdin.as_bytes()).await;
+    assert!(exit.accept, "{}", exit.stderr);
+
+    let cases: [Case<'_>; 3] = [
+        // changes the allowlist
+        (
+            vec![
+                ("agents/allowlist.toml", b"x = 2\n"),
+                ("skills/pe-a.md", b"a\n"),
+            ],
+            "agents/allowlist.toml",
+        ),
+        // deletes it
+        (vec![("skills/pe-a.md", b"a\n")], "agents/allowlist.toml"),
+        // adds a threshold proposal
+        (
+            vec![
+                ("agents/allowlist.toml", b"x = 1\n"),
+                ("skills/pe-a.md", b"a\n"),
+                ("thresholds/t1.md", b"{}\n"),
+            ],
+            "thresholds/t1.md",
+        ),
+    ];
+    // A person's unmerged commit on another branch, already in the
+    // repository: pointing a new improve/* branch at it is the bot's
+    // proposal of its paths.
+    let theirs = commit(
+        &f.path,
+        &[
+            ("agents/allowlist.toml", b"x = 9\n"),
+            ("skills/pe-a.md", b"a\n"),
+        ],
+        Some(&base),
+    );
+    let status = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(&f.path)
+        .args(["update-ref", "refs/heads/feature", &theirs])
+        .status()
+        .expect("update-ref");
+    assert!(status.success());
+    let run = f.run_draft();
+    let stdin = format!("{ZERO} {theirs} refs/heads/improve/req-3\n");
+    let exit = run_pre_receive(env_of(&run), stdin.as_bytes()).await;
+    assert!(!exit.accept, "{}", exit.stderr);
+    assert!(exit.stderr.contains("FG-GIT-0039"), "{}", exit.stderr);
+
+    for (files, path) in cases {
+        let tip = commit(&f.path, &files, Some(&base));
+        let run = f.run_draft();
+        let stdin = format!("{ZERO} {tip} refs/heads/improve/req-2\n");
+        let exit = run_pre_receive(env_of(&run), stdin.as_bytes()).await;
+        assert!(!exit.accept, "{path}: {}", exit.stderr);
+        assert!(exit.stderr.contains("FG-GIT-0039"), "{}", exit.stderr);
+        assert!(exit.stderr.contains(path), "{}", exit.stderr);
+        assert!(exit.stderr.contains(&tip[..12]), "{}", exit.stderr);
+        let outcome = run.outcome().expect("readable").expect("written");
+        assert_eq!(outcome.verdict, Verdict::Refused);
+        let finding = outcome.report.findings.first().expect("finding");
+        assert_eq!(finding.kind, crate::push_scan::FindingKind::ProtectedPath);
+        assert_eq!(finding.kind.rule(), "protected_path");
+        assert_eq!(finding.path, path);
+        assert_eq!(finding.commit.as_deref(), Some(tip.as_str()));
+        assert_eq!(outcome.report.total_findings, 1);
+
+        // Anyone else's push of the same commit is not held to the paths.
+        let other = f.run(1 << 20);
+        let exit = run_pre_receive(env_of(&other), stdin.as_bytes()).await;
+        assert!(exit.accept, "{}", exit.stderr);
+    }
+}
+
+/// One case of `bot_cannot_touch_protected_path`: the tip's files and the
+/// path the refusal names.
+type Case<'a> = (Vec<(&'a str, &'a [u8])>, &'a str);

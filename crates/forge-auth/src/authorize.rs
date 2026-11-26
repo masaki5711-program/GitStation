@@ -166,7 +166,11 @@ fn confirmation_refused(refusal: ForgeError) -> ForgeError {
 }
 
 /// The decision itself (see [`authorize`]).
-fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<(), ForgeError> {
+pub(crate) fn decide(
+    principal: &Principal,
+    action: Action,
+    resource: &Resource,
+) -> Result<(), ForgeError> {
     let deny = |code: ErrorCode| ForgeError::new(code).with_context("action", action.name());
 
     // Acting for a person (M3 S2, ADR-0025): its own arm, before anything
@@ -190,6 +194,14 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
     // The PFS portal (ADR-0036): its own arm, closed by default.
     if let Credential::Portal(credential) = principal.credential() {
         return crate::portal::decide(principal, *credential, action, resource);
+    }
+    // An improvement-draft token (plan 17 P17-5): its own arm, closed by
+    // default; what it allows is then decided below as a Developer's
+    // `api` + `write_repository` token would be.
+    if let Credential::Token(scopes) = principal.credential() {
+        if scopes.contains(&Scope::ImproveDraft) {
+            return crate::improve_draft::decide(principal, action, resource);
+        }
     }
     // A source branch as the autofix bot reaches it is no resource for
     // anyone else.
@@ -2075,7 +2087,7 @@ fn continuation(access_role: bool, account: AdmissionAccount) -> Result<(), &'st
 
 /// The project a resource belongs to, for the visibility check, and how it
 /// was reached (only a resolved path can arrive through a tombstone).
-fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
+pub(crate) fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
     let live = |p| Some((p, ResolvedVia::Live));
     match resource {
         Resource::Project(p) => live(p),

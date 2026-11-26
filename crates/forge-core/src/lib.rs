@@ -35,6 +35,7 @@ pub mod pipeline;
 pub mod feed;
 // 2026-11-12: the one-time history import of an empty repository.
 pub mod history_import;
+pub mod improve_draft;
 // ── end M3 I1c ──
 pub mod ids;
 pub mod integration;
@@ -189,6 +190,8 @@ mod dedup_key_tests;
 mod event_type_tests;
 #[cfg(test)]
 mod feed_tests;
+#[cfg(test)]
+mod improve_draft_tests;
 #[cfg(test)]
 mod integration_tests;
 #[cfg(test)]
