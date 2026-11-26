@@ -25,7 +25,7 @@ import { ErrorSummary } from '../../features/CreateDialogs';
 import { formatDateTime } from '../../features/labels';
 import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
-import { SERVICE_ACCOUNT_SCOPES } from './scopes';
+import { ACT_AS_SCOPE, MAX_TOKEN_SCOPES, SERVICE_ACCOUNT_SCOPES } from './scopes';
 import styles from './Settings.module.css';
 import { useLeaveGuard } from '../../hooks/useLeaveGuard';
 
@@ -678,7 +678,12 @@ function IssueToken({ id, onIssued }: { id: number; onIssued: (c: Issued) => voi
   const nameTrim = name.trim();
   const nameError =
     nameTrim === '' ? t('tokens.nameRequired') : Array.from(nameTrim).length > 100 ? t('tokens.nameLong') : null;
-  const scopeError = scopes.length === 0 ? t('tokens.scopeRequired') : null;
+  const scopeError =
+    scopes.length === 0
+      ? t('tokens.scopeRequired')
+      : scopes.length > MAX_TOKEN_SCOPES
+        ? t('sa.scopeTooMany', { max: MAX_TOKEN_SCOPES })
+        : null;
   const n = Number(days);
   const daysError =
     days.trim() === '' || !Number.isInteger(n) || n < 1 || n > 365 ? t('tokens.daysInvalid') : null;
@@ -734,6 +739,12 @@ function IssueToken({ id, onIssued }: { id: number; onIssued: (c: Issued) => voi
               <input
                 type="checkbox"
                 checked={scopes.includes(s)}
+                // An agent's token never acts for a person (the server
+                // refuses `act_as_agent_token`).
+                disabled={s === ACT_AS_SCOPE && agent}
+                aria-describedby={
+                  s !== ACT_AS_SCOPE ? undefined : agent ? 'sa-actas-help sa-actas-agent' : 'sa-actas-help'
+                }
                 onChange={(e) => {
                   setScopes(e.target.checked ? [...scopes, s] : scopes.filter((x) => x !== s));
                 }}
@@ -745,6 +756,14 @@ function IssueToken({ id, onIssued }: { id: number; onIssued: (c: Issued) => voi
         <p id="sa-scopes-help" className={controls.help}>
           {t('sa.scopesHelp')}
         </p>
+        <p id="sa-actas-help" className={controls.help}>
+          {t('sa.actAsHelp', { scope: ACT_AS_SCOPE })}
+        </p>
+        {agent && (
+          <p id="sa-actas-agent" className={controls.help}>
+            {t('sa.actAsAgent', { scope: ACT_AS_SCOPE })}
+          </p>
+        )}
         {attempt > 0 && scopeError !== null && <p className={controls.fieldError}>{scopeError}</p>}
       </fieldset>
       <TextField
@@ -763,6 +782,7 @@ function IssueToken({ id, onIssued }: { id: number; onIssued: (c: Issued) => voi
             aria-describedby="sa-agent-help"
             onChange={(e) => {
               setAgent(e.target.checked);
+              if (e.target.checked) setScopes((cur) => cur.filter((x) => x !== ACT_AS_SCOPE));
             }}
           />
           <span>{t('tokens.agent')}</span>
