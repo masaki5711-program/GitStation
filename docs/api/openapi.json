@@ -4743,6 +4743,7 @@
         "type": "object"
       },
       "DiagnosisCandidateBody": {
+        "additionalProperties": false,
         "description": "One cause candidate, as checked and stored.",
         "properties": {
           "confidence": {
