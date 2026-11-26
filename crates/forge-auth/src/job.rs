@@ -221,6 +221,7 @@ fn job(
         | Resource::NotificationPreferences { .. }
         | Resource::UserMergeRequests { .. }
         | Resource::UserActivity { .. }
+        | Resource::Agent(_)
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

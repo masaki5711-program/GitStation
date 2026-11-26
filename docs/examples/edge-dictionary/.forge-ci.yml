@@ -1,0 +1,40 @@
+# I/O の意味の辞書（edge-fw/io-dictionary）の CI。合成の例: イメージのダイジェストは社内のレジストリの値に置き換える。
+# 手引き: docs/guides/edge-release-pattern.md
+#
+# - dictionary: 追記だけの確かめ。1 つ前のコミット HEAD^1 と比べるので fetch_depth: 2（計画 21 G2）。
+#   MR のパイプラインはマージの結果で動くので HEAD^1 は目標のブランチの先端。
+# - dictionary-selftest: 確かめのスクリプト自身の試験（tests/cases）。
+# - release: 保護ブランチ release の push のパイプラインでだけ、辞書を成果物として残す（keep: true、計画 21 G1）。
+#   MR・保護されていないブランチでは keep は効かず 30 日で消える（ジョブのログに 1 行）。
+# イメージは git と python3（3.11 以上）を持つもの（例: 公式の python:3.12-bookworm を社内のレジストリに入れてダイジェストで固定）。
+version: 1
+stages: [check, release]
+jobs:
+  dictionary:
+    stage: check
+    image: registry.internal/library/python@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    timeout: 5m
+    fetch_depth: 2
+    script:
+      - python3 scripts/check-append-only.py
+  dictionary-selftest:
+    stage: check
+    image: registry.internal/library/python@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    timeout: 5m
+    script:
+      - python3 tests/run-cases.py
+  release:
+    stage: release
+    image: registry.internal/library/python@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    timeout: 5m
+    rules:
+      branches: [release]
+      merge_requests: false
+    script:
+      - mkdir -p out
+      - cp io-dictionary.toml out/io-dictionary.toml
+      - python3 -c "import json,tomllib; json.dump(tomllib.load(open('io-dictionary.toml','rb')), open('out/io-dictionary.json','w'), ensure_ascii=False, indent=2, sort_keys=True)"
+      - cd out && sha256sum io-dictionary.toml io-dictionary.json > SHA256SUMS
+    artifacts:
+      paths: [out/io-dictionary.toml, out/io-dictionary.json, out/SHA256SUMS]
+      keep: true

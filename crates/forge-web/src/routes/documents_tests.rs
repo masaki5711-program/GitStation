@@ -742,7 +742,7 @@ fn the_view_maps_to_the_answer_shape() {
     ]));
     let doc = parse_document(QP.as_bytes());
     let view = view_with_body(QP, &doc, TypeDefault::Known(None), &i);
-    let (fields, sections, refs) = view_parts(&view);
+    let (fields, sections, refs) = view_parts(&view, None);
     assert_eq!(fields.len(), view.fields.len());
     assert_eq!(sections.len(), view.sections.len());
     assert_eq!(refs.len(), view.refs.len());

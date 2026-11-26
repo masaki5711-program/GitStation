@@ -3094,6 +3094,46 @@
     "planned": true
   },
   {
+    "action": "AgentPartRead",
+    "planned": true
+  },
+  {
+    "action": "AgentPartList",
+    "planned": true
+  },
+  {
+    "action": "AgentPartPublish",
+    "planned": true
+  },
+  {
+    "action": "AgentPartPromote",
+    "planned": true
+  },
+  {
+    "action": "AgentPartRevoke",
+    "planned": true
+  },
+  {
+    "action": "AgentKeyRead",
+    "planned": true
+  },
+  {
+    "action": "AgentBuilderRecommend",
+    "planned": true
+  },
+  {
+    "action": "AgentBuilderDryRun",
+    "planned": true
+  },
+  {
+    "action": "AgentBuilderCompile",
+    "planned": true
+  },
+  {
+    "action": "RuleInjectLesson",
+    "planned": true
+  },
+  {
     "action": "SessionCreate",
     "decided_in": "/-/auth/callback"
   },

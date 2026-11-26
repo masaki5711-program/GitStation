@@ -133,12 +133,11 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 russh = { version = "0.65.1", default-features = false, features = ["ring"] }
 # ── end M4 C13 ──
 # ── Plan 21 E1: edge install windows (forge-edge, ADR-0041 §6) ──
-# Civil time and IANA time zones with DST, for the maintenance windows.
+# The edge manifest's `created_at` instant (RFC 3339, offset required).
 # Unlicense OR MIT (BurntSushi). Without default features: no system time
-# zone, no zoneinfo files, no clock reads — the tz database is compiled in
-# (`tzdb-bundle-always`), so forge-edge stays pure and answers the same on
-# Windows dev machines, the server and the edge devices.
-jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+# zone, no zoneinfo files, no clock reads, and no tz database (plan 21 E1b
+# retired the maintenance windows that needed one), so forge-edge stays pure.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 # ── end plan 21 E1 ──
 
 [workspace.lints.rust]

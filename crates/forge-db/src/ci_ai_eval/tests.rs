@@ -61,6 +61,7 @@ fn job(name: &str) -> NewCiJob {
         tags: Vec::new(),
         secrets: Vec::new(),
         manual: false,
+        artifacts_keep: false,
     }
 }
 

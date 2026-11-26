@@ -129,6 +129,7 @@ impl World {
                 tags: Vec::new(),
                 secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
                 manual: false,
+                artifacts_keep: false,
             }]),
         };
         let pipeline = pipelines::create(&self.t.db, &new)

@@ -203,6 +203,7 @@ fn report_plan(cli: &Cli, io: &mut Io<'_>, file: &str, plan: &Plan) -> Result<()
                 "script_lines": j.script_lines,
                 "services": j.services,
                 "manual": j.manual,
+                "keep_artifacts": j.keep_artifacts,
             })
         })
         .collect();
@@ -234,8 +235,13 @@ fn report_plan(cli: &Cli, io: &mut Io<'_>, file: &str, plan: &Plan) -> Result<()
             format!(" services {}", j.services.join(", "))
         };
         let manual = if j.manual { " (manual)" } else { "" };
+        let keep = if j.keep_artifacts {
+            " keeps artifacts"
+        } else {
+            ""
+        };
         human.push(format!(
-            "  wave {} {}{manual} [{}] timeout {}s{after}{secrets}{services}",
+            "  wave {} {}{manual} [{}] timeout {}s{after}{secrets}{services}{keep}",
             j.wave, j.name, j.stage, j.timeout_secs
         ));
     }

@@ -6192,12 +6192,19 @@
                     "found",
                     "hidden",
                     "broken",
-                    "external"
+                    "external",
+                    "unreadable",
+                    "no_wiki"
                   ]
+                },
+                "wiki": {
+                  "type": "boolean"
                 }
               },
               "required": [
                 "repo",
+                "wiki",
+                "wiki_project_id",
                 "doc",
                 "block",
                 "line",

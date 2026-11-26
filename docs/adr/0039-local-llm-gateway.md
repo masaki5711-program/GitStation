@@ -84,6 +84,24 @@ Claude（保守者）がログと成果物だけで失敗を診断できるこ�
 ボット・代理・`Forge-Context-Audience: agent` を宣言した要求・人でない資格情報はすべて `Agent`（閉じた既定）。forge-db の
 `advice_decided` / `record_feedback_decided` の `decide` はこの関数を通す（L5-5 以降の経路）。経路はまだ無い（forge-web の `PLANNED`）。
 
+## Amendment（2026-11-26、L5-11 `docs/ops-llm-runbooks`: runbook と doctor）
+
+計画 19 §8.4 の doctor の項目と §8.5 の runbook をそろえた。選んだこと（計画の推奨どおり）:
+
+- L5-3 の `llm.gateway` を計画の名前に分けた: `llm.endpoint`（`/api/tags` に届くか、FG-LLM-0001）と `llm.model`（digest、FG-LLM-0003）。
+  `/api/tags` は 1 回だけ読む。
+- `llm.num_ctx` は Ollama の `/api/ps` の `context_length`（読み込まれているモデルの文脈の長さ）と `llm.num_ctx` を比べる。違っても失敗では
+  なく **`warn`**（FG コードなし）: 何も止まらず遅くなるだけ。読み込まれていなければ `ok`、`context_length` を返さない Ollama・`/api/ps` を
+  読めないときも `warn`（比べられなかったことを隠さない）。
+- `llm.kanflow_gate` は `KanflowGate::probe`（ゲートウェイの `poll` と同じ要求で、届かない理由を返す）。届かなくても **`warn`**:
+  ゲートウェイは止まらず 1 分に 1 件に絞る（決定 2）。未設定は `skip`。
+- `llm.queue_age`（DB、読み取りのプール）: 層ごとの最古の `queued` の待ちが期限 + 2 分を超えたら FG-LLM-0004
+  `reason=queued_past_deadline`（動いているゲートウェイは期限で自分で諦めるので、残っている = 列を処理する worker がいない）。新しいコードは
+  作らない。直近 1 時間の期限切れは `warn`。`llm.enabled = false` の間は `skip`（列を処理するはずのゲートウェイが無い。前に残った行は
+  worker の掃除が 7 時間で `abandoned` にする）。
+- runbook `llm-advice-quality` を足した（採用率・誤検知率の集計、FG-LLM-0002 / 0006、プロンプトの版を「前の中身で新しい版」として戻す）。
+  `errors.toml` の FG-LLM-0002 / 0006 に `runbook = "llm-advice-quality"`、FG-LLM-0005 に `secret-removal` を付けた。
+
 ## Amendment（2026-11-26、L5-8 `feat/deploy-approval-summary`: 承認の要約）
 
 計画 19 §3.4 を実装した。利用者の指示（計画の推奨をすべて採る）で、次を決めた。

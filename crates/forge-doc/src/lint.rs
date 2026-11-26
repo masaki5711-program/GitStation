@@ -13,6 +13,15 @@
 //! `related` field, `docref` / `blockref` values and `replaced_by`) must
 //! resolve; a reference to another repository (`[[repo:ID]]`) is resolved by
 //! the caller against `.forge/repo.yml` and is not checked here.
+//!
+//! References to the project's linked wiki (`[[wiki:ID]]`, plan 20 W3,
+//! ADR-0040 §5) are checked only when the caller says what the wiki holds
+//! ([`lint_with_wiki`], [`WikiRefs`]): the caller reads the wiki's
+//! default-branch tip (this crate does no I/O). A page or block that is not
+//! there is `wiki_ref_broken`, a wiki reference in a project with no linked
+//! wiki is `wiki_not_linked` — both **warnings** ([`is_warning`],
+//! `FG-DOC-0008`): the wiki is edited on its own and must never block the
+//! project's merges. [`lint`] does not check them ([`WikiRefs::Unchecked`]).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -48,6 +57,81 @@ pub struct FileReport {
 }
 
 const REQUIRED_KEYS: &[&str] = &["doctype", "id", "title", "owner"];
+
+/// A `[[wiki:…]]` page or block that is not at the wiki's tip.
+pub const WIKI_REF_BROKEN: &str = "wiki_ref_broken";
+/// A `[[wiki:…]]` reference in a project with no linked wiki.
+pub const WIKI_NOT_LINKED: &str = "wiki_not_linked";
+
+/// The rules that are always warnings, never errors (plan 20 W3).
+pub const WARNING_RULES: &[&str] = &[WIKI_REF_BROKEN, WIKI_NOT_LINKED];
+
+/// Whether `rule` is a warning (it never fails a lint on its own).
+pub fn is_warning(rule: &str) -> bool {
+    WARNING_RULES.contains(&rule)
+}
+
+/// The pages of a wiki that references may name: id → its blocks' ids.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WikiIndex {
+    pages: HashMap<String, HashSet<String>>,
+}
+
+impl WikiIndex {
+    /// The index of the wiki's files at its tip (the `.md` files; the
+    /// same rule as this repository's index: originals named after their
+    /// id, the first by path keeps an id).
+    pub fn build(documents: &[Source<'_>]) -> Self {
+        let parsed: Vec<(&str, Document)> = documents
+            .iter()
+            .map(|src| (src.path, parse_document(src.bytes)))
+            .collect();
+        let mut docs: Vec<(&str, &Document)> = documents
+            .iter()
+            .zip(&parsed)
+            .filter(|(src, (_, doc))| names_type(doc, src.bytes))
+            .map(|(_, (path, doc))| (*path, doc))
+            .collect();
+        docs.sort_by(|a, b| a.0.cmp(b.0));
+        let (index, _) = build_index(&docs);
+        Self {
+            pages: index
+                .entries
+                .into_iter()
+                .map(|(id, e)| (id, e.blocks.into_keys().collect()))
+                .collect(),
+        }
+    }
+
+    /// Whether `doc` (and its block `block`) is a page of the wiki.
+    pub fn resolves(&self, doc: &str, block: Option<&str>) -> bool {
+        self.pages
+            .get(doc)
+            .is_some_and(|blocks| block.is_none_or(|b| blocks.contains(b)))
+    }
+
+    /// Pages in the index.
+    pub fn len(&self) -> usize {
+        self.pages.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
+    }
+}
+
+/// What the caller knows of the project's linked wiki (module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WikiRefs {
+    /// Not known (`gstn doc lint` on a working tree, the incremental and
+    /// train lints): wiki references are not checked.
+    Unchecked,
+    /// The project has no linked wiki: each wiki reference is
+    /// `wiki_not_linked`.
+    NotLinked,
+    /// The wiki's pages at its default-branch tip.
+    Linked(WikiIndex),
+}
 
 /// What other documents may refer to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +210,16 @@ impl Index {
 /// Check the repository's documents (module docs). `doctypes` are the
 /// files under [`DOCTYPES_DIR`]; `documents` the `.md` files.
 pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport> {
+    lint_with_wiki(doctypes, documents, &WikiRefs::Unchecked)
+}
+
+/// [`lint`], with the project's linked wiki's references checked against
+/// `wiki` (module docs; their problems are warnings).
+pub fn lint_with_wiki(
+    doctypes: &[Source<'_>],
+    documents: &[Source<'_>],
+    wiki: &WikiRefs,
+) -> Vec<FileReport> {
     let (mut reports, types) = lint_doctypes(doctypes);
 
     // Parse every document; keep those that name a type.
@@ -156,9 +250,25 @@ pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport
         }
         report.dropped += doc.problems_dropped;
         check_document(path, doc, &types, &index, report);
+        check_wiki_refs(doc, wiki, report);
     }
 
     finish_reports(reports)
+}
+
+/// `[[wiki:…]]` in the text, against what the caller read of the wiki.
+fn check_wiki_refs(doc: &Document, wiki: &WikiRefs, report: &mut Report) {
+    for r in doc.refs.iter().filter(|r| r.wiki) {
+        match wiki {
+            WikiRefs::Unchecked => return,
+            WikiRefs::NotLinked => report.push_on(r.line, WIKI_NOT_LINKED, &r.target()),
+            WikiRefs::Linked(index) => {
+                if !index.resolves(&r.doc, r.block.as_deref()) {
+                    report.push_on(r.line, WIKI_REF_BROKEN, &r.target());
+                }
+            }
+        }
+    }
 }
 
 /// The parsed type definitions by name.
@@ -704,11 +814,8 @@ fn resolve_doc(id: &str, doctype: Option<&str>, line: usize, index: &Index, repo
 
 /// `[[…]]` in the text: in this repository, the document (and block) exist.
 fn check_refs(doc: &Document, index: &Index, report: &mut Report) {
-    for r in doc.refs.iter().filter(|r| r.repo.is_none()) {
-        let target = match &r.block {
-            Some(b) => format!("{}#{b}", r.doc),
-            None => r.doc.clone(),
-        };
+    for r in doc.refs.iter().filter(|r| r.is_local()) {
+        let target = r.target();
         let resolves = index.get(&r.doc).is_some_and(|entry| {
             r.block
                 .as_ref()

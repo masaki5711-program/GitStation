@@ -196,6 +196,7 @@ impl World {
                     tags: Vec::new(),
                     secrets: vec!["DEPLOY_KEY".to_owned()],
                     manual: true,
+                    artifacts_keep: false,
                 }]),
                 ai_eval_job: None,
             },

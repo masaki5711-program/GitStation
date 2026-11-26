@@ -1,0 +1,7 @@
+# ファームウェアの持ち主（合成の例: グループの全パスに置き換える）。最後に一致した行が効く（ADR-0024 §9）。
+*                     @edge-fw/s3-io8-maintainers
+/config-schema.toml   @edge-fw/s3-io8-maintainers @edge-fw/config-tool-owners
+/scripts/             @edge-fw/s3-io8-maintainers
+/tests/               @edge-fw/s3-io8-maintainers
+/.forge-ci.yml        @edge-fw/s3-io8-maintainers
+/CODEOWNERS           @edge-fw/s3-io8-maintainers

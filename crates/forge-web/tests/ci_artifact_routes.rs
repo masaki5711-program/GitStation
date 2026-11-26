@@ -113,6 +113,7 @@ impl World {
             tags: Vec::new(),
             secrets: Vec::new(),
             manual: false,
+            artifacts_keep: false,
         };
         db::create(
             &self.t.db,
