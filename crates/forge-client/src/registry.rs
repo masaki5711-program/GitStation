@@ -1151,7 +1151,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn doc show --project 7 RA-2026-014", "gstn doc show --project 7 RA-2026-014 --ref v1.0 --json", "gstn doc show --project 7 QP-07-001 --lang en", "gstn doc show --project 7 RA-2026-014 --block H-01"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/documents/{doc_id}", "GET /api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}"],
-        output: r#"{"type":"object","required":["version","ref","path","lang","translations","id","doctype","title","owner","classification","fields","sections","refs","problems","problem_count","incomplete"],"properties":{"version":{"type":"integer"},"classification":{"enum":["public","internal","confidential"]},"sections":{"type":"array","items":{"type":"object","required":["heading","line","pieces"],"properties":{"pieces":{"type":"array","items":{"type":"object","required":["type","line","markdown","display","block"],"properties":{"type":{"enum":["text","block"]}}}}}}},"refs":{"type":"array","items":{"type":"object","required":["repo","doc","block","line","target","title","block_kind"],"properties":{"target":{"enum":["found","hidden","broken","external"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+        output: r#"{"type":"object","required":["version","ref","path","lang","translations","id","doctype","title","owner","classification","fields","sections","refs","problems","problem_count","incomplete"],"properties":{"version":{"type":"integer"},"classification":{"enum":["public","internal","confidential"]},"sections":{"type":"array","items":{"type":"object","required":["heading","line","pieces"],"properties":{"pieces":{"type":"array","items":{"type":"object","required":["type","line","markdown","display","block"],"properties":{"type":{"enum":["text","block"]}}}}}}},"refs":{"type":"array","items":{"type":"object","required":["repo","wiki","wiki_project_id","doc","block","line","target","title","block_kind"],"properties":{"wiki":{"type":"boolean"},"target":{"enum":["found","hidden","broken","external","unreadable","no_wiki"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
     },
     CommandSpec {
         name: "doc refs",
@@ -1449,6 +1449,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api"],
         routes: &["POST /api/v1/projects/{id}/deployments"],
         output: r#"{"type":"object","required":["id","environment","sha","status"]}"#,
+    },
+    CommandSpec {
+        name: "deploy summary",
+        summary: "A deployment's approval facts, made by code and always listed in full (merge requests since the last succeeded deployment, migrations, protected paths, CI and deploy config, permission code, forge/risk, failed checks, freeze windows), and apart from them the local LLM's summary as advice (none, shown, or withheld from an agent when confidential; stale when made for other facts). Approving never depends on it (M5 L5-8).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("deployment_id", "positional", true, "The deployment id."),
+        ],
+        examples: &["gstn deploy summary --project 7 12 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/deployments/{deployment_id}/approval-summary"],
+        output: r#"{"type":"object","required":["deployment","facts","summary"]}"#,
     },
     CommandSpec {
         name: "deploy approvers",

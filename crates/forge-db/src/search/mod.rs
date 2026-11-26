@@ -471,7 +471,8 @@ impl SearchIndex {
             | EventType::WebhookDisabled
             | EventType::SpecReleased
             | EventType::MergeRequestRevertDrafted
-            | EventType::MergeRequestAutofixFinished => Ok(()),
+            | EventType::MergeRequestAutofixFinished
+            | EventType::DeploymentApprovalSummarized => Ok(()),
         }
     }
 }

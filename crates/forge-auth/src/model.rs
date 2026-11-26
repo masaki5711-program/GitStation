@@ -1050,6 +1050,87 @@ pub enum Resource {
     /// `ActAsAssertionIssue`, ADR-0025 §5): the merge request as seen by
     /// the person, the intent, and the receiving integration's state.
     ActAsConfirm(Box<ActAsConfirmView>),
+    /// The agent marketplace's own resources (plan 16 §4, ADR-0032
+    /// Amendment A4): a part version a publishing route acts on, or a
+    /// lesson kanflow asks to inject.
+    Agent(AgentResource),
+}
+
+/// See [`Resource::Agent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentResource {
+    /// `AgentPartPublish`, `AgentPartPromote`, `AgentPartRevoke`.
+    Part(AgentPartView),
+    /// `RuleInjectLesson`.
+    Lesson(LessonView),
+}
+
+/// A part version as a publishing route loaded it (plan 16 §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentPartView {
+    /// The caller's effective role on the part's publishing group (the
+    /// `marketplace` group, plan 16 §9.2).
+    pub group_role: Option<Role>,
+    /// How that group is seen (plan 15 MR 3): a group the caller cannot
+    /// see is the invisible project's 404, as for any group.
+    pub group_sight: GroupSight,
+    /// The person who pushed the tag, from the push audit (never the
+    /// self-declared tagger). A bot's or a CI job's push is recorded as
+    /// the person who owns the bot or started the pipeline. `None` (an
+    /// import, a mirror, an audit row that names nobody): the two-person
+    /// rule cannot be established and publishing is refused
+    /// (`reason=tag_pusher_unknown`).
+    pub tag_pusher: Option<UserId>,
+    /// The other people behind the tag, as accounts: the tagger, the
+    /// tagged commit's author and committer. Identities that map to no
+    /// account are left out (the pusher is what cannot be forged). The
+    /// caller as the pusher or among these is refused (`FG-AGENT-0009`,
+    /// the two-person rule), administrators included.
+    pub tag_authors: Vec<UserId>,
+    /// The version declares the `network` capability: an administrator
+    /// publishes or promotes it.
+    pub network: bool,
+}
+
+/// A lesson kanflow asks to inject into a project's rules (plan 16 §4,
+/// §6): the project as seen by the person and whether the lesson is in
+/// kanflow's confirmed state. Only the act-as arm marks it as acted for
+/// (private field): built anywhere else it is refused
+/// (`reason=act_as_required`), so a person's own session or token never
+/// injects a lesson directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LessonView {
+    pub project: ProjectView,
+    pub confirmed: bool,
+    acted_for: bool,
+}
+
+impl LessonView {
+    /// The lesson as the route loaded it (not yet acted for). `project`
+    /// is the project as seen by the **person** (their own role): the
+    /// act-as arm decides on it without the service account's cap
+    /// (ADR-0025 Amendment A4), so the loader must never put the service
+    /// account's role here.
+    pub fn new(project: ProjectView, confirmed: bool) -> Self {
+        Self {
+            project,
+            confirmed,
+            acted_for: false,
+        }
+    }
+
+    /// The same lesson, reached through the act-as arm.
+    pub(crate) fn acted_for(&self) -> Self {
+        Self {
+            acted_for: true,
+            ..self.clone() // clone: the act-as arm decides on its own copy
+        }
+    }
+
+    /// Reached through the act-as arm.
+    pub(crate) fn is_acted_for(&self) -> bool {
+        self.acted_for
+    }
 }
 
 /// See [`Resource::PinnedCopy`]: what a job asks to copy. Private fields,

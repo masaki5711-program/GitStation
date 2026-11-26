@@ -142,6 +142,7 @@ async fn credentials(t: &FreshDb) -> Callers {
                 tags: Vec::new(),
                 secrets: Vec::new(),
                 manual: false,
+                artifacts_keep: false,
             }]),
         },
     )

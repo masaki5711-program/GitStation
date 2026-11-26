@@ -648,6 +648,24 @@
     "word": "fixed"
   },
   {
+    "action": "ClientDownload",
+    "method": "GET",
+    "path": "/api/v1/clients",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ClientDownload",
+    "method": "GET",
+    "path": "/api/v1/clients/gstn/{target}/binary",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "GroupList",
     "method": "GET",
     "path": "/api/v1/groups",
@@ -1146,6 +1164,15 @@
     "action": "DeployCreate",
     "method": "POST",
     "path": "/api/v1/projects/{id}/deployments",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/deployments/{deployment_id}/approval-summary",
     "people_only": false,
     "public": false,
     "scope": "fixed",
@@ -3091,6 +3118,46 @@
   },
   {
     "action": "LlmResume",
+    "planned": true
+  },
+  {
+    "action": "AgentPartRead",
+    "planned": true
+  },
+  {
+    "action": "AgentPartList",
+    "planned": true
+  },
+  {
+    "action": "AgentPartPublish",
+    "planned": true
+  },
+  {
+    "action": "AgentPartPromote",
+    "planned": true
+  },
+  {
+    "action": "AgentPartRevoke",
+    "planned": true
+  },
+  {
+    "action": "AgentKeyRead",
+    "planned": true
+  },
+  {
+    "action": "AgentBuilderRecommend",
+    "planned": true
+  },
+  {
+    "action": "AgentBuilderDryRun",
+    "planned": true
+  },
+  {
+    "action": "AgentBuilderCompile",
+    "planned": true
+  },
+  {
+    "action": "RuleInjectLesson",
     "planned": true
   },
   {

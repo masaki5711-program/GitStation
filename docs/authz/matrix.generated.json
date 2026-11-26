@@ -134,6 +134,7 @@
   { "action": "RunnerJobComplete", "allow": 2, "deny": 17, "public": false, "git_operation": false },
   { "action": "AuditRead", "allow": 4, "deny": 14, "public": false, "git_operation": false },
   { "action": "UserSelfRead", "allow": 5, "deny": 15, "public": false, "git_operation": false },
+  { "action": "ClientDownload", "allow": 5, "deny": 16, "public": false, "git_operation": false },
   { "action": "SessionRead", "allow": 3, "deny": 17, "public": false, "git_operation": false },
   { "action": "SessionList", "allow": 2, "deny": 16, "public": false, "git_operation": false },
   { "action": "SessionRevoke", "allow": 2, "deny": 20, "public": false, "git_operation": false },
@@ -154,5 +155,15 @@
   { "action": "OpsDiagnosisRead", "allow": 4, "deny": 16, "public": false, "git_operation": false },
   { "action": "LlmPause", "allow": 2, "deny": 17, "public": false, "git_operation": false },
   { "action": "LlmResume", "allow": 2, "deny": 17, "public": false, "git_operation": false },
+  { "action": "AgentPartRead", "allow": 5, "deny": 14, "public": false, "git_operation": false },
+  { "action": "AgentPartList", "allow": 4, "deny": 12, "public": false, "git_operation": false },
+  { "action": "AgentPartPublish", "allow": 6, "deny": 34, "public": false, "git_operation": false },
+  { "action": "AgentPartPromote", "allow": 3, "deny": 22, "public": false, "git_operation": false },
+  { "action": "AgentPartRevoke", "allow": 6, "deny": 20, "public": false, "git_operation": false },
+  { "action": "AgentKeyRead", "allow": 5, "deny": 12, "public": false, "git_operation": false },
+  { "action": "AgentBuilderRecommend", "allow": 6, "deny": 21, "public": false, "git_operation": false },
+  { "action": "AgentBuilderDryRun", "allow": 5, "deny": 16, "public": false, "git_operation": false },
+  { "action": "AgentBuilderCompile", "allow": 4, "deny": 21, "public": false, "git_operation": false },
+  { "action": "RuleInjectLesson", "allow": 2, "deny": 25, "public": false, "git_operation": false },
   { "action": "PortalWidgetRead", "allow": 5, "deny": 29, "public": false, "git_operation": false }
 ]

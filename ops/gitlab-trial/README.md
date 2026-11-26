@@ -58,7 +58,11 @@ runner の利用者 `gitstation-ci` は `docker` グループに入っている�
 | `docker.io`（Docker Hub）| 土台のイメージ（rust・node・debian はダイジェストで固定、`timescale/timescaledb`） |
 | `registry.npmjs.org` | `web/` の `npm ci` |
 | `index.crates.io` / `static.crates.io` | `cargo build --locked` のクレート |
-| `deb.debian.org` | 実行イメージの `apt-get`（git・curl・openssh-client・tini） |
+| `deb.debian.org` | 実行イメージの `apt-get`（git・curl・openssh-client・tini）と、`gstn` の Windows 版のビルドの `gcc-mingw-w64-x86-64` |
+| `static.rust-lang.org` | `rustup target add x86_64-pc-windows-gnu`（`gstn` の Windows 版） |
+
+イメージには配布用の `gstn`（Linux / Windows の x86_64）と `manifest.json` が
+`/usr/local/share/forge/clients` に入る（ステージ `gstn`。画面の「CLI（gstn）をダウンロード」、Runbook `cli-distribution`）。
 
 動かしているとき（serve / worker）の外への通信は Keycloak（`OIDC_ISSUER`）と、デプロイのターゲットへの ssh（下の「自前の CI/CD」。使うときだけ）。
 

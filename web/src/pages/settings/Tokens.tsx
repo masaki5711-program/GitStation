@@ -19,6 +19,7 @@ import { ErrorSummary } from '../../features/CreateDialogs';
 import { formatDateTime } from '../../features/labels';
 import { useLeaveGuard } from '../../hooks/useLeaveGuard';
 import { useSession } from '../../session/session';
+import { CliDownloads } from './CliDownloads';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import { PERSONAL_SCOPES } from './scopes';
 import styles from './Settings.module.css';
@@ -76,6 +77,7 @@ export function Tokens() {
           <p className={styles.hint}>{t('tokens.finishFirst')}</p>
         )}
       </Section>
+      <CliDownloads />
       <ConfirmDialog
         open={leave.target !== null}
         title={t('tokens.leaveTitle')}

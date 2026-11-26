@@ -338,6 +338,58 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - runbook `ci-runner`（「GPU の Runner とモデル置き場」）、FG-CI-0029 GpuUnavailable（新規、warn）、FG-CI-0030 ModelStoreUnverified
   （新規、alert）。
 
+## Amendment 2026-11-25（計画 21 G1）— 保護ブランチの成果物を残す（`artifacts: { keep: true }`）
+
+- **背景**: 計画 21（ADR-0041 の Amendment 2026-11-25）は、エッジのファームウェアと I/O の意味の辞書のリリースを「保護ブランチ `release` の
+  push のパイプラインの成果物」とする。保持は 30 日で、`keep` を立てるのはデプロイの worker だけだった（C11）ので、リリースが消える。
+- **決定**:
+  1. `.forge-ci.yml` のジョブの `artifacts` に `keep`（`true` / `false` だけ、既定 `false`）。lint は型だけ（それ以外は FG-CI-0001
+     `artifacts_keep_invalid`）。**求めるだけ**で、どこで効くかはファイルでは決められない。
+  2. **効くのは保護ブランチの push のパイプラインだけ**: `forge_ci::Trigger::may_use_secrets()`（`event = push` かつ `protected`）。
+     計画の `PlannedJob::keep_artifacts` に決めた値を入れ、`ci_jobs.artifacts_keep`（新しい列、derived）に書く。送られてきたファイルの
+     記録（`ci_artifacts::record`）は、パイプラインの行の `source = 'push' AND protected` ともう一度合わせて `ci_artifacts.keep` を書く
+     （シークレットの判定 `StoredPipeline::secrets_allowed` と同じ値。どちらかの行だけでは残らない）。
+  3. **それ以外では無視するが黙らない**: 保護されていないブランチ・MR・手動・定期・merge queue・autofix のパイプラインでは 30 日で消える。
+     Runner はクレームの `secrets_allowed` から同じ答えを知り、ジョブのログに 1 行書く（残る / 残らない）。成果物の一覧の `keep` でも見える。
+     パイプラインを失敗にはしない（同じ `.forge-ci.yml` を MR と `release` の両方で動かすため）。
+  4. `ci_artifact_expiry` は `keep` の行を消さない（今のまま）。割り当て `ci.artifact_quota_bytes` は `keep` の行も数える（FG-CI-0022）。
+     `keep` を外す API・CLI は作らない（runbook `ci-runner` の手順、必要になったら管理者の CLI）。
+- **選ばなかったもの**: 保護されていないパイプラインの `keep` を lint や計画で断る — MR のパイプラインで同じファイルが赤くなる。
+  Runner が送るときに `keep` を言う — Runner の申告で保持が決まることになる（判定はサーバーの行だけ）。保持の日数をファイルで選ばせる —
+  リリースに要るのは「消さない」だけ。
+- **受け入れたリスク**: 保護ブランチに push できる主体（ADR-0008 の保護の規則しだい）は、割り当ての範囲で成果物を残し続けられる。
+- 新しいエラーコードは無い（FG-CI-0001 の `reason` が 1 つ増える）。runbook `ci-runner` の「残す成果物」。
+
+## Amendment 2026-11-25（計画 21 G2）— ジョブの取得の深さ（`fetch_depth`）
+
+- **背景**: 計画 21 の追記だけの確かめ（I/O の意味の辞書、ファームウェアの設定のスキーマ）は、ジョブの中で 1 つ前のコミット `HEAD^1` と比べる。
+  Runner の取得は `--depth=1` で、ジョブにネットワークは無い（C5s）ので、ジョブは前の版を見られなかった。
+- **決定**:
+  1. `.forge-ci.yml` のジョブの `fetch_depth`（10 進の整数 1〜50、既定 1）。範囲の外・整数でない値は FG-CI-0001
+     `fetch_depth_out_of_range`、1 つの値でないものは `field_invalid`。自動修正の fixer は常に 1。
+  2. **深さを決めるのは固定した SHA の定義だけ**: Runner は今のとおり `--depth=1` で取って定義を読み、クレームの `definition_hash` と
+     合わせてから、`fetch_depth` が 2 以上ならパイプラインの ref を **もう一度 `--depth=<n>` で取る**（同じ argv・同じトークンの扱い、
+     値は数で、`1..=50` に Runner でももう一度丸める）。取った後に ref が固定した SHA のままかを確かめ直す（違えば FG-CI-0009
+     `step=verify reason=sha_mismatch`）。取得の失敗は FG-CI-0009 `step=deepen`。クレームの形・表は変えない（サーバーの判定も変えない）。
+  3. **取れるのはパイプラインの ref から届く履歴だけ**: サーバーの want の判定（パイプラインの ref から届くコミットだけ）はそのまま。
+     深さは want を広げず、固定した SHA の祖先を最大 50 世代まで送るだけ（届かないコミットは深さに関係なく断る。試験）。MR のパイプラインはマージの結果で動き、その第 1 の親は目標の
+     ブランチの先端（ADR-0024 Amendment 2026-11-11）なので、`fetch_depth: 2` の `HEAD^1` は目標の先端になる（試験
+     `fetch_depth_2_has_head_parent`）。
+- **選ばなかったもの**: 深さを `ci_jobs` に書いてクレームで渡す — 表とクレームの形が増え、Runner は結局ファイルと突き合わせる。
+  最初の取得を `--depth=<n>` にする — 定義を読む前に深さを知る手段がクレームしか無い。上限なし・`--unshallow` — 大きなリポジトリで
+  取得の時間と作業ディレクトリの上限を読めなくなる（50 は追記だけの確かめに 2 で足りる余裕）。ジョブにネットワークを与えて `git fetch`
+  させる — C5s の切り離しを崩す。
+- **受け入れたリスク**（ci-runner-security-reviewer、2026-11-25 の MEDIUM）:
+  - ジョブは最大 50 世代の過去のファイル（パイプラインの ref の祖先、そのブランチを読める人には見えるもの）を読める。ジョブのトークンの
+    範囲は今と同じプロジェクトの同じ SHA の履歴で、他の ref・他のプロジェクトには届かない。
+  - **出力の印は固定した SHA（先端）の印だけ**（決定 5 のまま）。履歴の中にだけある内容（後で消した・後で印を強めたファイル）を
+    ジョブがログや成果物に出すと、その出力は先端の印を継ぐ。`fetch_depth` を求めるのはリポジトリを書ける人で、そのスクリプトは
+    MR のレビューを通る（CODEOWNERS）。追記だけの確かめは ID・key と理由だけを出す（計画 21 の例）。履歴の印を見る必要が出たら、
+    `fetch_depth` が 2 以上のジョブを `Open` の先端に限る（後の MR）。
+  - 2 回目の取得は `limits.fetch` の期限をもう一度使う（ジョブの `timeout` の前に、最悪で取得の期限の 2 倍 Runner を使う）。
+    深さ 50 の上限と、浅い取得の 2 回目は差分だけを送ることで抑える。
+- 新しいエラーコードは無い（FG-CI-0001 の `reason` が 1 つ、FG-CI-0009 の `step` が 1 つ増える）。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。
@@ -349,4 +401,6 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 
 - 計画 17 P17-1（2026-11-14）: FG-CI-0029 GpuUnavailable（warn）、FG-CI-0030 ModelStoreUnverified（alert）、FG-CI-0001 に `service_gpu_without_tag`、FG-CI-0008 に `gpu_without_tag`。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節、P17-1 で「GPU の Runner とモデル置き場」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
+- 計画 21 G1（2026-11-25）: FG-CI-0001 に `artifacts_keep_invalid`。runbook `ci-runner` に「残す成果物」の節。
+- 計画 21 G2（2026-11-25）: FG-CI-0001 に `fetch_depth_out_of_range`、FG-CI-0009 に `step=deepen`。runbook `ci-runner` の Diagnose。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

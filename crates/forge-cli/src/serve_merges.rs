@@ -140,6 +140,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DocLintMigrationUntilInvalid
         | ErrorCode::DocRevisionOpen
         | ErrorCode::DocEditClaimHeld
+        // Plan 20 W3: a lint warning of the wiki references (never a merge's).
+        | ErrorCode::WikiReferenceBroken
         // M3 X5: answers of the context API (never a merge's).
         | ErrorCode::RequirementNotFound
         | ErrorCode::VisibilityAboveParent
@@ -255,6 +257,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::OrgUnitNotInMaster
         | ErrorCode::OrgBindingRoleAboveCap
         | ErrorCode::PortalWidgetSettingInvalid
+        | ErrorCode::ClientBinaryNotFound
+        | ErrorCode::ClientDistributionInvalid
         | ErrorCode::LoginNotPermitted
         | ErrorCode::IdentityLinkConflict
         | ErrorCode::IdentityProviderUnavailable
@@ -409,13 +413,20 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PartCapabilityUndeclared
         | ErrorCode::AgentLockMismatch
         | ErrorCode::McpEndpointNotAllowed
+        // Plan 16 A4: the marketplace's refusals (publish, lesson
+        // injection), never a merge run's.
+        | ErrorCode::PublishSelfApproval
+        | ErrorCode::LessonNotConfirmed
         // Plan 21 E1: edge releases are linted and verified by forge-edge
-        // (gstn, later forge-fleet and the device agent), never by a merge.
+        // (`gstn edge release verify` only), never by a merge.
         | ErrorCode::EdgeReleaseDefinitionInvalid
         | ErrorCode::EdgeManifestInvalid
         | ErrorCode::EdgeSigningKeyUnavailable
-        | ErrorCode::EdgeSignatureInvalid
-        | ErrorCode::EdgeRolloutPolicyInvalid => false,
+        | ErrorCode::EdgeSignatureInvalid => false,
+        // Plan 21 E1b: retired with the rollout waves and windows; nothing
+        // raises it, the variant stays because codes are never deleted.
+        #[allow(deprecated)]
+        ErrorCode::EdgeRolloutPolicyInvalid => false,
     }
 }
 

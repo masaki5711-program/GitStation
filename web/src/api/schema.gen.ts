@@ -872,6 +872,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The gstn binaries this server distributes (only the targets present), with version, SHA-256, size and download path */
+        get: operations["get_api_v1_clients"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clients/gstn/{target}/binary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download one gstn binary (target windows-x86_64 or linux-x86_64; application/octet-stream, X-Checksum-Sha256; 404 FG-WEB-0012 when not shipped) */
+        get: operations["get_api_v1_clients_gstn_target_binary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/groups": {
         parameters: {
             query?: never;
@@ -1546,6 +1580,23 @@ export interface paths {
         put?: never;
         /** Request a deployment ({"environment": "stg", "sha"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer) */
         post: operations["post_api_v1_projects_id_deployments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deployments/{deployment_id}/approval-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A deployment's approval facts, made by code and always listed in full (the merge requests since the environment's last succeeded deployment, migrations, protected paths, CI and deploy configuration, permission code, forge/risk, failed checks, freeze windows), and apart from them the local LLM's summary as advice: state none (the LLM is off, down or has not answered), shown, or withheld (a confidential summary read by an agent); stale when made for other facts or a newer commit was requested. Approving never depends on it; 404 FG-REPO-0005 without the deployment; an act-as request is refused (project readers) */
+        get: operations["get_api_v1_projects_id_deployments_deployment_id_approval_summary"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3861,6 +3912,34 @@ export interface components {
             on_behalf_of_id: number | null;
             target_branch: string;
         };
+        /** @description The facts, made by code and always listed in full. */
+        ApprovalFactsBody: {
+            /** @description The environment's last succeeded deployment (`null`: none). */
+            base_sha?: string | null;
+            ci_config: string[];
+            /** Format: int64 */
+            commits: number;
+            commits_truncated: boolean;
+            failed_checks: components["schemas"]["CheckFactBody"][];
+            /** @description `<start>/<end>` in UTC. */
+            freeze_windows: string[];
+            frozen_now: boolean;
+            /** @description A list or git's diff was cut: the lists may be incomplete. */
+            lists_truncated: boolean;
+            merge_requests: components["schemas"]["MergeRequestFactBody"][];
+            migrations: string[];
+            permissions: string[];
+            protected_paths: components["schemas"]["PathFactBody"][];
+            /**
+             * @description `first_deployment`, `read` or `unavailable` (git could not read the
+             *     range: the lists of changes are unknown, not empty).
+             */
+            range: string;
+            /** @description The FG code when `range` is `unavailable`. */
+            range_error_code?: string | null;
+            /** @description `forge/risk` of the commit itself (`null`: not assessed). */
+            risk?: string | null;
+        };
         /** @description One approval rule. */
         ApprovalRuleBody: {
             /** Format: int64 */
@@ -3937,6 +4016,42 @@ export interface components {
             on_behalf_of: string | null;
             uncounted_reason: string | null;
             username: string;
+        };
+        /**
+         * @description The local LLM's summary, apart from the facts. Advice only: approving
+         *     never depends on it.
+         */
+        ApprovalSummaryAdvice: {
+            /** Format: int64 */
+            advice_id?: number | null;
+            created_at?: string | null;
+            /** @description Less trustworthy (a verdict was withheld from it). */
+            degraded?: boolean | null;
+            input_class?: string | null;
+            /** @description "AI の助言（提案）". */
+            label: string;
+            model?: string | null;
+            /** @description For `none` and `withheld`: what the screen says instead. */
+            note?: string | null;
+            /** Format: int32 */
+            prompt_version?: number | null;
+            /** @description Made for other facts than these (a newer commit, a finished check). */
+            stale: boolean;
+            /** @description `sha_changed`, `newer_commit`, `facts_changed`, `facts_unknown`. */
+            stale_reason?: string | null;
+            /**
+             * @description `none` (no summary: the LLM is off, down or has not answered),
+             *     `shown`, or `withheld` (confidential, read by an agent).
+             */
+            state: string;
+            /** @description The words (`shown` only). */
+            text?: string | null;
+        };
+        /** @description `GET …/deployments/{deployment_id}/approval-summary`. */
+        ApprovalSummaryBody: {
+            deployment: components["schemas"]["DeploymentBody"];
+            facts: components["schemas"]["ApprovalFactsBody"];
+            summary: components["schemas"]["ApprovalSummaryAdvice"];
         };
         /** @description `POST …/approve`. */
         ApproveMergeRequest: {
@@ -4300,6 +4415,11 @@ export interface components {
         ChangeRepositoryBinding: {
             settings: components["schemas"]["BindingSettings"];
         };
+        /** @description A completed check that did not pass. */
+        CheckFactBody: {
+            conclusion: string;
+            name: string;
+        };
         /**
          * @description A grant change's answer: the grants now, and whether the change wrote
          *     anything (`false`: the grant already was, or was not, there).
@@ -4465,6 +4585,27 @@ export interface components {
             tags: string[];
             /** Format: int32 */
             timeout_s: number;
+        };
+        /** @description One distributed binary. */
+        ClientItem: {
+            /** @description Where to `GET` the bytes (same credentials). */
+            download_path: string;
+            /** @description Always `gstn`. */
+            name: string;
+            /** @description Lower-case hex SHA-256 of the file. */
+            sha256: string;
+            /**
+             * Format: int64
+             * @description Bytes.
+             */
+            size: number;
+            /** @description `windows-x86_64` or `linux-x86_64`. */
+            target: string;
+            version: string;
+        };
+        /** @description `200` of the list. */
+        ClientList: {
+            items: components["schemas"]["ClientItem"][];
         };
         /** @description One CODEOWNERS rule the changed paths need. */
         CodeownerStatusBody: {
@@ -5578,11 +5719,21 @@ export interface components {
              * @description `found` (a document of this repository the reader may be shown),
              *     `hidden` (more confidential than this document: its id only — plan
              *     13 Q14), `broken` (no such document or block) or `external` (another
-             *     repository's; not resolved here).
+             *     repository's; not resolved here). A wiki reference may also be
+             *     `unreadable` (the reader may not read the linked wiki: its id only)
+             *     or `no_wiki` (the project has no linked wiki).
              */
             target: string;
             /** @description `found` only. */
             title: string | null;
+            /** @description `[[wiki:ID]]`: a page of the project's linked wiki (plan 20 W3). */
+            wiki: boolean;
+            /**
+             * Format: int64
+             * @description The wiki project, for a `found` wiki reference only (its pages are
+             *     `GET /api/v1/projects/{wiki_project_id}/documents/{doc}`).
+             */
+            wiki_project_id: number | null;
         };
         /** @description An open merge request revising the document. */
         DocumentRevisionBody: {
@@ -6464,6 +6615,14 @@ export interface components {
             title: string;
             updated_at: string;
         };
+        /** @description A merge request the deployment brings. */
+        MergeRequestFactBody: {
+            /** Format: int64 */
+            iid: number;
+            /** @description `forge/risk` at the head it merged (`null`: not assessed). */
+            risk?: string | null;
+            title: string;
+        };
         /** @description Why the merge request was not opened (the commit stands). */
         MergeRequestNotOpened: {
             error_code: string;
@@ -6948,6 +7107,11 @@ export interface components {
             /** Format: int64 */
             id: number;
             username: string;
+        };
+        /** @description A path a rule names. */
+        PathFactBody: {
+            path: string;
+            rule: string;
         };
         /** @description A pipeline (with its jobs on the one-pipeline routes). */
         PipelineBody: {
@@ -10996,6 +11160,57 @@ export interface operations {
             };
         };
     };
+    get_api_v1_clients: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_clients_gstn_target_binary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_groups: {
         parameters: {
             query?: {
@@ -12870,6 +13085,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_deployments_deployment_id_approval_summary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deployment_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalSummaryBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

@@ -626,3 +626,58 @@ async fn review_mode_is_off_without_a_row() {
         ReviewMode::Advisory
     );
 }
+
+/// A live request of `priority` queued `age` ago (`queued` or `running`),
+/// or one that gave up in the queue `age` ago (`abandoned` FG-LLM-0004).
+async fn aged_request(w: &World, priority: &str, age: &str, state: &str) {
+    let (code, started, finished) = match state {
+        "queued" => ("NULL", "NULL", "NULL"),
+        "running" => ("NULL", "now()", "NULL"),
+        _ => ("'FG-LLM-0004'", "NULL", "now() - interval '1 minute'"),
+    };
+    w.t.exec_superuser(&format!(
+        "INSERT INTO forge.llm_requests (purpose, priority, subject_kind, subject_id, project_id, \
+           model, prompt_id, prompt_version, input_sha256, input_class, request_id, state, \
+           error_code, queued_at, started_at, finished_at) \
+         VALUES ('mr_review', '{priority}', 'merge_request', 7, {}, 'qwen3:27b', 'mr_review', 1, \
+           repeat('b', 64), 'internal', 'req-llm-aged', '{state}', {code}, \
+           now() - interval '{age}', {started}, {finished})",
+        w.web.project_id.get()
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn queue_health_reports_the_oldest_wait_per_tier_and_recent_deadline_misses() {
+    let w = world().await;
+    assert_eq!(
+        queue_health(&w.t.db).await.expect("empty"),
+        QueueHealth::default()
+    );
+    aged_request(&w, "batch", "2 hours", "queued").await;
+    aged_request(&w, "review", "40 minutes", "queued").await;
+    aged_request(&w, "review", "5 minutes", "queued").await;
+    aged_request(&w, "interactive", "1 minute", "running").await;
+    // Gave up in the queue: counted when it ended in the last hour.
+    aged_request(&w, "review", "31 minutes", "abandoned").await;
+    w.t.exec_superuser(&format!(
+        "INSERT INTO forge.llm_requests (purpose, priority, subject_kind, project_id, model, \
+           prompt_id, prompt_version, input_sha256, input_class, request_id, state, error_code, \
+           queued_at, finished_at) \
+         VALUES ('mr_review', 'review', 'merge_request', {}, 'qwen3:27b', 'mr_review', 1, \
+           repeat('b', 64), 'internal', 'req-llm-old-miss', 'abandoned', 'FG-LLM-0004', \
+           now() - interval '3 hours', now() - interval '2 hours')",
+        w.web.project_id.get()
+    ))
+    .await;
+    let h = queue_health(&w.t.db).await.expect("health");
+    assert_eq!(h.queued, 3);
+    assert_eq!(h.running, 1);
+    assert_eq!(h.deadline_misses, 1, "only the miss of the last hour");
+    let tiers: Vec<Priority> = h.oldest_queued_s.iter().map(|(p, _)| *p).collect();
+    assert_eq!(tiers, [Priority::Review, Priority::Batch], "highest first");
+    let review = h.oldest_queued_s[0].1;
+    assert!((40 * 60..41 * 60).contains(&review), "{review}");
+    let batch = h.oldest_queued_s[1].1;
+    assert!((2 * 3600..2 * 3600 + 60).contains(&batch), "{batch}");
+}

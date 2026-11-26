@@ -287,3 +287,39 @@ fn a_code_span_closes_only_on_the_same_run() {
     let got: Vec<&str> = d.refs.iter().map(|r| r.doc.as_str()).collect();
     assert_eq!(got, vec!["B-1", "C-1"]);
 }
+
+/// Plan 20 W3: `[[wiki:ID]]` and `[[wiki:ID#BLOCK]]` name the linked
+/// wiki's page (not a repository called `wiki`), and are no local
+/// references; a bad id after the prefix is `ref_invalid`.
+#[test]
+fn wiki_ref_parses() {
+    let d = doc(&format!(
+        "{FRONT}見る [[wiki:WIKI-0001]] と [[wiki:WIKI-0002#S-1]]、[[A-2]]、[[g/wiki:X-1]]。\n\
+         `[[wiki:CODE-1]]` [[wiki:]] [[wiki:bad id]]\n"
+    ));
+    type Seen<'a> = (Option<&'a str>, bool, &'a str, Option<&'a str>, bool);
+    let got: Vec<Seen<'_>> = d
+        .refs
+        .iter()
+        .map(|r| {
+            (
+                r.repo.as_deref(),
+                r.wiki,
+                r.doc.as_str(),
+                r.block.as_deref(),
+                r.is_local(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (None, true, "WIKI-0001", None, false),
+            (None, true, "WIKI-0002", Some("S-1"), false),
+            (None, false, "A-2", None, true),
+            (Some("g/wiki"), false, "X-1", None, false),
+        ]
+    );
+    assert_eq!(d.refs[1].target(), "WIKI-0002#S-1");
+    assert_eq!(rules(&d), vec!["ref_invalid", "ref_invalid"]);
+}

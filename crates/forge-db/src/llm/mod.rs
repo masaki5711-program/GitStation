@@ -12,6 +12,7 @@
 //! - **The arbitration**: [`interactive_active`] (the `gpu-eval` claim
 //!   waits for it, plan 19 §1.1), [`gpu_eval_running`] (batch work waits
 //!   for the bench).
+//! - **`forge doctor`**: [`queue_health`] (`llm.queue_age`, plan 19 §8.4).
 //! - **People**: [`record_feedback_decided`], [`advice_decided`] (one verdict per advice, finding and
 //!   person; changing it updates the row), [`review_mode`]. Reads and
 //!   votes are `*_decided`: the store loads the advice's own subject and
@@ -557,6 +558,152 @@ pub async fn review_mode(db: &Db, project: ProjectId) -> Result<ReviewMode, Forg
     }
 }
 
+/// The newest advice of a subject and purpose, with what labels it on a
+/// screen (plan 19 §4: the model, the prompt version, when) and the
+/// SHA-256 of the input it was made from (`None`: its request was swept),
+/// so a reader can tell whether the facts it summarized are still the
+/// facts (M5 L5-8). Its words are read with [`advice_decided`] only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdviceLabel {
+    pub id: i64,
+    pub llm_request_id: Option<i64>,
+    pub head_sha: Option<String>,
+    pub input_sha256: Option<String>,
+    pub model: String,
+    pub prompt_version: i32,
+    /// UTC, `YYYY-MM-DDTHH:MM:SSZ`.
+    pub created_at: String,
+}
+
+/// The newest advice of `purpose` about `kind` / `subject` (`None`: none).
+pub async fn latest_advice(
+    db: &Db,
+    kind: SubjectKind,
+    subject: i64,
+    purpose: Purpose,
+) -> Result<Option<AdviceLabel>, ForgeError> {
+    const QUERY: &str = "llm.latest_advice";
+    type Row = (
+        i64,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        String,
+        i32,
+        String,
+    );
+    let row: Option<Row> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT a.id, a.llm_request_id, a.head_sha, r.input_sha256, a.model, \
+                 a.prompt_version, \
+                 to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
+                 FROM forge.llm_advice a \
+                 LEFT JOIN forge.llm_requests r ON r.id = a.llm_request_id \
+                 WHERE a.subject_kind = $1 AND a.subject_id = $2 AND a.purpose = $3 \
+                 ORDER BY a.id DESC LIMIT 1",
+            )
+            .bind(kind.as_str())
+            .bind(subject)
+            .bind(purpose.as_str())
+            .fetch_optional(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(row.map(
+        |(id, llm_request_id, head_sha, input_sha256, model, prompt_version, created_at)| {
+            AdviceLabel {
+                id,
+                llm_request_id,
+                head_sha,
+                input_sha256,
+                model,
+                prompt_version,
+                created_at,
+            }
+        },
+    ))
+}
+
+/// The requests already made of `purpose` about `kind` / `subject` with
+/// one input (its SHA-256): what a feature reads before asking again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AskedBefore {
+    /// Queued, running or succeeded: asked, or answered.
+    pub live_or_answered: i64,
+    /// Failed or abandoned within the last `recent_secs`.
+    pub failed_recently: i64,
+    /// Every request of this input.
+    pub total: i64,
+}
+
+/// [`AskedBefore`] of one input.
+pub async fn asked_before(
+    db: &Db,
+    purpose: Purpose,
+    kind: SubjectKind,
+    subject: i64,
+    input_sha256: &str,
+    recent_secs: i64,
+) -> Result<AskedBefore, ForgeError> {
+    const QUERY: &str = "llm.asked_before";
+    let (live_or_answered, failed_recently, total): (i64, i64, i64) = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT count(*) FILTER (WHERE state IN ('queued', 'running', 'succeeded')), \
+                 count(*) FILTER (WHERE state IN ('failed', 'abandoned') \
+                 AND finished_at > now() - make_interval(secs => $5)), \
+                 count(*) \
+                 FROM forge.llm_requests \
+                 WHERE purpose = $1 AND subject_kind = $2 AND subject_id = $3 \
+                 AND input_sha256 = $4",
+            )
+            .bind(purpose.as_str())
+            .bind(kind.as_str())
+            .bind(subject)
+            .bind(input_sha256)
+            .bind(recent_secs as f64)
+            .fetch_one(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(AskedBefore {
+        live_or_answered,
+        failed_recently,
+        total,
+    })
+}
+
+/// The newest request of `purpose` about `kind` / `subject` with one input:
+/// its id and FG code (`None`: none). A feature that got the gateway's
+/// error back names the request with it (its own event, M5 L5-8).
+pub async fn last_request(
+    db: &Db,
+    purpose: Purpose,
+    kind: SubjectKind,
+    subject: i64,
+    input_sha256: &str,
+) -> Result<Option<(i64, Option<String>)>, ForgeError> {
+    const QUERY: &str = "llm.last_request";
+    db.within(QUERY, async {
+        sqlx::query_as(
+            "SELECT id, error_code FROM forge.llm_requests WHERE purpose = $1 \
+             AND subject_kind = $2 AND subject_id = $3 AND input_sha256 = $4 \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(purpose.as_str())
+        .bind(kind.as_str())
+        .bind(subject)
+        .bind(input_sha256)
+        .fetch_optional(db.write_pool())
+        .await
+        .map_err(|e| query_error(QUERY, e))
+    })
+    .await
+}
+
 /// Whether an interactive request is queued or running (younger than
 /// [`INTERACTIVE_STALE_SECS`]): the `gpu-eval` claim waits for it.
 pub async fn interactive_active(db: &Db) -> Result<bool, ForgeError> {
@@ -587,6 +734,67 @@ pub async fn gpu_eval_running(db: &Db) -> Result<bool, ForgeError> {
         .fetch_one(db.pool().executor())
         .await
         .map_err(|e| read_query_error(QUERY, e))
+    })
+    .await
+}
+
+/// How long ago a request that gave up in the queue counts for
+/// [`QueueHealth::deadline_misses`].
+pub const DEADLINE_MISS_WINDOW_SECS: i64 = 60 * 60;
+
+/// The live queue as the records show it (`forge doctor` `llm.queue_age`,
+/// plan 19 §8.4). The queue itself is in the worker's memory; its rows
+/// are written when a request is queued, starts and ends.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct QueueHealth {
+    /// Requests `queued` now.
+    pub queued: i64,
+    /// Requests `running` now.
+    pub running: i64,
+    /// Per tier (as submitted: its deadline is that tier's), how long the
+    /// oldest `queued` request has waited, in seconds. Tiers with nothing
+    /// queued are absent; highest tier first.
+    pub oldest_queued_s: Vec<(Priority, i64)>,
+    /// Requests that ended `FG-LLM-0004` (the deadline passed in the queue)
+    /// in the last [`DEADLINE_MISS_WINDOW_SECS`].
+    pub deadline_misses: i64,
+}
+
+/// Read [`QueueHealth`] (the read pool).
+pub async fn queue_health(db: &Db) -> Result<QueueHealth, ForgeError> {
+    const QUERY: &str = "llm.queue_health";
+    db.within(QUERY, async {
+        let tiers: Vec<(String, i64, i64, Option<i64>)> = sqlx::query_as(
+            "SELECT priority,                count(*) FILTER (WHERE state = 'queued'),                count(*) FILTER (WHERE state = 'running'),                floor(extract(epoch FROM now() - min(queued_at)                  FILTER (WHERE state = 'queued')))::bigint              FROM forge.llm_requests WHERE state IN ('queued', 'running')              GROUP BY priority",
+        )
+        .fetch_all(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
+        // A request that ended within the window was queued at most the
+        // stale bound before it: the queued_at index bounds the scan.
+        let deadline_misses: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM forge.llm_requests              WHERE queued_at > now() - make_interval(secs => $1)                AND state = 'abandoned' AND error_code = $2                AND finished_at > now() - make_interval(secs => $3)",
+        )
+        .bind((STALE_LIVE_SECS + DEADLINE_MISS_WINDOW_SECS) as f64)
+        .bind(ErrorCode::LlmQueueDeadline.id())
+        .bind(DEADLINE_MISS_WINDOW_SECS as f64)
+        .fetch_one(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
+        let mut health = QueueHealth {
+            deadline_misses,
+            ..QueueHealth::default()
+        };
+        for (priority, queued, running, oldest) in tiers {
+            let priority = Priority::parse(&priority).ok_or_else(|| stored_invalid("priority"))?;
+            health.queued += queued;
+            health.running += running;
+            if let Some(age) = oldest {
+                health.oldest_queued_s.push((priority, age.max(0)));
+            }
+        }
+        health.oldest_queued_s.sort_by_key(|(p, _)| p.rank());
+        Ok(health)
     })
     .await
 }

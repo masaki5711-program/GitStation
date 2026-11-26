@@ -141,3 +141,22 @@ GPU の出力は温度 0・シード固定でも完全には一致しないの�
    (d) 同じブランチに新しい定期のパイプラインがあれば古いものは出さない（`superseded`）。(e) 提案は定期のパイプラインのブランチが既定のブランチの
    ときだけ（チェックの段で確かめる）。(f) 開いている候補の作者が定期の持ち主でなければ動かさない。スカッシュでマージされた候補の枝は、新しい候補で
    置き換える（force push として持ち主の権限で判定）。
+
+## Amendment 2026-11-26（P17-8 `docs/ops-pfs-ai-runbooks`: doctor `ai_eval.runner`・`ai_eval.baseline_age`）
+
+計画 17 §5.3 の runbook（`ai-eval-bench`・`ai-asset-release`・`ai-asset-rollback`・`ai-model-update`）は 2026-11-23 に入った。残りの doctor の
+2 項目を足した。選んだこと（計画の推奨どおり、新しいコード・移行・ルートは無い）:
+
+1. **DB だけを読む**（`forge_db::ci_ai_eval::health`、読み取りのプール、件数と id だけ）。基準のファイルは git の中にあるが、doctor は
+   リポジトリを読まない（全プロジェクトの git を読むと重く、保存先の失敗が別の項目と重なる）。基準の「古さ」は、基準の候補を作る **夜間のベンチが
+   通った時刻** と **候補の MR が開いている日数** で測る。
+2. `ai_eval.runner`: タグ `gpu-eval` のジョブが 10 分（`NO_RUNNER_AFTER_S`）を越えて `pending` で、生きた（5 分以内に連絡のある）有効な
+   `gpu-eval` の Runner が無いとき **FG-AIASSET-0002 `reason=gpu_runner_unavailable`**（`ci.runners` の FG-CI-0005 と同じ待ちを、ベンチの
+   言葉と runbook で出す）。生きた Runner があるのに待つ・宣言があるのに生きた Runner が無いときは `warn`（ベンチがタグ `gpu-eval` を
+   使わない構成もありうるので失敗にしない）。7 日だれも宣言せず Runner も無ければ `ok`（使っていない）。
+3. `ai_eval.baseline_age`: 有効な定期を持ち 30 日以内に定期のパイプラインが報告を宣言したプロジェクトで、48 時間（2 晩）`succeeded` の定期の
+   パイプラインが無いとき **FG-AIASSET-0002 `reason=nightly_not_passing`**（runbook の「2 晩動かないなら SEV3」に合わせた。最初の定期のパイプラインから 48 時間は数えない）。候補の MR
+   （`ai-eval/baseline-*`、開いたもの）が 14 日（週 1 回の確認を 2 回）を越えたら `warn`、`ai_assets.enabled` なのに 30 日夜間のベンチが無い
+   プロジェクトも `warn`。FG-AIASSET-0003 は使わない（基準が「無い」ことは doctor からは分からない）。
+4. どちらも `/readyz` に入れない。runbook `ai-eval-bench` に doctor の表、Diagnose 0、Mitigate を足し、FG-AIASSET-0002 の文に doctor の
+   理由を書いた。FG-AIASSET-0003 / 0007 に `runbook = "ai-eval-bench"` を付けた（runbook の Diagnose 5 が読み方を持つ）。

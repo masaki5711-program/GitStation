@@ -392,6 +392,8 @@ pub const KEYS: &[Key] = &[
         "ci.mr_pipeline_on_target_move",
         "FORGE_CI_MR_PIPELINE_ON_TARGET_MOVE",
     ),
+    // The distributed `gstn` binaries (runbook cli-distribution).
+    text("clients.dir", "FORGE_CLIENTS_DIR"),
     // ADR-0036: the PFS portal's home widgets and news.
     boolean("portal.enabled", "FORGE_PORTAL_ENABLED"),
     text("portal.registry_url", "FORGE_PORTAL_REGISTRY_URL"),

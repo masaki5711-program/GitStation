@@ -637,6 +637,7 @@ async fn runner_job_and_act_as_credentials_are_refused() {
                 tags: Vec::new(),
                 secrets: Vec::new(),
                 manual: false,
+                artifacts_keep: false,
             }]),
         },
     )

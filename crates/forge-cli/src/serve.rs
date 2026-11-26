@@ -375,6 +375,14 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 // Plan 20 K3: the search reads (it shares the list caps).
                 .with_search(Arc::new(db.clone())), // clone: the pool handle is shared
             );
+        // The `gstn` CLI distribution (runbook cli-distribution).
+        match clients_dir(cfg) {
+            Ok(dir) => {
+                tracing::info!(dir = %dir.display(), "forge.serve.clients_dir");
+                state = state.with_clients(forge_web::routes::clients::ClientDist::new(dir));
+            }
+            Err(e) => forge_core::telemetry::log_failure(&e, &forge_core::RequestId::generate()),
+        }
         // ADR-0036: the portal's widget routes verify with the sign-in.
         if let Some(portal) = crate::portal::widgets(cfg, oidc.as_ref()) {
             tracing::info!(
@@ -700,6 +708,26 @@ fn probe_timeout_for(database: &DatabaseConfig) -> Duration {
         .acquire_timeout
         .saturating_mul(2)
         .saturating_add(Duration::from_secs(1))
+}
+
+/// `clients.dir`, or `<directory of the forge executable>/../share/forge/clients`
+/// (`/usr/local/bin/forge` → `/usr/local/share/forge/clients`).
+pub(crate) fn clients_dir(cfg: &Config) -> Result<std::path::PathBuf, ForgeError> {
+    if let Some(dir) = &cfg.clients.dir {
+        return Ok(dir.clone());
+    }
+    let exe = std::env::current_exe().map_err(|e| {
+        ForgeError::new(forge_errors::ErrorCode::ConfigInvalid)
+            .with_context("config_key", forge_core::config::CLIENTS_DIR_KEY)
+            .with_context("reason", "install_dir_unknown")
+            .with_source(e)
+    })?;
+    let bin = exe.parent().ok_or_else(|| {
+        ForgeError::new(forge_errors::ErrorCode::ConfigInvalid)
+            .with_context("config_key", forge_core::config::CLIENTS_DIR_KEY)
+            .with_context("reason", "install_dir_unknown")
+    })?;
+    Ok(bin.join("..").join("share").join("forge").join("clients"))
 }
 
 #[cfg(test)]

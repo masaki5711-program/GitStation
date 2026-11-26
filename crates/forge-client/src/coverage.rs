@@ -33,6 +33,18 @@ pub enum Coverage {
 
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
+    // The gstn distribution: the browser download and the desktop setup
+    // tool fetch it; `gstn self-update` is reserved, not implemented.
+    (
+        "GET",
+        "/api/v1/clients",
+        Coverage::NotForCli("the gstn binaries themselves, for the browser download and the desktop setup tool (gstn self-update is reserved, not built)"),
+    ),
+    (
+        "GET",
+        "/api/v1/clients/gstn/{target}/binary",
+        Coverage::NotForCli("the gstn binaries themselves, for the browser download and the desktop setup tool (gstn self-update is reserved, not built)"),
+    ),
     // M2 MR6: tokens, sessions, users.
     ("GET", "/api/v1/user/tokens", Coverage::Command("token list")),
     (
@@ -1195,6 +1207,19 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "GET",
         "/api/v1/search",
         Coverage::Command("search"),
+    ),
+    // M5 L5-9: kanflow's AI chat tool pack (each tool is a route covered
+    // by its own row).
+    (
+        "GET",
+        "/api/v1/ai-tools",
+        Coverage::NotForCli("kanflow's AI chat tool pack, read by kanflow's service account; each tool is an API route gstn already covers"),
+    ),
+    // M5 L5-8: the approval facts and summary.
+    (
+        "GET",
+        "/api/v1/projects/{id}/deployments/{deployment_id}/approval-summary",
+        Coverage::Command("deploy summary"),
     ),
     // ADR-0038 §3.4–§3.6 (step C): approvers and delegations.
     (

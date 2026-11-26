@@ -757,8 +757,9 @@ impl AuditDetails {
             | Self::Autofix(_)
             | Self::AiAssets(_)
             | Self::WikiLink(_)
-            | Self::CiVariable(_)
-            | Self::Deploy(_) => None,
+            | Self::CiVariable(_) => None,
+            // M5 L5-8: the approval summary is the one deploy event.
+            Self::Deploy(change) => change.event_type(),
             // M4 C12: a published specification version is the one
             // pipeline change that is an event.
             Self::Pipeline(change) => change.event_type(),

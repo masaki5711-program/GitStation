@@ -1,0 +1,56 @@
+# ファームウェアの設定のスキーマ（この系統の中で追記だけ）。合成の例。
+#
+# 規則（scripts/check-config-schema.py が CI で確かめる。手引き docs/guides/edge-release-pattern.md）:
+# - key は永久。消さない・使い回さない。type と default は変えない。範囲（min / max / max_len / values）は狭めない（広げるのはよい）。
+# - 新しい項目は default が必須（古い設定のツールが値を送らなくても動く）。since はその schema_version。
+# - 許されるのは [[setting]] の追加・範囲を広げること・説明の直し・deprecated を付けること（外せない）。
+# - 中身を変えたら schema_version を 1 つ上げる。
+# - 派生のファームウェアで分かれた後に足す項目には <派生の接頭辞>. を付ける（例 io16.）。元と派生で同じ key を違う意味に使わない。
+# - I/O の意味（チャンネル → 辞書の ID）はここに書かない。設定のツールの設定（辞書は edge-fw/io-dictionary に 1 つ）。
+# - アナログの換算は中央（設定のツール）。モジュールは生の値を送る（計画 21 §11 問い 4）。
+
+schema_version = 2
+
+# 派生のときだけ: 元のプロジェクトと分かれた版（記録だけ。一度書いたら変えない）。
+# lineage = { from = "edge-fw/s3-io8", at = "fw-1.4.0" }
+
+[[setting]]
+key = "net.ip"
+type = "ipv4"
+default = "0.0.0.0"
+description = "モジュールの IP アドレス（0.0.0.0 は DHCP）"
+since = 1
+
+[[setting]]
+key = "net.central_host"
+type = "string"
+max_len = 253
+default = "central.internal"
+description = "中央の受け口のホスト名"
+since = 1
+
+[[setting]]
+key = "sampling.interval_ms"
+type = "int"
+min = 10
+max = 60000
+default = 1000
+description = "入力を読む間隔（ミリ秒）"
+since = 1
+
+[[setting]]
+key = "sampling.decimation"
+type = "int"
+min = 1
+max = 1000
+default = 1
+description = "間引き: N 回に 1 回だけ送る"
+since = 1
+
+[[setting]]
+key = "input.mode"
+type = "enum"
+values = ["raw", "debounced"]
+default = "raw"
+description = "デジタル入力の読み方"
+since = 2

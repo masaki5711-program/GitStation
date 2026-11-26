@@ -504,6 +504,9 @@ pub(crate) enum Fixture {
     ActAsBinding(crate::matrix_rows_bindings::BindingScene),
     /// The act-as confirmation of a binding intent (M3 X3).
     BindingConfirm(crate::matrix_rows_bindings::BindingConfirmScene),
+    /// A marketplace part version or a lesson (plan 16 A4):
+    /// `matrix_rows_agent.rs`.
+    Agent(crate::matrix_rows_agent::Scene),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1387,6 +1390,7 @@ impl Fixture {
             Fixture::Confirm(scene) => scene.resource(role),
             Fixture::ActAsBinding(scene) => scene.resource(role),
             Fixture::BindingConfirm(scene) => scene.resource(role),
+            Fixture::Agent(scene) => scene.resource(role),
             Fixture::Discussion(d) => d.resource(role),
             Fixture::ServiceAccountTarget { human, active } => {
                 Resource::ServiceAccount(service_account_view(human, active))
@@ -1469,12 +1473,14 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_search::SEARCH_QUERY_ROWS,
         crate::matrix_rows_ai_tools::AI_TOOL_LIST_ROWS,
         crate::matrix_rows_wiki::WIKI_LINK_ROWS,
+        crate::matrix_rows_clients::CLIENT_ROWS,
         crate::matrix_rows_pipelines::PIPELINE_ROWS.as_slice(),
         crate::matrix_rows_merge_queue::MERGE_QUEUE_ROWS.as_slice(),
         crate::matrix_rows_revert::REVERT_ROWS,
         crate::matrix_rows_auto_merge::AUTO_MERGE_ROWS.as_slice(),
         crate::matrix_rows_ai_assets::AI_ASSETS_ROWS,
         crate::matrix_rows_llm::LLM_ROWS,
+        crate::matrix_rows_agent::AGENT_ROWS,
         crate::matrix_rows_org_bindings::ORG_BINDING_ROWS,
         &crate::matrix_rows_auto_merge::generated_denies(),
         crate::matrix_rows_autofix::AUTOFIX_ROWS.as_slice(),

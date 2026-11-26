@@ -28,6 +28,13 @@
 //!   person they name approves (`403 FG-DEPLOY-0014` otherwise), and
 //!   `?on_behalf_of=<username>` approves for a delegator where the
 //!   environment allows it.
+//! - M5 L5-8: `GET …/deployments/{deployment_id}/approval-summary`
+//!   (`DeployRead`): the approval's facts, made by code and listed in
+//!   full, and apart from them the local LLM's summary (`none` /
+//!   `shown` / `withheld` for an agent when confidential; `stale` when made
+//!   for other facts). Approving never depends on it. An act-as request is
+//!   refused (`act_as_facts_missing`: the project loader loads no act-as
+//!   facts, ADR-0025 Amendment L5-4).
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -63,6 +70,9 @@ pub const APPROVERS: &str = "/api/v1/projects/{id}/deploy/approvers";
 /// `PUT` one environment's approvers.
 pub const ENVIRONMENT_APPROVERS: &str =
     "/api/v1/projects/{id}/deploy/environments/{tier}/approvers";
+/// `GET` a deployment's approval facts and summary (M5 L5-8).
+pub const APPROVAL_SUMMARY: &str =
+    "/api/v1/projects/{id}/deployments/{deployment_id}/approval-summary";
 /// The query of [`APPROVE`].
 pub const APPROVE_QUERY: &[crate::registry::QueryParam] = &[crate::registry::QueryParam {
     name: "on_behalf_of",
@@ -350,6 +360,7 @@ enum Shape {
     Target(DeployTier, String),
     Deployments,
     Approve(i64),
+    ApprovalSummary(i64),
     Approvers,
     EnvironmentApprovers(DeployTier),
 }
@@ -377,6 +388,10 @@ fn path_of(raw_path: &str) -> Result<(ProjectId, Shape), ForgeError> {
         }
         ["deployments"] => Shape::Deployments,
         ["deployments", id, "approve"] => Shape::Approve(
+            parse_positive_id(id)
+                .ok_or_else(|| param_invalid("deployment_id", "not_positive_decimal"))?,
+        ),
+        ["deployments", id, "approval-summary"] => Shape::ApprovalSummary(
             parse_positive_id(id)
                 .ok_or_else(|| param_invalid("deployment_id", "not_positive_decimal"))?,
         ),
@@ -858,6 +873,244 @@ pub async fn put_approvers(
     }
 }
 
+// ── M5 L5-8: the approval summary (plan 19 §3.4) ──
+
+/// How long the facts may take (git's compare is bounded at 20 s itself).
+pub const FACTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The label every AI advice carries (plan 19 §4).
+pub const ADVICE_LABEL_JA: &str = "AI の助言（提案）";
+/// What a confidential summary says to an agent (ADR-0039 decision 6).
+pub const WITHHELD_JA: &str = "機密の入力のため表示しません";
+
+/// A merge request the deployment brings.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MergeRequestFactBody {
+    pub iid: i64,
+    pub title: String,
+    /// `forge/risk` at the head it merged (`null`: not assessed).
+    pub risk: Option<String>,
+}
+
+/// A path a rule names.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PathFactBody {
+    pub path: String,
+    pub rule: String,
+}
+
+/// A completed check that did not pass.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CheckFactBody {
+    pub name: String,
+    pub conclusion: String,
+}
+
+/// The facts, made by code and always listed in full.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalFactsBody {
+    /// The environment's last succeeded deployment (`null`: none).
+    pub base_sha: Option<String>,
+    /// `first_deployment`, `read` or `unavailable` (git could not read the
+    /// range: the lists of changes are unknown, not empty).
+    pub range: String,
+    /// The FG code when `range` is `unavailable`.
+    pub range_error_code: Option<String>,
+    pub commits: i64,
+    pub commits_truncated: bool,
+    pub merge_requests: Vec<MergeRequestFactBody>,
+    pub migrations: Vec<String>,
+    pub protected_paths: Vec<PathFactBody>,
+    pub ci_config: Vec<String>,
+    pub permissions: Vec<String>,
+    /// A list or git's diff was cut: the lists may be incomplete.
+    pub lists_truncated: bool,
+    /// `forge/risk` of the commit itself (`null`: not assessed).
+    pub risk: Option<String>,
+    pub failed_checks: Vec<CheckFactBody>,
+    /// `<start>/<end>` in UTC.
+    pub freeze_windows: Vec<String>,
+    pub frozen_now: bool,
+}
+
+/// The local LLM's summary, apart from the facts. Advice only: approving
+/// never depends on it.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalSummaryAdvice {
+    /// `none` (no summary: the LLM is off, down or has not answered),
+    /// `shown`, or `withheld` (confidential, read by an agent).
+    pub state: String,
+    /// "AI の助言（提案）".
+    pub label: String,
+    /// The words (`shown` only).
+    pub text: Option<String>,
+    /// For `none` and `withheld`: what the screen says instead.
+    pub note: Option<String>,
+    /// Made for other facts than these (a newer commit, a finished check).
+    pub stale: bool,
+    /// `sha_changed`, `newer_commit`, `facts_changed`, `facts_unknown`.
+    pub stale_reason: Option<String>,
+    /// Less trustworthy (a verdict was withheld from it).
+    pub degraded: Option<bool>,
+    pub input_class: Option<String>,
+    pub advice_id: Option<i64>,
+    pub model: Option<String>,
+    pub prompt_version: Option<i32>,
+    pub created_at: Option<String>,
+}
+
+/// `GET …/deployments/{deployment_id}/approval-summary`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalSummaryBody {
+    pub deployment: DeploymentBody,
+    pub facts: ApprovalFactsBody,
+    pub summary: ApprovalSummaryAdvice,
+}
+
+fn summary_advice(s: forge_deploy::SummaryView) -> ApprovalSummaryAdvice {
+    use forge_deploy::SummaryView;
+    let empty = |state: &str, note: Option<&str>| ApprovalSummaryAdvice {
+        state: state.to_owned(),
+        label: ADVICE_LABEL_JA.to_owned(),
+        text: None,
+        note: note.map(str::to_owned),
+        stale: false,
+        stale_reason: None,
+        degraded: None,
+        input_class: None,
+        advice_id: None,
+        model: None,
+        prompt_version: None,
+        created_at: None,
+    };
+    match s {
+        SummaryView::None => empty("none", Some(forge_deploy::summary::NO_SUMMARY_JA)),
+        SummaryView::Shown {
+            label,
+            text,
+            degraded,
+            input_class,
+            stale,
+        } => ApprovalSummaryAdvice {
+            text: Some(text),
+            note: None,
+            stale: stale.is_some(),
+            stale_reason: stale.map(|r| r.as_str().to_owned()),
+            degraded: Some(degraded),
+            input_class: Some(input_class.as_str().to_owned()),
+            advice_id: Some(label.id),
+            model: Some(label.model),
+            prompt_version: Some(label.prompt_version),
+            created_at: Some(label.created_at),
+            ..empty("shown", None)
+        },
+        SummaryView::Withheld {
+            label,
+            input_class,
+            stale,
+        } => ApprovalSummaryAdvice {
+            stale: stale.is_some(),
+            stale_reason: stale.map(|r| r.as_str().to_owned()),
+            input_class: Some(input_class.as_str().to_owned()),
+            advice_id: Some(label.id),
+            model: Some(label.model),
+            prompt_version: Some(label.prompt_version),
+            created_at: Some(label.created_at),
+            ..empty("withheld", Some(WITHHELD_JA))
+        },
+    }
+}
+
+fn approval_summary_body(s: forge_deploy::ApprovalSummary) -> ApprovalSummaryBody {
+    let f = s.facts;
+    let range_error_code = match &f.range {
+        forge_deploy::RangeState::Unavailable { error_code } => Some(error_code.clone()), // clone: the body owns it
+        forge_deploy::RangeState::FirstDeployment | forge_deploy::RangeState::Read => None,
+    };
+    ApprovalSummaryBody {
+        deployment: deployment_body(s.deployment),
+        facts: ApprovalFactsBody {
+            base_sha: f.base_sha,
+            range: f.range.as_str().to_owned(),
+            range_error_code,
+            commits: i64::try_from(f.commits).unwrap_or(i64::MAX),
+            commits_truncated: f.commits_truncated,
+            merge_requests: f
+                .merge_requests
+                .into_iter()
+                .map(|m| MergeRequestFactBody {
+                    iid: m.iid,
+                    title: m.title,
+                    risk: m.risk,
+                })
+                .collect(),
+            migrations: f.migrations,
+            protected_paths: f
+                .protected_paths
+                .into_iter()
+                .map(|p| PathFactBody {
+                    path: p.path,
+                    rule: p.rule,
+                })
+                .collect(),
+            ci_config: f.ci_config,
+            permissions: f.permissions,
+            lists_truncated: f.lists_truncated,
+            risk: f.risk,
+            failed_checks: f
+                .failed_checks
+                .into_iter()
+                .map(|c| CheckFactBody {
+                    name: c.name,
+                    conclusion: c.conclusion,
+                })
+                .collect(),
+            freeze_windows: f.freeze_windows,
+            frozen_now: s.frozen_now,
+        },
+        summary: summary_advice(s.summary),
+    }
+}
+
+/// `GET …/deployments/{deployment_id}/approval-summary` → `200`: the facts
+/// in full and the summary apart (`DeployRead`). The audience
+/// (`Forge-Context-Audience: agent`, or an agent's credential) decides
+/// whether a confidential summary's words are shown.
+pub async fn approval_summary(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let audience = crate::routes::context::audience(&request);
+    let path = request.raw_path().to_owned();
+    let w = request.into_write();
+    let built = async {
+        let declared_agent = audience?.is_agent();
+        let (_, Shape::ApprovalSummary(deployment)) = path_of(&path)? else {
+            return Err(param_invalid("path", "not_an_approval_summary"));
+        };
+        let service = deploy(&state)?;
+        let read =
+            service.approval_summary(&w.ctx.request_id, &w.proof, deployment, declared_agent);
+        let summary = match tokio::time::timeout(FACTS_TIMEOUT, read).await {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(ForgeError::new(ErrorCode::RequestTimeout)
+                    .with_context("operation", "approval_summary")
+                    .with_context("timeout_ms", FACTS_TIMEOUT.as_millis()))
+            }
+        };
+        json(approval_summary_body(summary))
+    }
+    .await;
+    match built {
+        Ok(value) => no_store(StatusCode::OK, value),
+        Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod unit {
     use super::*;
@@ -878,6 +1131,10 @@ mod unit {
         assert_eq!(
             path_of("/api/v1/projects/7/deployments/12/approve").expect("approve"),
             (ProjectId::new(7), Shape::Approve(12))
+        );
+        assert_eq!(
+            path_of("/api/v1/projects/7/deployments/12/approval-summary").expect("summary"),
+            (ProjectId::new(7), Shape::ApprovalSummary(12))
         );
         assert_eq!(
             path_of("/api/v1/projects/7/deploy/approvers").expect("approvers"),

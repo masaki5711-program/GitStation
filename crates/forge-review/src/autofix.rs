@@ -666,6 +666,7 @@ impl Autofixer {
                 tags: Vec::new(),
                 secrets: Vec::new(),
                 manual: false,
+                artifacts_keep: false,
             }]),
             ai_eval_job: None,
         };

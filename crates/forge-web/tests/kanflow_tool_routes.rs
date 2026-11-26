@@ -401,6 +401,7 @@ async fn world() -> World {
                 tags: Vec::new(),
                 secrets: Vec::new(),
                 manual: false,
+                artifacts_keep: false,
             }]),
         },
     )

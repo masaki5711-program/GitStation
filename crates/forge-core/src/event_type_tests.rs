@@ -138,7 +138,8 @@ fn all_lists_every_event_type_once() {
             "webhook.disabled",
             "merge_request.revert_drafted",
             "spec.released",
-            "merge_request.autofix_finished"
+            "merge_request.autofix_finished",
+            "deployment.approval_summarized"
         ]
     );
 }

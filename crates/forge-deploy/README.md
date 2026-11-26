@@ -12,6 +12,7 @@
 | `request`（`DeployCreate`）、`approve`（`DeployApprove`、`DeploymentCtx`） | 要求は凍結期間を DB の `now()` で確かめる。承認はロックした行で判定をやり直す（要求者・MR の作成者は FG-DEPLOY-0009） |
 | `run::run_once(db, transport, key_file, timeouts)` | worker の 1 回: 承認の無い要求を `blocked`、自動の要求、鍵の確認、1 つ取り出し、`execute` |
 | `run::execute` | 全ターゲットに `deploy` → 全ターゲットに `health`。失敗したら `auto_rollback` の環境は変えたターゲットを `rollback` → `health`。host key の不一致はそれ以上どこにも触れない |
+| `approval_facts` / `approval_summary`（`DeployRead`、M5 L5-8） | 承認の事実の一覧（コードが作る。範囲は `CommitSource::range` の git compare、分類は `forge_core::risk` の経路の規則）と、別にローカル LLM の要約（`summary::SummaryView`: なし・表示・機密はエージェントに伏せる、`StaleReason`）。承認は読まない。`summary::summary_input` が LLM の入力（`internal`） |
 | `transport::{DeployTransport, SshTransport, ssh_argv, classify}` | ssh は argv だけ（`-F none`、`BatchMode`、`ConnectTimeout`、固定した known_hosts だけ、`--` の後にホストと 3 語）。試験は trait の偽物 |
 
 **エラーコード**: FG-DEPLOY-0001〜0010（`errors.toml`）。**runbook**: `deploy`。**doctor**: `deploy.known_hosts`（forge-cli）。

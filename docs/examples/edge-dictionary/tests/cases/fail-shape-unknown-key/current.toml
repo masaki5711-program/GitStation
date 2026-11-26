@@ -1,0 +1,44 @@
+# 試験の入力（合成）。tests/run-cases.py が scripts/check-append-only.py に渡す。
+
+dictionary_version = 3
+
+[[signal]]
+id = 1
+name = "temperature"
+type = "analog"
+unit = "Cel"
+description = "温度（換算の後の値）"
+since = 1
+
+[[signal]]
+id = 2
+name = "button.pressed"
+type = "digital"
+description = "押しボタンが押されている"
+since = 1
+
+[[signal]]
+id = 3
+name = "pressure"
+type = "analog"
+unit = "kPa"
+description = "圧力（ゲージ圧と絶対圧の区別なし）"
+since = 1
+deprecated = { since = 3, replaced_by = 5 }
+
+[[signal]]
+id = 4
+name = "workpiece.count"
+type = "counter"
+unit = "1"
+description = "加工した個数"
+since = 2
+
+[[signal]]
+id = 5
+name = "pressure.gauge"
+scale = 10
+type = "analog"
+unit = "kPa"
+description = "ゲージ圧（大気圧との差）"
+since = 3
