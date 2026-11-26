@@ -26,7 +26,7 @@ golden）は `docs/api/integration-feed.example.json`。forge-web のテスト `
   無効にした連携（`reason=integration_disabled`）: `FG-AUTH-0003`（403）。無効のサービスアカウント: `FG-AUTH-0004`。
 - 見えるイベント: 結びつけたプロジェクトのうち、サービスアカウントが **Reporter 以上のメンバー**で、削除待ちでないもの、の
   **連携の分類**（ADR-0016 §5: `merge_request.*`（`merge_request.work_items_changed` を含む。`merge_request.relink_requested` は除く）、
-  `repository.pushed`、`project.created` など、`check.completed`、`work_item.*`、`spec.released`）の
+  `repository.pushed`、`project.created` など、`check.completed`、`work_item.*`、`spec.released`、`deployment.approval_summarized`）の
   イベントを、連携の `event_types` で狭めたもの。判定は読むたびに `authorize()` で行う（`prove_visible`）。
 - **決して出ないもの**: `project_id` のないイベント（インスタンス全体）、`member.*`・`protected_ref.*`・`project.visibility_changed`
   （maintainer の分類）、`token.*` など（admin の分類）。結びつけを解除したプロジェクトは、**解除の前のイベントも後のイベントも**出ない。
@@ -106,6 +106,31 @@ ADR-0016 Amendment 2026-11-12。MR と作業項目のリンクが **手で**（�
 - タグを push したのが **人**（人のアカウントで、エージェントのトークンではない。サービスアカウント・ボットは不可）で、そのタグを覆う
   保護の規則（`refs/tags/v*` など）があるときだけ出す（ログの `reason`: `pusher_not_a_person`・`tag_not_protected`）。
 - 未決定の項目の数（計画 07 W12）は schema_version 1 には入らない（後の版で足す）。
+
+## `deployment.approval_summarized`（承認の要約を作った、M5 L5-8）
+
+計画 19 §3.4（W14-11）・ADR-0039 Amendment L5-8。承認待ちのデプロイ（承認の窓の中）について、worker がローカル LLM に要約を
+頼んだ結果を 1 回ずつ出す（`actor.kind = system`、`aggregate_type = deployment`）。Kanflow の承認待ちのカード（KF-19b）が、
+これを合図に `GET /api/v1/projects/{id}/deployments/{deployment_id}/approval-summary` を読む。**要約の文はイベントに入らない**
+（機密の要約をエージェントの資格情報に見せないため、文は API が読み手ごとに判定して出す）。
+
+| `data` の欄 | 内容 |
+|---|---|
+| `project_id`・`deployment_id`・`environment`・`sha` | そのデプロイ（要約はこの SHA に結びつく） |
+| `summary` | `ready`（要約ができた）か `unavailable`（LLM が使えなかった。カードは事実の一覧だけを出す） |
+| `advice_id` | `ready` のときの助言の id（`unavailable` は `null`） |
+| `llm_request_id` | ゲートウェイの依頼の id（依頼の行を書く前に失敗したとき — Ollama に届かない・モデルの digest の不一致 — は `null`） |
+| `error_code` | `unavailable` のときの `FG-LLM-…` |
+
+- 同じ事実（入力のハッシュ）には 1 回だけ頼む。失敗したら 10 分後に、合わせて 3 回まで頼み直す（そのたびに 1 件）。
+- 承認は要約と無関係（要約が無くても、LLM が止まっていても、要約が何を言っても承認の判定は変わらない）。
+- API の答え: `facts`（コードが作る事実の一覧。前回の成功したデプロイからの MR・マイグレーション・保護パス・CI と配備の設定・権限の
+  コード・`forge/risk`・失敗したチェック・凍結の期間。**要約とは別に必ず全部出る**）と `summary`（`state` = `none` / `shown` /
+  `withheld`、`stale` と `stale_reason` = `newer_commit` / `facts_changed` / `sha_changed` / `facts_unknown`、`label` = 「AI の助言（提案）」）。
+  サービスアカウント・エージェントのトークンには、機密の要約は `withheld`（「機密の入力のため表示しません」）で、事実のうち
+  秘密のファイル（規則 `secret_file`）のパス名は `[path withheld]`（規則と件数は残る）。失敗したチェックは `success`・`neutral` 以外のすべて
+  （`failure`・`error`・`action_required`）。代理（`Forge-Act-As`）の
+  要求はこの経路では断られる（`act_as_facts_missing`、L5-9 でも承認の経路には代理の事実を足さない）。
 
 ## `GET /api/v1/integrations/{id}/events/cursor`
 

@@ -11,10 +11,11 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use forge_core::risk::{ChangeStatus, ChangedFile};
 use forge_core::{ObjectId, ProjectAccessLoader as _, ProjectId, RepositoryState};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::browse::{Browser, RefKind, RepoPath};
+use forge_git::browse::{Browser, DiffFile, DiffStatus, RefKind, RepoPath};
 
 /// The commit as git reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,9 +33,36 @@ pub struct CommitFacts {
 pub type FactsFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<CommitFacts>, ForgeError>> + Send + 'a>>;
 
+/// What changed between two commits (M5 L5-8: the approval facts).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RangeChanges {
+    /// The commits of `to` that `from` does not have, newest first.
+    pub commits: Vec<String>,
+    pub commits_truncated: bool,
+    /// The tree diff `from` → `to` (paths, status and modes).
+    pub files: Vec<ChangedFile>,
+    pub files_truncated: bool,
+}
+
+/// What [`CommitSource::range`] returns.
+pub type RangeFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<RangeChanges>, ForgeError>> + Send + 'a>>;
+
 /// Reads a commit of a project (`Ok(None)`: no such commit).
 pub trait CommitSource: Send + Sync {
     fn facts<'a>(&'a self, project: ProjectId, sha: &'a ObjectId) -> FactsFuture<'a>;
+
+    /// The change `from` → `to` of `project` (`Ok(None)`: a commit is not
+    /// there, or this source cannot read ranges — the facts then say the
+    /// range is unavailable, never that nothing changed).
+    fn range<'a>(
+        &'a self,
+        _project: ProjectId,
+        _from: &'a ObjectId,
+        _to: &'a ObjectId,
+    ) -> RangeFuture<'a> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 /// The most protected branches compared (one `merge-base` each).
@@ -126,8 +154,110 @@ impl GitCommits {
     }
 }
 
+impl GitCommits {
+    async fn read_range(
+        &self,
+        project: ProjectId,
+        from: &ObjectId,
+        to: &ObjectId,
+    ) -> Result<Option<RangeChanges>, ForgeError> {
+        let Some(record) = self.db.load_project(project, None).await? else {
+            return Ok(None);
+        };
+        let repo = record.repository;
+        if repo.state != RepositoryState::Ready {
+            return Err(ForgeError::new(ErrorCode::RepositoryNotReady)
+                .with_context("repo_id", repo.id.get())
+                .with_context("state", repo.state.as_str()));
+        }
+        // Both ends must be commits a branch or tag of THIS repository
+        // reaches (as for a request): never another repository's object.
+        for end in [from, to] {
+            match self
+                .browse
+                .resolve_ref(repo.id, end.as_str(), "deploy")
+                .await
+            {
+                Ok(_) => {}
+                Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => return Ok(None),
+                Err(e) => return Err(e),
+            }
+        }
+        let cmp = match self
+            .browse
+            .compare(repo.id, from.as_str(), to.as_str())
+            .await
+        {
+            Ok(c) => c,
+            Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        // An entry that cannot be read as a change (no path, a mode that is
+        // not octal) is never dropped silently: the lists say they are cut.
+        let mut files = Vec::with_capacity(cmp.diff.files.len());
+        let mut unreadable = false;
+        for f in &cmp.diff.files {
+            match changed_file(f) {
+                Ok(c) => files.push(c),
+                Err(_) => unreadable = true,
+            }
+        }
+        Ok(Some(RangeChanges {
+            commits: cmp.commits.into_iter().map(|c| c.oid).collect(),
+            commits_truncated: cmp.commits_truncated,
+            files,
+            files_truncated: cmp.diff.truncated || unreadable,
+        }))
+    }
+}
+
+/// A diff entry as the risk path rules read it (modes in octal; no line
+/// counts: the path rules do not use them). `Err`: `no_path`,
+/// `mode_unparsable`.
+pub fn changed_file(f: &DiffFile) -> Result<ChangedFile, &'static str> {
+    let path = f
+        .new_path
+        .as_deref()
+        .or(f.old_path.as_deref())
+        .ok_or("no_path")?
+        .to_owned();
+    let status = match f.status {
+        DiffStatus::Added | DiffStatus::Copied => ChangeStatus::Added,
+        DiffStatus::Modified => ChangeStatus::Modified,
+        DiffStatus::Deleted => ChangeStatus::Deleted,
+        DiffStatus::Renamed => ChangeStatus::Renamed,
+        DiffStatus::TypeChanged => ChangeStatus::TypeChanged,
+    };
+    let mode = |m: &str| u32::from_str_radix(m, 8).map_err(|_| "mode_unparsable");
+    Ok(ChangedFile {
+        path,
+        old_path: match f.status {
+            DiffStatus::Renamed => f.old_path.clone(), // clone: the entry owns it
+            DiffStatus::Added
+            | DiffStatus::Modified
+            | DiffStatus::Deleted
+            | DiffStatus::Copied
+            | DiffStatus::TypeChanged => None,
+        },
+        status,
+        old_mode: mode(&f.old_mode)?,
+        new_mode: mode(&f.new_mode)?,
+        added: None,
+        deleted: None,
+    })
+}
+
 impl CommitSource for GitCommits {
     fn facts<'a>(&'a self, project: ProjectId, sha: &'a ObjectId) -> FactsFuture<'a> {
         Box::pin(self.read(project, sha))
+    }
+
+    fn range<'a>(
+        &'a self,
+        project: ProjectId,
+        from: &'a ObjectId,
+        to: &'a ObjectId,
+    ) -> RangeFuture<'a> {
+        Box::pin(self.read_range(project, from, to))
     }
 }

@@ -1161,6 +1161,15 @@
     "word": "fixed"
   },
   {
+    "action": "DeployRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/deployments/{deployment_id}/approval-summary",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "DeployApprove",
     "method": "POST",
     "path": "/api/v1/projects/{id}/deployments/{deployment_id}/approve",

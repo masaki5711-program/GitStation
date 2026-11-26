@@ -351,6 +351,109 @@
         ],
         "type": "object"
       },
+      "ApprovalFactsBody": {
+        "additionalProperties": false,
+        "description": "The facts, made by code and always listed in full.",
+        "properties": {
+          "base_sha": {
+            "description": "The environment's last succeeded deployment (`null`: none).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ci_config": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "commits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "commits_truncated": {
+            "type": "boolean"
+          },
+          "failed_checks": {
+            "items": {
+              "$ref": "#/components/schemas/CheckFactBody"
+            },
+            "type": "array"
+          },
+          "freeze_windows": {
+            "description": "`<start>/<end>` in UTC.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "frozen_now": {
+            "type": "boolean"
+          },
+          "lists_truncated": {
+            "description": "A list or git's diff was cut: the lists may be incomplete.",
+            "type": "boolean"
+          },
+          "merge_requests": {
+            "items": {
+              "$ref": "#/components/schemas/MergeRequestFactBody"
+            },
+            "type": "array"
+          },
+          "migrations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "protected_paths": {
+            "items": {
+              "$ref": "#/components/schemas/PathFactBody"
+            },
+            "type": "array"
+          },
+          "range": {
+            "description": "`first_deployment`, `read` or `unavailable` (git could not read the\nrange: the lists of changes are unknown, not empty).",
+            "type": "string"
+          },
+          "range_error_code": {
+            "description": "The FG code when `range` is `unavailable`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "risk": {
+            "description": "`forge/risk` of the commit itself (`null`: not assessed).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "range",
+          "commits",
+          "commits_truncated",
+          "merge_requests",
+          "migrations",
+          "protected_paths",
+          "ci_config",
+          "permissions",
+          "lists_truncated",
+          "failed_checks",
+          "freeze_windows",
+          "frozen_now"
+        ],
+        "type": "object"
+      },
       "ApprovalRuleBody": {
         "additionalProperties": false,
         "description": "One approval rule.",
@@ -568,6 +671,111 @@
           "uncounted_reason",
           "committer_push_audit_id",
           "on_behalf_of"
+        ],
+        "type": "object"
+      },
+      "ApprovalSummaryAdvice": {
+        "additionalProperties": false,
+        "description": "The local LLM's summary, apart from the facts. Advice only: approving\nnever depends on it.",
+        "properties": {
+          "advice_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "degraded": {
+            "description": "Less trustworthy (a verdict was withheld from it).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "input_class": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "\"AI の助言（提案）\".",
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "description": "For `none` and `withheld`: what the screen says instead.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt_version": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stale": {
+            "description": "Made for other facts than these (a newer commit, a finished check).",
+            "type": "boolean"
+          },
+          "stale_reason": {
+            "description": "`sha_changed`, `newer_commit`, `facts_changed`, `facts_unknown`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`none` (no summary: the LLM is off, down or has not answered),\n`shown`, or `withheld` (confidential, read by an agent).",
+            "type": "string"
+          },
+          "text": {
+            "description": "The words (`shown` only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "label",
+          "stale"
+        ],
+        "type": "object"
+      },
+      "ApprovalSummaryBody": {
+        "additionalProperties": false,
+        "description": "`GET …/deployments/{deployment_id}/approval-summary`.",
+        "properties": {
+          "deployment": {
+            "$ref": "#/components/schemas/DeploymentBody"
+          },
+          "facts": {
+            "$ref": "#/components/schemas/ApprovalFactsBody"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ApprovalSummaryAdvice"
+          }
+        },
+        "required": [
+          "deployment",
+          "facts",
+          "summary"
         ],
         "type": "object"
       },
@@ -1528,6 +1736,23 @@
         },
         "required": [
           "settings"
+        ],
+        "type": "object"
+      },
+      "CheckFactBody": {
+        "additionalProperties": false,
+        "description": "A completed check that did not pass.",
+        "properties": {
+          "conclusion": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "conclusion"
         ],
         "type": "object"
       },
@@ -7570,6 +7795,31 @@
         ],
         "type": "object"
       },
+      "MergeRequestFactBody": {
+        "additionalProperties": false,
+        "description": "A merge request the deployment brings.",
+        "properties": {
+          "iid": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "risk": {
+            "description": "`forge/risk` at the head it merged (`null`: not assessed).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "title"
+        ],
+        "type": "object"
+      },
       "MergeRequestNotOpened": {
         "additionalProperties": false,
         "description": "Why the merge request was not opened (the commit stands).",
@@ -8767,6 +9017,23 @@
           "id",
           "username",
           "active"
+        ],
+        "type": "object"
+      },
+      "PathFactBody": {
+        "additionalProperties": false,
+        "description": "A path a rule names.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "rule"
         ],
         "type": "object"
       },
@@ -19746,6 +20013,57 @@
         "summary": "Request a deployment ({\"environment\": \"stg\", \"sha\"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer)",
         "x-forge-action": "DeployCreate",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/deployments/{deployment_id}/approval-summary": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_deployments_deployment_id_approval_summary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalSummaryBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A deployment's approval facts, made by code and always listed in full (the merge requests since the environment's last succeeded deployment, migrations, protected paths, CI and deploy configuration, permission code, forge/risk, failed checks, freeze windows), and apart from them the local LLM's summary as advice: state none (the LLM is off, down or has not answered), shown, or withheld (a confidential summary read by an agent); stale when made for other facts or a newer commit was requested. Approving never depends on it; 404 FG-REPO-0005 without the deployment; an act-as request is refused (project readers)",
+        "x-forge-action": "DeployRead"
       }
     },
     "/api/v1/projects/{id}/deployments/{deployment_id}/approve": {

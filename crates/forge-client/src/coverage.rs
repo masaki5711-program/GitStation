@@ -1208,6 +1208,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/search",
         Coverage::Command("search"),
     ),
+    // M5 L5-8: the approval facts and summary.
+    (
+        "GET",
+        "/api/v1/projects/{id}/deployments/{deployment_id}/approval-summary",
+        Coverage::Command("deploy summary"),
+    ),
     // ADR-0038 §3.4–§3.6 (step C): approvers and delegations.
     (
         "GET",
