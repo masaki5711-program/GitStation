@@ -70,7 +70,8 @@ fn forge_reports_exactly_its_own_checks() {
     use crate::merge_conditions::CheckNamespace;
     // M3 X7 adds forge/risk, M3 X4 forge/spec-lint and forge/spec-trace,
     // plan 13 stage 2 forge/doc-lint, plan 14 C1 forge/ci-lint, plan 17
-    // P17-2 forge/ai-eval, plan 19 L5-5 forge/ai-review.
+    // P17-2 forge/ai-eval, plan 19 L5-5 forge/ai-review, plan 16 A7
+    // forge/agent-lock.
     assert_eq!(
         FORGE_REPORTED_CHECKS,
         &[
@@ -95,7 +96,7 @@ fn forge_reports_exactly_its_own_checks() {
     assert_eq!(SPEC_TRACE_CHECK, "forge/spec-trace");
     assert_eq!(
         crate::checks::MAX_STORED_CHECK_RUNS_PER_COMMIT,
-        crate::checks::MAX_CHECK_RUNS_PER_COMMIT + 9
+        crate::checks::MAX_CHECK_RUNS_PER_COMMIT + 10
     );
     for raw in FORGE_REPORTED_CHECKS {
         let n = name(raw);
