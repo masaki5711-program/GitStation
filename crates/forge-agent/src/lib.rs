@@ -15,11 +15,14 @@
 //!   `require`, `eval`, …), and MCP endpoints outside the allow-list.
 //! - [`verify_lock`]: `.gitstation/agent.lock.json` against the working
 //!   tree's managed files and the keys.
+//! - [`import`]: seeding the marketplace (A6) — W1 `part.json` parts and
+//!   Claude Code trees as `part.toml` parts, the two adapter parts.
 //!
 //! Every finding is a [`Problem`]: a registered `FG-AGENT-*` code, a stable
 //! `reason` and an optional subject (a path, a host, a kid).
 
 mod digest;
+pub mod import;
 mod lock;
 mod manifest;
 mod path;

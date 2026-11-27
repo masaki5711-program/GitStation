@@ -295,7 +295,7 @@ fn verify_repo(
 }
 
 /// The part directory's entries, paths relative to `dir` with `/`.
-fn read_part_dir(dir: &Path) -> Result<Vec<TreeEntry>> {
+pub(crate) fn read_part_dir(dir: &Path) -> Result<Vec<TreeEntry>> {
     let mut entries = Vec::new();
     let mut total = 0usize;
     let mut stack: Vec<(PathBuf, usize)> = vec![(dir.to_path_buf(), 0)];
@@ -410,7 +410,7 @@ fn verify_part_dir(cli: &Cli, io: &mut Io<'_>, dir: &Path, allowed: &[String]) -
     report(cli, io, value, &problems, &summary)
 }
 
-fn problem_json(p: &Problem) -> Value {
+pub(crate) fn problem_json(p: &Problem) -> Value {
     json!({"error_code": p.code.id(), "reason": p.reason, "subject": p.subject})
 }
 
@@ -423,7 +423,7 @@ fn problem_text(p: &Problem) -> String {
     format!("{subject}{} [{}]", p.reason, p.code.id())
 }
 
-fn report(
+pub(crate) fn report(
     cli: &Cli,
     io: &mut Io<'_>,
     value: Value,

@@ -281,3 +281,75 @@ forge-auth / forge-git / forge-db → forge-core → forge-agent）。利用者�
 - （MEDIUM、受け入れ）目録の読み取りはインスタンス全体（A4 の LOW のとおり）。
 - （LOW、受け入れ）部品のリポジトリの設定を変えると、古い版は昇格・取り消しのローダーで 404 になる（閉じる側。設定を戻すか、
   A9 で管理者の取り消しの道を足す）。
+
+## Amendment（2026-11-27、A6 `feat/core-marketplace-seed-parts`: 部品の種まきの道具と Dry-Run）
+
+計画 16 A6（`marketplace/parts` を作り、root と TMUX 版・Ver2 の部品を移す。アダプター 2 つ）のうち、**GitStation の側**を入れた。
+サーバーの `marketplace/parts` プロジェクトを作ること、tag を押すこと、エージェントモデルの 2 つのリポジトリ
+（`Agents_skills_Claudecode_TMUX`・`Claudecode_Agent_Ver2.0`）を書き換えることはしていない（本番の変更と他のリポジトリへの push は
+人の承認が要る）。利用者は不在で「推奨を選ぶ」と言っているので、計画に書かれていない点は次のとおり決めた。
+
+1. **変換は純粋な関数**（`forge_agent::import`）と、手元だけのコマンド **`gstn part import --from DIR --format marketplace|claude
+   [--out DIR] [--only SLUG,…] [--mcp-allowed-hosts …]`**（何も送らない、トークンを読まない）。`--out` が無ければ Dry-Run（報告だけ）。
+   `--out` は新しいか空のディレクトリだけで、**全部の部品が通ったときだけ** `<out>/<slug>/part.toml` と中身を書く（全部か無し。
+   `marketplace/parts` の並び = A5 の公開が読む `<slug>/`）。空でなければ FG-CLI-0007 `out_not_empty`、元が読めなければ FG-CLI-0009。
+   新しいエラーコードは無い（変換の問題は FG-AGENT-0001 の新しい reason: `source_manifest_invalid`・`source_path_invalid`・
+   `source_directory_mismatch`・`source_file_missing`・`merge_unsupported`・`mcp_fragment_invalid`・`settings_conflict`・
+   `overlay_*`・`slug_collision`・`require_not_in_import` など）。
+2. **slug は `<kind>-<id>`**（`hook-kanflow-claim`・`command-kanflow`・`mcp-kanflow`）。W1 では同じ id を 2 つの種類が使う
+   （`commands/kanflow` と `mcp_servers/kanflow`）。衝突したときだけ名前を変える形は、後で部品が増えると古い slug が変わりうる
+   （公開した slug は不変）ので採らない。`requires` の `<category>/<id>` も同じ規則で slug にする（版の範囲は無し）。
+3. **フックの `events`** は部品自身の `.claude/settings.json`（`{"hooks": …}`、決まった並び）にする。静的な検査がすべての
+   コマンドを確かめられる（`node <この部品の .js>` の形）。部品どうしの `settings.json` を 1 つにまとめるのはアダプター（A7）。
+   **MCP の `merge: "$.mcpServers"`** はそのまま部品の `.mcp.json`（`mcpServers` が 1 つ以上ある JSON だけ）。他の `merge` は断る。
+4. **アダプター 2 つ** = 部品 `adapter-claude-code-tmux`・`adapter-claude-code-v2`（`kind = adapter`、1.0.0、ファイル
+   `.claude/gitstation/adapter.json`: `schema_version`・`adapter_id`・`outputs`（`settings.json` の `$.hooks` と `.mcp.json` の
+   `$.mcpServers` は JSON のマージ、他はコピー）・`overlays`）。W1 の部品の **`overlays` は部品から外してアダプターに移す**
+   （署名した部品はどのベースモデルでも同じバイト）。上乗せで中身が変わるファイルは、§6 のとおり A7 の生成したファイルの欄で扱う。
+   上乗せの行は検査されずに署名した部品へ足されるので、**決まった一覧の行だけ**を受け付ける（今は `disable-model-invocation: true`
+   だけ。力を取り去る行だけで、フック・道具・コマンド・権限を足す行は `overlay_line_invalid`）。A7 は上乗せを当てた後の中身も検査する。
+5. **能力は静的な検査から宣言する — 頼まれた種類だけ**: `--declare-from-scan exec,network,fs-write` で名指しした能力だけを、検査が
+   `undeclared_child_process`・`undeclared_network`・`undeclared_fs_write` と言うときに `part.toml` に足す（既定は何も足さない）。
+   **`permissions` は決して足さない**（`settings.json` の権限を広げる部品は作者が自分で宣言する）。足した能力ごとに、元になった
+   検査の結果（reason とファイル）を報告の `inferred_from` に出し、`--out` では報告を `import-report.json` として部品の横に書く
+   （部品の MR のレビューで二人が見る。`exec` は読めないコマンド — `node` でないフックのコマンド・`` !` `` — の受け皿でもあるため）。
+   `dynamic_code`・許可の一覧に無い MCP の行き先・他の断りは **決して宣言で通さない**。
+6. **`description` は捨てる**（`part.toml` v1 に欄が無く、足すと要約の形が変わる）。目録の説明は A8 の画面で決める。
+7. **root（エージェントモデル）からは `.claude/` の skills・agents・commands・rules だけ**を 1.0.0 の部品にする。`settings.json`・
+   `mistakes/`・`state/`・`worktrees/` はそのモデルの道具で、読まずに `skipped` に出す。root のフック（`scripts/hooks/`）は
+   `scripts/lib/` と forge の配置に依存するので A6 では切り出さない（計画 16 §9.6「forge 自身はビルダーの対象にしない」）。
+
+8. **元の読み方**: `src` は区切りごとに `.`・`..`・空・末尾の `.` や空白・`.git` を断り、symlink をたどらず（`part.json` も）、
+   開く前に正規化したパスが部品のディレクトリの下にあることを確かめる（`source_path_invalid`）。一覧の後に消えたファイルは
+   `source_file_missing`（空の部品にしない）。
+### Dry-Run（2026-11-27、`gstn part import --declare-from-scan exec,network,fs-write` を各元に。報告の JSON は残さない — 同じコマンドで作り直せる）
+
+| 元 | 部品 | 通る | 通らない |
+|---|---|---|---|
+| root `D:/APP/git_station`（`--format claude`） | 66（agent 28・command 12・rule 13・skill 13） | **66** | 0。能力 `exec` の宣言 5（`agent-database-reviewer`・`agent-rust-reviewer`・`agent-typescript-reviewer`・`rule-rust-coding-style`・`skill-rust-testing`: 本文の `` !` ``） |
+| Ver2 `marketplace/`（`--format marketplace`） | 24 + アダプター 2 | 11（skill 6・command 1・rule 1・`mcp-gitstation`・アダプター 2） | 15 |
+| TMUX `marketplace/` | Ver2 とバイト単位で同じ（報告も同じ） | — | — |
+
+通らない 15 は、どれも **A1 の保守的な検査の想定どおり**（§Consequences「書き直しが要る部品がありうる」）:
+
+- フック 14 の `dynamic_code`: `unicode_escape`（`\u` のエスケープ。ac-trace・gstn-conflict-check・kanflow-client の `lib/kanflow.js`・
+  kanflow-setup・mr-conflict-brief・mr-conflict-resolve・session-handoff）、`computed_require`（kanflow-claim・kanflow-mr-comment・
+  kanflow-session-tasks: 隣か一つ上の `lib/` を探す `require(変数)`）、`process_access`（kanflow-pbi-check）、`global`
+  （kanflow-feedback）、`binding`（gstn-mr-guard）、`constructor`（spec-check の `lib/spec-yaml.js`）・`require_not_called`（spec-check）。
+- `mcp-kanflow`: `${KANFLOW_URL:-https://kanflow-url-not-configured.invalid}/api/mcp` の行き先が許可の一覧に無い（FG-AGENT-0013）。
+
+**残す点**（エージェントモデルの側の MR、人の承認と push の後に `--out` で書き、`marketplace/parts` に入れる）: フックの書き直し
+（`\u` のエスケープを文字そのものに、`lib/` の探索を文字列のリテラル 2 つの `require` に、`process[…]`・`global`・
+`.constructor`・`binding` の書き方を避ける）、`mcp-kanflow` の行き先を社内のホスト名にするか、サーバーの `agent.mcp_allowed_hosts` に
+載せる名前にする。`marketplace/parts` のプロジェクトの作成と最初の tag（人が push、A5 の二人の目）は本番の操作で、この MR には無い。
+
+### A6 の独立レビュー（2026-11-27、security-reviewer）で変えた点
+
+- （CRITICAL、直した）上乗せの行は検査されずに A7 で署名した部品へ足される: フックや `allowed-tools` を足す行で、部品もアダプターも
+  検査を通りえた。→ 決まった一覧の行だけ（上の 4、テスト `overlay_lines_outside_the_fixed_list_are_refused`）。
+- （HIGH、直した）全部の `undeclared_*` を宣言に変えると、`exec` を受け皿に `curl … | sh` のフックのコマンドも「ok」になりえた。
+  → 名指しした能力だけ、`permissions` は無し、元の結果を報告と `import-report.json` に（上の 5、テスト
+  `inference_is_opt_in_never_permissions_and_keeps_its_evidence`）。
+- （MEDIUM、直した）`src` の末尾の `.`・空白（Windows が名前を変える）と、開く前の正規化したパスの確かめ（上の 8、テスト
+  `source_segments_windows_renames_are_refused`）。
+- （LOW、直した）`part.json` も symlink をたどらない。一覧の後に消えたファイルを空の部品にしない。

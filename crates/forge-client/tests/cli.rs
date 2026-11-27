@@ -967,6 +967,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "part publish",
             "part promote",
             "part revoke",
+            "part import",
             "edge release verify",
             "ai-asset lint",
             "ai-asset status",

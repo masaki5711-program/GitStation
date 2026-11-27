@@ -2584,6 +2584,32 @@ pub enum PartCommand {
         #[arg(value_parser = parse_text)]
         slug: String,
     },
+    /// Convert parts from a W1 marketplace/ tree or a .claude/ tree into
+    /// part.toml part directories (plan 16 A6), checked like `gstn agent
+    /// verify --part`. Local only. Without --out: a dry run.
+    Import {
+        /// The source: a marketplace/ directory, or a repository holding .claude/.
+        #[arg(long, value_name = "DIR")]
+        from: PathBuf,
+        /// marketplace (part.json parts) or claude (a .claude/ tree).
+        #[arg(long, value_parser = ["marketplace", "claude"])]
+        format: String,
+        /// Write <out>/<slug>/ for every part (a new or empty directory;
+        /// only when every part passes).
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// Keep only these slugs.
+        #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "SLUG,…")]
+        only: Option<Vec<String>>,
+        /// The internal hosts an MCP server may name (an exact host, or
+        /// .suffix for its subdomains).
+        #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "A,B")]
+        mcp_allowed_hosts: Option<Vec<String>>,
+        /// Declare these capabilities when the static scan asks for them
+        /// (exec, network, fs-write; never permissions). Default: none.
+        #[arg(long, value_delimiter = ',', value_parser = ["exec", "network", "fs-write"], value_name = "CAP,…")]
+        declare_from_scan: Option<Vec<String>>,
+    },
 }
 
 /// `gstn ai-asset` (plan 17 P17-3, ADR-0035): the AI asset lint on the
