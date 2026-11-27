@@ -65,6 +65,7 @@ pub fn act_as_admission(token: &Principal) -> Result<(), ForgeError> {
         | Credential::Job(_)
         | Credential::AutoMerge
         | Credential::Autofix
+        | Credential::AssetDraft
         | Credential::Portal(_) => return Err(refused("act_as_requires_service_account")),
     };
     credential_checks(token.account_kind(), scopes, token.is_agent())
@@ -190,6 +191,7 @@ fn decide_rule(
             | Resource::JobSelf(_)
             | Resource::AutoMerge(_)
             | Resource::Autofix(_)
+            | Resource::AssetDraft(_)
             | Resource::Deployment(_)
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
@@ -238,6 +240,7 @@ fn decide_rule(
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
         | Resource::Autofix(_)
+        | Resource::AssetDraft(_)
         | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
@@ -405,6 +408,7 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
         | Resource::Autofix(_)
+        | Resource::AssetDraft(_)
         | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
@@ -500,6 +504,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
         | Resource::Autofix(_)
+        | Resource::AssetDraft(_)
         | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }

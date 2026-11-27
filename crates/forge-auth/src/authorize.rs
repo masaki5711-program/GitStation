@@ -191,6 +191,11 @@ pub(crate) fn decide(
     if let Credential::Autofix = principal.credential() {
         return crate::autofix::decide(action, resource);
     }
+    // The AI asset draft writer (plan 17 P17-10): its own arm, closed by
+    // default.
+    if let Credential::AssetDraft = principal.credential() {
+        return crate::asset_draft::decide(action, resource);
+    }
     // The PFS portal (ADR-0036): its own arm, closed by default.
     if let Credential::Portal(credential) = principal.credential() {
         return crate::portal::decide(principal, *credential, action, resource);
@@ -207,6 +212,11 @@ pub(crate) fn decide(
     // anyone else.
     if let Resource::Autofix(_) = resource {
         return Err(deny(ErrorCode::Forbidden).with_context("reason", "autofix_resource"));
+    }
+    // A draft branch as the AI asset draft writer reaches it is no resource
+    // for anyone else.
+    if let Resource::AssetDraft(_) = resource {
+        return Err(deny(ErrorCode::Forbidden).with_context("reason", "asset_draft_resource"));
     }
     // A merge request as the auto-merge principal reaches it is no
     // resource for anyone else.
@@ -2062,6 +2072,7 @@ pub(crate) fn decide(
             | Resource::JobSelf(_)
             | Resource::AutoMerge(_)
             | Resource::Autofix(_)
+            | Resource::AssetDraft(_)
             | Resource::Deployment(_)
             | Resource::Agent(_),
         ) => wrong_resource(),
@@ -2172,6 +2183,7 @@ pub(crate) fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedV
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
         | Resource::Autofix(_)
+        | Resource::AssetDraft(_)
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_) => None,
     }
@@ -2250,6 +2262,7 @@ fn hidden_target(resource: &Resource, admin: bool, kind: AccountKind) -> Option<
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
         | Resource::Autofix(_)
+        | Resource::AssetDraft(_)
         | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }

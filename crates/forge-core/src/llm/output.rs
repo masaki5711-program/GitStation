@@ -38,7 +38,18 @@
 //!   ([`MUTATING_WITHHELD`]): the diagnosis only says what to look at next;
 //! - with [`OutputPolicy::cited_lines_of`] a finding about that path (the
 //!   numbered log, `L<n>: …`) must name a given line and quote that line,
-//!   and every finding must name its part.
+//!   and every finding must name its part;
+//! - with [`OutputPolicy::edits`] (the AI asset draft, plan 17 P17-10) the
+//!   answer may carry `"edits": [{"path": "…", "content": "…"}]`: the new
+//!   text of a file the input gave as a part of [`EditPolicy::label`]. An
+//!   edit of any other path, an empty, oversized or unchanged content, one
+//!   holding NUL or a redaction marker (`[REDACTED:`: the model only saw
+//!   the redacted text), a repeated path, or one past
+//!   [`EditPolicy::max_edits`] is dropped and counted
+//!   ([`Advice::dropped_edits`], degraded). The content is kept as written
+//!   (it is a proposed file, never shown as advice text); what the caller
+//!   commits is checked again by its own rules. Without the policy an
+//!   `edits` key is ignored like any other.
 
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{Map, Value};
@@ -94,6 +105,27 @@ pub struct DeepReview {
     pub reason: String,
 }
 
+/// A file's proposed new text (the AI asset draft, [`EditPolicy`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposedEdit {
+    /// The path of an input part of [`EditPolicy::label`].
+    pub path: String,
+    pub content: String,
+}
+
+/// Which files an answer may propose new text for (module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditPolicy {
+    /// The label of the parts whose files may be edited.
+    pub label: &'static str,
+    pub max_edits: usize,
+    /// The longest content (bytes) of one edit.
+    pub max_bytes: usize,
+}
+
+/// The marker [`super::prepare`] leaves where it redacted a secret.
+const REDACTION_MARKER: &str = "[REDACTED:";
+
 /// A checked advice: words only, no action.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Advice {
@@ -121,9 +153,13 @@ pub struct Advice {
     /// Findings (and a deep-review reason) dropped because they name a
     /// mutating step ([`OutputPolicy::forbid_mutating_steps`]).
     pub dropped_mutating: usize,
+    /// The proposed files ([`OutputPolicy::edits`]; empty without it).
+    pub edits: Vec<ProposedEdit>,
+    /// Edits dropped by the checks of [`OutputPolicy::edits`].
+    pub dropped_edits: usize,
     /// Less trustworthy than its words suggest: a verdict was withheld or
-    /// removed, findings were dropped for their evidence, or a mutating
-    /// step was refused (shown as such).
+    /// removed, findings were dropped for their evidence, a mutating step
+    /// was refused, or an edit was dropped (shown as such).
     pub degraded: bool,
 }
 
@@ -302,6 +338,8 @@ pub struct OutputPolicy {
     /// as a merge request's title or description - is dropped for its
     /// evidence (the merge request first pass, L5-5). Off by default.
     pub require_path: bool,
+    /// The answer may propose files' new text (module docs). Off by default.
+    pub edits: Option<EditPolicy>,
 }
 
 impl Default for OutputPolicy {
@@ -315,6 +353,7 @@ impl Default for OutputPolicy {
             forbid_mutating_steps: false,
             cited_lines_of: None,
             require_path: false,
+            edits: None,
         }
     }
 }
@@ -444,6 +483,10 @@ pub fn check_output(
     });
     let dropped_over_cap = kept.len().saturating_sub(policy.max_findings);
     kept.truncate(policy.max_findings);
+    let (edits, dropped_edits) = match policy.edits {
+        Some(edit_policy) => parse_edits(top.get("edits"), input, edit_policy)?,
+        None => (Vec::new(), 0),
+    };
     Ok(Advice {
         summary,
         findings: kept,
@@ -456,12 +499,64 @@ pub fn check_output(
         summary_withheld,
         verdicts_removed,
         dropped_mutating,
+        edits,
+        dropped_edits,
         degraded: summary_withheld
             || summary_mutating
             || verdicts_removed > 0
             || dropped_evidence > 0
-            || dropped_mutating > 0,
+            || dropped_mutating > 0
+            || dropped_edits > 0,
     })
+}
+
+/// The `edits` of an answer under `policy` (module docs): the kept edits
+/// and how many were dropped. A wrong shape is `FG-LLM-0002`.
+fn parse_edits(
+    raw: Option<&Value>,
+    input: &PreparedInput,
+    policy: EditPolicy,
+) -> Result<(Vec<ProposedEdit>, usize), ForgeError> {
+    let items = match raw {
+        None | Some(Value::Null) => return Ok((Vec::new(), 0)),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(invalid("edits_type")),
+    };
+    if items.len() > 20 {
+        return Err(invalid("edits_too_many"));
+    }
+    let mut kept: Vec<ProposedEdit> = Vec::new();
+    let mut dropped = 0usize;
+    for item in items {
+        let Value::Object(e) = item else {
+            return Err(invalid("edit_type"));
+        };
+        let (Some(Value::String(path)), Some(Value::String(content))) =
+            (e.get("path"), e.get("content"))
+        else {
+            return Err(invalid("edit_type"));
+        };
+        let original = input
+            .parts()
+            .iter()
+            .find(|p| p.label == policy.label && p.path.as_deref() == Some(path.as_str()));
+        let acceptable = original.is_some_and(|part| {
+            !content.trim().is_empty()
+                && content.len() <= policy.max_bytes
+                && !content.contains('\0')
+                && !content.contains(REDACTION_MARKER)
+                && content.trim_end() != part.text.trim_end()
+        });
+        if !acceptable || kept.iter().any(|k| &k.path == path) || kept.len() >= policy.max_edits {
+            dropped += 1;
+            continue;
+        }
+        kept.push(ProposedEdit {
+            path: path.clone(),
+            content: content.clone(),
+        });
+    }
+    Ok((kept, dropped))
 }
 
 /// A model may wrap JSON in a ```json fence.

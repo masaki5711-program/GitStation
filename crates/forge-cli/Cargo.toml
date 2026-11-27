@@ -13,6 +13,10 @@ path = "src/main.rs"
 
 [dependencies]
 forge-errors.workspace = true
+# Plan 17 P17-10: the AI asset draft task proves its branch creation
+# (`Principal::asset_draft`, `AssetDraftCtx`) before git is written; the M3
+# R1b worker tests also open merge requests with a real proof.
+forge-auth.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
 serde_json.workspace = true
@@ -71,8 +75,6 @@ tempfile.workspace = true
 # The worker loop tests: paused time and captured JSON logs.
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber.workspace = true
-# M3 R1b: the worker test opens a merge request with a real proof.
-forge-auth.workspace = true
 
 [lints]
 workspace = true

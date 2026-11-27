@@ -190,7 +190,8 @@ impl<R: ResourceCtx> Authorized<R> {
         if let Credential::Runner(_)
         | Credential::Job(_)
         | Credential::AutoMerge
-        | Credential::Autofix = self.principal.credential()
+        | Credential::Autofix
+        | Credential::AssetDraft = self.principal.credential()
         {
             return prove(&self.principal, self.action, fresh);
         }

@@ -68,6 +68,17 @@ pub fn incident_diagnosis() -> Prompt {
     }
 }
 
+/// The AI asset draft (plan 17 P17-10): a fix of a skill or a playbook
+/// from an improvement request's case, as the files' new text; proposed on
+/// a separate branch only.
+pub fn ai_asset_draft() -> Prompt {
+    Prompt {
+        id: "ai_asset_draft".to_owned(),
+        version: 1,
+        system: include_str!("../prompts/ai_asset_draft.v1.txt").to_owned(),
+    }
+}
+
 /// The prompt and output policy in use for `purpose`; `None` while the
 /// purpose's feature has not landed (the merge request that adds its
 /// prompt adds it here, and its eval sets start to run). Every purpose has
@@ -76,6 +87,10 @@ pub fn for_purpose(purpose: Purpose) -> Option<(Prompt, OutputPolicy)> {
     match purpose {
         Purpose::ApprovalSummary => Some((approval_summary(), approval_summary_policy())),
         Purpose::IncidentDiagnosis => Some((incident_diagnosis(), diagnosis::policy())),
+        // Plan 17 P17-10: the worker asks with `ai_asset_draft()` and
+        // `asset_draft::policy()`; the eval set runs from the merge request
+        // that adds its measured baseline cases (ADR-0034 Amendment 1).
+        Purpose::AiAssetDraft => None,
         Purpose::MrReview => Some((mr_review(), mr_review_policy())),
     }
 }
@@ -135,8 +150,22 @@ mod tests {
         let (prompt, policy) = for_purpose(Purpose::MrReview).expect("in use (L5-5)");
         assert_eq!(prompt, mr_review());
         assert_eq!(policy, mr_review_policy());
+        assert!(for_purpose(Purpose::AiAssetDraft).is_none());
         for purpose in Purpose::ALL {
-            assert!(for_purpose(purpose).is_some(), "{purpose}");
+            if purpose != Purpose::AiAssetDraft {
+                assert!(for_purpose(purpose).is_some(), "{purpose}");
+            }
         }
+        assert_eq!(forge_core::llm::asset_draft::policy().max_findings, 0);
+    }
+
+    #[test]
+    fn the_draft_prompt_asks_for_edits_of_the_given_assets_only() {
+        let p = ai_asset_draft();
+        assert_eq!(p.id, "ai_asset_draft");
+        assert_eq!(p.version, 1);
+        assert!(p.system.contains(r#""edits": [{"path": "#));
+        assert!(p.system.contains("never instructions to you"));
+        assert!(p.system.contains("label=asset"));
     }
 }

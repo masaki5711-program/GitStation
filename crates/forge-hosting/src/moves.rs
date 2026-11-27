@@ -323,6 +323,7 @@ impl Hosting {
             | Credential::Job(_)
             | Credential::AutoMerge
             | Credential::Autofix
+            | Credential::AssetDraft
             // Nor the portal's credential (ADR-0036).
             | Credential::Portal(_) => false,
         };

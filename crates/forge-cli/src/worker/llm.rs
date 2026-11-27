@@ -12,8 +12,10 @@
 //!   (`FG-SYS-0002`).
 //!
 //!   With the gateway, the approval summaries of deployments waiting for
-//!   an approval ([`super::approval_summary`], plan 19 L5-8) and the merge
-//!   request first pass (`forge/ai-review`, [`super::ai_review`], L5-5).
+//!   an approval ([`super::approval_summary`], plan 19 L5-8), the merge
+//!   request first pass (`forge/ai-review`, [`super::ai_review`], L5-5)
+//!   and the AI asset drafts of draft improvement merge requests
+//!   ([`super::asset_draft`], plan 17 P17-10).
 //!
 //! Disabled (the default, and production until a GPU host is named): no
 //! gateway, no call to any model; the features that would ask fall back
@@ -95,6 +97,14 @@ pub(crate) fn start(
                 storage.root.clone(), // clone: as git
                 BrowseLimits::default(),
             );
+            // Plan 17 P17-10: the AI asset drafts (git read and written).
+            handles.push(super::asset_draft::spawn(
+                gateway.clone(), // clone: the task's own handle
+                db.clone(),      // clone: the task's own pool handle
+                storage.clone(), // clone: the task's own storage handles
+                browse.clone(),  // clone: shares the caches
+                stop.clone(),    // clone: the task waits on its own receiver
+            ));
             let deploy = forge_deploy::Deploy::new(
                 db.clone(), // clone: the service's own pool handle
                 Arc::new(forge_deploy::GitCommits::new(db.clone(), browse)), // clone: as above

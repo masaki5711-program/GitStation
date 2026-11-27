@@ -172,6 +172,9 @@ pub(crate) enum Actor {
     AutoMerge,
     /// The autofix bot (M4 C14): `matrix_rows_autofix.rs`.
     Autofix,
+    /// The AI asset draft writer (plan 17 P17-10):
+    /// `matrix_rows_asset_draft.rs`.
+    AssetDraft,
     /// The PFS portal forwarding `ME`'s token (ADR-0036):
     /// `matrix_rows_portal.rs`.
     Portal(crate::matrix_rows_portal::Case),
@@ -226,6 +229,10 @@ pub(crate) enum Fixture {
     /// A merge request's source branch as the autofix bot reaches it
     /// (M4 C14): one case of `matrix_rows_autofix::Case`.
     Autofix(crate::matrix_rows_autofix::Case),
+    /// A draft improvement's draft branch as the AI asset draft writer
+    /// reaches it (plan 17 P17-10): one case of
+    /// `matrix_rows_asset_draft::Case`.
+    AssetDraft(crate::matrix_rows_asset_draft::Case),
     /// A ref or merge request as `pfs-ai-bot` reaches it (plan 17 P17-5):
     /// `matrix_rows_pfs_ai_bot.rs`.
     PfsAiBot(crate::matrix_rows_pfs_ai_bot::Target),
@@ -695,6 +702,7 @@ impl Actor {
             Actor::Job(state) => crate::matrix_rows_ci::job(state),
             Actor::AutoMerge => Principal::auto_merge(),
             Actor::Autofix => Principal::autofix(),
+            Actor::AssetDraft => Principal::asset_draft(),
             Actor::Portal(case) => case.principal(),
             Actor::PfsAiBot(bot) => bot.principal(),
             Actor::NonMember
@@ -745,7 +753,11 @@ impl Actor {
             }
             Actor::ActAs(via) => via.person,
             // No membership: the job arm decides on the token alone.
-            Actor::Runner | Actor::Job(_) | Actor::AutoMerge | Actor::Autofix => None,
+            Actor::Runner
+            | Actor::Job(_)
+            | Actor::AutoMerge
+            | Actor::Autofix
+            | Actor::AssetDraft => None,
             Actor::Portal(case) => case.role(),
             Actor::PfsAiBot(bot) => bot.role(),
             Actor::Maintainer
@@ -866,6 +878,7 @@ impl Actor {
             | Actor::Job(_)
             | Actor::AutoMerge
             | Actor::Autofix
+            | Actor::AssetDraft
             | Actor::Portal(_)
             | Actor::PfsAiBot(_) => None,
         }
@@ -966,6 +979,7 @@ impl Fixture {
                 full_allowed,
             } => crate::matrix_rows_auto_merge::target_resource(mode, stop, deleted, full_allowed),
             Fixture::Autofix(case) => crate::matrix_rows_autofix::target_resource(case),
+            Fixture::AssetDraft(case) => crate::matrix_rows_asset_draft::target_resource(case),
             Fixture::PfsAiBot(target) => target.resource(role),
             Fixture::Ref {
                 kind,
@@ -1498,6 +1512,8 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         &crate::matrix_rows_auto_merge::generated_denies(),
         crate::matrix_rows_autofix::AUTOFIX_ROWS.as_slice(),
         &crate::matrix_rows_autofix::generated_denies(),
+        crate::matrix_rows_asset_draft::ASSET_DRAFT_ROWS,
+        &crate::matrix_rows_asset_draft::generated_denies(),
         crate::matrix_rows_portal::PORTAL_ROWS,
         &crate::matrix_rows_portal::generated_denies(),
         crate::matrix_rows_ci_outputs::CI_OUTPUT_ROWS.as_slice(),

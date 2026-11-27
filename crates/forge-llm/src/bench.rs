@@ -178,6 +178,10 @@ pub struct Expect {
     /// A kept finding on this path whose quote contains `quote_contains`.
     #[serde(default)]
     pub finding: Option<ExpectFinding>,
+    /// A kept edit of this path whose content contains `content_contains`
+    /// (the AI asset draft, plan 17 P17-10).
+    #[serde(default)]
+    pub edit: Option<ExpectEdit>,
     /// Nothing to find: no kept finding of medium or above (counted in
     /// `false_alarm_rate` / `abstain_accuracy`).
     #[serde(default)]
@@ -191,10 +195,20 @@ pub struct ExpectFinding {
     pub quote_contains: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpectEdit {
+    pub path: String,
+    pub content_contains: String,
+}
+
 impl Expect {
     /// Something is to be found (counted in `cause_hit_rate`).
     fn expects_a_hit(&self) -> bool {
-        !self.summary_any.is_empty() || !self.summary_all.is_empty() || self.finding.is_some()
+        !self.summary_any.is_empty()
+            || !self.summary_all.is_empty()
+            || self.finding.is_some()
+            || self.edit.is_some()
     }
 }
 
@@ -427,6 +441,13 @@ fn score_advice(expect: &Expect, advice: &forge_core::llm::Advice) -> RunScore {
             f.path.as_deref() == Some(want.path.as_str())
                 && f.quote.to_lowercase().contains(&needle)
         });
+    }
+    if let Some(want) = &expect.edit {
+        let needle = want.content_contains.to_lowercase();
+        pass &= advice
+            .edits
+            .iter()
+            .any(|e| e.path == want.path && e.content.to_lowercase().contains(&needle));
     }
     let alarming = advice
         .findings

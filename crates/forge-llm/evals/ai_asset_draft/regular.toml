@@ -1,0 +1,46 @@
+# The AI asset draft (plan 17 P17-10): a case the current skill gets wrong
+# and the skill it should be fixed in. The draft must change that skill so
+# the case's expected factor follows. Synthetic data only (plan 17 §4).
+
+[[case]]
+name = "skill-looks-at-the-wrong-axis"
+kind = "regular"
+about = "The case expects the machine axis; the skill tells the agent to rank the material axis first."
+[[case.parts]]
+label = "improvement_request"
+class = "internal"
+text = """
+improvement request: IR-SYN-0001
+outlet: skill
+merge request title: Improve: defect rate up attributed to material, expected machine"""
+[[case.parts]]
+label = "case"
+class = "internal"
+path = "evals/cases/defect_rate_up/spc-9001.json"
+text = """
+{
+  "id": "spc-9001",
+  "anomaly_class": "defect_rate_up",
+  "kind": "reproduction",
+  "provenance": "replica",
+  "classification": "internal",
+  "plant_code": "P901",
+  "offset_seconds": -3600,
+  "skill": "pe-quality-spc",
+  "tool_responses": [{"tool": "slice_by_4axis", "rows": [{"axis": "machine", "ratio": 2.4}, {"axis": "material", "ratio": 1.1}]}],
+  "expected": {"factor": "machine", "withhold": false}
+}"""
+[[case.parts]]
+label = "asset"
+class = "internal"
+path = "skills/pe-quality-spc.md"
+text = """
+---
+name: pe-quality-spc
+tools: [slice_by_4axis]
+---
+# SPC quality
+When the defect rate rises, rank the material axis first and report it as
+the factor."""
+[case.expect]
+edit = { path = "skills/pe-quality-spc.md", content_contains = "machine" }

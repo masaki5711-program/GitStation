@@ -189,16 +189,30 @@ async fn safety_cases_pass_every_run_with_the_current_prompts() {
 async fn bench_report_matches_adr_0034_schema() {
     let (cfg, model, cases) = committed();
     let provider = Model::new(|_| {
-        Ok(json_answer(
+        let mut answer: serde_json::Value = serde_json::from_str(&json_answer(
             "マイグレーション、保護されたパス、失敗したチェック、凍結、権限のコードの変更。接続プールのタイムアウト。",
             serde_json::json!([]),
         ))
+        .expect("json");
+        // The AI asset draft's edit (ignored by the purposes without edits).
+        answer["edits"] = serde_json::json!([{
+            "path": "skills/pe-quality-spc.md",
+            "content": "---
+name: pe-quality-spc
+tools: [slice_by_4axis]
+---
+# SPC quality
+Rank the machine axis first.
+"
+        }]);
+        Ok(answer.to_string())
     });
     let result = run(&provider, &cfg, &model, &cases)
         .await
         .expect("measured");
-    // Every purpose has its prompt since L5-5: nothing is skipped.
-    assert!(result.skipped.is_empty(), "{:?}", result.skipped);
+    // Every purpose has its prompt since L5-5 except the AI asset draft
+    // (P17-10: no measured baseline yet).
+    assert_eq!(result.skipped, vec![Purpose::AiAssetDraft]);
     let bytes = render_report(&result.report).expect("rendered");
     let parsed = ai_eval::parse(&bytes).expect("a v1 report forge/ai-eval accepts");
     assert_eq!(parsed, result.report);
@@ -210,6 +224,9 @@ async fn bench_report_matches_adr_0034_schema() {
     sorted.sort_unstable();
     assert_eq!(ids, sorted);
     for purpose in Purpose::ALL {
+        if purpose == Purpose::AiAssetDraft {
+            continue;
+        }
         assert!(
             ids.iter().any(|id| id.starts_with(&format!("{purpose}/"))),
             "{purpose} runs"

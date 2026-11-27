@@ -330,6 +330,12 @@ fn change_context(
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "autofix_principal_in_review"))
         }
+        // The AI asset draft writes its branch in the worker, never a
+        // person's command (plan 17 P17-10).
+        (Credential::AssetDraft, _) => {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "asset_draft_principal_in_review"))
+        }
         // The portal reads widgets only (ADR-0036), never a command.
         (Credential::Portal(_), _) => {
             return Err(ForgeError::new(ErrorCode::Internal)

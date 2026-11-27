@@ -342,3 +342,46 @@ L5-8 で残した「GitStation の Web には承認の画面がまだ無い。�
     `JoinSet` で `stop` のとき止め、`InFlight` の鍵はドロップで外す（panic でも残らない、MEDIUM）。候補は版の記録（target の tip）が
     ある head だけ（準備前の MR が 20 件の枠を埋めない、MEDIUM）。**受け入れた点**: 代理（act-as）の読み手は forge-auth の
     `advice_reader` の単体テスト（`act_as_tests.rs`）が `Agent` と確かめ、経路のテストは agent トークンと宣言の 2 つ。
+
+## Amendment（2026-11-27、P17-10 `feat/cross-llm-ai-asset-draft`: AI 資産の修正の下書き）
+
+計画 17 §1.5・P17-10（計画 19 §7.2 の段 2 の 1 つ）を作った。利用者の指示（計画の推奨をすべて採る）で、次を決めた。
+
+1. **目的 `ai_asset_draft`**（`Purpose::AiAssetDraft`）。優先度は自動修正の層（`autofix`、ADR-0017 §3）。追記のマイグレーション
+   `20270112170000_llm_ai_asset_draft.sql` が `llm_requests` / `llm_advice` / `llm_advice_feedback` の目的の CHECK に足す（新しい表は無い。
+   下書きそのものは git のブランチ、理由は助言の行）。
+2. **きっかけ**: worker の `asset_draft` の周回（60 秒、ゲートウェイがあるときだけ）が、`ai_assets.enabled` のプロジェクトの、開いている
+   **下書きの** MR で、元のブランチが `improve/<id>` のものを最大 10 件見る。Outbox の購読はしない（承認の要約 L5-8 と同じ）。
+3. **改善要求の読み方**: MR の本文の行 `Improvement-Request: <id>` と `Outlet: <kind>`（PFS-4 が書く。**PFS 側の要件**）。下書きを作るのは
+   出口が `skill` と `playbook` のときだけ（`agent`・`model` は保護パス、ほかは AI 資産でない。計画 17 §1.3）。
+4. **入力**（`forge_core::llm::asset_draft`、純粋）: MR が足した・変えたケース（`evals/` の下で target の枝と blob が違うもの、最大 4・各 16 KiB。
+   **生データを含むケース**（`forge_doc::ai_asset::case_raw_data`）は送らない）と、出口の種類の **保護されていない** 資産のファイル
+   （`skills/*.md` か `playbooks/*.toml`、`improve_draft::is_protected_path` でない、最大 6・各 24 KiB、ケースが名前を出すものを先に）。
+   区分は `internal`、秘密は `prepare` が伏せる（伏せられなければ下書きなし、FG-LLM-0005 を 1 回ログ）。
+5. **出力**（`OutputPolicy::edits`、既定は off でほかの目的は変わらない）: `"edits": [{"path", "content"}]`。入力の `asset` の部品のパスだけ、
+   最大 3 つ、空・変わらない・大きすぎる・NUL・伏せ字の印（`[REDACTED:`）・重複は捨てて数える（`dropped_edits`、`degraded`）。指摘は 0 件。
+   要約（理由）は助言として MR に残る。プロンプトは `crates/forge-llm/prompts/ai_asset_draft.v1.txt`、評価セットは
+   `crates/forge-llm/evals/ai_asset_draft/`（`llm-bench` に `expect.edit` を足した）。ただし `prompts::for_purpose` にはまだ載せない（ベンチは
+   skipped）: 基準のファイルは目的の在用のケースをすべて持つ決まりで、測っていない値を基準に書かないため。この開発サーバーの共用 Ollama で
+   測った基準を足す MR が `for_purpose` に載せる（ADR-0034 Amendment 1 の順序）。
+6. **書く場所は別ブランチ `ai-draft/<id>`**（`improve/*` ではない: ボットのトークンが先に作れない・競えない）。MR の head を親にした
+   1 つのコミット（`forge_git::file_commit::Git::commit_branch_files`: 一時の index、作成だけの `update-ref`、既にあれば失敗）。作者は
+   `forge-ai-draft <ai-draft@forge.invalid>`、メッセージは決まった文と trailer（`Improvement-Request`・`Forge-LLM-Request`・`Forge-LLM-Advice`・
+   モデル・プロンプトの版・`Forge-Request-Id`。モデルの文は入れない）。push として記録する（`repository.pushed`）。**1 つの MR に 1 回だけ**:
+   ブランチがあればもう聞かない。
+7. **権限**: 新しい主体 `Credential::AssetDraft`（`Principal::asset_draft()`、worker だけが作る）と `Resource::AssetDraft`。`authorize()` の
+   専用の腕（`forge-auth/src/asset_draft.rs`）が `RepoPush` だけを、`ai-draft/<id>` の**作成**・保護されていない・MR が開いていて**下書き**・
+   元が `improve/<id>`・`ai_assets.enabled` のときだけ許す。ほかのすべての操作（準備完了 = `MergeRequestUpdate`、承認、マージ、コメント、読み取り）は
+   `FG-AUTH-0003 reason=asset_draft_not_allowed`。ほかの主体はこの資源に届かない。権限の表 `matrix_rows_asset_draft.rs`（allow 1・条件ごとの deny・
+   生成した deny）。書く直前に新しい事実で `prove` する。
+8. **書く前の 2 つ目の門**: 出口の種類の保護されていないファイルか、元のファイルと比べて数値が変わらない・リンクや `@` の宛先が増えない
+   （`refused_edit`。判断の数値は人が書く、計画 17 §1.5）、push の秘密の検査（`forge_git::secret_scan`）。
+   当たれば何も書かず、新しいコード **FG-LLM-0007 AiAssetDraftRefused**（info、`reason` = `no_edit` / `not_editable` / `secret` / `path_refused`）を
+   MR と入力ごとに 1 回ログ。
+9. **決めない・止めない**: MR は下書きのまま、`improve/<id>` は動かない、コメント・承認・マージはしない。適用は人（計画 17 §1.5）。LLM が
+   届かない・一時停止・答えが不正なときは何も変えず（`llm_down_leaves_request_open`）、同じ入力は 10 分後に計 3 回まで（行が無い失敗はメモリで同じ上限）。
+   聞くのを終えるのは下書きのブランチだけ: 答えたが書けなかった（git の失敗、新しい head、準備完了にされた、受け入れられる編集が無い）入力も
+   同じ上限の中でもう一度聞く（独立レビューの HIGH）。決定と `update-ref` の間に MR が準備完了になりうるが、作るのはブランチだけで MR は変えない（受け入れた）。
+   テスト `draft_never_marks_ready`（権限の腕と worker の両方）。
+10. **まだ無いもの**: 下書きの画面の表示・通知（L5-6 の助言の欄と一緒）、ケースが増えた後の作り直し（今は 1 回だけ。作り直すには人が
+    `ai-draft/<id>` を消す）、ケースの JSON の機密の判定を lint 全体（`forge_doc::ai_asset::lint`）で下書きのブランチにかけること（CI の lint が見る）。

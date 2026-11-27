@@ -59,6 +59,7 @@ pub fn advice_reader(principal: &Principal, declared_agent: bool) -> AdviceReade
         | Credential::Job(_)
         | Credential::AutoMerge
         | Credential::Autofix
+        | Credential::AssetDraft
         | Credential::Portal(_) => AdviceReader::Agent,
     }
 }
