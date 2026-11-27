@@ -150,7 +150,7 @@
   { "action": "WebShell", "allow": 3, "deny": 11, "public": true, "git_operation": false },
   { "action": "Health", "allow": 1, "deny": 11, "public": true, "git_operation": false },
   { "action": "Metrics", "allow": 1, "deny": 13, "public": false, "git_operation": false },
-  { "action": "AiAdviceFeedback", "allow": 8, "deny": 32, "public": false, "git_operation": false },
+  { "action": "AiAdviceFeedback", "allow": 8, "deny": 36, "public": false, "git_operation": false },
   { "action": "AiReviewRerun", "allow": 4, "deny": 25, "public": false, "git_operation": false },
   { "action": "LlmSettingsManage", "allow": 3, "deny": 25, "public": false, "git_operation": false },
   { "action": "OpsDiagnosisRead", "allow": 4, "deny": 19, "public": false, "git_operation": false },

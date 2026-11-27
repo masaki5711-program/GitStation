@@ -553,3 +553,116 @@
   background: var(--gs-color-warning-surface);
   color: var(--gs-color-warning-text);
 }
+
+/* The AI's first pass (plan 19 §4, L5-6): framed apart from the people's
+ * threads, labelled in words and a glyph (never the colour alone), every
+ * word of the advice as plain text. */
+.aiAdvice {
+  margin: 0;
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border: 1px dashed var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-info-surface);
+}
+
+.aiAdvice p {
+  margin: 0 0 var(--gs-space-2);
+}
+
+.aiAdviceLabel {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+  color: var(--gs-color-info-text);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.aiAdviceText {
+  color: var(--gs-color-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aiAdviceHeading {
+  margin: var(--gs-space-3) 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+  color: var(--gs-color-heading);
+}
+
+.aiAdviceDeep {
+  margin: 0 0 var(--gs-space-3);
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-color-attention);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+}
+
+.aiAdviceDeepTitle {
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.aiFindings {
+  margin: 0 0 var(--gs-space-2);
+  padding-left: var(--gs-space-6);
+}
+
+.aiFinding {
+  margin: 0 0 var(--gs-space-3);
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border-subtle);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+}
+
+.aiFindingHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gs-space-1) var(--gs-space-3);
+}
+
+.aiSeverity {
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.aiPlace,
+.aiQuote {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.aiQuote {
+  padding: 0 var(--gs-space-1);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-code-surface);
+}
+
+.aiConfidence,
+.aiEvidence > span,
+.aiAdviceMeta {
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.aiAdviceMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-3);
+}
+
+.aiVotes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+}
+
+/* The verdict given: a check mark (in the TSX) and a strong border, not the colour alone. */
+.aiVote[aria-pressed='true'] {
+  border-width: var(--gs-border-width-strong);
+  background: var(--gs-color-active-surface);
+  font-weight: var(--gs-font-weight-bold);
+}

@@ -2456,5 +2456,37 @@
       "failed": "Failed",
       "requested": "Running"
     }
+  },
+  "aiAdvice": {
+    "title": "AI review (first pass)",
+    "label": "AI advice (suggestion)",
+    "none": "There is no AI advice now.",
+    "running": "The AI is reviewing the latest commit. This section updates by itself when it is done.",
+    "failed": "The AI first pass failed for the latest commit; it is not a pass. Have a person check the change.",
+    "withheld": "Not shown: the input is confidential.",
+    "stale": "This advice is out of date: it was made for commit {{sha}}, not the latest commit {{head}}.",
+    "unknownCommit": "(unknown)",
+    "degraded": "Less trustworthy advice (a verdict was withheld or findings without evidence were dropped). Check the change itself.",
+    "deepTitle": "A deeper review (Claude or a person) is recommended",
+    "summaryTitle": "Summary",
+    "findingsTitle": "Findings ({{n}})",
+    "noFindings": "No findings.",
+    "severity": {
+      "critical": "Critical",
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "place": "{{path}} line {{line}}",
+    "confidence": "Confidence {{pct}}%",
+    "evidence": "Evidence (quoted from the change):",
+    "voteGroup": "Was finding {{n}} right?",
+    "useful": "Useful",
+    "wrong": "Wrong",
+    "recorded": "Recorded: {{verdict}}",
+    "adviceOnly": "This is advice. It never approves or blocks a merge: tests, required checks and people decide.",
+    "arrived": "The AI advice has arrived.",
+    "usefulFor": "Useful (finding {{n}})",
+    "wrongFor": "Wrong (finding {{n}})"
   }
 }

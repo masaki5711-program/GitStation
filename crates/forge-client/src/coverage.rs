@@ -730,6 +730,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/ai-review",
         Coverage::Command("mr ai-review"),
     ),
+    // M5 L5-6: a person's verdict on a finding (the merge request screen).
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/feedback",
+        Coverage::NotForCli("a person's 役に立った / 誤り on a finding, from the merge request screen: agents never vote (plan 19 §4) and gstn is the agents' tool"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/merge-requests/{iid}/status",

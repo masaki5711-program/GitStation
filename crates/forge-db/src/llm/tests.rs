@@ -533,6 +533,16 @@ async fn feedback_one_per_user_and_finding() {
         ))
         .await;
     assert_eq!(rows[0]["n"], 4);
+    // M5 L5-6: each person reads their own verdicts by finding (the
+    // advice-as-a-whole row is not a finding's).
+    assert_eq!(
+        my_feedback(db, id, w.alice).await.expect("alice"),
+        vec![(0, Verdict::Wrong), (1, Verdict::Useful)]
+    );
+    assert_eq!(
+        my_feedback(db, id, w.bob).await.expect("bob"),
+        vec![(0, Verdict::Useful)]
+    );
     // The database refuses a second row for the same triple.
     let mut su = w.t.superuser().await;
     let dup = sqlx::query(

@@ -757,6 +757,32 @@ pub struct AiReviewView {
     /// `forge/ai-review` on the current head (`None`: none).
     pub check: Option<CheckRun>,
     pub advice: AdviceState,
+    /// The reader may vote 「役に立った / 誤り」 on the findings
+    /// (`AiAdviceFeedback` decided by `authorize_advice` on this merge
+    /// request, a person: M5 L5-6). A hint for the screen; the vote's route
+    /// decides again.
+    pub can_feedback: bool,
+    /// The reader's own verdicts on the shown advice's findings (empty when
+    /// none, withheld, or not a signed-in person).
+    pub my_feedback: Vec<(u8, forge_core::llm::Verdict)>,
+}
+
+/// What `POST …/ai-review/feedback` did (`Review::ai_review_feedback`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedbackRecorded {
+    Recorded,
+    Changed,
+    Unchanged,
+}
+
+impl FeedbackRecorded {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Recorded => "recorded",
+            Self::Changed => "changed",
+            Self::Unchanged => "unchanged",
+        }
+    }
 }
 
 impl crate::Review {
@@ -804,6 +830,16 @@ impl crate::Review {
             Purpose::MrReview,
         )
         .await?;
+        let resource = proof.ctx().resource();
+        let can_feedback = matches!(
+            authorize_advice(
+                proof.principal(),
+                Action::AiAdviceFeedback,
+                &resource,
+                declared_agent,
+            ),
+            Ok(AdviceReader::Person)
+        );
         let Some(label) = label else {
             return Ok(AiReviewView {
                 iid,
@@ -811,10 +847,11 @@ impl crate::Review {
                 head_sha: mr.head_sha,
                 check,
                 advice: AdviceState::None,
+                can_feedback,
+                my_feedback: Vec::new(),
             });
         };
         let stale = label.head_sha.is_none() || label.head_sha != mr.head_sha;
-        let resource = proof.ctx().resource();
         let viewed = forge_db::llm::advice_decided(&self.db, label.id, |subject| {
             if subject.kind != SubjectKind::MergeRequest
                 || subject.id != Some(mr.id.get())
@@ -836,6 +873,12 @@ impl crate::Review {
             })
         })
         .await?;
+        let my_feedback = match (&viewed, proof.principal().user()) {
+            (Some(AdviceView::Shown(_)), Some(user)) if can_feedback => {
+                forge_db::llm::my_feedback(&self.db, label.id, user).await?
+            }
+            _ => Vec::new(),
+        };
         let advice = match viewed {
             None => AdviceState::None,
             Some(AdviceView::Shown(advice)) => AdviceState::Shown {
@@ -855,7 +898,92 @@ impl crate::Review {
             head_sha: mr.head_sha,
             check,
             advice,
+            can_feedback,
+            my_feedback,
         })
+    }
+
+    /// `POST …/merge-requests/{iid}/ai-review/feedback` (`AiAdviceFeedback`,
+    /// M5 L5-6, plan 19 §4): a person's verdict on finding `finding` of
+    /// advice `advice_id`, one per person and finding (a new verdict
+    /// replaces theirs). The vote is decided again on the advice's own
+    /// subject by `authorize_advice`: an advice that is not this merge
+    /// request's, or no such advice or finding, is `FG-REPO-0005`
+    /// not found (`reason=advice_not_found`, existence never leaks); an
+    /// agent audience (a person's token that declared
+    /// `Forge-Context-Audience: agent`) is refused (`reason=agent_audience`):
+    /// an agent's vote would skew the measure of the advice.
+    pub async fn ai_review_feedback(
+        &self,
+        proof: &forge_auth::Authorized<forge_auth::MergeRequestCtx>,
+        declared_agent: bool,
+        advice_id: i64,
+        finding: u8,
+        verdict: forge_core::llm::Verdict,
+    ) -> Result<FeedbackRecorded, ForgeError> {
+        use forge_auth::{authorize_advice, Action, AdviceReader, ResourceCtx as _};
+        use forge_core::llm::SubjectKind;
+        use forge_db::llm::{FeedbackOutcome, ReaderKind};
+        if proof.action() != Action::AiAdviceFeedback {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "proof_action_mismatch")
+                .with_context("action", proof.action().name()));
+        }
+        let (project, Some(iid)) = *proof.id() else {
+            return Err(
+                ForgeError::new(ErrorCode::Internal).with_context("reason", "proof_shape_mismatch")
+            );
+        };
+        let Some(user) = proof.principal().user() else {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "decided_vote_without_user"));
+        };
+        let mr = forge_db::review::get(&self.db, project, iid)
+            .await?
+            .ok_or_else(|| {
+                ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "decided_merge_request_missing")
+            })?;
+        let not_found =
+            || ForgeError::new(ErrorCode::NotFound).with_context("reason", "advice_not_found");
+        let resource = proof.ctx().resource();
+        let outcome = forge_db::llm::record_feedback_decided(
+            &self.db,
+            advice_id,
+            Some(finding),
+            user,
+            verdict,
+            |subject| {
+                if subject.kind != SubjectKind::MergeRequest
+                    || subject.id != Some(mr.id.get())
+                    || subject.project != Some(project)
+                {
+                    return Err(not_found().with_context("advice_id", subject.advice_id));
+                }
+                authorize_advice(
+                    proof.principal(),
+                    Action::AiAdviceFeedback,
+                    &resource,
+                    declared_agent,
+                )
+                .map(|r| match r {
+                    AdviceReader::Person => ReaderKind::Person,
+                    AdviceReader::Agent => ReaderKind::Agent,
+                })
+            },
+        )
+        .await?;
+        match outcome {
+            FeedbackOutcome::Recorded => Ok(FeedbackRecorded::Recorded),
+            FeedbackOutcome::Changed => Ok(FeedbackRecorded::Changed),
+            FeedbackOutcome::Unchanged => Ok(FeedbackRecorded::Unchanged),
+            FeedbackOutcome::NoAdvice => Err(not_found()
+                .with_context("advice_id", advice_id)
+                .with_context("finding_index", i64::from(finding))),
+            FeedbackOutcome::NotAllowed => {
+                Err(ForgeError::new(ErrorCode::Forbidden).with_context("reason", "agent_audience"))
+            }
+        }
     }
 }
 

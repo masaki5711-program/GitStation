@@ -65,6 +65,11 @@ pub(crate) const LLM_ROWS: &[Row] = &[
     row(A::AiAdviceFeedback, W::ServiceAccountTokenApi, F::PrivateProject, deny(E::Forbidden)),
     row(A::AiAdviceFeedback, W::BotTokenApi, F::PrivateProject, deny(E::Forbidden)),
     row(A::AiAdviceFeedback, W::Guest, F::PrivateProject, deny(E::Forbidden)),
+    // M5 L5-6 (the merge request route): the same refusals on a merge request.
+    row(A::AiAdviceFeedback, W::Guest, MR, deny(E::Forbidden)),
+    row(A::AiAdviceFeedback, W::ServiceAccountTokenApi, MR, deny(E::Forbidden)),
+    row(A::AiAdviceFeedback, W::BotTokenApi, MR, deny(E::Forbidden)),
+    row(A::AiAdviceFeedback, W::MaintainerTokenReadApi, MR, deny(E::InsufficientScope)),
     row(A::AiAdviceFeedback, W::MaintainerTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::AiAdviceFeedback, W::NonMember, F::PrivateProject, deny(E::NotFound)),
     row(A::AiAdviceFeedback, W::NonMember, MR, deny(E::NotFound)),

@@ -561,6 +561,41 @@ pub async fn record_feedback_decided(
     .await
 }
 
+/// The verdicts `user` gave on the findings of advice `advice_id`, by
+/// finding (M5 L5-6: the screen shows which button the person pressed).
+/// A verdict on the advice as a whole is not a finding's and is left out.
+/// Read only after the advice's own words were decided for this reader
+/// ([`advice_decided`] returned it shown): the verdicts are the reader's
+/// own, so they add nothing the reader may not see.
+pub async fn my_feedback(
+    db: &Db,
+    advice_id: i64,
+    user: UserId,
+) -> Result<Vec<(u8, Verdict)>, ForgeError> {
+    const QUERY: &str = "llm.my_feedback";
+    let rows: Vec<(i16, String)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT finding_index, verdict FROM forge.llm_advice_feedback \
+                 WHERE advice_id = $1 AND user_id = $2 AND finding_index >= 0 \
+                 ORDER BY finding_index",
+            )
+            .bind(advice_id)
+            .bind(user.get())
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    rows.into_iter()
+        .map(|(index, verdict)| {
+            let index = u8::try_from(index).map_err(|_| stored_invalid("finding_index"))?;
+            let verdict = Verdict::parse(&verdict).ok_or_else(|| stored_invalid("verdict"))?;
+            Ok((index, verdict))
+        })
+        .collect()
+}
+
 /// A project's `llm.review` (no row = off).
 pub async fn review_mode(db: &Db, project: ProjectId) -> Result<ReviewMode, ForgeError> {
     const QUERY: &str = "llm.review_mode";

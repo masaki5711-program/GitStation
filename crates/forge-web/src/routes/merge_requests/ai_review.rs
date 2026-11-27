@@ -9,23 +9,43 @@
 //! from an agent token, a delegated (act-as) request and a request that
 //! declares `Forge-Context-Audience: agent`. Reading writes nothing; the
 //! advice never decides anything.
+//!
+//! `POST …/ai-review/feedback` (M5 L5-6, plan 19 §4, §8.2): a person's
+//! 「役に立った / 誤り」 on one finding (`AiAdviceFeedback`: whoever reads
+//! the merge request, Reporter and above, people only), one per person and
+//! finding — a new verdict replaces theirs. Decided again on the advice's
+//! own subject (`Review::ai_review_feedback`). The read says whether the
+//! reader may vote (`can_feedback`) and what they said (`my_feedback`).
 
+use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use forge_auth::MergeRequestCtx;
 use forge_core::checks::CheckRun;
+use forge_core::llm::Verdict;
+use forge_core::UserId;
 use forge_review::ai_review::{AdviceState, AiReviewView, ADVICE_LABEL, WITHHELD_JA};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use super::loaders::MergeRequestRead;
 use super::review;
 use crate::app::AppState;
-use crate::registry::Dispatched;
+use crate::body::param_invalid;
+use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader};
 use crate::routes::write::{bounded, json, no_store};
 
 /// The path after `{iid}` of [`AI_REVIEW`].
 pub const AI_REVIEW_SUFFIX: &str = "/ai-review";
 /// `GET` the AI first pass of a merge request.
 pub const AI_REVIEW: &str = "/api/v1/projects/{id}/merge-requests/{iid}/ai-review";
+/// The path after `{iid}` of [`AI_FEEDBACK`].
+pub const AI_FEEDBACK_SUFFIX: &str = "/ai-review/feedback";
+/// `POST` a person's verdict on one finding of the AI first pass.
+pub const AI_FEEDBACK: &str = "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/feedback";
+/// The vote's body is three small fields.
+pub const AI_FEEDBACK_MAX_BODY: usize = 1024;
+/// `POST …/ai-review/feedback`: the merge request, loaded as for a read.
+pub const AI_FEEDBACK_OF: MergeRequestRead = MergeRequestRead(AI_FEEDBACK_SUFFIX);
 /// What the screens say when there is no advice (plan 19 §0.3 5).
 pub const NO_ADVICE_JA: &str = "AI の助言は今ありません";
 
@@ -56,6 +76,17 @@ pub struct AiReviewFindingBody {
     pub quote: String,
     pub message: String,
     pub confidence: f64,
+}
+
+/// One of the reader's own verdicts.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AiReviewMyFeedbackBody {
+    /// The finding (0-based, as in `findings`).
+    #[schema(minimum = 0, maximum = 255)]
+    pub finding_index: i64,
+    /// `useful` or `wrong`.
+    pub verdict: String,
 }
 
 /// The newest advice.
@@ -99,6 +130,9 @@ pub struct AiReviewAdviceBody {
     /// UTC.
     #[schema(required = true)]
     pub created_at: Option<String>,
+    /// The reader's own verdicts on the findings (M5 L5-6; empty for
+    /// `none`, `withheld` and a reader who may not vote).
+    pub my_feedback: Vec<AiReviewMyFeedbackBody>,
 }
 
 /// `GET …/merge-requests/{iid}/ai-review`.
@@ -116,6 +150,39 @@ pub struct AiReviewBody {
     #[schema(required = true)]
     pub check: Option<AiReviewCheckBody>,
     pub advice: AiReviewAdviceBody,
+    /// The reader may vote 「役に立った / 誤り」 on the findings (a person
+    /// who reads the merge request, Reporter and above, never an agent or
+    /// a read-only token). A hint: the vote decides again.
+    pub can_feedback: bool,
+}
+
+/// `POST …/ai-review/feedback`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AiAdviceVote {
+    /// The advice (`advice.advice_id` of the read).
+    #[schema(minimum = 1)]
+    pub advice_id: i64,
+    /// The finding (0-based, as in `advice.findings`).
+    #[schema(minimum = 0, maximum = 255)]
+    pub finding_index: i64,
+    /// `useful` (役に立った) or `wrong` (誤り).
+    pub verdict: String,
+}
+
+/// What a vote did.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AiAdviceVoteBody {
+    #[schema(minimum = 1)]
+    pub advice_id: i64,
+    #[schema(minimum = 0, maximum = 255)]
+    pub finding_index: i64,
+    /// `useful` or `wrong`: the verdict now.
+    pub verdict: String,
+    /// `recorded` (new), `changed` (the person's earlier verdict replaced)
+    /// or `unchanged` (the same verdict was there).
+    pub outcome: String,
 }
 
 fn check_body(run: CheckRun) -> AiReviewCheckBody {
@@ -158,7 +225,16 @@ pub fn ai_review_body(view: AiReviewView) -> AiReviewBody {
         model: None,
         prompt_version: None,
         created_at: None,
+        my_feedback: Vec::new(),
     };
+    let my_feedback: Vec<AiReviewMyFeedbackBody> = view
+        .my_feedback
+        .iter()
+        .map(|(index, verdict)| AiReviewMyFeedbackBody {
+            finding_index: i64::from(*index),
+            verdict: verdict.as_str().to_owned(),
+        })
+        .collect();
     let advice = match view.advice {
         AdviceState::None => empty("none", Some(NO_ADVICE_JA)),
         AdviceState::Shown {
@@ -178,6 +254,7 @@ pub fn ai_review_body(view: AiReviewView) -> AiReviewBody {
             model: Some(label.model),
             prompt_version: Some(label.prompt_version),
             created_at: Some(label.created_at),
+            my_feedback,
             ..empty("shown", None)
         },
         AdviceState::Withheld {
@@ -201,6 +278,7 @@ pub fn ai_review_body(view: AiReviewView) -> AiReviewBody {
         head_sha: view.head_sha,
         check: view.check.map(check_body),
         advice,
+        can_feedback: view.can_feedback,
     }
 }
 
@@ -217,6 +295,67 @@ pub async fn ai_review(state: AppState, request: Dispatched<MergeRequestCtx>) ->
         )
         .await?;
         json(ai_review_body(view))
+    }
+    .await;
+    match built {
+        Ok(value) => no_store(StatusCode::OK, value),
+        Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
+impl BodyLoader<AppState, AiAdviceVote> for MergeRequestRead {
+    type Ctx = MergeRequestCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        _body: &'a AiAdviceVote,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, MergeRequestCtx> {
+        Loader::load(self, state, parts, viewer)
+    }
+}
+
+/// The vote's fields, checked (`FG-WEB-0006 reason=param_invalid`).
+fn vote_of(input: &AiAdviceVote) -> Result<(i64, u8, Verdict), forge_errors::ForgeError> {
+    if input.advice_id < 1 {
+        return Err(param_invalid("advice_id", "positive"));
+    }
+    let finding =
+        u8::try_from(input.finding_index).map_err(|_| param_invalid("finding_index", "0..=255"))?;
+    let verdict = Verdict::parse(&input.verdict)
+        .ok_or_else(|| param_invalid("verdict", "useful_or_wrong"))?;
+    Ok((input.advice_id, finding, verdict))
+}
+
+/// `POST …/ai-review/feedback` → `200` what the vote did (module docs).
+pub async fn ai_review_feedback(
+    state: AppState,
+    request: Dispatched<MergeRequestCtx, AiAdviceVote>,
+) -> Response {
+    let audience = crate::routes::context::audience(&request);
+    let w = request.into_write();
+    let built = async {
+        let declared_agent = audience?.is_agent();
+        let (advice_id, finding, verdict) = vote_of(&w.input)?;
+        let outcome = bounded(
+            &state,
+            "merge_request_ai_feedback",
+            review(&state)?.ai_review_feedback(
+                &w.proof,
+                declared_agent,
+                advice_id,
+                finding,
+                verdict,
+            ),
+        )
+        .await?;
+        json(AiAdviceVoteBody {
+            advice_id,
+            finding_index: i64::from(finding),
+            verdict: verdict.as_str().to_owned(),
+            outcome: outcome.as_str().to_owned(),
+        })
     }
     .await;
     match built {

@@ -1,6 +1,10 @@
 //! M5 L5-5 (plan 19 §3.1): `GET …/merge-requests/{iid}/ai-review` — the
 //! AI first pass, read like the merge request; a confidential advice is
-//! withheld from agents; reading never decides anything. Synthetic data.
+//! withheld from agents; reading never decides anything. M5 L5-6 (plan 19
+//! §4, §8.2): `POST …/ai-review/feedback` — a person's 「役に立った /
+//! 誤り」 on one finding (`AiAdviceFeedback`), one per person and finding;
+//! agents never vote, and the read says who may (`can_feedback`) and what
+//! the reader said (`my_feedback`). Synthetic data.
 
 #![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly
 
@@ -49,6 +53,7 @@ struct World {
     owner: UserId,
     developer: UserId,
     outsider: UserId,
+    guest: UserId,
     web: ProjectId,
     mr: i64,
 }
@@ -85,6 +90,7 @@ impl World {
         let owner = user("ada").await;
         let developer = user("cy").await;
         let outsider = user("eve").await;
+        let guest = user("gil").await;
         let web = projects::create(
             &t.db,
             &ctx("req-web"),
@@ -101,6 +107,15 @@ impl World {
         )
         .await
         .expect("member");
+        projects::add_member(
+            &t.db,
+            &ctx("req-guest"),
+            web.project_id,
+            guest.user_id,
+            Role::Guest,
+        )
+        .await
+        .expect("guest");
         let p = web.project_id.get();
         t.commit_audited(
             ("project", p),
@@ -129,20 +144,44 @@ impl World {
             owner: owner.user_id,
             developer: developer.user_id,
             outsider: outsider.user_id,
+            guest: guest.user_id,
             web: web.project_id,
             mr,
         }
     }
 
     async fn get(&self, who: Principal, header: Option<(&str, &str)>) -> Answer {
-        let mut builder = Request::builder().method("GET").uri(format!(
-            "/api/v1/projects/{}/merge-requests/1/ai-review",
+        self.send("GET", "", who, header, None).await
+    }
+
+    async fn vote(&self, who: Principal, header: Option<(&str, &str)>, body: Value) -> Answer {
+        self.send("POST", "/feedback", who, header, Some(body))
+            .await
+    }
+
+    async fn send(
+        &self,
+        method: &str,
+        suffix: &str,
+        who: Principal,
+        header: Option<(&str, &str)>,
+        body: Option<Value>,
+    ) -> Answer {
+        let mut builder = Request::builder().method(method).uri(format!(
+            "/api/v1/projects/{}/merge-requests/1/ai-review{suffix}",
             self.web.get()
         ));
         if let Some((k, v)) = header {
             builder = builder.header(k, v);
         }
-        let mut req = builder.body(Body::empty()).expect("request");
+        let body = match body {
+            Some(b) => {
+                builder = builder.header("content-type", "application/json");
+                Body::from(b.to_string())
+            }
+            None => Body::empty(),
+        };
+        let mut req = builder.body(body).expect("request");
         req.extensions_mut().insert(who);
         let state = AppState::new(
             "test",
@@ -176,7 +215,7 @@ impl World {
         }
     }
 
-    async fn advice(&self, head: char, class: InputClass) {
+    async fn advice(&self, head: char, class: InputClass) -> i64 {
         let req = forge_db::llm::insert_request(
             &self.t.db,
             &forge_db::llm::NewRequest {
@@ -222,7 +261,7 @@ impl World {
             },
         )
         .await
-        .expect("advice");
+        .expect("advice")
     }
 }
 
@@ -268,7 +307,7 @@ async fn a_confidential_advice_is_read_by_people_and_withheld_from_agents() {
         },
     )
     .await;
-    w.advice('a', InputClass::Confidential).await;
+    let _ = w.advice('a', InputClass::Confidential).await;
     let person = w.get(session(w.developer), None).await;
     assert_eq!(person.status, StatusCode::OK, "{}", person.json);
     assert_eq!(person.json["mode"], "advisory");
@@ -307,7 +346,7 @@ async fn a_confidential_advice_is_read_by_people_and_withheld_from_agents() {
 #[tokio::test]
 async fn an_advice_for_another_head_is_stale() {
     let w = World::new().await;
-    w.advice('b', InputClass::Internal).await;
+    let _ = w.advice('b', InputClass::Internal).await;
     let agent = w.get(token(w.developer).as_agent(true), None).await;
     assert_eq!(agent.status, StatusCode::OK, "{}", agent.json);
     assert_eq!(
@@ -318,4 +357,175 @@ async fn an_advice_for_another_head_is_stale() {
     assert_eq!(agent.json["advice"]["head_sha"], "b".repeat(40));
     assert_eq!(agent.json["head_sha"], "a".repeat(40));
     w.t.drop_now().await;
+}
+
+fn full_token(user: UserId) -> Principal {
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Token(vec![Scope::Api]),
+        AccountKind::Human,
+    )
+}
+
+fn vote_body(advice: i64, index: i64, verdict: &str) -> Value {
+    json!({"advice_id": advice, "finding_index": index, "verdict": verdict})
+}
+
+#[tokio::test]
+async fn a_person_votes_once_per_finding_and_may_change_the_verdict() {
+    let w = World::new().await;
+    let id = w.advice('a', InputClass::Confidential).await;
+    let before = w.get(session(w.developer), None).await;
+    assert_eq!(before.status, StatusCode::OK, "{}", before.json);
+    assert_eq!(before.json["can_feedback"], true);
+    assert_eq!(before.json["advice"]["my_feedback"], json!([]));
+    let first = w
+        .vote(session(w.developer), None, vote_body(id, 0, "useful"))
+        .await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.json);
+    assert_eq!(first.json["outcome"], "recorded");
+    assert_eq!(first.json["verdict"], "useful");
+    assert_eq!(first.json["finding_index"], 0);
+    assert_eq!(first.json["advice_id"], id);
+    let again = w
+        .vote(session(w.developer), None, vote_body(id, 0, "useful"))
+        .await;
+    assert_eq!(again.json["outcome"], "unchanged", "{}", again.json);
+    let changed = w
+        .vote(session(w.developer), None, vote_body(id, 0, "wrong"))
+        .await;
+    assert_eq!(changed.json["outcome"], "changed", "{}", changed.json);
+    // A person's own token votes too (plan 19 §8.2).
+    let owner = w
+        .vote(full_token(w.owner), None, vote_body(id, 0, "useful"))
+        .await;
+    assert_eq!(owner.status, StatusCode::OK, "{}", owner.json);
+    let rows =
+        w.t.json_rows("SELECT user_id, finding_index, verdict FROM forge.llm_advice_feedback")
+            .await;
+    assert_eq!(rows.len(), 2, "one row per person and finding: {rows:?}");
+    let after = w.get(session(w.developer), None).await;
+    assert_eq!(
+        after.json["advice"]["my_feedback"],
+        json!([{"finding_index": 0, "verdict": "wrong"}])
+    );
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn agents_guests_and_read_tokens_never_vote_and_are_not_offered_it() {
+    let w = World::new().await;
+    let id = w.advice('a', InputClass::Internal).await;
+    let cases: [(Principal, Option<(&str, &str)>); 4] = [
+        (token(w.developer).as_agent(true), None),
+        (full_token(w.developer).as_agent(true), None),
+        (
+            full_token(w.developer),
+            Some(("forge-context-audience", "agent")),
+        ),
+        (token(w.developer), None),
+    ];
+    for (who, header) in cases {
+        let read = w.get(who.clone(), header).await;
+        assert_eq!(read.status, StatusCode::OK, "{}", read.json);
+        assert_eq!(read.json["can_feedback"], false, "{who:?} {header:?}");
+        let a = w.vote(who, header, vote_body(id, 0, "wrong")).await;
+        assert_eq!(a.status, StatusCode::FORBIDDEN, "{header:?} {}", a.json);
+        assert!(a.json["request_id"].is_string(), "{}", a.json);
+    }
+    // A Guest reads no merge request of a private project, and votes on
+    // none of its advice.
+    let guest_read = w.get(session(w.guest), None).await;
+    assert_eq!(
+        guest_read.status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        guest_read.json
+    );
+    let guest = w
+        .vote(session(w.guest), None, vote_body(id, 0, "wrong"))
+        .await;
+    assert_eq!(guest.status, StatusCode::FORBIDDEN, "{}", guest.json);
+    let outsider = w
+        .vote(session(w.outsider), None, vote_body(id, 0, "wrong"))
+        .await;
+    assert_eq!(outsider.status, StatusCode::NOT_FOUND, "{}", outsider.json);
+    let rows =
+        w.t.json_rows("SELECT id FROM forge.llm_advice_feedback")
+            .await;
+    assert!(rows.is_empty(), "nothing was counted: {rows:?}");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_vote_on_a_missing_advice_or_finding_is_not_found_and_a_bad_body_is_refused() {
+    let w = World::new().await;
+    let id = w.advice('a', InputClass::Internal).await;
+    let missing = w
+        .vote(
+            session(w.developer),
+            None,
+            vote_body(id + 1000, 0, "useful"),
+        )
+        .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND, "{}", missing.json);
+    let beyond = w
+        .vote(session(w.developer), None, vote_body(id, 1, "useful"))
+        .await;
+    assert_eq!(beyond.status, StatusCode::NOT_FOUND, "{}", beyond.json);
+    for bad in [
+        vote_body(id, 0, "great"),
+        vote_body(id, -1, "useful"),
+        vote_body(id, 256, "useful"),
+        json!({"advice_id": id, "verdict": "useful"}),
+    ] {
+        let a = w.vote(session(w.developer), None, bad.clone()).await;
+        assert_eq!(a.status, StatusCode::BAD_REQUEST, "{bad} {}", a.json);
+    }
+    let rows =
+        w.t.json_rows("SELECT id FROM forge.llm_advice_feedback")
+            .await;
+    assert!(rows.is_empty(), "{rows:?}");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn an_advice_of_another_merge_request_is_not_voted_on_through_this_one() {
+    let w = World::new().await;
+    let p = w.web.get();
+    w.t.commit_audited(
+        ("project", p),
+        &[
+            format!("UPDATE forge.merge_request_counters SET last_iid = 2 WHERE project_id = {p}"),
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id, \
+                 source_branch, target_branch, head_sha) VALUES ({p}, 2, 'other', {}, \
+                 'refs/heads/other', 'refs/heads/main', '{}')",
+                w.owner.get(),
+                "c".repeat(40)
+            ),
+        ],
+    )
+    .await;
+    let other =
+        w.t.json_rows("SELECT id FROM forge.merge_requests WHERE iid = 2")
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .expect("mr 2");
+    let foreign = World { mr: other, ..w };
+    let id = foreign.advice('c', InputClass::Internal).await;
+    // The route is merge request 1's; the advice is merge request 2's.
+    let a = foreign
+        .vote(session(foreign.developer), None, vote_body(id, 0, "useful"))
+        .await;
+    assert_eq!(a.status, StatusCode::NOT_FOUND, "{}", a.json);
+    let rows = foreign
+        .t
+        .json_rows("SELECT id FROM forge.llm_advice_feedback")
+        .await;
+    assert!(rows.is_empty(), "{rows:?}");
+    foreign.t.drop_now().await;
 }

@@ -69,6 +69,32 @@ const defaults: Record<string, Handler> = {
       conflict: false,
       eligible: [],
     }),
+  // M5 L5-6: the merge request screen's AI first pass (off, none: no section).
+  'GET /api/v1/projects/7/merge-requests/3/ai-review': () =>
+    json(200, {
+      iid: 3,
+      mode: 'off',
+      head_sha: null,
+      check: null,
+      can_feedback: false,
+      advice: {
+        state: 'none',
+        label: 'AI の助言（提案） / AI advice (suggestion)',
+        note: 'AI の助言は今ありません',
+        stale: false,
+        head_sha: null,
+        summary: null,
+        findings: [],
+        deep_review: null,
+        degraded: null,
+        input_class: null,
+        advice_id: null,
+        model: null,
+        prompt_version: null,
+        created_at: null,
+        my_feedback: [],
+      },
+    }),
   // ADR-0038 §2: the members screen's org bindings (none unless a test
   // gives some) of the usual project and group.
   'GET /api/v1/projects/7/org-bindings': () => json(200, NO_ORG_BINDINGS),
