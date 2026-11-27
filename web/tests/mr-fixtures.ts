@@ -235,6 +235,73 @@ export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Han
     // The detail under the status: the head's check runs and the predicted conflicts.
     [`GET ${CHECKS_API}`]: () => json(200, checkRuns([])),
     [`GET ${MR_API}/3/conflicts`]: () => json(200, conflicts([])),
+    // M5 L5-6: a project without the AI first pass (no section).
+    [`GET ${MR_API}/3/ai-review`]: () => json(200, aiReview()),
     ...over,
   });
 }
+
+/** `GET …/ai-review` (M5 L5-5 / L5-6): by default a project with the AI
+ * first pass off and no advice (the section is not drawn). */
+export function aiReview(over: Record<string, unknown> = {}, advice: Record<string, unknown> = {}) {
+  return {
+    iid: 3,
+    mode: 'off',
+    head_sha: 'b'.repeat(40),
+    check: null,
+    can_feedback: false,
+    ...over,
+    advice: {
+      state: 'none',
+      label: 'AI の助言（提案） / AI advice (suggestion)',
+      note: 'AI の助言は今ありません',
+      stale: false,
+      head_sha: null,
+      summary: null,
+      findings: [],
+      deep_review: null,
+      degraded: null,
+      input_class: null,
+      advice_id: null,
+      model: null,
+      prompt_version: null,
+      created_at: null,
+      my_feedback: [],
+      ...advice,
+    },
+  };
+}
+
+/** A shown advice of the head on screen with two findings. */
+export const SHOWN_ADVICE = {
+  state: 'shown',
+  note: null,
+  head_sha: 'b'.repeat(40),
+  summary: 'Changes the tolerance check.\nTouches the orders table.',
+  findings: [
+    {
+      severity: 'high',
+      path: 'src/orders.rs',
+      line: 41,
+      quote: 'size.unwrap()',
+      message: 'A missing size panics on a production path.',
+      confidence: 0.9,
+    },
+    {
+      severity: 'low',
+      path: 'src/view.rs',
+      line: null,
+      quote: 'let x = 1;',
+      message: 'An unused binding.',
+      confidence: 0.6,
+    },
+  ],
+  deep_review: 'A deeper review is recommended by code rules: a database migration. The model adds: the lock order changes.',
+  degraded: false,
+  input_class: 'internal',
+  advice_id: 12,
+  model: 'qwen3:27b',
+  prompt_version: 1,
+  created_at: '2026-11-03T01:00:00Z',
+  my_feedback: [],
+};

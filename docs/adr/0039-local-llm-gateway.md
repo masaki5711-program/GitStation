@@ -385,3 +385,41 @@ L5-8 で残した「GitStation の Web には承認の画面がまだ無い。�
    テスト `draft_never_marks_ready`（権限の腕と worker の両方）。
 10. **まだ無いもの**: 下書きの画面の表示・通知（L5-6 の助言の欄と一緒）、ケースが増えた後の作り直し（今は 1 回だけ。作り直すには人が
     `ai-draft/<id>` を消す）、ケースの JSON の機密の判定を lint 全体（`forge_doc::ai_asset::lint`）で下書きのブランチにかけること（CI の lint が見る）。
+
+## Amendment（2026-11-27、L5-6 の残り `feat/ui-ai-advice`: MR の画面の助言の欄と「役に立った / 誤り」）
+
+L5-6 の deploy 承認の Amendment の 1 で残した「MR の画面の助言の欄」を、同じ見せ方（その 3）で作った。利用者の指示（計画の推奨を
+すべて採る）で、次を決めた。
+
+1. **欄の出し方**: MR の概要のチェックの結果の下に「AI の一次レビュー」の節。`llm.review = off` で助言も run も無いプロジェクトでは
+   **節ごと出さない**（自動マージ・autofix の行と同じ。試行のプロジェクト以外の MR に雑音を足さない）。on なら助言が無くても
+   「AI の助言は今ありません」。読み込み中・読めない（`user_message` と `request_id`、再試行）も節の中に出す。
+2. **見せ方**: 文字と記号のラベル「AI の助言（提案）」（色だけに頼らない）、深掘りの印を先に（理由はサーバーの順 = コードの規則が先、
+   モデルの文が後）、要約、指摘（重大度の語・ファイルと行・確信度・**根拠の引用**）、モデル・プロンプトの版・作った時刻、
+   「助言です。マージを承認も停止もしません」。別の head の助言は「古い助言です」と **両方のコミット**（助言の head と今の head）を
+   出す（MR の古さの理由は head の違いだけ）。`degraded` は「信頼度が低い」。`withheld` は「機密の入力のため表示しません」だけ。
+   `forge/ai-review` が `error` なら「失敗しました（合格ではありません）」、`queued` / `in_progress` なら「確認しています」。
+   本文はすべて平文（`white-space: pre-wrap`、HTML・Markdown にしない）。モデルの文の言語はプロンプトが決めないので `lang` を付けない
+   （ページの言語を継ぐ）。
+3. **読み直し**: 開いている MR で `llm.review` が on、今の head の run が無いか完了していない間だけ 30 秒ごと（worker の周回と同じ）。
+4. **評価の経路**: `POST /api/v1/projects/{id}/merge-requests/{iid}/ai-review/feedback`（`AiAdviceFeedback`、本文
+   `{advice_id, finding_index, verdict}`、`PLANNED` から外した）。ローダーは読み取りと同じ（`MergeRequestRead` の形）、
+   `authorize()` は MR の資源で 1 回、さらに `forge_review::Review::ai_review_feedback` が **助言自身の対象** で `authorize_advice` を
+   通す（forge-db の `record_feedback_decided`）。別の MR の助言・無い助言・無い指摘は 404 `FG-REPO-0005 reason=advice_not_found`
+   （存在を漏らさない）、`Forge-Context-Audience: agent` を宣言した人のトークンは 403 `FG-AUTH-0003 reason=agent_audience`、
+   エージェントのトークン・サービスアカウント・ボット・代理・Guest・`read_api` だけのトークンは `authorize()` が断る（既存の
+   matrix の行）。1 人 1 指摘 1 行（L5-2 の一意の索引）、変えると `changed`、同じなら `unchanged`。本文の誤り（verdict の語、
+   0..=255 の外の番号）は `FG-WEB-0006`。新しいエラーコードは作らず、`errors.toml` の 2 つの診断の文に理由を足した。
+   全体への評価（`finding_index` なし）は画面に無いので受けない。gstn のコマンドは作らない（`NotForCli`: エージェントは評価しない、gstn はエージェントの道具）。
+5. **ボタンを出すか**: サーバーが決める。読み取りの答えに `can_feedback`（`AiAdviceFeedback` を `authorize_advice` で試し、`Person`
+   のときだけ true）と、読み手自身の評価 `advice.my_feedback`（指摘ごと）を足した。画面は `can_feedback` が false ならボタンを
+   出さない。ボタンは `aria-pressed` と ✓ と太い枠（色だけでない）、押した結果はサーバーの答えで表示を変え、読み上げる。
+6. **まだ無いもの**: `AiReviewRerun`（やり直しのボタン）は **`PLANNED` のまま**。完了した run を同じ head でもう聞かない worker の
+   規則（L5-5 の 1）を変え、1 MR 1 時間 3 回の上限（429）と回数の記録が要るので、この小さな変更には入れなかった。
+   `forge_llm_advice_feedback_total` のメトリクスも未（採用率は runbook `llm-advice-quality` の SQL が表から数える）。
+   P17-10 の AI 資産の下書きの表示も未。
+7. **独立レビュー（`a11y-architect`・`authz-matrix-auditor`）で直した点**（CRITICAL / HIGH は無し）: 記号（✦ ⚑ ✓）は CSS の
+   `::before` でなく `aria-hidden` の要素にした（読み上げに出さない）。評価のボタンの名前に指摘の番号を入れた（「役に立った（指摘 1）」、
+   見える語が先）。最初の答えの後の変化（確認中 → 届いた・失敗）は MR の画面の読み上げの領域で 1 回だけ言う。MR の資源での
+   deny の行（Guest・サービスアカウント・ボット・`read_api`）を matrix に足した。**受け入れた点**: `can_feedback` は助言が無くても
+   true になりうる（ヒントで、ボタンは指摘があるときだけ出る）。読み込み中の節が off のプロジェクトで消える短い揺れ。

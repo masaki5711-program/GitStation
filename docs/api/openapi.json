@@ -434,6 +434,67 @@
         ],
         "type": "object"
       },
+      "AiAdviceVote": {
+        "additionalProperties": false,
+        "description": "`POST …/ai-review/feedback`.",
+        "properties": {
+          "advice_id": {
+            "description": "The advice (`advice.advice_id` of the read).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "finding_index": {
+            "description": "The finding (0-based, as in `advice.findings`).",
+            "format": "int64",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "description": "`useful` (役に立った) or `wrong` (誤り).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advice_id",
+          "finding_index",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "AiAdviceVoteBody": {
+        "additionalProperties": false,
+        "description": "What a vote did.",
+        "properties": {
+          "advice_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "finding_index": {
+            "format": "int64",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outcome": {
+            "description": "`recorded` (new), `changed` (the person's earlier verdict replaced)\nor `unchanged` (the same verdict was there).",
+            "type": "string"
+          },
+          "verdict": {
+            "description": "`useful` or `wrong`: the verdict now.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advice_id",
+          "finding_index",
+          "verdict",
+          "outcome"
+        ],
+        "type": "object"
+      },
       "AiAssetsBody": {
         "additionalProperties": false,
         "description": "A project's `ai_assets.enabled`.",
@@ -551,6 +612,13 @@
               "null"
             ]
           },
+          "my_feedback": {
+            "description": "The reader's own verdicts on the findings (M5 L5-6; empty for\n`none`, `withheld` and a reader who may not vote).",
+            "items": {
+              "$ref": "#/components/schemas/AiReviewMyFeedbackBody"
+            },
+            "type": "array"
+          },
           "note": {
             "description": "For `none` and `withheld`: what the screen says instead.",
             "type": [
@@ -594,7 +662,8 @@
           "advice_id",
           "model",
           "prompt_version",
-          "created_at"
+          "created_at",
+          "my_feedback"
         ],
         "type": "object"
       },
@@ -604,6 +673,10 @@
         "properties": {
           "advice": {
             "$ref": "#/components/schemas/AiReviewAdviceBody"
+          },
+          "can_feedback": {
+            "description": "The reader may vote 「役に立った / 誤り」 on the findings (a person\nwho reads the merge request, Reporter and above, never an agent or\na read-only token). A hint: the vote decides again.",
+            "type": "boolean"
           },
           "check": {
             "oneOf": [
@@ -638,7 +711,8 @@
           "mode",
           "head_sha",
           "check",
-          "advice"
+          "advice",
+          "can_feedback"
         ],
         "type": "object"
       },
@@ -704,6 +778,28 @@
           "quote",
           "message",
           "confidence"
+        ],
+        "type": "object"
+      },
+      "AiReviewMyFeedbackBody": {
+        "additionalProperties": false,
+        "description": "One of the reader's own verdicts.",
+        "properties": {
+          "finding_index": {
+            "description": "The finding (0-based, as in `findings`).",
+            "format": "int64",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "description": "`useful` or `wrong`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "finding_index",
+          "verdict"
         ],
         "type": "object"
       },
@@ -23802,6 +23898,66 @@
         },
         "summary": "A merge request's AI first pass by the local LLM, as advice only (it never blocks or approves a merge): the project's llm.review (off, advisory, required), the forge/ai-review run on the current head (error when the LLM failed, never success) and the newest advice — summary, findings with their checked evidence, the deep-review mark (code rules first), model, prompt version and time; state none (no advice), shown, or withheld (a confidential advice read by an agent, an act-as request or Forge-Context-Audience: agent); stale when made for another head (as the merge request)",
         "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/feedback": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_ai_review_feedback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAdviceVote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAdviceVoteBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Vote on one finding of a merge request's AI first pass: useful or wrong (people only: whoever reads the merge request, Reporter and above; an agent's token, a service account, a bot, act-as and Forge-Context-Audience: agent are refused, 403). One verdict per person and finding: a new one replaces theirs (outcome recorded, changed or unchanged). No such advice or finding, or an advice of another merge request: 404 FG-REPO-0005",
+        "x-forge-action": "AiAdviceFeedback",
+        "x-forge-max-body-bytes": 1024
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {

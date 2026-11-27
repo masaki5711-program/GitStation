@@ -2243,6 +2243,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Vote on one finding of a merge request's AI first pass: useful or wrong (people only: whoever reads the merge request, Reporter and above; an agent's token, a service account, a bot, act-as and Forge-Context-Audience: agent are refused, 403). One verdict per person and finding: a new one replaces theirs (outcome recorded, changed or unchanged). No such advice or finding, or an advice of another merge request: 404 FG-REPO-0005 */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_ai_review_feedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {
         parameters: {
             query?: never;
@@ -4166,6 +4183,35 @@ export interface components {
             files: components["schemas"]["AgentPartFileBody"][];
             version: components["schemas"]["AgentPartVersionBody"];
         };
+        /** @description `POST …/ai-review/feedback`. */
+        AiAdviceVote: {
+            /**
+             * Format: int64
+             * @description The advice (`advice.advice_id` of the read).
+             */
+            advice_id: number;
+            /**
+             * Format: int64
+             * @description The finding (0-based, as in `advice.findings`).
+             */
+            finding_index: number;
+            /** @description `useful` (役に立った) or `wrong` (誤り). */
+            verdict: string;
+        };
+        /** @description What a vote did. */
+        AiAdviceVoteBody: {
+            /** Format: int64 */
+            advice_id: number;
+            /** Format: int64 */
+            finding_index: number;
+            /**
+             * @description `recorded` (new), `changed` (the person's earlier verdict replaced)
+             *     or `unchanged` (the same verdict was there).
+             */
+            outcome: string;
+            /** @description `useful` or `wrong`: the verdict now. */
+            verdict: string;
+        };
         /** @description A project's `ai_assets.enabled`. */
         AiAssetsBody: {
             /** @description UTC, RFC 3339 (`null`: never changed). */
@@ -4210,6 +4256,11 @@ export interface components {
             label: string;
             /** @description `name:tag`. */
             model: string | null;
+            /**
+             * @description The reader's own verdicts on the findings (M5 L5-6; empty for
+             *     `none`, `withheld` and a reader who may not vote).
+             */
+            my_feedback: components["schemas"]["AiReviewMyFeedbackBody"][];
             /** @description For `none` and `withheld`: what the screen says instead. */
             note: string | null;
             /** Format: int32 */
@@ -4226,6 +4277,12 @@ export interface components {
         /** @description `GET …/merge-requests/{iid}/ai-review`. */
         AiReviewBody: {
             advice: components["schemas"]["AiReviewAdviceBody"];
+            /**
+             * @description The reader may vote 「役に立った / 誤り」 on the findings (a person
+             *     who reads the merge request, Reporter and above, never an agent or
+             *     a read-only token). A hint: the vote decides again.
+             */
+            can_feedback: boolean;
             check: null | components["schemas"]["AiReviewCheckBody"];
             /** @description The merge request's head now. */
             head_sha: string | null;
@@ -4257,6 +4314,16 @@ export interface components {
             quote: string;
             /** @description `critical`, `high`, `medium` or `low`. */
             severity: string;
+        };
+        /** @description One of the reader's own verdicts. */
+        AiReviewMyFeedbackBody: {
+            /**
+             * Format: int64
+             * @description The finding (0-based, as in `findings`).
+             */
+            finding_index: number;
+            /** @description `useful` or `wrong`. */
+            verdict: string;
         };
         /** @description One state name and its plain words (plan 08). */
         AiTermBody: {
@@ -15358,6 +15425,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AiReviewBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_ai_review_feedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiAdviceVote"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiAdviceVoteBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

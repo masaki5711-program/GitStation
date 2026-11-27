@@ -2456,5 +2456,37 @@
       "failed": "Gagal",
       "requested": "Berjalan"
     }
+  },
+  "aiAdvice": {
+    "title": "Tinjauan AI (tahap pertama)",
+    "label": "Saran AI (usulan)",
+    "none": "Belum ada saran AI saat ini.",
+    "running": "AI sedang meninjau commit terbaru. Bagian ini diperbarui sendiri setelah selesai.",
+    "failed": "Tinjauan tahap pertama AI untuk commit terbaru gagal; ini bukan kelulusan. Minta seseorang memeriksa perubahannya.",
+    "withheld": "Tidak ditampilkan: masukannya rahasia.",
+    "stale": "Saran ini sudah usang: dibuat untuk commit {{sha}}, bukan commit terbaru {{head}}.",
+    "unknownCommit": "(tidak diketahui)",
+    "degraded": "Saran yang kurang dapat dipercaya (sebuah putusan ditahan atau temuan tanpa bukti dibuang). Periksa perubahannya sendiri.",
+    "deepTitle": "Disarankan tinjauan yang lebih mendalam (Claude atau seseorang)",
+    "summaryTitle": "Ringkasan",
+    "findingsTitle": "Temuan ({{n}})",
+    "noFindings": "Tidak ada temuan.",
+    "severity": {
+      "critical": "Kritis",
+      "high": "Tinggi",
+      "medium": "Sedang",
+      "low": "Rendah"
+    },
+    "place": "{{path}} baris {{line}}",
+    "confidence": "Keyakinan {{pct}}%",
+    "evidence": "Bukti (kutipan dari perubahan):",
+    "voteGroup": "Apakah temuan {{n}} benar?",
+    "useful": "Berguna",
+    "wrong": "Salah",
+    "recorded": "Tercatat: {{verdict}}",
+    "adviceOnly": "Ini hanya saran. Saran tidak pernah menyetujui atau menghentikan merge: tes, check wajib, dan orang yang memutuskan.",
+    "arrived": "Saran AI sudah tersedia.",
+    "usefulFor": "Berguna (temuan {{n}})",
+    "wrongFor": "Salah (temuan {{n}})"
   }
 }

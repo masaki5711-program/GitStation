@@ -134,7 +134,9 @@ impl Audience {
 /// The audience of a request: the principal's
 /// (`Principal::is_agent_audience`), else `Forge-Context-Audience: agent`.
 /// Any other value of the header, or the header twice, is `FG-WEB-0006`.
-pub(crate) fn audience<R: ResourceCtx>(request: &Dispatched<R>) -> Result<Audience, ForgeError> {
+pub(crate) fn audience<R: ResourceCtx, B>(
+    request: &Dispatched<R, B>,
+) -> Result<Audience, ForgeError> {
     let mut values = request.headers().get_all(AUDIENCE_HEADER).iter();
     let header = match (values.next(), values.next()) {
         (None, _) => false,

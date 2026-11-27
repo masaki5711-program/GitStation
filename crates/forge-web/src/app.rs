@@ -511,7 +511,6 @@ pub const PLANNED: &[Action] = &[
     Action::UserCreate,
     Action::AuditRead,
     Action::Metrics,
-    Action::AiAdviceFeedback,
     Action::AiReviewRerun,
     Action::LlmSettingsManage,
     Action::LlmPause,
@@ -3205,6 +3204,17 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::ai_review,
         )
         .responds::<mr::AiReviewBody>(Verb::Get, mr::AI_REVIEW)
+        // M5 L5-6 (plan 19 §4, §8.2): a person's verdict on one finding.
+        .route_with_body(
+            Verb::Post,
+            mr::AI_FEEDBACK,
+            Action::AiAdviceFeedback,
+            "Vote on one finding of a merge request's AI first pass: useful or wrong (people only: whoever reads the merge request, Reporter and above; an agent's token, a service account, a bot, act-as and Forge-Context-Audience: agent are refused, 403). One verdict per person and finding: a new one replaces theirs (outcome recorded, changed or unchanged). No such advice or finding, or an advice of another merge request: 404 FG-REPO-0005",
+            mr::AI_FEEDBACK_MAX_BODY,
+            mr::AI_FEEDBACK_OF,
+            mr::ai_review_feedback,
+        )
+        .responds::<mr::AiAdviceVoteBody>(Verb::Post, mr::AI_FEEDBACK)
         // M3 X5 (plan 03 §6): a merge request's review context, read like
         // the merge request itself.
         .route_with(

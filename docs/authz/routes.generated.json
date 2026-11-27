@@ -1611,6 +1611,15 @@
     "word": "fixed"
   },
   {
+    "action": "AiAdviceFeedback",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/feedback",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/approvals",
@@ -3301,10 +3310,6 @@
   },
   {
     "action": "Metrics",
-    "planned": true
-  },
-  {
-    "action": "AiAdviceFeedback",
     "planned": true
   },
   {

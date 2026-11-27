@@ -72,8 +72,10 @@ mod versions;
 mod work_items;
 
 pub use ai_review::{
-    ai_review, ai_review_body, AiReviewAdviceBody, AiReviewBody, AiReviewCheckBody,
-    AiReviewFindingBody, AI_REVIEW, AI_REVIEW_SUFFIX,
+    ai_review, ai_review_body, ai_review_feedback, AiAdviceVote, AiAdviceVoteBody,
+    AiReviewAdviceBody, AiReviewBody, AiReviewCheckBody, AiReviewFindingBody,
+    AiReviewMyFeedbackBody, AI_FEEDBACK, AI_FEEDBACK_MAX_BODY, AI_FEEDBACK_OF, AI_REVIEW,
+    AI_REVIEW_SUFFIX,
 };
 pub use approvals::{
     approvals, approve, delete_rule as delete_approval_rule, put_rule as put_approval_rule,
