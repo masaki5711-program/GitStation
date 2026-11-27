@@ -35,6 +35,8 @@ use forge_db::projects::ProjectAccessFacts;
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
+// Plan 16 A7: `forge/agent-lock`, the commit's Claude Code configuration verified.
+pub mod agent_lock;
 pub mod ci_lint;
 pub mod confidential;
 pub mod doc_lint;

@@ -269,6 +269,8 @@ impl AutoMerger {
             doc_lint: DocLintState::Pending,
             blockers: Vec::new(),
             protected_path: false,
+            agent_config_locked: false,
+            maintainer_approved: false,
         };
         // The warning a merge request shows by name (plan 17 P17-3: an AI
         // asset change, "AI 資産の変更"); read with the facts.
@@ -349,6 +351,30 @@ impl AutoMerger {
         Ok(verdict)
     }
 
+    /// Whether a person who is a Maintainer (or more) of the project now,
+    /// active, not the author and approving for themself, approved this
+    /// very head (given on it, not carried onto it from an older one).
+    async fn maintainer_approved(
+        &self,
+        mr: &forge_db::review::StoredMergeRequest,
+        head: &ObjectId,
+    ) -> Result<bool, ForgeError> {
+        let db = &self.merger.db;
+        let facts = forge_db::review::approvals::approval_facts(db, mr.project_id, mr.id).await?;
+        let given = forge_db::review::approvals::approved_heads(db, mr.id).await?;
+        Ok(facts.approvals.iter().any(|a| {
+            a.active
+                && a.kind == forge_core::UserKind::Human
+                && a.approval.approver != mr.author
+                && a.approval.on_behalf_of.is_none()
+                && a.role.is_some_and(|r| r >= forge_core::Role::Maintainer)
+                && &a.approval.head_sha == head
+                && given
+                    .iter()
+                    .any(|g| g.approval == a.approval.id && g.approved_head.as_ref() == Some(head))
+        }))
+    }
+
     async fn queue_facts(
         &self,
         mr: &forge_db::review::StoredMergeRequest,
@@ -406,12 +432,20 @@ impl AutoMerger {
         facts.doc_lint = self
             .doc_lint(mr, head, DocLintState::of(doc_lint_run), request_id)
             .await?;
-        let warn_detail = summary
+        let warns = summary
             .as_deref()
             .map(forge_core::auto_merge::warn_rules)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|rule| *rule == "ai_asset");
+            .unwrap_or_default();
+        let warn_detail = warns.iter().copied().find(|rule| *rule == "ai_asset");
+        // Plan 16 A7 (ADR-0017 Amendment A7): a verified agent
+        // configuration change waits for a Maintainer who is not the author.
+        // A summary cut short (it ends with `…`) may have lost the line:
+        // fail closed and wait for the Maintainer too.
+        let clipped = summary.as_deref().is_some_and(|s| s.ends_with('…'));
+        facts.agent_config_locked = warns.contains(&"agent_config_locked") || clipped;
+        if facts.agent_config_locked {
+            facts.maintainer_approved = self.maintainer_approved(mr, head).await?;
+        }
         let target_tip = self
             .review
             .branch_tip(project, repo, mr.author, &mr.target_branch)

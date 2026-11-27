@@ -64,6 +64,7 @@ use forge_git::risk_inputs::RiskDiff;
 use forge_git::secret_scan::{self, SecretScan};
 use forge_git::{Git, StorageRoot};
 
+use crate::agent_lock::{AgentLock, LockVerdict};
 use crate::validate::relative_path;
 
 /// One lookup of the project.
@@ -300,6 +301,7 @@ pub struct Risk {
     git: Git,
     storage: StorageRoot,
     browse: Browser,
+    agent_lock: AgentLock,
     projects: Arc<dyn ProjectAccessLoader>,
     budget: Duration,
     limits: Limits,
@@ -359,6 +361,7 @@ impl Risk {
         projects: Arc<dyn ProjectAccessLoader>,
     ) -> Self {
         Self {
+            agent_lock: AgentLock::new(db.clone(), browse.clone()), // clone: pool and cache handles
             db,
             git,
             storage,
@@ -415,7 +418,7 @@ impl Risk {
                     .with_context("timeout_ms", self.budget.as_millis()))
             }
         };
-        let Some(evaluation) = evaluation else {
+        let Some((evaluation, repo, lock)) = evaluation else {
             tracing::info!(
                 target: "forge_checks",
                 event = "forge.risk.project_gone",
@@ -428,6 +431,27 @@ impl Risk {
         };
         let new = assess(&evaluation)?;
         let reported = record(&self.db, request, request_id, &new).await?;
+        // Plan 16 A7: `forge/agent-lock` on the same head, from the same
+        // verification the `agent_config` rule read.
+        let lock_run = crate::agent_lock::run_of(&lock)?;
+        let lock_reported = record(&self.db, request, request_id, &lock_run).await?;
+        let first = match &lock {
+            LockVerdict::Failed(p) => p.first().map(|p| (p.code.id(), p.reason)),
+            LockVerdict::NoConfig | LockVerdict::Verified { .. } => None,
+        };
+        tracing::info!(
+            target: "forge_checks",
+            event = "forge.agent_lock.recorded",
+            request_id = %request_id,
+            project_id = request.project.get(),
+            repo_id = repo.get(),
+            head_sha = request.head.as_str(),
+            conclusion = lock_run.conclusion.map(CheckConclusion::as_str),
+            first_error_code = first.map(|f| f.0),
+            first_reason = first.map(|f| f.1),
+            check_run_id = lock_reported.run.id,
+            "agent lock verified"
+        );
         let all: Vec<&Finding> = evaluation
             .targets
             .iter()
@@ -450,12 +474,13 @@ impl Risk {
         Ok(Ran::Recorded(Box::new(reported)))
     }
 
-    /// Everything before the write (`None`: the project is gone).
+    /// Everything before the write (`None`: the project is gone): the
+    /// evaluation, the repository and the head's agent lock (plan 16 A7).
     async fn evaluate(
         &self,
         request: &RiskRequest,
         targets: &RiskTargets,
-    ) -> Result<Option<Evaluation>, ForgeError> {
+    ) -> Result<Option<(Evaluation, RepoId, LockVerdict)>, ForgeError> {
         let project = request.project;
         let loaded =
             match tokio::time::timeout(LOOKUP_TIMEOUT, self.projects.load_project(project, None))
@@ -502,13 +527,14 @@ impl Risk {
         if targets.more {
             evaluation.general.push(rule("targets_not_assessed")?);
         }
+        let lock = self.agent_lock.verify(repo.id, &request.head).await?;
         for target in &targets.targets {
             evaluation.targets.push(
-                self.target(repo.id, target, &request.head, ai_assets)
+                self.target(repo.id, target, &request.head, ai_assets, &lock)
                     .await?,
             );
         }
-        Ok(Some(evaluation))
+        Ok(Some((evaluation, repo.id, lock)))
     }
 
     /// One target branch: the head's diff from the merge base (`ai_assets`:
@@ -519,6 +545,7 @@ impl Risk {
         target: &RefName,
         head: &ObjectId,
         ai_assets: bool,
+        lock: &LockVerdict,
     ) -> Result<TargetFindings, ForgeError> {
         // The cached ref list may be older than the target's tip. A
         // reader's refresh, not a ref write: nothing is announced.
@@ -536,7 +563,7 @@ impl Risk {
                 return Ok(found);
             }
         };
-        self.target_at(repo, target, &tip, head, ai_assets, None)
+        self.target_at(repo, target, &tip, head, ai_assets, None, Some(lock))
             .await
     }
 
@@ -544,6 +571,7 @@ impl Risk {
     /// and `head` to `head`, every rule (the head's run, and the merge
     /// result's, where `tip` is the train's base and `head` a step of it —
     /// the merge base is then `tip` itself).
+    #[allow(clippy::too_many_arguments)] // the per-target evaluation's inputs
     async fn target_at(
         &self,
         repo: RepoId,
@@ -554,6 +582,9 @@ impl Risk {
         // Plan 18 S7: the merge base already known (a train's steps all
         // descend from its base: found once for the whole train).
         known_base: Option<&ObjectId>,
+        // Plan 16 A7: the head's agent lock when already verified (a
+        // merge result's is verified here, only when needed).
+        lock: Option<&LockVerdict>,
     ) -> Result<TargetFindings, ForgeError> {
         let mut found = TargetFindings {
             target: short_name(target),
@@ -613,10 +644,57 @@ impl Risk {
         found
             .findings
             .extend(self.contents(repo, head, &files, ai_assets).await?);
+        self.locked_agent_config(repo, head, lock, &mut found.findings)
+            .await?;
         sort_findings(&mut found.findings);
         found.findings.dedup();
         found.findings.truncate(MAX_FINDINGS_PER_TARGET);
         Ok(found)
+    }
+
+    /// Plan 16 A7 (ADR-0017 Amendment A7): an `agent_config` finding on a
+    /// managed path (`.claude/**`, `CLAUDE.md`, `.mcp.json`) or the lock
+    /// itself becomes `agent_config_locked` (warn) when `forge/agent-lock`
+    /// verifies the commit: the change is exactly signed, published,
+    /// unrevoked parts. Anything else (`.gitstation/**` beside the lock, a
+    /// nested `CLAUDE.md`, a symlink into `.claude`, a name folded to
+    /// `.claude`) stays a stop; so does every finding when the lock fails.
+    async fn locked_agent_config(
+        &self,
+        repo: RepoId,
+        head: &ObjectId,
+        lock: Option<&LockVerdict>,
+        findings: &mut [Finding],
+    ) -> Result<(), ForgeError> {
+        let lockable = |f: &Finding| {
+            f.rule == "agent_config"
+                && f.path
+                    .as_deref()
+                    .is_some_and(|p| forge_agent::is_managed_path(p) || p == forge_agent::LOCK_PATH)
+        };
+        if !findings.iter().any(lockable) {
+            return Ok(());
+        }
+        // Security review A7: only signed, published parts lift the stop;
+        // a lock with hand-added `custom` files (whose approval forge does
+        // not check yet) keeps it.
+        let signed_only = |v: &LockVerdict| matches!(v, LockVerdict::Verified { custom: 0, .. });
+        let verified = match lock {
+            Some(v) => signed_only(v),
+            None => signed_only(&self.agent_lock.verify(repo, head).await?),
+        };
+        if !verified {
+            return Ok(());
+        }
+        let locked = rule("agent_config_locked")?;
+        for f in findings.iter_mut().filter(|f| lockable(f)) {
+            let path = f.path.take();
+            *f = Finding {
+                path,
+                ..locked.clone() // clone: one finding per path
+            };
+        }
+        Ok(())
     }
 
     /// The mass-deletion rule; the target's tree is counted only when the
@@ -881,6 +959,7 @@ impl Risk {
                 range.result,
                 ai_assets,
                 known_base,
+                None,
             ),
         )
         .await;

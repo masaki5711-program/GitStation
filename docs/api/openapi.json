@@ -2154,6 +2154,271 @@
         ],
         "type": "object"
       },
+      "BuildChangeBody": {
+        "additionalProperties": false,
+        "description": "One changed file of a build.",
+        "properties": {
+          "change": {
+            "description": "`added`, `modified` or `removed`.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "change"
+        ],
+        "type": "object"
+      },
+      "BuildCompiledBody": {
+        "additionalProperties": false,
+        "description": "The build as written.",
+        "properties": {
+          "branch": {
+            "description": "The new branch (without `refs/heads/`).",
+            "type": "string"
+          },
+          "commit_sha": {
+            "description": "The builder bot's commit.",
+            "type": "string"
+          },
+          "merge_request": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MergeRequestBody",
+                "description": "The merge request opened (null when it could not be opened)."
+              }
+            ]
+          },
+          "merge_request_error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BuildMergeRequestError"
+              }
+            ]
+          },
+          "preview": {
+            "$ref": "#/components/schemas/BuildPreviewBody"
+          }
+        },
+        "required": [
+          "preview",
+          "branch",
+          "commit_sha"
+        ],
+        "type": "object"
+      },
+      "BuildMergeRequestError": {
+        "additionalProperties": false,
+        "description": "Why the merge request was not opened (the commit stands).",
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "message": {
+            "description": "The user message in the request's language.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "BuildPartBody": {
+        "additionalProperties": false,
+        "description": "One part of a build.",
+        "properties": {
+          "capabilities": {
+            "description": "exec, network, permissions, fs-write (the screen's marks;\n`permissions` widens Claude Code's permissions).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "channel": {
+            "description": "`beta` or `stable`.",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "kind",
+          "version",
+          "channel",
+          "capabilities"
+        ],
+        "type": "object"
+      },
+      "BuildPreviewBody": {
+        "additionalProperties": false,
+        "description": "The Dry-Run.",
+        "properties": {
+          "base_sha": {
+            "description": "Its tip the plan was made against.",
+            "type": "string"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/BuildChangeBody"
+            },
+            "type": "array"
+          },
+          "lock": {
+            "description": "`.gitstation/agent.lock.json` as it would be written.",
+            "type": "string"
+          },
+          "lock_digest": {
+            "description": "`sha256:<hex>` of the lock.",
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/BuildPartBody"
+            },
+            "type": "array"
+          },
+          "target_branch": {
+            "description": "The branch the merge request would target (without `refs/heads/`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_branch",
+          "base_sha",
+          "lock_digest",
+          "lock",
+          "changes",
+          "parts"
+        ],
+        "type": "object"
+      },
+      "BuildRecordBody": {
+        "additionalProperties": false,
+        "description": "One recorded build.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "lock_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merge_request_iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "selection": {
+            "description": "`[{\"slug\",\"version\",\"selected_by\",\"reason\"}]`.",
+            "type": "object"
+          },
+          "state": {
+            "description": "`requested`, `succeeded` or `failed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "requested_by",
+          "selection",
+          "lock_digest",
+          "dry_run",
+          "merge_request_iid",
+          "state",
+          "error_code",
+          "request_id",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "BuildRequest": {
+        "additionalProperties": false,
+        "description": "`POST …/preview` and `…/compile`.",
+        "properties": {
+          "selection": {
+            "description": "The parts: exactly one adapter (the base model) and what it needs.",
+            "items": {
+              "$ref": "#/components/schemas/SelectionItem"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "`…/compile` only: the merge request's title (1..=255 characters;\ndefault \"Build the agent configuration\").",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "selection"
+        ],
+        "type": "object"
+      },
+      "BuildStatusBody": {
+        "additionalProperties": false,
+        "description": "`GET …/agent-builder`.",
+        "properties": {
+          "builds": {
+            "description": "Newest first, at most 20.",
+            "items": {
+              "$ref": "#/components/schemas/BuildRecordBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "builds"
+        ],
+        "type": "object"
+      },
       "ChangeMember": {
         "additionalProperties": false,
         "description": "`PATCH …/members/{user_id}`: the member's new direct role.",
@@ -11278,6 +11543,71 @@
         },
         "type": "object"
       },
+      "RecommendBody": {
+        "additionalProperties": false,
+        "description": "`POST …/recommend`.",
+        "properties": {
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendedBody"
+            },
+            "type": "array"
+          },
+          "source": {
+            "description": "`rules` (the local LLM's reasons come later, plan 16 A11).",
+            "type": "string"
+          },
+          "unavailable": {
+            "description": "Parts of the current lock with no stable version to pick.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "source",
+          "parts",
+          "unavailable"
+        ],
+        "type": "object"
+      },
+      "RecommendRequest": {
+        "additionalProperties": false,
+        "description": "`POST …/recommend` (no field yet; the body is `{}`).",
+        "type": "object"
+      },
+      "RecommendedBody": {
+        "additionalProperties": false,
+        "description": "One recommended part.",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "`base_model`, `current_lock` or `required_by=<slug>`.",
+            "type": "string"
+          },
+          "selected_by": {
+            "description": "`rule`.",
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "kind",
+          "version",
+          "selected_by",
+          "reason"
+        ],
+        "type": "object"
+      },
       "RedeliveryQueued": {
         "additionalProperties": false,
         "description": "A redelivery was queued.",
@@ -12286,6 +12616,38 @@
           "highlights",
           "cut_before",
           "cut_after"
+        ],
+        "type": "object"
+      },
+      "SelectionItem": {
+        "additionalProperties": false,
+        "description": "One selected part version.",
+        "properties": {
+          "reason": {
+            "description": "Why (the recommendation's reason; at most 200 characters).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "selected_by": {
+            "description": "`user` (default: picked on the screen) or `rule` (the\nrecommendation's).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "type": "string"
+          },
+          "version": {
+            "description": "The exact published version (`1.2.3`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "version"
         ],
         "type": "object"
       },
@@ -19964,6 +20326,203 @@
         "summary": "Change a project's display name / description (Maintainer)",
         "x-forge-action": "ProjectUpdate",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/agent-builder": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_agent_builder",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildStatusBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The project's newest agent builds (at most 20, newest first): the selection, the lock digest, Dry-Run or the merge request opened, the state and the error code (a Developer, an agent's token included)",
+        "x-forge-action": "AgentBuilderDryRun"
+      }
+    },
+    "/api/v1/projects/{id}/agent-builder/compile": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_agent_builder_compile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildCompiledBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Build the agent configuration ({\"selection\", \"title\"?}) as the Dry-Run would, write it as one commit of the builder bot on a new branch agent-builder/<lock digest> from the default branch's tip (the ref update decided like the caller's push, the secret rules on every file, the push recorded for the caller) and open the merge request for the caller (201). forge/agent-lock verifies it and auto-merge waits for a Maintainer's approval. A person only (never an agent, a service account or a bot), Developer; 409 FG-GIT-0027 reason=branch_exists when the same build was asked for, 409 FG-GIT-0031 when nothing changes",
+        "x-forge-action": "AgentBuilderCompile",
+        "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/agent-builder/preview": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_agent_builder_preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildPreviewBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The Dry-Run of an agent build ({\"selection\": [{\"slug\", \"version\", \"selected_by\"?, \"reason\"?}]}): the published versions are verified (digest, signature) and built (forge-agent compile: one adapter, requirements met, .claude/settings.json and .mcp.json merged), compared with the default branch's tip: the files added, modified and removed, each part's capabilities and the lock. Writes nothing but the build's record. 422 FG-AGENT-0008 for a selection that cannot be built, 409 FG-AGENT-0006 for a revoked version (a Developer, an agent's token included)",
+        "x-forge-action": "AgentBuilderDryRun",
+        "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/agent-builder/recommend": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_agent_builder_recommend",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The rules-only recommendation of agent parts ({}): the base model (the lock's adapter at the default branch, else claude-code-v2), the lock's parts and what they require, each at its newest stable version, with selected_by=rule and the reason; source=rules. Decided as AgentBuilderRecommend on a whole copy of the default tip (an AI agent audience only when the tip is open, 403 FG-AUTH-0022); 422 FG-AGENT-0008 when the base model or a requirement has no stable version",
+        "x-forge-action": "RepoRead",
+        "x-forge-max-body-bytes": 65536
       }
     },
     "/api/v1/projects/{id}/ai-assets": {

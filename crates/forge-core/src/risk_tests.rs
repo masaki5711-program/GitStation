@@ -830,3 +830,18 @@ fn case_with_absolute_timestamp_stops() {
     let clean = "{\"id\": \"c1\", \"provenance\": \"synthetic\", \"offset_seconds\": -60}";
     assert!(content_findings(ContentKind::AiCase, &case.path, clean).is_empty());
 }
+
+/// Plan 16 A7 (security review): the line auto-merge waits on is never
+/// the one a cap or a clipped summary drops.
+#[test]
+fn agent_config_locked_sorts_first_among_warnings() {
+    let mut found = vec![
+        Finding::of("dependency_change").at("-0001/package.json"),
+        Finding::of("agent_config_locked").at(".claude/settings.json"),
+        Finding::of("agent_config").at("docs/CLAUDE.md"),
+    ];
+    sort_findings(&mut found);
+    let rules: Vec<&str> = found.iter().map(|f| f.rule).collect();
+    assert_eq!(rules[0], "agent_config", "stops first: {rules:?}");
+    assert_eq!(rules[1], "agent_config_locked", "{rules:?}");
+}

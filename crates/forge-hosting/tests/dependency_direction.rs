@@ -74,9 +74,12 @@ const ALLOWED: &[(&str, &[&str])] = &[
     // depending on it: the merge conditions read the runs through
     // forge-core's `CheckResultsSource`). Plan 13 stage 2: forge-doc for
     // `forge/doc-lint` (the same lint as `gstn doc lint`).
+    // Plan 16 A7: forge-agent for `forge/agent-lock` (the same verify_lock
+    // as `gstn agent verify`).
     (
         "forge-checks",
         &[
+            "forge-agent",
             "forge-auth",
             "forge-git",
             "forge-db",

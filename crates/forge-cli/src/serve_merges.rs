@@ -425,6 +425,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // injection), never a merge run's.
         | ErrorCode::PublishSelfApproval
         | ErrorCode::LessonNotConfirmed
+        // Plan 16 A7: the builder's refusals, never a merge run's.
+        | ErrorCode::SelectionUnresolved
         // Plan 16 A5: the publish / promote / revoke routes' refusals.
         | ErrorCode::PartChecksNotGreen
         | ErrorCode::PartVersionRevoked

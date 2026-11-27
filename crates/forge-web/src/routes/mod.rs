@@ -5,6 +5,8 @@
 
 // M3 S2: the act-as confirmation and claim (ADR-0025 §5).
 pub mod act_as;
+// Plan 16 A7: the agent builder.
+pub mod agent_builder;
 // Plan 16 A5: the agent marketplace.
 pub mod agent_parts;
 pub mod assets;

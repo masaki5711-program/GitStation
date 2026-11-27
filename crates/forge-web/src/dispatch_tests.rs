@@ -1258,6 +1258,9 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         // Plan 20 W2 / N1: the first commit of a new wiki or notes project —
         // forge-git's file_commit (commit_root_files) API only.
         "routes/first_commit.rs",
+        // Plan 16 A7: the builder's commit — forge-git's file_commit
+        // (commit_tree_change), refs and browse API only, decided like a push.
+        "routes/agent_builder.rs",
         "git_stream.rs",
     ];
     let mut used_in = Vec::new();

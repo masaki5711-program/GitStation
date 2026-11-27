@@ -68,6 +68,17 @@ pub fn agent(cli: &Cli, cmd: &AgentCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> 
         // Plan 16 A5: the server's public keys (the one `agent` subcommand
         // that calls the server).
         AgentCommand::Keys => crate::part::keys(cli, env, io),
+        // Plan 16 A7: the builder.
+        AgentCommand::Status { project } => crate::builder::status(cli, *project, env, io),
+        AgentCommand::Recommend { project } => crate::builder::recommend(cli, *project, env, io),
+        AgentCommand::Preview { project, select } => {
+            crate::builder::build(cli, *project, select, None, env, io)
+        }
+        AgentCommand::Apply {
+            project,
+            select,
+            title,
+        } => crate::builder::build(cli, *project, select, Some(title.as_deref()), env, io),
     }
 }
 

@@ -281,3 +281,74 @@ forge-auth / forge-git / forge-db → forge-core → forge-agent）。利用者�
 - （MEDIUM、受け入れ）目録の読み取りはインスタンス全体（A4 の LOW のとおり）。
 - （LOW、受け入れ）部品のリポジトリの設定を変えると、古い版は昇格・取り消しのローダーで 404 になる（閉じる側。設定を戻すか、
   A9 で管理者の取り消しの道を足す）。
+
+## Amendment（2026-11-27、A7 `feat/core-marketplace-compile`: 生成・Dry-Run・ボットのコミットの MR・規則だけの推薦・`forge/agent-lock`）
+
+計画 16 A7 を入れた。利用者は不在で「推奨を選ぶ」と言っているので、計画に書かれていない点は次のとおり決めた。
+
+1. **生成は純粋な `forge_agent::compile`**（`compile_is_deterministic`: 選んだ順によらず同じバイト列）。最初に部品ごとに確かめる（生成のときの
+   確かめ、3 か所の 1 つ目）: `part.toml` の欄の lint、ファイルの中身から作り直した要約が DB の要約と同じ（違えば 0002 `digest_mismatch`。
+   DB の行を書き換えても通らない）、署名が DB の鍵で通る（0002 / 0003）。次に選び方: slug は 1 回、`adapter`（ベースモデル）はちょうど 1 つ
+   （`adapter_missing` / `adapter_multiple`）、`requires` の `slug@range` は選んだ版で満たす（`requirement_unmet`）。範囲は `^`・`~`・`=`・
+   `>=`・`>`・`<=`・`<`・`*`・素の版（`^` と同じ）を `,` か空白で並べる。pre-release は `=` で名指ししたときだけ当たる。誤りは新しいコード
+   **FG-AGENT-0008** SelectionUnresolved（422）。
+2. **同じパスを 2 つの部品が書く**のは `.claude/settings.json` と `.mcp.json` だけ: slug の順に JSON のオブジェクトを深くまとめる（鍵は和、
+   配列はつなげて同じ要素は 1 つ、違うスカラーは `merge_conflict`）。他のパスは `path_conflict`（`custom` のパスとも）。
+   **決定 6 の「生成したファイルの欄」は作らない**: 代わりに、まとめたファイルの元の部品ごとのファイルの欄に、その部品の文 `content` を lock に
+   入れる。`verify_lock` は `content` の SHA-256 が署名した要約の固定する値と同じこと（違えば 0002 `merge_source_mismatch`）を確かめ、
+   まとめ直した結果と作業ツリーのファイルを比べる（`file_changed`）。こうすると `gstn agent verify`・`forge/agent-lock`・生成の 3 か所が
+   署名したバイト列だけから同じ判定をし、署名する場所（鍵の種を読む所）を増やさない。lock は `schema_version: 1` のまま（`content` は
+   任意の欄。古い gstn は知らない鍵として閉じる側に倒れる）。
+3. **アダプター**は `kind = "adapter"` の部品で、中身はベースモデルのファイル（`CLAUDE.md`・`.claude/settings.json` など）、`requires` が
+   ベースモデルに要る部品。計画 09 の `target-adapter.yaml`（出力の場所と形式）は A7 では作らない: 出力は「コピー」と「JSON のまとめ」の
+   2 つで足り、置き場所は部品のパスそのもの。A6 のアダプター 2 つ（`claude-code-v2`・`claude-code-tmux`）はこの形で作る。
+4. **推薦は規則だけ**（`forge_agent::recommend`、`source: "rules"`）: 既定の枝の lock のアダプター（無ければ `claude-code-v2`、
+   `reason=base_model`）、lock の部品（`current_lock`、安定版が無いものは `unavailable` に出す。黙って落とさない）、それらの `requires` を
+   たどったもの（`required_by=<slug>`）。どれも取り消していない最新の stable。`project_type`（ADR-0023 で種類は廃止）と仕様書のタグは、
+   部品の側に合わせる欄が無いので使わない（A11 の LLM の推薦と合わせて決める）。
+5. **経路**（GitStation の API に合わせて `projects/{id}` の下。計画の `repos/{id}` から変えた）:
+   `GET /api/v1/projects/{id}/agent-builder`（ビルドの記録、`AgentBuilderDryRun`。A4 の LOW「状態の読み取りの Action」はこれに決めた）、
+   `POST …/agent-builder/recommend`（`AgentBuilderRecommend`。登録の Action は `RepoRead` で、経路の中で既定の先端の丸ごとの写しとして
+   判定する: `forge_auth::authorize_agent_recommend`、`DECIDED_IN_ROUTE`）、`POST …/agent-builder/preview`（Dry-Run、`AgentBuilderDryRun`）、
+   `POST …/agent-builder/compile`（`AgentBuilderCompile`、人だけ）。計画の `compile {dry_run}` は **2 つの経路に分けた**（Action が違うので、
+   本文を読んでから判定を選ぶ仕組みを作らない）。`forge.agent_builds` に記録するのはビルドと失敗した Dry-Run だけ（通った Dry-Run は何も変えないので
+   記録しない。エージェントのトークンでも呼べるので、表を増やさない）。
+6. **ボットのコミットの MR**: 作者・コミッターは `forge-agent-builder <agent-builder@forge.invalid>`、push の記録は頼んだ人
+   （`repository.pushed` の監査・イベント。パイプライン・MR の版はいつもの push と同じに続く）。枝は `agent-builder/<lock の要約の 16 進 12 桁>`
+   （既定の枝の先端から）。ref の更新は頼んだ人の push と同じに判定（`authorize_ref_updates`、保護ブランチの規則）、書くファイルは全部
+   push の秘密の規則（FG-GIT-0022）、同じ名前の枝の先端がこのビルドの lock とファイルをそのまま持つなら、コミットを作らずに MR を開くことだけをやり直す（要求が
+   コミットの後で切れた・MR を開けなかったときの再開。push の記録は最初の要求のもの）。違う中身の枝なら FG-GIT-0027 `branch_exists`、何も
+   変わらなければ FG-GIT-0031。MR を開けなかったビルドは `failed` と記録する。1 回のコミットで 500 パスを超えるビルドは FG-AGENT-0008 `too_many_files`。MR の作成者は
+   頼んだ人（`MergeRequestCreate`）。ビルドは管理する範囲を持つ: 先端の管理するファイルで出力に無いもの（手で足したもの、symlink）は消す
+   （Dry-Run に `removed` と出る）。先端の lock の `custom` で中身が同じものは残す。
+7. **`forge/agent-lock`**（3 か所の 2 つ目）は新しいジョブを作らず、`check.risk` のジョブが `forge/risk` と同じ head に書く
+   （`forge_checks::agent_lock`）。管理する範囲（ルートの、大文字・小文字を畳んだ `.claude`・`CLAUDE.md`・`.mcp.json` と
+   `.gitstation/agent.lock.json`。`forge_git::browse::Browser::agent_config`、symlink・submodule は `not_a_regular_file`）を読み、
+   `verify_lock` と、lock の版が DB に公開されていて要約が同じで取り消していないこと（0002 `not_published` / `digest_mismatch`、0006 `revoked`）。
+   管理するファイルも lock も無い head は `success`。読み切れない（2000 ファイル・8 MiB 超、一覧の打ち切り）は `failure`。
+8. **`agent_config` の例外**（ADR-0017 Amendment A7）: `forge/risk` の `agent_config` のうち、管理するパスか lock のパスのものは、その commit の
+   `forge/agent-lock` が通るとき新しい規則 **`agent_config_locked`**（warn）になる（マージ結果の判定でも、その結果の commit で確かめる）。
+   それ以外（`.gitstation/**` の他のファイル、入れ子の `CLAUDE.md`、`.claude` へのリンク、畳むと `.claude` になる名前）は `stop` のまま。
+9. **`custom` の承認は作らない**: コードを動かしうる `custom` は今までどおり `custom_unverified`（サーバーでも失敗）。
+
+### A7 の独立レビュー（2026-11-27、security-reviewer・rust-reviewer）で変えた点
+
+- （security CRITICAL、直した）自動マージが Maintainer を待つかを `forge/risk` の要約の行で読むので、発見の上限（1 つの target に 1000）や
+  要約の大きさ（64 KiB）で `agent_config_locked` の行が切られると待たずに入りえた。`sort_findings` で `agent_config_locked` を warn の
+  先頭に並べ（stop の次）、要約が切られている（`…` で終わる）ときも Maintainer を待つ（閉じる側）。
+- （security HIGH、直した）lock の `custom`（署名も公開もしていない手のファイル）がプレーンな Markdown なら `forge/agent-lock` は通るので、
+  例外がそれにも効いていた。**`custom` を 1 つでも持つ lock では `agent_config` を `stop` のまま**にする（`forge/agent-lock` は緑のまま。
+  承認の確かめは後の MR）。テスト `a_lock_with_hand_added_custom_files_keeps_the_stop`。
+- （rust HIGH 2 件、直した）コミットの後で要求が切れた・MR を開けなかったビルドは、同じ選択でもう一度頼むと再開する（6 の枝の再利用）。
+  MR を開く呼び出しに時間の上限。`.gitstation` の一覧の打ち切りを `tree_unreadable` に。500 パス超は FG-AGENT-0008 `too_many_files`。
+  通った Dry-Run は記録しない。
+- （security MEDIUM・rust LOW、残す）Markdown の front matter の `allowed-tools`・`permissionMode` は静的な検査が見ていない（`custom` は
+  上のとおり例外にしないので、A7 では影響なし）。`recommend` は版を戻ってやり直さない（選んだ版が後の範囲に合わなければ
+  `requirement_unmet`）。
+
+### 残すこと
+
+- 自動マージの Maintainer の承認は、キューに入れるときに読む（着地の判定はマージ結果の危険と lock を確かめ直すが、承認は読み直さない）。
+- `gstn agent recommend|preview|apply|status`（計画 §6）と画面は A8。更新・世代の移行・取り消しの更新 MR は A9。
+- ADR-0017 Amendment 2026-11-12 の残り: `CLAUDE.md` の `@` が `.claude` の外のファイルを取り込む変更は、まだ `agent_config` に当たらない。
+- A5 の MEDIUM（tag の裏の人に MR の作成者・承認者を足す）はこの MR では入れていない。

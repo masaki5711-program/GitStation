@@ -224,6 +224,24 @@ pub(crate) async fn decide_copy(
     authorize_repo_copy(proof, measured.mark).map_err(|e| refusal_context(e, repo, &measured))
 }
 
+/// Plan 16 A7: the agent builder's recommendation, decided like a copy
+/// of the tip (`forge_auth::authorize_agent_recommend`): an agent audience
+/// is measured, a person is not.
+pub(crate) async fn decide_agent_recommend(
+    smart: &SmartHttp,
+    proof: &Authorized<ProjectCtx>,
+    repo: RepoId,
+    principal_key: &str,
+) -> Result<(), ForgeError> {
+    let measured = if proof.principal().is_agent_audience() {
+        measure(smart, repo, principal_key, &smart.copy_limits).await
+    } else {
+        Measured::plain(CopyMark::NotMeasured)
+    };
+    forge_auth::authorize_agent_recommend(proof, measured.mark)
+        .map_err(|e| refusal_context(e, repo, &measured))
+}
+
 pub(crate) fn refusal_context(
     mut err: ForgeError,
     repo: RepoId,

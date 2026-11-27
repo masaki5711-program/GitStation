@@ -19,8 +19,10 @@
 //!   `CLAUDE.md` at any level, `.mcp.json` or `.gitstation/**` (names as a
 //!   developer's file system folds them), or a symlink resolving to one;
 //!   and `submodule_change`, a gitlink added or changed. They have no
-//!   exemption yet; the required `forge/agent-lock` check (plan 16 MR A7)
-//!   adds one for a change whose lock check is green.
+//!   exemption but one (plan 16 A7, ADR-0017 Amendment A7): an
+//!   `agent_config` finding on a managed path of a commit whose
+//!   `forge/agent-lock` verifies is `agent_config_locked`, a `warn`
+//!   (forge-checks decides it; auto-merge then waits for a Maintainer).
 //! - `warn` — authentication / permission code, CI or deploy
 //!   configuration, a dependency manifest, a new migration, a symlink or a
 //!   submodule, an object dropped or a privilege changed in SQL. The merge
@@ -155,6 +157,14 @@ pub const RULES: &[Rule] = &[
         "agent_config",
         RiskLevel::Stop,
         "a Claude Code configuration (.claude, CLAUDE.md, .mcp.json or .gitstation) changed; it runs on developers' PCs, so a person reviews it",
+    ),
+    // Plan 16 A7 (ADR-0017 Amendment A7): an `agent_config` change of a
+    // managed path that `forge/agent-lock` verified. Auto-merge then waits
+    // for a Maintainer's approval instead of stopping.
+    rule(
+        "agent_config_locked",
+        RiskLevel::Warn,
+        "a Claude Code configuration changed, exactly as the signed parts of .gitstation/agent.lock.json (forge/agent-lock verified it); a Maintainer approves it before it merges",
     ),
     rule(
         "submodule_change",
@@ -316,9 +326,14 @@ pub fn level(findings: &[Finding]) -> RiskLevel {
 /// Worst first, then by path, line and rule: a stable order for the
 /// summary and for the annotations a run can hold.
 pub fn sort_findings(findings: &mut [Finding]) {
+    // Plan 16 A7 (security review): `agent_config_locked` sorts first among
+    // the warnings, so no cut (the per-target cap, the summary's size) can
+    // drop the line auto-merge waits for a Maintainer on.
+    let key = |f: &Finding| f.rule != "agent_config_locked";
     findings.sort_by(|a, b| {
-        (Reverse(a.level), &a.path, a.line, a.rule).cmp(&(
+        (Reverse(a.level), key(a), &a.path, a.line, a.rule).cmp(&(
             Reverse(b.level),
+            key(b),
             &b.path,
             b.line,
             b.rule,

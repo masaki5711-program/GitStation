@@ -715,3 +715,68 @@ async fn root_files_need_at_least_one_file() {
         .await
         .is_err());
 }
+
+/// Plan 16 A7: the builder's commit writes and removes several files on a
+/// parent, as one commit on a new branch; an existing branch is never
+/// overwritten.
+#[tokio::test]
+async fn a_tree_change_writes_and_removes_on_a_new_branch() {
+    let f = fixture().await;
+    let parent = sample(&f.path);
+    let branch = RefName::parse("refs/heads/agent-builder/1").expect("ref");
+    let hook = FilePath::parse(".claude/hooks/fmt.js").expect("path");
+    let lock = FilePath::parse(".gitstation/agent.lock.json").expect("path");
+    let gone = FilePath::parse("docs/guide/intro.md").expect("path");
+    let writes = [(hook, &b"process.exit(0);\n"[..]), (lock, &b"{}\n"[..])];
+    let removes = [gone];
+    let author = ident("Builder");
+    let change = TreeChange {
+        parent: &parent,
+        branch: &branch,
+        writes: &writes,
+        removes: &removes,
+        message: "Build the agent configuration",
+        author: &author,
+        committer: &author,
+    };
+    let commit = f
+        .git
+        .commit_tree_change(&f.root, f.id, &change, T)
+        .await
+        .expect("commit");
+    let head = f
+        .git
+        .read_ref(&f.root, f.id, &branch, T)
+        .await
+        .expect("read");
+    assert_eq!(head, Some(commit.clone()));
+    let listed = plumb(
+        &f.path,
+        &["ls-tree", "-r", "--name-only", commit.as_str()],
+        None,
+    );
+    let names: Vec<&str> = listed.lines().collect();
+    assert!(names.contains(&".claude/hooks/fmt.js"), "{names:?}");
+    assert!(names.contains(&".gitstation/agent.lock.json"), "{names:?}");
+    assert!(names.contains(&"README"), "the rest is kept: {names:?}");
+    assert!(!names.contains(&"docs/guide/intro.md"), "{names:?}");
+    let parents = plumb(
+        &f.path,
+        &["rev-list", "--parents", "-n", "1", commit.as_str()],
+        None,
+    );
+    assert!(parents.contains(parent.as_str()), "{parents}");
+    // The branch exists now: never overwritten.
+    assert!(f
+        .git
+        .commit_tree_change(&f.root, f.id, &change, T)
+        .await
+        .is_err());
+    let head = f
+        .git
+        .read_ref(&f.root, f.id, &branch, T)
+        .await
+        .expect("read");
+    assert_eq!(head, Some(commit));
+    let _ = &f.home;
+}

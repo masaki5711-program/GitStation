@@ -40,12 +40,22 @@ pub const SPEC_DRIFT_CHECK: &str = "forge/spec-drift";
 /// assessed); `failure` — a `stop` rule. Reported by forge's worker only.
 pub const RISK_CHECK: &str = "forge/risk";
 
+/// `forge/agent-lock` (plan 16 A7, ADR-0032 Amendment A7): whether a
+/// commit's Claude Code configuration (`.claude/**`, `CLAUDE.md`,
+/// `.mcp.json`) is exactly what `.gitstation/agent.lock.json` pins, every
+/// part signed with a registered key, published and not revoked
+/// (`success`; also with no configuration at all) or not (`failure`).
+/// Written by the `check.risk` job beside `forge/risk`. Reported by
+/// forge's worker only.
+pub const AGENT_LOCK_CHECK: &str = "forge/agent-lock";
+
 /// The `forge/` names forge's own worker reports (never over HTTP: the
 /// `CheckWrite` route refuses `forge/` to everyone, ADR-0024 §10). A
 /// required `forge/` name outside this list has no reporter.
 pub const FORGE_REPORTED_CHECKS: &[&str] = &[
     SPEC_DRIFT_CHECK,
     RISK_CHECK,
+    AGENT_LOCK_CHECK,
     SPEC_LINT_CHECK,
     SPEC_TRACE_CHECK,
     DOC_LINT_CHECK,
@@ -104,6 +114,7 @@ pub const CI_PIPELINE_CHECK: &str = "ci/pipeline";
 pub const SYSTEM_REPORTED_CHECKS: &[&str] = &[
     SPEC_DRIFT_CHECK,
     RISK_CHECK,
+    AGENT_LOCK_CHECK,
     SPEC_LINT_CHECK,
     SPEC_TRACE_CHECK,
     DOC_LINT_CHECK,

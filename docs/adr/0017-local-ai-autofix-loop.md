@@ -1504,3 +1504,16 @@ LLM の修正とともに M5 で入れる。
 - 「AI 変更」タブ、P-9 の `autofix`、`forge doctor` の `autofix.stuck_attempts` / `autofix.orphan_candidate_refs`、指標 `forge_autofix_*`、
   試行の期限（2 時間）、緊急停止 `AutofixPause`（インスタンス全体。今はプロジェクトごとの無効化だけ）、MR ごとの有効・無効。
 - §2.2 のテストを弱めない判定（JUnit の件数）は候補のパイプラインとともに M5。
+
+## Amendment（2026-11-27、計画 16 A7）: `agent_config` の例外 — `forge/agent-lock` が緑の変更
+
+**出どころ**: 計画 16 §9 の 1（2026-11-12、利用者が推奨を承認）「`forge/agent-lock` が緑なら外す例外は A7 で足す」と「ビルダーの MR も
+Maintainer の人の承認を 1 つ要る」。詳細は ADR-0032 Amendment A7。
+
+- `forge/risk` の `agent_config` の発見のうち、パスが管理する範囲（`.claude/**`・ルートの `CLAUDE.md`・`.mcp.json`、大文字・小文字を問わない）か
+  `.gitstation/agent.lock.json` のものは、**同じ commit の `forge/agent-lock` が通るとき** warn の規則 `agent_config_locked` になる
+  （「署名した部品のとおりの設定の変更。Maintainer が承認してからマージ」）。他の `agent_config`、`submodule_change` は今までどおり `stop`。
+- 自動マージは `agent_config_locked` の head を、**作成者でない、いま Maintainer 以上の、有効な人が、この head そのものに（持ち越しでなく、
+  代理でなく）承認する**まで `waiting reason=agent_config_approval` にする（`full`・`conditional` のどちらでも。テスト
+  `builder_mr_not_auto_merged`）。承認があれば警告付きでキューに入る。
+- 着地の前のマージ結果の判定でも同じ規則を当てる（マージ結果の commit で lock を確かめる）。

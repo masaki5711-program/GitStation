@@ -100,6 +100,7 @@ export function stateKind(s: AutoMergeState): LineKind {
         case 'approvals_missing':
         case 'codeowner_approval_missing':
         case 'config_change_needs_maintainer_approval':
+        case 'agent_config_approval': // plan 16 A7: a verified agent configuration waits for a Maintainer
           return 'approvals';
         case 'protected_path':
           return 'protected_path';

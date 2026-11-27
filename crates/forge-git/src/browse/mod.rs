@@ -75,6 +75,7 @@ use crate::refs_cache::RefSnapshotCache;
 use crate::storage::StorageRoot;
 
 // Plan 16 A5: the marketplace's publish reads.
+mod agent_config;
 mod agent_part;
 mod blame;
 mod branches;
@@ -88,6 +89,7 @@ mod refs;
 mod scan;
 mod tree;
 
+pub use agent_config::AgentConfigListing;
 pub use agent_part::{PartEntry, PartListing, TagIdentities};
 pub use blame::{Blame, BlameCommit, BlameHunk};
 pub use content::{ArchiveFormat, Blob, RawBlob, RawBody, SmallFile};

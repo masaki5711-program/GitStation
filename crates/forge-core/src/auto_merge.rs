@@ -522,7 +522,17 @@ pub struct Facts {
     /// `conditional` only: a changed path is protected (or the changed
     /// paths could not be read).
     pub protected_path: bool,
+    /// Plan 16 A7: the head's `forge/risk` names `agent_config_locked` (a
+    /// verified agent configuration change).
+    pub agent_config_locked: bool,
+    /// An approval of the head by a person who is a Maintainer (or more)
+    /// of the project and not the merge request's author.
+    pub maintainer_approved: bool,
 }
+
+/// The waiting reason of a verified agent configuration change without a
+/// Maintainer's approval (plan 16 §9 item 1, ADR-0017 Amendment A7).
+pub const AGENT_CONFIG_APPROVAL: &str = "agent_config_approval";
 
 /// What auto-merge does with the merge request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -758,6 +768,14 @@ pub fn decide(facts: &Facts) -> Verdict {
     if facts.mode == AutoMergeMode::Conditional && facts.protected_path {
         return Verdict::Waiting {
             reason: "protected_path",
+        };
+    }
+    // Plan 16 §9 item 1: even a verified agent configuration (the
+    // builder's merge request) runs on every developer's PC — one
+    // Maintainer who is not its author approves it first, in any mode.
+    if facts.agent_config_locked && !facts.maintainer_approved {
+        return Verdict::Waiting {
+            reason: AGENT_CONFIG_APPROVAL,
         };
     }
     Verdict::Enqueue { warned }

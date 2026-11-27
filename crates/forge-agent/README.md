@@ -16,6 +16,9 @@ Ed25519 の署名の確かめ、フック・設定・MCP の静的な検査。I/
 | `KeyRing::parse(bytes)` | 公開鍵の一覧 `{"keys":[{"kid","public_key","created_at","retired_at","revoked_at"}]}` |
 | `scan(&Part, &ScanPolicy) -> Vec<Problem>` | 静的な検査（ADR-0032 Amendment 2026-11-14）。宣言していない `exec`・`network`・`permissions`・`fs-write`、settings.json の許可の一覧に無い鍵、`node <部品のスクリプト>` の形でないフックのコマンド、見通せないコード（`dynamic_code`、宣言しても断る）は FG-AGENT-0005、許可の一覧に無い MCP のホストは FG-AGENT-0013 |
 | `Lock::parse(bytes)` / `verify_lock(&Lock, &KeyRing, &tree)` | lock と作業ツリー（管理するファイルの path → バイト）。ファイルの SHA-256 → 要約 → 署名の鎖。不一致は FG-AGENT-0007 |
+| `compile(&CompileInput) -> Result<Compiled, Vec<Problem>>`（A7） | ビルダーの生成。部品ごとに要約・署名を確かめ、アダプター 1 つ・`requires` の範囲・パスのぶつかりを見て、管理するファイルと lock のバイト列を作る（決定的）。`.claude/settings.json`・`.mcp.json` は slug の順にまとめ、lock に元の文 `content` を入れる。選べないものは FG-AGENT-0008 |
+| `recommend(&[CatalogVersion], adapter, current)`（A7） | 規則だけの推薦: ベースモデル、lock の部品、`requires` をたどった最新の stable |
+| `Version` / `Range` / `split_require` | `requires` の版と範囲（`^`・`~`・`=`・比較・`*`） |
 | `worst(&[Problem])` | 終了コードに使う、いちばん重い問題（0002 → 0003 → 0005 → 0013 → 0007 → 0001） |
 
 `Problem` は `code`（登録したコード）、`reason`（安定した snake_case）、`subject`（パス・ホスト・kid。ファイルの中身は入れない）。
@@ -28,11 +31,13 @@ Ed25519 の署名の確かめ、フック・設定・MCP の静的な検査。I/
 | FG-AGENT-0002 | PartSignatureInvalid（alert） | `agent-supply-chain` |
 | FG-AGENT-0003 | SigningKeyUnavailable（alert） | `agent-signing-key` |
 | FG-AGENT-0005 | PartCapabilityUndeclared | — |
-| FG-AGENT-0007 | AgentLockMismatch | — |
+| FG-AGENT-0007 | AgentLockMismatch | `agent-lock` |
+| FG-AGENT-0008 | SelectionUnresolved | — |
 | FG-AGENT-0013 | McpEndpointNotAllowed | — |
 
 ## 試験
 
 `cargo nextest run -p forge-agent`（`src/tests.rs`: 計画 16 A1 の `manifest_rejects_path_outside_claude_dir`・`digest_is_independent_of_file_order`・
 `verify_rejects_one_byte_change`・`scan_flags_undeclared_child_process`・`mcp_external_host_rejected` ほか。`tests/purity.rs`: 依存）。
-`gstn agent verify` の通しの試験は `crates/forge-client/tests/agent.rs`。
+`gstn agent verify` の通しの試験は `crates/forge-client/tests/agent.rs`。A7 の `src/compile_tests.rs`: `compile_is_deterministic`・
+`lock_check_fails_on_hand_edited_hook`・`compile_refuses_conflicting_paths` ほか。

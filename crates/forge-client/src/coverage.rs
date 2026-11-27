@@ -56,6 +56,27 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         Coverage::BrowserOnly("sessions only: a person revokes in the browser (FG-AUTH-0002 session_required); gstn part revoke names the page"),
     ),
     ("GET", "/api/v1/agent-keys", Coverage::Command("agent keys")),
+    // Plan 16 A7 (ADR-0032 Amendment A7): the agent builder.
+    (
+        "GET",
+        "/api/v1/projects/{id}/agent-builder",
+        Coverage::Command("agent status"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/agent-builder/recommend",
+        Coverage::Command("agent recommend"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/agent-builder/preview",
+        Coverage::Command("agent preview"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/agent-builder/compile",
+        Coverage::Command("agent apply"),
+    ),
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
     // The gstn distribution: the browser download and the desktop setup
     // tool fetch it; `gstn self-update` is reserved, not implemented.

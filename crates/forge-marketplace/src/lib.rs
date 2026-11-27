@@ -32,6 +32,10 @@
 //! administrator, a reason 1..=500 characters; final) are audited changes
 //! of the version's row.
 //!
+//! **Building** (plan 16 A7, [`builder`]): a project's Claude Code
+//! configuration from published versions — the Dry-Run plan, the build's
+//! record, the rules-only recommendation.
+//!
 //! The server-decided hook test job of plan 16 A5 is not built yet
 //! (ADR-0032 Amendment A5: the follow-up A5b); until then the pipeline of
 //! the parts repository is what must be green.
@@ -58,6 +62,12 @@ use forge_db::change::{Actor, ChangeContext};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{Browser, EntryKind as GitKind, ListedBlob, RefLookup, RepoPath};
+
+// Plan 16 A7: the agent builder (Dry-Run, the build, the recommendation).
+pub mod builder;
+pub use builder::{BuildPlan, FileChange, PlannedPart, Selected, BUILDER_EMAIL, BUILDER_NAME};
+pub use forge_agent::{Recommendation, Recommended};
+pub use forge_db::agent_builder::{BuildOutcome, StoredBuild};
 
 /// The stored rows the routes show (forge-web does not depend on
 /// forge-db).

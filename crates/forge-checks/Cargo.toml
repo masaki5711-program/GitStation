@@ -13,6 +13,8 @@ publish.workspace = true
 # another feature crate: forge-review reads the runs through forge-core's
 # `CheckResultsSource`.
 [dependencies]
+# Plan 16 A7: `forge/agent-lock` runs forge-agent's verify_lock (pure).
+forge-agent.workspace = true
 forge-auth.workspace = true
 # Plan 14 C1: the pipeline definition lint (`forge/ci-lint`), pure.
 forge-ci.workspace = true
