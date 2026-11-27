@@ -161,7 +161,7 @@ pub use prove::{
     UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
-pub use repo_copy::authorize_repo_copy;
+pub use repo_copy::{authorize_agent_recommend, authorize_repo_copy};
 pub use spec_ref::{prove_spec_ref, prove_spec_ref_for_every_person};
 pub use viewer::{
     ActAsTipGate, ActAsTrial, ActAsViewer, MergeRequestViewer, MergeSettingsViewer,

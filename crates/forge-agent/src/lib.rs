@@ -17,18 +17,28 @@
 //!   tree's managed files and the keys.
 //! - [`import`]: seeding the marketplace (A6) — W1 `part.json` parts and
 //!   Claude Code trees as `part.toml` parts, the two adapter parts.
+//! - [`compile`] (A7): signed part versions → the managed files and the
+//!   lock, deterministic; [`recommend`]: the rules-only recommendation
+//!   (the base model and what it requires, the current lock's parts).
 //!
 //! Every finding is a [`Problem`]: a registered `FG-AGENT-*` code, a stable
 //! `reason` and an optional subject (a path, a host, a kid).
 
+mod compile;
 mod digest;
 pub mod import;
 mod lock;
 mod manifest;
 mod path;
+mod recommend;
 mod scan;
+mod semver;
 mod sign;
 
+pub use compile::{
+    compile, is_merged_path, merge_json, CompileInput, Compiled, CustomFile, SourcePart,
+    MAX_MERGE_SOURCE, MAX_SELECTED_PARTS, MERGED_PATHS,
+};
 pub use digest::{digest, Digest};
 pub use lock::{verify_lock, Lock, LockFile, LockPart, LockReport, LOCK_PATH};
 pub use manifest::{
@@ -36,7 +46,9 @@ pub use manifest::{
     MAX_PART_BYTES, MAX_PART_FILES,
 };
 pub use path::{case_key, check_install_path, is_managed_path, is_per_checkout_path};
+pub use recommend::{recommend, CatalogVersion, Recommendation, Recommended, DEFAULT_ADAPTER};
 pub use scan::{scan, ScanPolicy};
+pub use semver::{split_require, Range, Version};
 pub use sign::{
     public_key_from_seed, sign_digest, sign_digest_in, verify_signature, verify_signature_in,
     KeyRing, PublicKey, SignatureDomain, SIGNATURE_DOMAIN,
@@ -70,12 +82,13 @@ impl Problem {
     /// first code of the most serious problem is the one a caller exits
     /// with (tampering before keys before drift before form).
     pub fn rank(&self) -> usize {
-        const ORDER: [ErrorCode; 6] = [
+        const ORDER: [ErrorCode; 7] = [
             ErrorCode::PartSignatureInvalid,
             ErrorCode::SigningKeyUnavailable,
             ErrorCode::PartCapabilityUndeclared,
             ErrorCode::McpEndpointNotAllowed,
             ErrorCode::AgentLockMismatch,
+            ErrorCode::SelectionUnresolved,
             ErrorCode::PartManifestInvalid,
         ];
         ORDER
@@ -132,3 +145,7 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "compile_tests.rs"]
+mod compile_tests;

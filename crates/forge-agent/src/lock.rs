@@ -97,6 +97,11 @@ pub struct LockFile {
     /// For a `custom` file: who approved it (checked by the server, A7).
     #[serde(default)]
     pub approved_by: Option<String>,
+    /// For a part's file that several parts write together (a merged JSON
+    /// file, A7): this part's own text, whose SHA-256 is `sha256` — the
+    /// working-tree file is the merge of every part's text.
+    #[serde(default)]
+    pub content: Option<String>,
 }
 
 impl Lock {
@@ -146,15 +151,35 @@ pub fn verify_lock(lock: &Lock, ring_: &KeyRing, tree: &BTreeMap<String, Vec<u8>
     let mut pinned: BTreeSet<&str> = BTreeSet::new();
     let mut keys: BTreeSet<String> = BTreeSet::new();
 
+    let mut writers: BTreeMap<String, Vec<(&LockPart, &LockFile)>> = BTreeMap::new();
     for part in &lock.parts {
         report.parts += 1;
         let label = format!("{}@{}", part.slug, part.version);
         verify_part(part, &label, ring_, &mut report.problems);
         for f in &part.files {
-            check_file(f, tree, &mut pinned, &mut keys, &mut report);
+            writers
+                .entry(case_key(&f.path))
+                .or_default()
+                .push((part, f));
+        }
+    }
+    for group in writers.values() {
+        match group.as_slice() {
+            [(_, f)] => {
+                if f.content.is_some() {
+                    report.files += 1;
+                    report.problems.push(mismatch("lock_invalid", &f.path));
+                    continue;
+                }
+                check_file(f, tree, &mut pinned, &mut keys, &mut report);
+            }
+            _ => check_merged(group, tree, &mut pinned, &mut keys, &mut report),
         }
     }
     for f in &lock.custom {
+        if f.content.is_some() {
+            report.problems.push(mismatch("lock_invalid", &f.path));
+        }
         check_file(f, tree, &mut pinned, &mut keys, &mut report);
         // Security review A1, finding 6: a hand-added file nobody signed or
         // scanned is not "verified" while its approval cannot be checked
@@ -233,6 +258,71 @@ fn verify_part(part: &LockPart, label: &str, keys: &KeyRing, problems: &mut Vec<
             p.reason,
             Some(format!("{label} key {what}")),
         ));
+    }
+}
+
+/// A path several parts write (A7): every writer's text is pinned by its
+/// signed SHA-256, and the working-tree file is their merge in slug order
+/// (`crate::compile::merge_json`, the builder's own function).
+fn check_merged<'a>(
+    group: &[(&'a LockPart, &'a LockFile)],
+    tree: &BTreeMap<String, Vec<u8>>,
+    pinned: &mut BTreeSet<&'a str>,
+    keys: &mut BTreeSet<String>,
+    report: &mut LockReport,
+) {
+    report.files += group.len();
+    let Some((_, first)) = group.first() else {
+        return;
+    };
+    let path = first.path.as_str();
+    let mut slugs = BTreeSet::new();
+    let distinct = group.iter().all(|(p, _)| slugs.insert(p.slug.as_str()));
+    if !distinct
+        || group.iter().any(|(_, f)| f.path != path)
+        || !crate::compile::is_merged_path(path)
+    {
+        report.problems.push(mismatch("duplicate_path", path));
+        return;
+    }
+    if let Err(reason) = check_install_path(path) {
+        report
+            .problems
+            .push(Problem::about(ErrorCode::PartManifestInvalid, reason, path));
+        return;
+    }
+    if !keys.insert(case_key(path)) || !pinned.insert(path) {
+        report.problems.push(mismatch("duplicate_path", path));
+        return;
+    }
+    let mut sources: Vec<(&str, &[u8])> = Vec::with_capacity(group.len());
+    for (part, f) in group {
+        let (Some(text), Some(expected)) = (f.content.as_deref(), unhex32(&f.sha256)) else {
+            report.problems.push(mismatch("lock_invalid", path));
+            return;
+        };
+        if sha256(text.as_bytes()) != expected {
+            // The text is not what the part's signed digest pins.
+            report.problems.push(Problem::about(
+                ErrorCode::PartSignatureInvalid,
+                "merge_source_mismatch",
+                &format!("{path} ({})", part.slug),
+            ));
+            return;
+        }
+        sources.push((part.slug.as_str(), text.as_bytes()));
+    }
+    sources.sort_by(|a, b| a.0.cmp(b.0));
+    let Ok(expected) = crate::compile::merge_json(path, &sources) else {
+        report.problems.push(mismatch("lock_invalid", path));
+        return;
+    };
+    match tree.get(path) {
+        None => report.problems.push(mismatch("file_missing", path)),
+        Some(bytes) if *bytes != expected => {
+            report.problems.push(mismatch("file_changed", path));
+        }
+        Some(_) => {}
     }
 }
 

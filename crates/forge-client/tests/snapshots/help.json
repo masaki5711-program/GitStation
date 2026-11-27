@@ -7410,6 +7410,148 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn agent status --project 7"
+      ],
+      "name": "agent status",
+      "output": {
+        "required": [
+          "builds"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/agent-builder"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "A project's newest agent builds (at most 20): the state, the lock digest, Dry-Run or the merge request opened, the error code."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn agent recommend --project 7 --json"
+      ],
+      "name": "agent recommend",
+      "output": {
+        "required": [
+          "source",
+          "parts",
+          "unavailable"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/agent-builder/recommend"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The rules-only recommendation of agent parts for a project: the base model (the lock's adapter, else claude-code-v2), the lock's parts and what they require, each at its newest stable version, with the reason."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A part version, slug@version (exactly one adapter).",
+          "kind": "option",
+          "name": "--select",
+          "repeatable": true,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn agent preview --project 7 --select claude-code-v2@1.0.0 --select format-on-save@1.1.0"
+      ],
+      "name": "agent preview",
+      "output": {
+        "required": [
+          "target_branch",
+          "base_sha",
+          "lock_digest",
+          "lock",
+          "changes",
+          "parts"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/agent-builder/preview"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "The Dry-Run of an agent build: the published versions are verified and built, and compared with the default branch's tip (files added, modified, removed; each part's capabilities; the lock). Nothing is written. FG-AGENT-0008 when the selection cannot be built."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A part version, slug@version (exactly one adapter).",
+          "kind": "option",
+          "name": "--select",
+          "repeatable": true,
+          "required": true
+        },
+        {
+          "description": "The merge request's title.",
+          "kind": "option",
+          "name": "--title",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn agent apply --project 7 --select claude-code-v2@1.0.0 --select format-on-save@1.1.0"
+      ],
+      "name": "agent apply",
+      "output": {
+        "required": [
+          "preview",
+          "branch",
+          "commit_sha"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/agent-builder/compile"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Build the agent configuration as one commit of the builder bot on a new branch and open the merge request (a person's token only, Developer). forge/agent-lock verifies it; a Maintainer approves it before it merges."
+    },
+    {
+      "args": [
+        {
           "description": "skill, agent, rule, hook, command, mcp or adapter.",
           "kind": "option",
           "name": "--kind",

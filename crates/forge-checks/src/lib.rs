@@ -37,6 +37,8 @@ use forge_errors::{ErrorCode, ForgeError};
 
 // Plan 19 L5-5: the AI first-pass review's check run.
 pub mod ai_review;
+// Plan 16 A7: `forge/agent-lock`, the commit's Claude Code configuration verified.
+pub mod agent_lock;
 pub mod ci_lint;
 pub mod confidential;
 pub mod doc_lint;

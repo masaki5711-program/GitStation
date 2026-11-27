@@ -1012,6 +1012,164 @@ pub struct BranchFiles<'a> {
     pub author: &'a CommitIdentity,
 }
 
+/// The most paths one [`Git::commit_tree_change`] writes and removes.
+pub const MAX_TREE_CHANGE_FILES: usize = 500;
+
+/// Several files written and removed on top of `parent`, as ONE commit on
+/// a NEW branch (plan 16 A7: the agent builder's commit).
+#[derive(Debug, Clone)]
+pub struct TreeChange<'a> {
+    /// The commit the change is built on (the target's tip).
+    pub parent: &'a ObjectId,
+    /// The branch to create (it must not exist).
+    pub branch: &'a RefName,
+    /// (path, content), each checked like the editor's ([`FilePath`],
+    /// [`check_content`]): text only.
+    pub writes: &'a [(FilePath, &'a [u8])],
+    /// Paths removed (a path that is not there is refused by the check
+    /// below: the caller lists only what the parent holds).
+    pub removes: &'a [FilePath],
+    pub message: &'a str,
+    pub author: &'a CommitIdentity,
+    pub committer: &'a CommitIdentity,
+}
+
+impl Git {
+    /// Write `change` (the same plumbing as [`Git::write_file_commit`]: the
+    /// blobs on stdin, a temporary index read from the parent, the entries
+    /// and removals on stdin, `write-tree`, the tree checked to hold exactly
+    /// the writes and none of the removals, `commit-tree`) and create its
+    /// branch with ONE `update-ref` create (an existing branch is never
+    /// overwritten). Every step bounded by `timeout`. The caller decided
+    /// the ref update like a push before calling, and records it after.
+    pub async fn commit_tree_change(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        change: &TreeChange<'_>,
+        timeout: Duration,
+    ) -> Result<ObjectId, ForgeError> {
+        let count = change.writes.len() + change.removes.len();
+        if count == 0 || count > MAX_TREE_CHANGE_FILES {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "tree_change_count")
+                .with_context("count", count));
+        }
+        let zero = "0".repeat(change.parent.as_str().len());
+        let mut lines = String::new();
+        let mut entries = Vec::with_capacity(change.writes.len());
+        for (path, content) in change.writes {
+            let text = std::str::from_utf8(content).map_err(|_| {
+                ForgeError::new(ErrorCode::FileCommitNotText).with_context("reason", "not_utf8")
+            })?;
+            check_content(text, MAX_FILE_BYTES)?;
+            let blob = self.write_blob(storage, id, content, timeout).await?;
+            lines.push_str(&format!(
+                "100644 blob {}\t{}\n",
+                blob.as_str(),
+                path.as_str()
+            ));
+            entries.push((path, blob));
+        }
+        for path in change.removes {
+            lines.push_str(&format!("0 {zero}\t{}\n", path.as_str()));
+        }
+        let repo = storage.existing(id)?;
+        let dir = self.config().home.join(INDEX_DIR);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            ForgeError::new(ErrorCode::StorageIoFailed)
+                .with_context("operation", "file_commit_index_dir")
+                .with_source(e)
+        })?;
+        sweep_stale_indexes(&dir, STALE_INDEX_AGE);
+        let index = TempIndex(dir.join(format!("{}.index", uuid::Uuid::new_v4())));
+        let index_env = OsString::from(index.0.as_os_str());
+        let with_index = |sub: &'static str| {
+            self.command(sub)
+                .config_override("core.protectNTFS", "true")
+                .config_override("core.protectHFS", "true")
+                .env("GIT_INDEX_FILE", index_env.clone()) // clone: each command owns its environment
+                .repo(&repo)
+                .timeout(timeout)
+        };
+        let fail = |e: ForgeError| e.with_context("repo_id", id.get());
+        with_index("read-tree")
+            .revision(Revision::object_id(change.parent.as_str())?)
+            .output()
+            .await
+            .map_err(fail)?;
+        with_index("update-index")
+            .arg("--add")
+            .arg("--remove")
+            .arg("--index-info")
+            .stdin(lines.into_bytes())
+            .output()
+            .await
+            .map_err(|e| {
+                if e.code() == ErrorCode::GitProcessFailed {
+                    path_invalid("refused_by_git")
+                        .with_context("repo_id", id.get())
+                        .with_source(e)
+                } else {
+                    fail(e)
+                }
+            })?;
+        let out = with_index("write-tree").output().await.map_err(fail)?;
+        let tree = ObjectId::parse(String::from_utf8_lossy(&out.stdout).trim())
+            .map_err(|_| unexpected("write-tree"))?;
+        drop(index);
+        // git skips a path it refuses and still exits 0: every write must be
+        // in the tree, and no removal.
+        for (path, blob) in &entries {
+            let written = self
+                .ls_tree(&repo, &tree, path.as_str(), false, timeout)
+                .await
+                .map_err(fail)?;
+            if !written
+                .iter()
+                .any(|e| e.name == path.as_str() && e.kind == "blob" && e.oid == blob.as_str())
+            {
+                return Err(path_invalid("refused_by_git").with_context("repo_id", id.get()));
+            }
+        }
+        for path in change.removes {
+            let left = self
+                .ls_tree(&repo, &tree, path.as_str(), false, timeout)
+                .await
+                .map_err(fail)?;
+            if left.iter().any(|e| e.name == path.as_str()) {
+                return Err(path_invalid("removal_refused").with_context("repo_id", id.get()));
+            }
+        }
+        let commit = self
+            .commit_tree(
+                storage,
+                id,
+                &NewCommit {
+                    tree: &tree,
+                    parents: std::slice::from_ref(change.parent),
+                    message: change.message,
+                    author: change.author,
+                    committer: change.committer,
+                },
+                timeout,
+            )
+            .await?;
+        self.update_refs(
+            storage,
+            id,
+            &[RefChange::Create {
+                name: change.branch.clone(), // clone: the change owns its name
+                new: commit.clone(),         // clone: as above
+            }],
+            timeout,
+        )
+        .await
+        .map_err(fail)?;
+        Ok(commit)
+    }
+}
+
 #[cfg(test)]
 #[path = "file_commit_tests.rs"]
 mod tests;

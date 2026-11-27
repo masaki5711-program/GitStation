@@ -44,6 +44,32 @@ pub fn authorize_repo_copy(
     .map_err(|e| e.with_context("project_id", project.id().get()))
 }
 
+/// Plan 16 A7 (ADR-0032 Amendment A4 5): the agent builder's
+/// recommendation reads the default tip as a whole copy does —
+/// `authorize(<the proof's principal>, AgentBuilderRecommend, RepoCopy {
+/// <the proof's project>, mark })`, after the dispatcher's project-level
+/// `RepoRead`. The same `FG-SYS-0001` for another proof.
+pub fn authorize_agent_recommend(
+    project: &Authorized<ProjectCtx>,
+    mark: CopyMark,
+) -> Result<(), ForgeError> {
+    if project.action() != Action::RepoRead {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "proof_action_mismatch")
+            .with_context("route_action", Action::RepoRead.name())
+            .with_context("proof_action", project.action().name()));
+    }
+    authorize(
+        project.principal(),
+        Action::AgentBuilderRecommend,
+        &Resource::RepoCopy {
+            project: project.ctx().view(),
+            mark,
+        },
+    )
+    .map_err(|e| e.with_context("project_id", project.id().get()))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)] // tests may fail loudly
@@ -101,5 +127,29 @@ mod tests {
         ] {
             assert!(authorize_repo_copy(&person, mark).is_ok(), "{mark:?}");
         }
+    }
+
+    /// Plan 16 A7: the recommendation is the copy's rule on its own
+    /// action (an agent only on an open tip; never another proof).
+    #[test]
+    fn the_recommendation_is_decided_as_a_copy_of_the_tip() {
+        let api = |kind| {
+            Principal::authenticated(
+                UserId::new(1),
+                false,
+                true,
+                Credential::Token(vec![Scope::ReadApi, Scope::ReadRepository]),
+                kind,
+            )
+        };
+        let person = proof(api(AccountKind::Human), Action::RepoRead);
+        assert!(authorize_agent_recommend(&person, CopyMark::NotMeasured).is_ok());
+        let agent = proof(api(AccountKind::Human).as_agent(true), Action::RepoRead);
+        assert!(authorize_agent_recommend(&agent, CopyMark::Open).is_ok());
+        let err = authorize_agent_recommend(&agent, CopyMark::Confidential).expect_err("agent");
+        assert_eq!(err.code(), ErrorCode::RepositoryCopyWithheld);
+        let wrong = proof(api(AccountKind::Human), Action::RepoBrowse);
+        let err = authorize_agent_recommend(&wrong, CopyMark::Open).expect_err("proof");
+        assert_eq!(err.code(), ErrorCode::Internal);
     }
 }

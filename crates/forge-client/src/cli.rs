@@ -2543,6 +2543,38 @@ pub enum AgentCommand {
     /// The public keys that sign agent parts (GET /api/v1/agent-keys);
     /// --json prints the agent-keys.json `verify` reads.
     Keys,
+    /// A project's newest agent builds (plan 16 A7).
+    Status {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// The rules-only recommendation of parts for a project: the base
+    /// model, the lock's parts and what they require (newest stable).
+    Recommend {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// The Dry-Run of a build: the files it would add, change and remove,
+    /// each part's capabilities and the lock. Nothing is written.
+    Preview {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A part version, slug@version (repeat; exactly one adapter).
+        #[arg(long = "select", value_name = "SLUG@VERSION", required = true)]
+        select: Vec<String>,
+    },
+    /// Build the configuration as a merge request (a person's token only;
+    /// a Maintainer approves it before it merges).
+    Apply {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A part version, slug@version (repeat; exactly one adapter).
+        #[arg(long = "select", value_name = "SLUG@VERSION", required = true)]
+        select: Vec<String>,
+        /// The merge request's title.
+        #[arg(long, value_parser = parse_text)]
+        title: Option<String>,
+    },
 }
 
 /// `gstn part` (plan 16 A5, ADR-0032 Amendment A5): the marketplace's

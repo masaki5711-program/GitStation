@@ -516,11 +516,8 @@ pub const PLANNED: &[Action] = &[
     Action::LlmSettingsManage,
     Action::LlmPause,
     Action::LlmResume,
-    // Plan 16 §4 (A4): the builder's routes land with A7 and A10 (the
-    // marketplace's with A5).
-    Action::AgentBuilderRecommend,
-    Action::AgentBuilderDryRun,
-    Action::AgentBuilderCompile,
+    // Plan 16 §4 (A4): the lesson injection lands with A10 (the
+    // builder's routes with A7, the marketplace's with A5).
     Action::RuleInjectLesson,
 ];
 
@@ -538,6 +535,13 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
     (Action::SessionCreate, routes::auth::CALLBACK_PATH),
     (Action::SessionContinue, routes::session::PATH),
     (Action::WebhookDeliver, routes::webhooks::COLLECTION),
+    // Plan 16 A7: the recommendation reads the default tip as a whole copy
+    // does, decided in the route after the project-level `RepoRead`
+    // (`forge_auth::authorize_agent_recommend`, ADR-0032 Amendment A4 5).
+    (
+        Action::AgentBuilderRecommend,
+        routes::agent_builder::RECOMMEND,
+    ),
     // M4 C12 review: the second decision of a manual job's start when its
     // pipeline is protected (decided in the transaction).
     (Action::PipelinePlayProtected, routes::pipelines::PLAY),
@@ -757,7 +761,9 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
     ))));
     // ADR-0036: the PFS portal's home widgets; plan 20 W2: the wiki;
     // plan 20 N1: notes; plan 16 A5: the agent marketplace.
-    agent_part_routes(notes_routes(wiki_routes(portal_widget_routes(all))))
+    agent_builder_routes(agent_part_routes(notes_routes(wiki_routes(
+        portal_widget_routes(all),
+    ))))
 }
 
 /// A person's notes (plan 20 N1, ADR-0040 §6): create them, read the
@@ -856,6 +862,52 @@ fn agent_part_routes(registry: Registry<AppState>) -> Registry<AppState> {
             m::keys,
         )
         .responds::<m::AgentKeyListBody>(Verb::Get, m::KEYS)
+}
+
+/// The agent builder (plan 16 §6 A7, ADR-0032 Amendment A7): a project's
+/// Claude Code configuration from signed marketplace parts.
+fn agent_builder_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::agent_builder as b;
+    registry
+        .route_with(
+            Verb::Get,
+            b::STATUS,
+            Action::AgentBuilderDryRun,
+            "The project's newest agent builds (at most 20, newest first): the selection, the lock digest, Dry-Run or the merge request opened, the state and the error code (a Developer, an agent's token included)",
+            b::STATUS_OF,
+            b::status,
+        )
+        .responds::<b::BuildStatusBody>(Verb::Get, b::STATUS)
+        .route_with_body(
+            Verb::Post,
+            b::RECOMMEND,
+            Action::RepoRead,
+            "The rules-only recommendation of agent parts ({}): the base model (the lock's adapter at the default branch, else claude-code-v2), the lock's parts and what they require, each at its newest stable version, with selected_by=rule and the reason; source=rules. Decided as AgentBuilderRecommend on a whole copy of the default tip (an AI agent audience only when the tip is open, 403 FG-AUTH-0022); 422 FG-AGENT-0008 when the base model or a requirement has no stable version",
+            b::MAX_BODY,
+            b::RECOMMEND_OF,
+            b::recommend,
+        )
+        .responds::<b::RecommendBody>(Verb::Post, b::RECOMMEND)
+        .route_with_body(
+            Verb::Post,
+            b::PREVIEW,
+            Action::AgentBuilderDryRun,
+            "The Dry-Run of an agent build ({\"selection\": [{\"slug\", \"version\", \"selected_by\"?, \"reason\"?}]}): the published versions are verified (digest, signature) and built (forge-agent compile: one adapter, requirements met, .claude/settings.json and .mcp.json merged), compared with the default branch's tip: the files added, modified and removed, each part's capabilities and the lock. Writes nothing but the build's record. 422 FG-AGENT-0008 for a selection that cannot be built, 409 FG-AGENT-0006 for a revoked version (a Developer, an agent's token included)",
+            b::MAX_BODY,
+            b::PREVIEW_OF,
+            b::preview,
+        )
+        .responds::<b::BuildPreviewBody>(Verb::Post, b::PREVIEW)
+        .route_with_body(
+            Verb::Post,
+            b::COMPILE,
+            Action::AgentBuilderCompile,
+            "Build the agent configuration ({\"selection\", \"title\"?}) as the Dry-Run would, write it as one commit of the builder bot on a new branch agent-builder/<lock digest> from the default branch's tip (the ref update decided like the caller's push, the secret rules on every file, the push recorded for the caller) and open the merge request for the caller (201). forge/agent-lock verifies it and auto-merge waits for a Maintainer's approval. A person only (never an agent, a service account or a bot), Developer; 409 FG-GIT-0027 reason=branch_exists when the same build was asked for, 409 FG-GIT-0031 when nothing changes",
+            b::MAX_BODY,
+            b::COMPILE_OF,
+            b::compile,
+        )
+        .responds_created::<b::BuildCompiledBody>(Verb::Post, b::COMPILE)
 }
 
 /// A project's wiki (plan 20 W2, ADR-0040 §5): create and link, unlink;

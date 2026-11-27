@@ -1035,6 +1035,42 @@
     "word": "fixed"
   },
   {
+    "action": "AgentBuilderDryRun",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/agent-builder",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentBuilderCompile",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/agent-builder/compile",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentBuilderDryRun",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/agent-builder/preview",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoRead",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/agent-builder/recommend",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/ai-assets",
@@ -3252,18 +3288,6 @@
     "planned": true
   },
   {
-    "action": "AgentBuilderRecommend",
-    "planned": true
-  },
-  {
-    "action": "AgentBuilderDryRun",
-    "planned": true
-  },
-  {
-    "action": "AgentBuilderCompile",
-    "planned": true
-  },
-  {
     "action": "RuleInjectLesson",
     "planned": true
   },
@@ -3278,6 +3302,10 @@
   {
     "action": "WebhookDeliver",
     "decided_in": "/api/v1/projects/{id}/webhooks"
+  },
+  {
+    "action": "AgentBuilderRecommend",
+    "decided_in": "/api/v1/projects/{id}/agent-builder/recommend"
   },
   {
     "action": "PipelinePlayProtected",

@@ -17,7 +17,59 @@ fn clear_facts() -> Facts {
         doc_lint: DocLintState::Clear,
         blockers: Vec::new(),
         protected_path: false,
+        agent_config_locked: false,
+        maintainer_approved: false,
     }
+}
+
+// ── Plan 16 A7: a verified agent configuration waits for a Maintainer ──
+
+#[test]
+fn builder_mr_not_auto_merged() {
+    // The builder's merge request: forge/risk names agent_config_locked
+    // (forge/agent-lock verified it). Without a Maintainer's approval it
+    // waits, in every mode that acts; with one it is enqueued.
+    for mode in [AutoMergeMode::Full, AutoMergeMode::Conditional] {
+        let mut facts = clear_facts();
+        facts.mode = mode;
+        facts.risk = RiskVerdict::Clear { warned: true };
+        facts.agent_config_locked = true;
+        assert_eq!(
+            decide(&facts),
+            Verdict::Waiting {
+                reason: AGENT_CONFIG_APPROVAL
+            },
+            "{mode:?}"
+        );
+        facts.maintainer_approved = true;
+        assert_eq!(decide(&facts), Verdict::Enqueue { warned: true });
+    }
+}
+
+#[test]
+fn an_unverified_agent_config_change_still_stops() {
+    let mut facts = clear_facts();
+    facts.risk = risk_failure("agent_config");
+    facts.maintainer_approved = true;
+    assert!(matches!(
+        decide(&facts),
+        Verdict::Stopped(Stop {
+            class: StopClass::DeveloperPc,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn agent_config_locked_is_a_known_warn_rule() {
+    let summary =
+        "WARN: 0 stop, 1 warn.\n- warn agent_config_locked .claude/x — r [FG-REVIEW-0024]";
+    assert_eq!(warn_rules(summary), ["agent_config_locked"]);
+    assert_eq!(rule_class("agent_config_locked"), None);
+    assert_eq!(
+        deterministic_layer(run(CheckConclusion::Neutral), Some(summary)),
+        RiskVerdict::Clear { warned: true }
+    );
 }
 
 fn risk_failure(rule: &str) -> RiskVerdict {

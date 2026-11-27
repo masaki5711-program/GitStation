@@ -185,18 +185,25 @@ impl World {
             .await
             .expect("run");
         assert!(matches!(ran, Ran::Recorded(_)), "{ran:?}");
-        let mut runs = check_runs(
+        let run = self.run_named(head, forge_core::checks::RISK_CHECK).await;
+        assert_eq!(run.reported_by, None, "forge's own run has no reporter");
+        run
+    }
+
+    /// The run `name` on `head` (plan 16 A7: the risk job writes
+    /// `forge/risk` and `forge/agent-lock`, nothing else).
+    async fn run_named(&self, head: &str, name: &str) -> forge_db::checks::StoredCheckRun {
+        let runs = check_runs(
             &self.t.db,
             self.project,
             &ObjectId::parse(head).expect("sha"),
         )
         .await
         .expect("runs");
-        assert_eq!(runs.len(), 1, "{runs:?}");
-        let run = runs.remove(0);
-        assert_eq!(run.name.as_str(), forge_core::checks::RISK_CHECK);
-        assert_eq!(run.reported_by, None, "forge's own run has no reporter");
-        run
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        runs.into_iter()
+            .find(|r| r.name.as_str() == name)
+            .expect("the run")
     }
 }
 
@@ -376,6 +383,11 @@ async fn a_head_with_no_open_merge_request_is_neutral_and_not_assessed() {
     let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&head).expect("sha"))
         .await
         .expect("runs");
+    // Plan 16 A7: the job writes forge/agent-lock beside it.
+    let runs: Vec<_> = runs
+        .into_iter()
+        .filter(|r| r.name.as_str() == forge_core::checks::RISK_CHECK)
+        .collect();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].conclusion, Some(CheckConclusion::Neutral));
     assert!(
@@ -745,6 +757,11 @@ async fn more_changes_than_the_cap_are_a_stop_and_unread_files_are_counted() {
     let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&head).expect("sha"))
         .await
         .expect("runs");
+    // Plan 16 A7: the job writes forge/agent-lock beside it.
+    let runs: Vec<_> = runs
+        .into_iter()
+        .filter(|r| r.name.as_str() == forge_core::checks::RISK_CHECK)
+        .collect();
     assert_eq!(runs[0].conclusion, Some(CheckConclusion::Failure));
     assert!(
         runs[0].summary.contains("too_many_changes"),
@@ -763,6 +780,11 @@ async fn more_changes_than_the_cap_are_a_stop_and_unread_files_are_counted() {
     let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&head).expect("sha"))
         .await
         .expect("runs");
+    // Plan 16 A7: the job writes forge/agent-lock beside it.
+    let runs: Vec<_> = runs
+        .into_iter()
+        .filter(|r| r.name.as_str() == forge_core::checks::RISK_CHECK)
+        .collect();
     assert_eq!(
         runs[0].conclusion,
         Some(CheckConclusion::Neutral),
@@ -889,6 +911,11 @@ async fn an_unread_migration_or_deploy_file_is_a_stop() {
     let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&head).expect("sha"))
         .await
         .expect("runs");
+    // Plan 16 A7: the job writes forge/agent-lock beside it.
+    let runs: Vec<_> = runs
+        .into_iter()
+        .filter(|r| r.name.as_str() == forge_core::checks::RISK_CHECK)
+        .collect();
     assert_eq!(
         runs[0].conclusion,
         Some(CheckConclusion::Failure),
@@ -918,6 +945,11 @@ async fn an_unread_migration_or_deploy_file_is_a_stop() {
     let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&head).expect("sha"))
         .await
         .expect("runs");
+    // Plan 16 A7: the job writes forge/agent-lock beside it.
+    let runs: Vec<_> = runs
+        .into_iter()
+        .filter(|r| r.name.as_str() == forge_core::checks::RISK_CHECK)
+        .collect();
     // The deploy file is the one read; only the plain files are unread.
     assert_eq!(
         runs[0].conclusion,
@@ -946,6 +978,11 @@ async fn an_unread_migration_or_deploy_file_is_a_stop() {
     let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&two).expect("sha"))
         .await
         .expect("runs");
+    // Plan 16 A7: the job writes forge/agent-lock beside it.
+    let runs: Vec<_> = runs
+        .into_iter()
+        .filter(|r| r.name.as_str() == forge_core::checks::RISK_CHECK)
+        .collect();
     assert_eq!(
         runs[0].conclusion,
         Some(CheckConclusion::Failure),
@@ -1239,5 +1276,373 @@ async fn a_32_member_judgement_stays_within_the_budget() {
     // A third of the budget: the judgement leaves room for the lint and
     // the landing in the same tick, on a loaded test machine too.
     assert!(took < std::time::Duration::from_secs(30), "took {took:?}");
+    w.t.drop_now().await;
+}
+
+// ── Plan 16 A7: forge/agent-lock and agent_config_locked ──
+
+/// A synthetic Ed25519 seed (never a real key).
+#[allow(clippy::disallowed_methods)] // tests sign with a synthetic seed (clippy.toml)
+fn sign(digest: &forge_agent::Digest) -> String {
+    forge_agent::sign_digest(&[7u8; 32], digest).expect("sign")
+}
+
+/// A signed part as the database holds it, from its files.
+fn signed(slug: &str, kind: &str, files: &[(&str, &str)]) -> forge_agent::SourcePart {
+    let paths: Vec<String> = files.iter().map(|(p, _)| format!("\"{p}\"")).collect();
+    let manifest = format!(
+        "slug = \"{slug}\"\nkind = \"{kind}\"\nversion = \"1.0.0\"\nfiles = [{}]\n",
+        paths.join(", ")
+    );
+    let mut entries = vec![forge_agent::TreeEntry::file(
+        forge_agent::MANIFEST,
+        manifest,
+    )];
+    for (p, c) in files {
+        entries.push(forge_agent::TreeEntry::file(p, *c));
+    }
+    let part = forge_agent::parse_part(&entries).expect("part");
+    forge_agent::SourcePart {
+        slug: slug.to_owned(),
+        kind: kind.to_owned(),
+        version: "1.0.0".to_owned(),
+        requires: Vec::new(),
+        capabilities: Vec::new(),
+        digest: part.digest.to_string(),
+        key_id: "1".to_owned(),
+        signature: sign(&part.digest),
+        files: files
+            .iter()
+            .map(|(p, c)| ((*p).to_owned(), c.as_bytes().to_vec()))
+            .collect(),
+        selected_by: "user".to_owned(),
+        reason: None,
+    }
+}
+
+impl World {
+    /// Register the synthetic key (kid 1) and publish `parts`.
+    async fn publish(&self, parts: &[forge_agent::SourcePart]) {
+        let public = forge_agent::public_key_from_seed(&[7u8; 32]).expect("public key");
+        self.t
+            .exec_superuser(&format!(
+                "SELECT forge.agent_signing_key_manage('register', '1', '{public}', NULL, 'req-key')"
+            ))
+            .await;
+        for (i, p) in parts.iter().enumerate() {
+            let ctx =
+                ChangeContext::new(Actor::User(self.owner), request_id(&format!("req-pub-{i}")));
+            forge_db::agent_marketplace::publish_version(
+                &self.t.db,
+                &ctx,
+                &forge_db::agent_marketplace::NewPartVersion {
+                    slug: p.slug.clone(),
+                    kind: p.kind.clone(),
+                    source_project: self.project,
+                    version: p.version.clone(),
+                    source_sha: "a".repeat(40),
+                    tag: format!("{}/v{}", p.slug, p.version),
+                    tag_object: "a".repeat(40),
+                    tag_pusher: self.owner,
+                    tag_authors: Vec::new(),
+                    manifest: serde_json::json!({"slug": p.slug, "requires": []}),
+                    digest: p.digest.clone(),
+                    signature: p.signature.clone(),
+                    key_id: p.key_id.clone(),
+                    capabilities: Vec::new(),
+                    published_by: self.owner,
+                    ci_pipeline_id: 1,
+                    files: p
+                        .files
+                        .iter()
+                        .map(|(path, c)| forge_db::agent_marketplace::NewPartFile {
+                            path: path.clone(),
+                            mode: "100644",
+                            sha256: forge_agent::sha256(c)
+                                .iter()
+                                .map(|b| format!("{b:02x}"))
+                                .collect(),
+                            content: c.clone(),
+                        })
+                        .collect(),
+                },
+            )
+            .await
+            .expect("publish");
+        }
+    }
+}
+
+fn builder_parts() -> Vec<forge_agent::SourcePart> {
+    vec![
+        signed(
+            "claude-code-v2",
+            "adapter",
+            &[
+                ("CLAUDE.md", "# Synthetic project\n"),
+                (
+                    ".claude/settings.json",
+                    "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/guard.js\"}]}]}}",
+                ),
+                (".claude/hooks/guard.js", "process.exit(0);\n"),
+            ],
+        ),
+        signed(
+            "format-on-save",
+            "hook",
+            &[
+                (
+                    ".claude/settings.json",
+                    "{\"hooks\":{\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"node .claude/hooks/fmt.js\"}]}]}}",
+                ),
+                (".claude/hooks/fmt.js", "process.exit(0);\n"),
+            ],
+        ),
+    ]
+}
+
+/// The builder's files for `parts` (compiled with the database's key).
+fn built(w: &World, parts: &[forge_agent::SourcePart]) -> Vec<(String, String)> {
+    let public = forge_agent::public_key_from_seed(&[7u8; 32]).expect("public key");
+    let ring = forge_agent::KeyRing::parse(
+        format!(r#"{{"keys":[{{"kid":"1","public_key":"{public}"}}]}}"#).as_bytes(),
+    )
+    .expect("ring");
+    let compiled = forge_agent::compile(&forge_agent::CompileInput {
+        project_id: w.project.get(),
+        parts,
+        custom: &[],
+        keys: &ring,
+    })
+    .expect("compile");
+    compiled
+        .written()
+        .into_iter()
+        .map(|(p, b)| (p, String::from_utf8(b).expect("text")))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_built_agent_config_is_verified_and_only_warns() {
+    let (w, base) = world_with_main().await;
+    let parts = builder_parts();
+    w.publish(&parts).await;
+    let files = built(&w, &parts);
+    let mut all: Vec<(&str, &str)> = base_files();
+    all.extend(files.iter().map(|(p, c)| (p.as_str(), c.as_str())));
+    let head = w.commit(&all, Some(&base));
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Neutral),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary.contains("agent_config_locked"),
+        "{}",
+        run.summary
+    );
+    assert!(
+        !run.summary.contains("stop agent_config"),
+        "{}",
+        run.summary
+    );
+    let lock = w
+        .run_named(&head, forge_core::checks::AGENT_LOCK_CHECK)
+        .await;
+    assert_eq!(
+        lock.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        lock.summary
+    );
+    assert!(lock.summary.starts_with("Verified"), "{}", lock.summary);
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn lock_check_fails_on_hand_edited_hook() {
+    let (w, base) = world_with_main().await;
+    let parts = builder_parts();
+    w.publish(&parts).await;
+    let files = built(&w, &parts);
+    let mut all: Vec<(&str, &str)> = base_files();
+    for (p, c) in &files {
+        let c = if p == ".claude/hooks/fmt.js" {
+            "require('child_process').exec('curl x');\n"
+        } else {
+            c.as_str()
+        };
+        all.push((p.as_str(), c));
+    }
+    let head = w.commit(&all, Some(&base));
+    let run = w.assess(&head).await;
+    let lock = w
+        .run_named(&head, forge_core::checks::AGENT_LOCK_CHECK)
+        .await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("stop agent_config"), "{}", run.summary);
+    assert_eq!(
+        lock.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        lock.summary
+    );
+    assert!(
+        lock.summary
+            .contains("FG-AGENT-0007 file_changed .claude/hooks/fmt.js"),
+        "{}",
+        lock.summary
+    );
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_revoked_part_or_a_lock_beside_unpinned_files_is_not_verified() {
+    let (w, base) = world_with_main().await;
+    let parts = builder_parts();
+    w.publish(&parts).await;
+    let files = built(&w, &parts);
+    let mut all: Vec<(&str, &str)> = base_files();
+    all.extend(files.iter().map(|(p, c)| (p.as_str(), c.as_str())));
+    all.push((".claude/commands/extra.md", "# extra\n"));
+    let head = w.commit(&all, Some(&base));
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    let lock = w
+        .run_named(&head, forge_core::checks::AGENT_LOCK_CHECK)
+        .await;
+    assert!(
+        lock.summary
+            .contains("unmanaged_file .claude/commands/extra.md"),
+        "{}",
+        lock.summary
+    );
+
+    let ctx = ChangeContext::new(Actor::User(w.owner), request_id("req-revoke"));
+    forge_db::agent_marketplace::revoke_version(
+        &w.t.db,
+        &ctx,
+        "format-on-save",
+        "1.0.0",
+        w.owner,
+        "synthetic",
+    )
+    .await
+    .expect("revoke");
+    let mut clean: Vec<(&str, &str)> = base_files();
+    clean.extend(files.iter().map(|(p, c)| (p.as_str(), c.as_str())));
+    clean.push(("README.md", "synthetic, again\n"));
+    let head = w.commit(&clean, Some(&base));
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    let lock = w
+        .run_named(&head, forge_core::checks::AGENT_LOCK_CHECK)
+        .await;
+    assert!(
+        lock.summary
+            .contains("FG-AGENT-0006 revoked format-on-save@1.0.0"),
+        "{}",
+        lock.summary
+    );
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_head_without_agent_config_has_a_green_agent_lock() {
+    let (w, base) = world_with_main().await;
+    let head = w.commit(&with(&[("src/lib.rs", "pub fn f() {}\n")]), Some(&base));
+    let _ = w.assess(&head).await;
+    let lock = w
+        .run_named(&head, forge_core::checks::AGENT_LOCK_CHECK)
+        .await;
+    assert_eq!(
+        lock.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        lock.summary
+    );
+    assert!(
+        lock.summary.starts_with("No Claude Code configuration"),
+        "{}",
+        lock.summary
+    );
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_lock_with_hand_added_custom_files_keeps_the_stop() {
+    let (w, base) = world_with_main().await;
+    let parts = builder_parts();
+    w.publish(&parts).await;
+    let local = "# local rule\n";
+    let public = forge_agent::public_key_from_seed(&[7u8; 32]).expect("public key");
+    let ring = forge_agent::KeyRing::parse(
+        format!(r#"{{"keys":[{{"kid":"1","public_key":"{public}"}}]}}"#).as_bytes(),
+    )
+    .expect("ring");
+    let custom = [forge_agent::CustomFile {
+        path: ".claude/rules/local.md".to_owned(),
+        sha256: forge_agent::sha256(local.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+        approved_by: Some("anyone".to_owned()),
+    }];
+    let compiled = forge_agent::compile(&forge_agent::CompileInput {
+        project_id: w.project.get(),
+        parts: &parts,
+        custom: &custom,
+        keys: &ring,
+    })
+    .expect("compile");
+    let files: Vec<(String, String)> = compiled
+        .written()
+        .into_iter()
+        .map(|(p, b)| (p, String::from_utf8(b).expect("text")))
+        .collect();
+    let mut all: Vec<(&str, &str)> = base_files();
+    all.extend(files.iter().map(|(p, c)| (p.as_str(), c.as_str())));
+    all.push((".claude/rules/local.md", local));
+    let head = w.commit(&all, Some(&base));
+    let run = w.assess(&head).await;
+    // forge/agent-lock verifies it (plain Markdown), but forge/risk keeps
+    // the stop: a hand-added file is neither signed nor published.
+    let lock = w
+        .run_named(&head, forge_core::checks::AGENT_LOCK_CHECK)
+        .await;
+    assert_eq!(
+        lock.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        lock.summary
+    );
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(
+        !run.summary.contains("agent_config_locked"),
+        "{}",
+        run.summary
+    );
     w.t.drop_now().await;
 }

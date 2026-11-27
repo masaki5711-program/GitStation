@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 409 |
 | 重大度 | warn |
-| Runbook | なし |
+| Runbook | [`agent-lock`](../../ops/runbooks/agent-lock.md) |
 | 発生させるテスト | `verify_flags_hand_edited_file` |
 
 ## 利用者向けメッセージ
@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-Plan 16 §3 (ADR-0032 §6): a managed file (`.claude/**`, `CLAUDE.md`, `.mcp.json`, except per-checkout files) differs from `.gitstation/agent.lock.json`. `reason`: `file_changed` (the file's SHA-256 is not the lock's: edited by hand), `file_missing`, `unmanaged_file` (a managed file the lock does not pin, neither a part's nor `custom`; managed paths match in any letter case — `.Claude/settings.json`, `CLAUDE.MD` — and a tracked per-checkout file such as `.claude/settings.local.json` is managed), `case_collision` (two tracked paths that differ only by letter case), `custom_unverified` (a hand-added `custom` file that can run code — anything but Markdown without hooks or `` !` `` — has no signature or scan; it stays unverified until the builder's approval check, A7), `not_a_regular_file` (a symlink where a managed file is, or a `.claude` that is not a directory), `duplicate_path`, `lock_missing` (managed files without a lock), `lock_unreadable`, `lock_invalid` (not the lock's JSON, an unknown key, a bad hash), `lock_version_unsupported`.
+Plan 16 §3 (ADR-0032 §6): a managed file (`.claude/**`, `CLAUDE.md`, `.mcp.json`, except per-checkout files) differs from `.gitstation/agent.lock.json`. `reason`: `file_changed` (the file's SHA-256 is not the lock's: edited by hand), `file_missing`, `unmanaged_file` (a managed file the lock does not pin, neither a part's nor `custom`; managed paths match in any letter case — `.Claude/settings.json`, `CLAUDE.MD` — and a tracked per-checkout file such as `.claude/settings.local.json` is managed), `case_collision` (two tracked paths that differ only by letter case), `custom_unverified` (a hand-added `custom` file that can run code — anything but Markdown without hooks or `` !` `` — has no signature or scan; it stays unverified until the builder's approval check, A7), `not_a_regular_file` (a symlink where a managed file is, or a `.claude` that is not a directory), `duplicate_path`, `lock_missing` (managed files without a lock), `lock_unreadable`, `lock_invalid` (not the lock's JSON, an unknown key, a bad hash, a merged file's source text missing), `lock_version_unsupported`. Plan 16 A7: also the server's required check `forge/agent-lock` on a merge request head (written by the `check.risk` job), where `tree_unreadable` / `too_many_files` / `too_large` mean the managed area could not be read whole (never a pass), and the builder's routes (`tree_unreadable` at the default branch's tip).
 
 ## 調べ方 (diagnosis)
 
-`gstn agent verify --json` lists each path with its reason. `git log -p -- <path>` shows who changed it; `git status -- .claude` shows uncommitted edits. Every file is `file_changed` at once after a checkout with `core.autocrlf=true` (LF became CRLF): the check fails closed; check `git config core.autocrlf`.
+`forge/agent-lock`'s summary lists `- <code> <reason> <path>` per problem (runbook agent-lock); `gstn agent verify --json` lists each path with its reason. `git log -p -- <path>` shows who changed it; `git status -- .claude` shows uncommitted edits. Every file is `file_changed` at once after a checkout with `core.autocrlf=true` (LF became CRLF): the check fails closed; check `git config core.autocrlf`.
 
 ## 対処 (fix)
 

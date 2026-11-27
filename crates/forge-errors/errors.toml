@@ -3139,9 +3139,10 @@ severity = "warn"
 user_message_ja = "リポジトリのエージェントの設定が agent.lock.json と合いません。ビルダーで作り直すか、変更の承認を受けてください。"
 user_message_en = "The repository's agent configuration does not match agent.lock.json. Regenerate it with the builder or get the change approved."
 user_message_id = "Konfigurasi agen repositori tidak cocok dengan agent.lock.json. Buat ulang dengan builder atau minta persetujuan perubahan."
-cause = "Plan 16 §3 (ADR-0032 §6): a managed file (`.claude/**`, `CLAUDE.md`, `.mcp.json`, except per-checkout files) differs from `.gitstation/agent.lock.json`. `reason`: `file_changed` (the file's SHA-256 is not the lock's: edited by hand), `file_missing`, `unmanaged_file` (a managed file the lock does not pin, neither a part's nor `custom`; managed paths match in any letter case — `.Claude/settings.json`, `CLAUDE.MD` — and a tracked per-checkout file such as `.claude/settings.local.json` is managed), `case_collision` (two tracked paths that differ only by letter case), `custom_unverified` (a hand-added `custom` file that can run code — anything but Markdown without hooks or `` !` `` — has no signature or scan; it stays unverified until the builder's approval check, A7), `not_a_regular_file` (a symlink where a managed file is, or a `.claude` that is not a directory), `duplicate_path`, `lock_missing` (managed files without a lock), `lock_unreadable`, `lock_invalid` (not the lock's JSON, an unknown key, a bad hash), `lock_version_unsupported`."
-diagnosis = "`gstn agent verify --json` lists each path with its reason. `git log -p -- <path>` shows who changed it; `git status -- .claude` shows uncommitted edits. Every file is `file_changed` at once after a checkout with `core.autocrlf=true` (LF became CRLF): the check fails closed; check `git config core.autocrlf`."
+cause = "Plan 16 §3 (ADR-0032 §6): a managed file (`.claude/**`, `CLAUDE.md`, `.mcp.json`, except per-checkout files) differs from `.gitstation/agent.lock.json`. `reason`: `file_changed` (the file's SHA-256 is not the lock's: edited by hand), `file_missing`, `unmanaged_file` (a managed file the lock does not pin, neither a part's nor `custom`; managed paths match in any letter case — `.Claude/settings.json`, `CLAUDE.MD` — and a tracked per-checkout file such as `.claude/settings.local.json` is managed), `case_collision` (two tracked paths that differ only by letter case), `custom_unverified` (a hand-added `custom` file that can run code — anything but Markdown without hooks or `` !` `` — has no signature or scan; it stays unverified until the builder's approval check, A7), `not_a_regular_file` (a symlink where a managed file is, or a `.claude` that is not a directory), `duplicate_path`, `lock_missing` (managed files without a lock), `lock_unreadable`, `lock_invalid` (not the lock's JSON, an unknown key, a bad hash, a merged file's source text missing), `lock_version_unsupported`. Plan 16 A7: also the server's required check `forge/agent-lock` on a merge request head (written by the `check.risk` job), where `tree_unreadable` / `too_many_files` / `too_large` mean the managed area could not be read whole (never a pass), and the builder's routes (`tree_unreadable` at the default branch's tip)."
+diagnosis = "`forge/agent-lock`'s summary lists `- <code> <reason> <path>` per problem (runbook agent-lock); `gstn agent verify --json` lists each path with its reason. `git log -p -- <path>` shows who changed it; `git status -- .claude` shows uncommitted edits. Every file is `file_changed` at once after a checkout with `core.autocrlf=true` (LF became CRLF): the check fails closed; check `git config core.autocrlf`."
 fix = "Undo the hand edit (git restore); for line endings set `core.autocrlf=false` (or `.gitattributes` `* -text` for `.claude/`) and check out again; or add the file as `custom` through a builder merge request (a person approves it), or regenerate the configuration with the builder."
+runbook = "agent-lock"
 test = "verify_flags_hand_edited_file"
 
 [[error]]
@@ -3221,6 +3222,19 @@ cause = "Plan 16 §8, contract 8 (on-prem; ADR-0032 §5): a part's `.mcp.json` n
 diagnosis = "`gstn agent verify --part <dir> --mcp-allowed-hosts <a,b> --json`: `subject` is the host refused."
 fix = "Point the MCP server at an internal host on the list, or ask the administrator to add the internal host to the list. External hosts are not allowed."
 test = "mcp_external_host_rejected"
+
+[[error]]
+code = "FG-AGENT-0008"
+name = "SelectionUnresolved"
+http_status = 422
+severity = "info"
+user_message_ja = "選んだ部品の組み合わせからエージェントの設定を作れません。部品の版の条件か、部品どうしのぶつかりを直してください。"
+user_message_en = "The agent configuration cannot be built from the selected parts. Fix the parts' version requirements or the conflict between parts."
+user_message_id = "Konfigurasi agen tidak dapat dibuat dari bagian yang dipilih. Perbaiki persyaratan versi bagian atau konflik antarbagian."
+cause = "Plan 16 A7 (ADR-0032 Amendment A7): the builder (`forge_agent::compile` / `recommend`, the `…/agent-builder/preview`, `…/compile` and `…/recommend` routes) could not turn the selection into one configuration. `reason`: `adapter_missing` / `adapter_multiple` (exactly one part of kind `adapter` — the base model — is required), `duplicate_part` (a slug selected twice), `requirement_unmet` (a part's `requires` `slug@range` has no selected / published stable version in the range; `subject` `<part> requires <require>`), `require_invalid` (a range the builder cannot read), `path_conflict` (two parts, or a part and a hand-added `custom` file, install the same path that cannot be merged), `merge_conflict` (two parts set one key of `.claude/settings.json` / `.mcp.json` to different values; `subject` the path and the JSON key), `merge_source_invalid` (a merged source is not a JSON object, or over 64 KiB), `part_not_found` (a slug / version that is not published), `too_many_parts`, `too_many_files` (the build would write and remove more than 500 paths in one commit), `too_large` (the parts' contents over 8 MiB). Nothing was written."
+diagnosis = "The route's answer and its log event carry `reason`, `subject` and `request_id`; `gstn part view <slug>` shows each version's `requires` and files."
+fix = "Pick versions whose requirements hold (or publish the missing part), select exactly one adapter, or drop one of the two parts that write the same file / key. Then preview again."
+test = "compile_refuses_conflicting_paths"
 
 # ── Plan 17 P17-1 (ADR-0029 amendment 2026-11-14): the GPU runner ──
 

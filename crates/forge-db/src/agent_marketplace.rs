@@ -425,7 +425,7 @@ pub struct StoredVersion {
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
 
-fn version_sql(filter: &str) -> String {
+pub(crate) fn version_sql(filter: &str) -> String {
     format!(
         "SELECT v.id, v.part_id, p.slug, p.kind, p.source_project_id, v.version, v.channel, \
          v.state, v.source_sha, v.tag, v.manifest, v.digest, v.signature, v.key_id, \

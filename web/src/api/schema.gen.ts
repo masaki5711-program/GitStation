@@ -1427,6 +1427,74 @@ export interface paths {
         patch: operations["patch_api_v1_projects_id"];
         trace?: never;
     };
+    "/api/v1/projects/{id}/agent-builder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's newest agent builds (at most 20, newest first): the selection, the lock digest, Dry-Run or the merge request opened, the state and the error code (a Developer, an agent's token included) */
+        get: operations["get_api_v1_projects_id_agent_builder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/agent-builder/compile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build the agent configuration ({"selection", "title"?}) as the Dry-Run would, write it as one commit of the builder bot on a new branch agent-builder/<lock digest> from the default branch's tip (the ref update decided like the caller's push, the secret rules on every file, the push recorded for the caller) and open the merge request for the caller (201). forge/agent-lock verifies it and auto-merge waits for a Maintainer's approval. A person only (never an agent, a service account or a bot), Developer; 409 FG-GIT-0027 reason=branch_exists when the same build was asked for, 409 FG-GIT-0031 when nothing changes */
+        post: operations["post_api_v1_projects_id_agent_builder_compile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/agent-builder/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The Dry-Run of an agent build ({"selection": [{"slug", "version", "selected_by"?, "reason"?}]}): the published versions are verified (digest, signature) and built (forge-agent compile: one adapter, requirements met, .claude/settings.json and .mcp.json merged), compared with the default branch's tip: the files added, modified and removed, each part's capabilities and the lock. Writes nothing but the build's record. 422 FG-AGENT-0008 for a selection that cannot be built, 409 FG-AGENT-0006 for a revoked version (a Developer, an agent's token included) */
+        post: operations["post_api_v1_projects_id_agent_builder_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/agent-builder/recommend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The rules-only recommendation of agent parts ({}): the base model (the lock's adapter at the default branch, else claude-code-v2), the lock's parts and what they require, each at its newest stable version, with selected_by=rule and the reason; source=rules. Decided as AgentBuilderRecommend on a whole copy of the default tip (an AI agent audience only when the tip is open, 403 FG-AUTH-0022); 422 FG-AGENT-0008 when the base model or a requirement has no stable version */
+        post: operations["post_api_v1_projects_id_agent_builder_recommend"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/ai-assets": {
         parameters: {
             query?: never;
@@ -4759,6 +4827,88 @@ export interface components {
             binding: components["schemas"]["IntegrationBindingBody"];
             /** @description `bound`, or `unchanged` (it was bound so already; nothing written). */
             outcome: string;
+        };
+        /** @description One changed file of a build. */
+        BuildChangeBody: {
+            /** @description `added`, `modified` or `removed`. */
+            change: string;
+            path: string;
+        };
+        /** @description The build as written. */
+        BuildCompiledBody: {
+            /** @description The new branch (without `refs/heads/`). */
+            branch: string;
+            /** @description The builder bot's commit. */
+            commit_sha: string;
+            merge_request?: null | components["schemas"]["MergeRequestBody"];
+            merge_request_error?: null | components["schemas"]["BuildMergeRequestError"];
+            preview: components["schemas"]["BuildPreviewBody"];
+        };
+        /** @description Why the merge request was not opened (the commit stands). */
+        BuildMergeRequestError: {
+            error_code: string;
+            /** @description The user message in the request's language. */
+            message: string;
+        };
+        /** @description One part of a build. */
+        BuildPartBody: {
+            /**
+             * @description exec, network, permissions, fs-write (the screen's marks;
+             *     `permissions` widens Claude Code's permissions).
+             */
+            capabilities: string[];
+            /** @description `beta` or `stable`. */
+            channel: string;
+            kind: string;
+            slug: string;
+            version: string;
+        };
+        /** @description The Dry-Run. */
+        BuildPreviewBody: {
+            /** @description Its tip the plan was made against. */
+            base_sha: string;
+            changes: components["schemas"]["BuildChangeBody"][];
+            /** @description `.gitstation/agent.lock.json` as it would be written. */
+            lock: string;
+            /** @description `sha256:<hex>` of the lock. */
+            lock_digest: string;
+            parts: components["schemas"]["BuildPartBody"][];
+            /** @description The branch the merge request would target (without `refs/heads/`). */
+            target_branch: string;
+        };
+        /** @description One recorded build. */
+        BuildRecordBody: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            dry_run: boolean;
+            error_code: string | null;
+            /** Format: int64 */
+            id: number;
+            lock_digest: string | null;
+            /** Format: int64 */
+            merge_request_iid: number | null;
+            request_id: string;
+            /** Format: int64 */
+            requested_by: number;
+            /** @description `[{"slug","version","selected_by","reason"}]`. */
+            selection: Record<string, never>;
+            /** @description `requested`, `succeeded` or `failed`. */
+            state: string;
+        };
+        /** @description `POST …/preview` and `…/compile`. */
+        BuildRequest: {
+            /** @description The parts: exactly one adapter (the base model) and what it needs. */
+            selection: components["schemas"]["SelectionItem"][];
+            /**
+             * @description `…/compile` only: the merge request's title (1..=255 characters;
+             *     default "Build the agent configuration").
+             */
+            title?: string | null;
+        };
+        /** @description `GET …/agent-builder`. */
+        BuildStatusBody: {
+            /** @description Newest first, at most 20. */
+            builds: components["schemas"]["BuildRecordBody"][];
         };
         /** @description `PATCH …/members/{user_id}`: the member's new direct role. */
         ChangeMember: {
@@ -8244,6 +8394,26 @@ export interface components {
              */
             up_to?: number | null;
         };
+        /** @description `POST …/recommend`. */
+        RecommendBody: {
+            parts: components["schemas"]["RecommendedBody"][];
+            /** @description `rules` (the local LLM's reasons come later, plan 16 A11). */
+            source: string;
+            /** @description Parts of the current lock with no stable version to pick. */
+            unavailable: string[];
+        };
+        /** @description `POST …/recommend` (no field yet; the body is `{}`). */
+        RecommendRequest: Record<string, never>;
+        /** @description One recommended part. */
+        RecommendedBody: {
+            kind: string;
+            /** @description `base_model`, `current_lock` or `required_by=<slug>`. */
+            reason: string;
+            /** @description `rule`. */
+            selected_by: string;
+            slug: string;
+            version: string;
+        };
         /** @description A redelivery was queued. */
         RedeliveryQueued: {
             /** @description `queued`. */
@@ -8604,6 +8774,19 @@ export interface components {
             /** @description Sorted, not overlapping. */
             highlights: components["schemas"]["SearchHighlight"][];
             text: string;
+        };
+        /** @description One selected part version. */
+        SelectionItem: {
+            /** @description Why (the recommendation's reason; at most 200 characters). */
+            reason?: string | null;
+            /**
+             * @description `user` (default: picked on the screen) or `rule` (the
+             *     recommendation's).
+             */
+            selected_by?: string | null;
+            slug: string;
+            /** @description The exact published version (`1.2.3`). */
+            version: string;
         };
         /** @description One service account (no personal data: it has none). */
         ServiceAccountBody: {
@@ -13020,6 +13203,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_agent_builder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildStatusBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_agent_builder_compile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildCompiledBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_agent_builder_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildPreviewBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_agent_builder_recommend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecommendRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
