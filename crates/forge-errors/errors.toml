@@ -3237,6 +3237,20 @@ fix = "Pick versions whose requirements hold (or publish the missing part), sele
 test = "compile_refuses_conflicting_paths"
 
 [[error]]
+code = "FG-AGENT-0011"
+name = "RecommendDegraded"
+http_status = 503
+severity = "warn"
+user_message_ja = "推薦は決まった規則だけで出しています（AI の理由は今ありません）。部品はそのまま選べます。"
+user_message_en = "The recommendation uses the fixed rules only (no AI reasons right now). You can still pick the parts."
+user_message_id = "Rekomendasi hanya memakai aturan tetap (alasan AI tidak tersedia saat ini). Anda tetap dapat memilih bagian."
+cause = "Plan 16 A11 (ADR-0032 Amendment A11, ADR-0039 Amendment A11): the agent builder's recommendation (`POST …/agent-builder/recommend`) has no local LLM reasons for the default branch's tip, so it answers the rules-only result with `degraded: true` and `source: \"rules\"` — never an error, never a made-up reason. The code is named in the answer (`llm.error_code`) and the worker's log; it is never an HTTP error (`http_status` is nominal: the route answers 200). The worker's `agent_recommend` task logs this code once per project, tip and cause. `reason`: `llm_unavailable` (the gateway failed: `llm_error` is its FG-LLM code — 0001 down or timed out, 0002 invalid answer twice, 0003 digest mismatch, 0004 queue deadline), `paused` (the gateway is paused: nothing was queued), `input_refused` (FG-LLM-0005: a secret could not be redacted from the input), `no_spec` (the tip has no specification document that may be given — none, or every one is confidential), `confidential_unreadable` (the documents could not be classified by `forge_checks::confidential`: fail closed, nothing is sent; `llm_error` is the git code). A reader also sees `unavailable` when no worker answered an ask within 6 minutes (`llm.enabled = false`, the worker is down)."
+diagnosis = "The worker's log event carries `task=agent_recommend`, `project_id`, `tip`, `reason` and `llm_error`; the gateway logs its own FG-LLM code with the same `request_id`. The ask's row: SELECT state, head_sha, error_code, advice_id, asked_at, pending_since FROM forge.agent_recommend_asks WHERE project_id = <id>. `forge doctor` (`llm.endpoint`, `llm.model`, `llm.queue_age`) says whether the gateway is up."
+fix = "Nothing is blocked: the person picks parts from the rules' recommendation. For `llm_unavailable` / `paused` follow runbook llm-gateway; `input_refused` means a specification document holds a credential (a committed secret is a leak: runbook secret-removal); `no_spec` needs nothing (add an open specification document under the repository's spec directory to get reasons)."
+runbook = "llm-gateway"
+test = "llm_down_returns_rules_with_degraded_flag"
+
+[[error]]
 code = "FG-AGENT-0015"
 name = "AgentUpdateNotNeeded"
 http_status = 409

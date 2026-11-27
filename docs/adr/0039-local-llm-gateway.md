@@ -423,3 +423,31 @@ L5-6 の deploy 承認の Amendment の 1 で残した「MR の画面の助言�
    見える語が先）。最初の答えの後の変化（確認中 → 届いた・失敗）は MR の画面の読み上げの領域で 1 回だけ言う。MR の資源での
    deny の行（Guest・サービスアカウント・ボット・`read_api`）を matrix に足した。**受け入れた点**: `can_feedback` は助言が無くても
    true になりうる（ヒントで、ボタンは指摘があるときだけ出る）。読み込み中の節が off のプロジェクトで消える短い揺れ。
+
+## Amendment（2026-11-27、A11 `feat/core-llm-agent-recommend`: エージェントの推薦の理由）
+
+計画 16 A11（計画 19 §7.2 の段 2 の 1 つ）を作った。利用者の指示（計画の推奨をすべて採る）で、次を決めた。部品の側の決定は
+ADR-0032 Amendment A11。
+
+1. **目的 `agent_recommend`**（`Purpose::AgentRecommend`）と **対象の種類 `project`**（`SubjectKind::Project`、助言の `head_sha` は既定の枝の
+   先端）。優先度は対話（`interactive`）: 人がビルダーの画面を開いている。追記のマイグレーション `20270113110000_agent_recommend_llm.sql` が
+   3 つの表の目的の CHECK と 2 つの表の対象の CHECK に足し、聞いたことの表 `forge.agent_recommend_asks`（derived、消去で消す）を作る。
+   入力の本文はどこにも残さない。
+2. **きっかけ**: worker の `agent_recommend` の周回（20 秒、ゲートウェイがあるときだけ）が、1 時間以内に読まれた推薦のうち先端の答えが
+   無いもの（最大 20）を見る。経路（別のプロセス）は聞いたことを記録するだけで、ゲートウェイを呼ばない・待たない。同じ入力は 10 分後に
+   計 3 回まで（行の無い失敗はメモリで同じ上限）、答えたものは先端が変わるまで聞かない。
+3. **入力**（`forge_core::llm::agent_recommend::recommend_input`、純粋、`internal`）: 規則の選択（`rules`）、カタログの安定版の manifest の
+   事実（`part`、パスは `part:<slug>`、最大 60、規則の部品を先に）、機密でない仕様書（`spec`、最大 6・各 4,000 文字）。秘密は `prepare` が
+   伏せ、伏せられなければ聞かない（`refused`、FG-LLM-0005 を原因に）。
+4. **出力の方針**（`agent_recommend::policy`、新しい形は足さない）: 指摘の形のまま、`require_path` で各指摘は `part:<slug>` のパスと、その
+   部品の文からの引用（8 文字以上）を持つ。最大 10 件、理由は 200 文字、要約は 600 文字。判定の語・メンション・リンクは契約どおり除く。
+   併合（`merge`）は規則の選択を変えず、確信度で並べ替え、カタログのアダプターでない部品だけを最大 5 つの提案に、ほかは捨てて数える。
+5. **劣化**: 答えが無い・失敗・一時停止は規則だけの推薦に `degraded: true`。worker はプロジェクト・先端・原因ごとに 1 回
+   **FG-AGENT-0011 RecommendDegraded**（warn、runbook `llm-gateway`、`reason` = `llm_unavailable` / `paused` / `input_refused` / `no_spec` /
+   `confidential_unreadable`、`llm_error`）をログに出す。ゲートウェイは自分の FG-LLM をそのまま出す。
+6. **評価**: プロンプト `crates/forge-llm/prompts/agent_recommend.v1.txt`、評価セット `crates/forge-llm/evals/agent_recommend/`（regular 1・
+   safety 2: 仕様書の注入、仕様書の秘密）。P17-10 と同じく `prompts::for_purpose` にはまだ載せない（ベンチは skipped、
+   `bench_report_matches_adr_0034_schema` の `skipped` は `[AiAssetDraft, AgentRecommend]`）: 測っていない値を基準に書かない。
+   この開発サーバーの共用 Ollama で測った基準を足す MR が載せる（ADR-0034 Amendment 1 の順序）。
+7. **独立レビューで直した・受け入れた点**: ADR-0032 Amendment A11 の 5。ゲートウェイ側では、優先度を対話のままにした（人が画面を開いて
+   いる。worker は依頼を 1 件ずつ待つので、対話の層を占めるのは同時に 1 つまで）。

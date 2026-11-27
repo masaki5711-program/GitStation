@@ -65,14 +65,19 @@ use forge_git::browse::{Browser, EntryKind as GitKind, ListedBlob, RefLookup, Re
 
 // Plan 16 A7: the agent builder (Dry-Run, the build, the recommendation).
 pub mod builder;
-pub use builder::{BuildPlan, FileChange, PlannedPart, Selected, BUILDER_EMAIL, BUILDER_NAME};
+pub use builder::{
+    BuildPlan, FileChange, PlannedPart, RecommendedAt, Selected, BUILDER_EMAIL, BUILDER_NAME,
+};
 // Plan 16 A9: update merge requests (asked, and after a revocation).
 pub mod updates;
+// Plan 16 A11: the LLM's reasons for the recommendation.
+pub mod reasons;
 pub use forge_agent::{Recommendation, Recommended};
 pub use forge_db::agent_builder::{
     agent_update_job, agent_update_payload, AgentUpdateRequest, AGENT_UPDATE_JOB,
 };
 pub use forge_db::agent_builder::{BuildOutcome, StoredBuild};
+pub use reasons::{Reasons, ShownReasons};
 pub use updates::{AgentUpdater, UpdateLine, UpdatePlan, UpdateReport};
 
 /// The stored rows the routes show (forge-web does not depend on

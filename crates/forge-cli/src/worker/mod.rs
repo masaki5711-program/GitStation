@@ -112,6 +112,7 @@ mod llm;
 // Plan 19 L5-5: the merge request first pass with the gateway.
 mod ai_review;
 // Plan 19 L5-8: approval summaries with the gateway.
+mod agent_recommend;
 mod approval_summary;
 mod asset_draft;
 // ── end M3 N1 ──
@@ -234,7 +235,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
         });
         // Plan 19 L5-3: the LLM gateway (enabled only by llm.enabled) and the
         // records' upkeep (always).
-        let llm = llm::start(&cfg.llm, &db, &storage, &stopped)?;
+        let llm = llm::start(&cfg.llm, &cfg.agent, &db, &storage, &stopped)?;
         let purger = purge::Purger::new(&db, storage.root.clone()); // clone: the purge's own handle
         let purge = Some(PurgeTask {
             purger,

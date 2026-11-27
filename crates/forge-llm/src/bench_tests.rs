@@ -211,8 +211,12 @@ Rank the machine axis first.
         .await
         .expect("measured");
     // Every purpose has its prompt since L5-5 except the AI asset draft
-    // (P17-10: no measured baseline yet).
-    assert_eq!(result.skipped, vec![Purpose::AiAssetDraft]);
+    // (P17-10) and the recommendation reasons (plan 16 A11): no measured
+    // baseline yet.
+    assert_eq!(
+        result.skipped,
+        vec![Purpose::AiAssetDraft, Purpose::AgentRecommend]
+    );
     let bytes = render_report(&result.report).expect("rendered");
     let parsed = ai_eval::parse(&bytes).expect("a v1 report forge/ai-eval accepts");
     assert_eq!(parsed, result.report);
@@ -224,7 +228,7 @@ Rank the machine axis first.
     sorted.sort_unstable();
     assert_eq!(ids, sorted);
     for purpose in Purpose::ALL {
-        if purpose == Purpose::AiAssetDraft {
+        if purpose == Purpose::AiAssetDraft || purpose == Purpose::AgentRecommend {
             continue;
         }
         assert!(

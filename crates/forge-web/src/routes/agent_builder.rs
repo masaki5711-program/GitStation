@@ -6,8 +6,16 @@
 //!   Developer, an agent's token included): the project's newest builds.
 //! - `POST …/agent-builder/recommend` (`AgentBuilderRecommend`, decided in
 //!   the route like a copy of the default tip after the dispatcher's
-//!   project-level `RepoRead`): the rules-only recommendation
-//!   (`source: "rules"`).
+//!   project-level `RepoRead`): the rules-only recommendation, with the
+//!   local LLM's reasons when the worker has them for the default branch's
+//!   tip (plan 16 A11: `source: "rules+llm"`). The reasons only add words
+//!   and an order to the rules' parts and suggest other catalog parts
+//!   (`suggested`, never selected): the selection is the rules' one. No
+//!   reasons now (the LLM is off, down, paused, timed out, or the tip has
+//!   no open specification document) is the rules-only result with
+//!   `degraded: true` and `llm.state` — never an error, never made-up
+//!   reasons (`FG-AGENT-0011` in `llm.error_code` for a failure). The read
+//!   is recorded so the worker answers it (`forge.agent_recommend_asks`).
 //! - `POST …/agent-builder/preview` `{selection}` (`AgentBuilderDryRun`):
 //!   the Dry-Run — what the build adds, changes and removes, each part's
 //!   capabilities, the lock. Nothing is written but the build's record.
@@ -50,6 +58,7 @@ use forge_auth::{
     authorize_ref_updates, prove, Action, LoadedMergeRequest, MergeRequestCtx, MergeRequestState,
     ProjectCtx, RefUpdate, RefUpdateCtx,
 };
+use forge_core::llm::agent_recommend::{findings_of, merge, ReasonsState, RulePick};
 use forge_core::{
     telemetry, ObjectId, ProjectId, PushApplied, PushRecord, PushUpdateKind, PushedCommits,
     PushedRef, Pusher, RefName, UserId,
@@ -59,7 +68,8 @@ use forge_git::commit::CommitIdentity;
 use forge_git::file_commit::{FilePath, TreeChange, COMMIT_DEADLINE};
 use forge_git::secret_scan::{self, SecretScan};
 use forge_marketplace::{
-    BuildOutcome, BuildPlan, Marketplace, Selected, StoredBuild, BUILDER_EMAIL, BUILDER_NAME,
+    BuildOutcome, BuildPlan, Marketplace, Reasons, RecommendedAt, Selected, StoredBuild,
+    BUILDER_EMAIL, BUILDER_NAME,
 };
 use forge_review::{NewFields, Review, ReviewRequest};
 use serde::{Deserialize, Serialize};
@@ -294,17 +304,73 @@ pub struct RecommendedBody {
     pub selected_by: String,
     /// `base_model`, `current_lock` or `required_by=<slug>`.
     pub reason: String,
+    /// The local LLM's reason (an AI proposal, at most 200 characters);
+    /// `null` without one.
+    pub llm_reason: Option<String>,
+}
+
+/// A catalog part the local LLM suggests: never selected (a person ticks
+/// it and sees its capabilities in the Dry-Run).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestedBody {
+    pub slug: String,
+    pub kind: String,
+    /// The newest stable version.
+    pub version: String,
+    /// What the part may do (`exec`, `network`, …): shown beside the AI's
+    /// reason so the reason is never the only thing a person reads.
+    pub capabilities: Vec<String>,
+    /// `llm`.
+    pub selected_by: String,
+    /// The local LLM's reason (an AI proposal, at most 200 characters).
+    pub reason: String,
+}
+
+/// The local LLM's part of the recommendation (plan 16 A11).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecommendLlmBody {
+    /// `ready` (the reasons are merged in), `pending` (asked; look again
+    /// shortly), `unavailable` (the LLM did not answer), `paused`,
+    /// `refused` (nothing was sent: no open specification document, or one
+    /// held a secret), `withheld` (a confidential advice for an agent).
+    pub state: String,
+    /// `FG-AGENT-0011` when the LLM did not answer.
+    pub error_code: Option<String>,
+    /// The recorded cause (an FG code, e.g. `FG-LLM-0001`), if any.
+    pub cause: Option<String>,
+    /// `ready`: the AI's summary of what the specifications need (a
+    /// proposal; the person decides).
+    pub summary: Option<String>,
+    pub advice_id: Option<i64>,
+    /// `name:tag` of the model.
+    pub model: Option<String>,
+    pub prompt_version: Option<i32>,
+    /// UTC, `YYYY-MM-DDTHH:MM:SSZ`.
+    pub created_at: Option<String>,
+    /// The model's findings that named no catalog part (dropped).
+    pub dropped: usize,
 }
 
 /// `POST …/recommend`.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RecommendBody {
-    /// `rules` (the local LLM's reasons come later, plan 16 A11).
+    /// `rules+llm` (the local LLM's reasons are merged in) or `rules`.
     pub source: String,
+    /// `true` when the answer has no LLM reasons (any `llm.state` but
+    /// `ready`) or they are less trustworthy (the advice was degraded, or
+    /// findings were dropped).
+    pub degraded: bool,
+    /// The rules' selection: the base model first, then the parts with an
+    /// LLM reason (most confident first), then the rest.
     pub parts: Vec<RecommendedBody>,
+    /// Other catalog parts the LLM suggests (never selected).
+    pub suggested: Vec<SuggestedBody>,
     /// Parts of the current lock with no stable version to pick.
     pub unavailable: Vec<String>,
+    pub llm: RecommendLlmBody,
 }
 
 /// Loads the project of `…/{id}/agent-builder[/…]`.
@@ -590,6 +656,10 @@ async fn recommend_inner(
 ) -> Result<serde_json::Value, ForgeError> {
     let target = Target::of(state, &request)?;
     let key = principal_key(&request)?;
+    // Who reads the advice's words (plan 19 §5: a confidential advice is a
+    // person's only), decided by forge-auth like every advice read.
+    let declared_agent = crate::routes::context::audience(&request)?.is_agent();
+    let reader = forge_auth::advice_reader(request.principal(), declared_agent);
     // Nothing of the request (not `Sync`) is held across an await.
     let w = request.into_write();
     crate::routes::repo_copy::decide_agent_recommend(
@@ -599,27 +669,108 @@ async fn recommend_inner(
         &key,
     )
     .await?;
+    let market = marketplace(state)?;
     let found = bounded(
         state,
         "agent_recommend",
-        marketplace(state)?.recommend_for(target.repository.id),
+        market.recommend_at(target.repository.id),
     )
     .await?;
-    json(RecommendBody {
-        source: "rules".to_owned(),
-        parts: found
+    let read = bounded(
+        state,
+        "agent_recommend_reasons",
+        market.reasons(
+            target.project,
+            found.tip.as_ref(),
+            w.ctx.request_id.as_str(),
+            reader,
+        ),
+    )
+    .await;
+    let reasons = match read {
+        Ok(r) => r,
+        Err(e) => {
+            // The rules' answer still stands: degraded, never an error.
+            let cause = e.code().id().to_owned();
+            telemetry::log_failure(
+                &e.with_context("route", "agent_builder_recommend")
+                    .with_context("step", "llm_reasons"),
+                &w.ctx.request_id,
+            );
+            Reasons {
+                state: ReasonsState::Unavailable,
+                error_code: Some(ErrorCode::RecommendDegraded),
+                cause: Some(cause),
+                advice: None,
+            }
+        }
+    };
+    json(recommend_body(&found, reasons))
+}
+
+/// The answer of `…/recommend` (module docs): the rules' selection with the
+/// reasons merged in when there are any.
+pub(crate) fn recommend_body(found: &RecommendedAt, reasons: Reasons) -> RecommendBody {
+    let picks: Vec<RulePick> = found
+        .recommendation
+        .parts
+        .iter()
+        .map(|p| RulePick {
+            slug: p.slug.clone(),       // clone: the merge owns its picks
+            kind: p.kind.clone(),       // clone: as above
+            version: p.version.clone(), // clone: as above
+            reason: p.reason.clone(),   // clone: as above
+        })
+        .collect();
+    let ready = reasons.state == ReasonsState::Ready && reasons.advice.is_some();
+    let (findings, unreadable) = match (&reasons.advice, ready) {
+        (Some(a), true) => findings_of(&a.findings),
+        _ => (Vec::new(), 0),
+    };
+    let merged = merge(&picks, &found.catalog, &findings);
+    let dropped = merged.dropped + unreadable;
+    let advice = if ready { reasons.advice } else { None };
+    let advice_degraded = advice.as_ref().is_some_and(|a| a.degraded);
+    RecommendBody {
+        source: if ready { "rules+llm" } else { "rules" }.to_owned(),
+        degraded: !ready || advice_degraded || dropped > 0,
+        parts: merged
             .parts
             .into_iter()
             .map(|p| RecommendedBody {
-                slug: p.slug,
-                kind: p.kind,
-                version: p.version,
-                selected_by: p.selected_by.to_owned(),
-                reason: p.reason,
+                slug: p.pick.slug,
+                kind: p.pick.kind,
+                version: p.pick.version,
+                selected_by: "rule".to_owned(),
+                reason: p.pick.reason,
+                llm_reason: p.llm_reason,
             })
             .collect(),
-        unavailable: found.unavailable,
-    })
+        suggested: merged
+            .suggested
+            .into_iter()
+            .map(|s| SuggestedBody {
+                slug: s.slug,
+                kind: s.kind,
+                version: s.version,
+                capabilities: s.capabilities,
+                selected_by: "llm".to_owned(),
+                reason: s.reason,
+            })
+            .collect(),
+        unavailable: found.recommendation.unavailable.clone(), // clone: the body owns it
+        llm: RecommendLlmBody {
+            state: reasons.state.as_str().to_owned(),
+            error_code: reasons.error_code.map(|c| c.id().to_owned()),
+            cause: reasons.cause,
+            summary: advice.as_ref().map(|a| a.summary.clone()), // clone: the body owns it
+            advice_id: advice.as_ref().map(|a| a.advice_id),
+            model: advice.as_ref().map(|a| a.model.clone()), // clone: as above
+            prompt_version: advice.as_ref().map(|a| a.prompt_version),
+            created_at: advice.map(|a| a.created_at),
+            dropped,
+        },
+    }
 }
 
 /// `POST …/agent-builder/preview` → `200` the Dry-Run.

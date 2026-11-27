@@ -8533,17 +8533,64 @@ export interface components {
         };
         /** @description `POST …/recommend`. */
         RecommendBody: {
+            /**
+             * @description `true` when the answer has no LLM reasons (any `llm.state` but
+             *     `ready`) or they are less trustworthy (the advice was degraded, or
+             *     findings were dropped).
+             */
+            degraded: boolean;
+            llm: components["schemas"]["RecommendLlmBody"];
+            /**
+             * @description The rules' selection: the base model first, then the parts with an
+             *     LLM reason (most confident first), then the rest.
+             */
             parts: components["schemas"]["RecommendedBody"][];
-            /** @description `rules` (the local LLM's reasons come later, plan 16 A11). */
+            /** @description `rules+llm` (the local LLM's reasons are merged in) or `rules`. */
             source: string;
+            /** @description Other catalog parts the LLM suggests (never selected). */
+            suggested: components["schemas"]["SuggestedBody"][];
             /** @description Parts of the current lock with no stable version to pick. */
             unavailable: string[];
+        };
+        /** @description The local LLM's part of the recommendation (plan 16 A11). */
+        RecommendLlmBody: {
+            /** Format: int64 */
+            advice_id?: number | null;
+            /** @description The recorded cause (an FG code, e.g. `FG-LLM-0001`), if any. */
+            cause?: string | null;
+            /** @description UTC, `YYYY-MM-DDTHH:MM:SSZ`. */
+            created_at?: string | null;
+            /** @description The model's findings that named no catalog part (dropped). */
+            dropped: number;
+            /** @description `FG-AGENT-0011` when the LLM did not answer. */
+            error_code?: string | null;
+            /** @description `name:tag` of the model. */
+            model?: string | null;
+            /** Format: int32 */
+            prompt_version?: number | null;
+            /**
+             * @description `ready` (the reasons are merged in), `pending` (asked; look again
+             *     shortly), `unavailable` (the LLM did not answer), `paused`,
+             *     `refused` (nothing was sent: no open specification document, or one
+             *     held a secret), `withheld` (a confidential advice for an agent).
+             */
+            state: string;
+            /**
+             * @description `ready`: the AI's summary of what the specifications need (a
+             *     proposal; the person decides).
+             */
+            summary?: string | null;
         };
         /** @description `POST …/recommend` (no field yet; the body is `{}`). */
         RecommendRequest: Record<string, never>;
         /** @description One recommended part. */
         RecommendedBody: {
             kind: string;
+            /**
+             * @description The local LLM's reason (an AI proposal, at most 200 characters);
+             *     `null` without one.
+             */
+            llm_reason?: string | null;
             /** @description `base_model`, `current_lock` or `required_by=<slug>`. */
             reason: string;
             /** @description `rule`. */
@@ -9544,6 +9591,25 @@ export interface components {
              *     exists (`false`: `work_item_link_missing`).
              */
             linked: boolean;
+        };
+        /**
+         * @description A catalog part the local LLM suggests: never selected (a person ticks
+         *     it and sees its capabilities in the Dry-Run).
+         */
+        SuggestedBody: {
+            /**
+             * @description What the part may do (`exec`, `network`, …): shown beside the AI's
+             *     reason so the reason is never the only thing a person reads.
+             */
+            capabilities: string[];
+            kind: string;
+            /** @description The local LLM's reason (an AI proposal, at most 200 characters). */
+            reason: string;
+            /** @description `llm`. */
+            selected_by: string;
+            slug: string;
+            /** @description The newest stable version. */
+            version: string;
         };
         /** @description A target (its pin by fingerprint; never a private key). */
         TargetBody: {

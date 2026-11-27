@@ -29,6 +29,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{query_error, read_query_error, Db};
 
+pub mod agent_recommend;
 pub mod asset_draft;
 pub mod diagnosis;
 pub mod review;

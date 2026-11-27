@@ -1052,6 +1052,14 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 
+# Plan 16 A11 (20270113110000): a project's ask for the LLM's reasons of
+# the builder's recommendation — upserted by the route, answered by the
+# worker, removed with the project by the purge.
+[tables.agent_recommend_asks]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
 # ── Plan 20 K2 (20270107100000, ADR-0040): the search index — derived,
 # rebuilt from the source tables at any time (`forge search reindex`) ──
 [tables.search_entries]

@@ -11862,15 +11862,30 @@
         "additionalProperties": false,
         "description": "`POST …/recommend`.",
         "properties": {
+          "degraded": {
+            "description": "`true` when the answer has no LLM reasons (any `llm.state` but\n`ready`) or they are less trustworthy (the advice was degraded, or\nfindings were dropped).",
+            "type": "boolean"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/RecommendLlmBody"
+          },
           "parts": {
+            "description": "The rules' selection: the base model first, then the parts with an\nLLM reason (most confident first), then the rest.",
             "items": {
               "$ref": "#/components/schemas/RecommendedBody"
             },
             "type": "array"
           },
           "source": {
-            "description": "`rules` (the local LLM's reasons come later, plan 16 A11).",
+            "description": "`rules+llm` (the local LLM's reasons are merged in) or `rules`.",
             "type": "string"
+          },
+          "suggested": {
+            "description": "Other catalog parts the LLM suggests (never selected).",
+            "items": {
+              "$ref": "#/components/schemas/SuggestedBody"
+            },
+            "type": "array"
           },
           "unavailable": {
             "description": "Parts of the current lock with no stable version to pick.",
@@ -11882,8 +11897,80 @@
         },
         "required": [
           "source",
+          "degraded",
           "parts",
-          "unavailable"
+          "suggested",
+          "unavailable",
+          "llm"
+        ],
+        "type": "object"
+      },
+      "RecommendLlmBody": {
+        "additionalProperties": false,
+        "description": "The local LLM's part of the recommendation (plan 16 A11).",
+        "properties": {
+          "advice_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cause": {
+            "description": "The recorded cause (an FG code, e.g. `FG-LLM-0001`), if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "UTC, `YYYY-MM-DDTHH:MM:SSZ`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dropped": {
+            "description": "The model's findings that named no catalog part (dropped).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error_code": {
+            "description": "`FG-AGENT-0011` when the LLM did not answer.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "description": "`name:tag` of the model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt_version": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready` (the reasons are merged in), `pending` (asked; look again\nshortly), `unavailable` (the LLM did not answer), `paused`,\n`refused` (nothing was sent: no open specification document, or one\nheld a secret), `withheld` (a confidential advice for an agent).",
+            "type": "string"
+          },
+          "summary": {
+            "description": "`ready`: the AI's summary of what the specifications need (a\nproposal; the person decides).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "dropped"
         ],
         "type": "object"
       },
@@ -11898,6 +11985,13 @@
         "properties": {
           "kind": {
             "type": "string"
+          },
+          "llm_reason": {
+            "description": "The local LLM's reason (an AI proposal, at most 200 characters);\n`null` without one.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "reason": {
             "description": "`base_model`, `current_lock` or `required_by=<slug>`.",
@@ -14623,6 +14717,46 @@
         },
         "required": [
           "linked"
+        ],
+        "type": "object"
+      },
+      "SuggestedBody": {
+        "additionalProperties": false,
+        "description": "A catalog part the local LLM suggests: never selected (a person ticks\nit and sees its capabilities in the Dry-Run).",
+        "properties": {
+          "capabilities": {
+            "description": "What the part may do (`exec`, `network`, …): shown beside the AI's\nreason so the reason is never the only thing a person reads.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "The local LLM's reason (an AI proposal, at most 200 characters).",
+            "type": "string"
+          },
+          "selected_by": {
+            "description": "`llm`.",
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "version": {
+            "description": "The newest stable version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "kind",
+          "version",
+          "capabilities",
+          "selected_by",
+          "reason"
         ],
         "type": "object"
       },

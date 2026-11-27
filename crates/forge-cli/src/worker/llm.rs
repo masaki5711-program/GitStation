@@ -15,7 +15,8 @@
 //!   an approval ([`super::approval_summary`], plan 19 L5-8), the merge
 //!   request first pass (`forge/ai-review`, [`super::ai_review`], L5-5)
 //!   and the AI asset drafts of draft improvement merge requests
-//!   ([`super::asset_draft`], plan 17 P17-10).
+//!   ([`super::asset_draft`], plan 17 P17-10) and the agent builder's
+//!   recommendation reasons ([`super::agent_recommend`], plan 16 A11).
 //!
 //! Disabled (the default, and production until a GPU host is named): no
 //! gateway, no call to any model; the features that would ask fall back
@@ -24,7 +25,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_core::config::LlmConfig;
+use forge_core::config::{AgentConfig, LlmConfig};
 use forge_core::deploy::TargetPolicy;
 use forge_core::{telemetry, RequestId};
 use forge_db::Db;
@@ -61,6 +62,7 @@ impl LlmTasks {
 /// Start the tasks (module docs).
 pub(crate) fn start(
     cfg: &LlmConfig,
+    agent: &AgentConfig,
     db: &Db,
     storage: &Storage,
     stop: &watch::Receiver<bool>,
@@ -104,6 +106,19 @@ pub(crate) fn start(
                 storage.clone(), // clone: the task's own storage handles
                 browse.clone(),  // clone: shares the caches
                 stop.clone(),    // clone: the task waits on its own receiver
+            ));
+            // Plan 16 A11: the recommendation's reasons (the rules from the
+            // marketplace, the specification documents read with git).
+            handles.push(super::agent_recommend::spawn(
+                gateway.clone(), // clone: the task's own handle
+                db.clone(),      // clone: the task's own pool handle
+                forge_marketplace::Marketplace::new(
+                    db.clone(),     // clone: the marketplace's own pool handle
+                    browse.clone(), // clone: shares the caches
+                    agent.clone(),  // clone: the marketplace owns its settings
+                ),
+                browse.clone(), // clone: shares the caches
+                stop.clone(),   // clone: the task waits on its own receiver
             ));
             let deploy = forge_deploy::Deploy::new(
                 db.clone(), // clone: the service's own pool handle

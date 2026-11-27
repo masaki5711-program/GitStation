@@ -236,6 +236,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::LlmQueueDeadline
         // Plan 17 P17-10: the AI asset draft's (a proposal, never a merge's).
         | ErrorCode::AiAssetDraftRefused
+        // Plan 16 A11: the recommendation without LLM reasons (never a merge's).
+        | ErrorCode::RecommendDegraded
         // Plan 19 L5-7: forge diagnose's (an operator command, never a merge's).
         | ErrorCode::DiagnoseSourceUnreadable
         // Plan 20 W1/W2: the wiki link (never a merge's).
