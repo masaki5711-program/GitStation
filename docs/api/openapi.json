@@ -178,6 +178,225 @@
         ],
         "type": "object"
       },
+      "AiReviewAdviceBody": {
+        "additionalProperties": false,
+        "description": "The newest advice.",
+        "properties": {
+          "advice_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "UTC.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deep_review": {
+            "description": "Why a deeper review (Claude or a person) is recommended: code rules\nfirst, then the model's words (`null`: not recommended).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "degraded": {
+            "description": "Less trustworthy than its words (a verdict withheld, findings\ndropped for missing evidence).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/AiReviewFindingBody"
+            },
+            "type": "array"
+          },
+          "head_sha": {
+            "description": "The head the advice was made for.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input_class": {
+            "description": "`internal` or `confidential` (people only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "\"AI の助言（提案） / AI advice (suggestion)\".",
+            "type": "string"
+          },
+          "model": {
+            "description": "`name:tag`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "description": "For `none` and `withheld`: what the screen says instead.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt_version": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stale": {
+            "description": "Made for another head than the current one.",
+            "type": "boolean"
+          },
+          "state": {
+            "description": "`none` (no advice: off, the LLM disabled or down, not answered yet),\n`shown`, or `withheld` (confidential, read by an agent).",
+            "type": "string"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "label",
+          "note",
+          "stale",
+          "head_sha",
+          "summary",
+          "findings",
+          "deep_review",
+          "degraded",
+          "input_class",
+          "advice_id",
+          "model",
+          "prompt_version",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "AiReviewBody": {
+        "additionalProperties": false,
+        "description": "`GET …/merge-requests/{iid}/ai-review`.",
+        "properties": {
+          "advice": {
+            "$ref": "#/components/schemas/AiReviewAdviceBody"
+          },
+          "check": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiReviewCheckBody",
+                "description": "`forge/ai-review` on that head (`null`: none)."
+              }
+            ]
+          },
+          "head_sha": {
+            "description": "The merge request's head now.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "description": "The project's `llm.review`: `off`, `advisory` or `required`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "mode",
+          "head_sha",
+          "check",
+          "advice"
+        ],
+        "type": "object"
+      },
+      "AiReviewCheckBody": {
+        "additionalProperties": false,
+        "description": "The `forge/ai-review` run on the current head.",
+        "properties": {
+          "conclusion": {
+            "description": "`success` (no finding), `neutral` (findings, low confidence, or not\nreviewed), `failure` (a `required` project's critical / high\nfinding), `error` (the LLM failed: never a success).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`queued`, `in_progress` or `completed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "conclusion"
+        ],
+        "type": "object"
+      },
+      "AiReviewFindingBody": {
+        "additionalProperties": false,
+        "description": "One finding, with the evidence it was checked against.",
+        "properties": {
+          "confidence": {
+            "format": "double",
+            "type": "number"
+          },
+          "line": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote": {
+            "description": "Copied from the input (code checked it is there).",
+            "type": "string"
+          },
+          "severity": {
+            "description": "`critical`, `high`, `medium` or `low`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "path",
+          "line",
+          "quote",
+          "message",
+          "confidence"
+        ],
+        "type": "object"
+      },
       "AiTermBody": {
         "additionalProperties": false,
         "description": "One state name and its plain words (plan 08).",
@@ -21996,6 +22215,55 @@
         },
         "summary": "What the act-as confirmation screen shows: the merge request, its head and the target's tip, whether sha is the head, the receiving integration (a person's web session; the intent's action allowed for them)",
         "x-forge-action": "ActAsConfirmView"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/ai-review": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_ai_review",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiReviewBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's AI first pass by the local LLM, as advice only (it never blocks or approves a merge): the project's llm.review (off, advisory, required), the forge/ai-review run on the current head (error when the LLM failed, never success) and the newest advice — summary, findings with their checked evidence, the deep-review mark (code rules first), model, prompt version and time; state none (no advice), shown, or withheld (a confidential advice read by an agent, an act-as request or Forge-Context-Audience: agent); stale when made for another head (as the merge request)",
+        "x-forge-action": "MergeRequestRead"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {

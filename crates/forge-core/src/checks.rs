@@ -51,6 +51,7 @@ pub const FORGE_REPORTED_CHECKS: &[&str] = &[
     DOC_LINT_CHECK,
     CI_LINT_CHECK,
     AI_EVAL_CHECK,
+    AI_REVIEW_CHECK,
 ];
 
 /// `forge/ai-eval` (plan 17 P17-2, ADR-0034): the AI evaluation bench's
@@ -62,6 +63,17 @@ pub const FORGE_REPORTED_CHECKS: &[&str] = &[
 /// report; every other pipeline has no such run. Never over HTTP (a
 /// `forge/` name), never by a CI job (ADR-0029 decision 8).
 pub const AI_EVAL_CHECK: &str = "forge/ai-eval";
+
+/// `forge/ai-review` (plan 19 §3.1, M5 L5-5, ADR-0039 Amendment L5-5): the
+/// local LLM's first pass over a merge request head, as **advice** —
+/// `success` with no finding, `neutral` with findings (or a degraded
+/// answer, or a review that was not done for its head), `error` when the
+/// LLM failed (never a success). `failure` only in a project whose
+/// `llm.review` is `required` and only for a critical or high finding; it
+/// blocks a merge only when a branch rule names it as a required check
+/// (no default rule does). Written by forge's worker only, for projects
+/// whose `llm.review` is not `off`; never over HTTP (a `forge/` name).
+pub const AI_REVIEW_CHECK: &str = "forge/ai-review";
 
 /// `forge/spec-lint` (M3 X4, plan 03 §5.4): whether the commit's own
 /// specification documents and the `@req` tags of its families keep the
@@ -109,6 +121,7 @@ pub const SYSTEM_REPORTED_CHECKS: &[&str] = &[
     DOC_LINT_CHECK,
     CI_LINT_CHECK,
     AI_EVAL_CHECK,
+    AI_REVIEW_CHECK,
     CI_PIPELINE_CHECK,
 ];
 

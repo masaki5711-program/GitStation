@@ -784,6 +784,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["unlinked","project_id","iid","ref"]}"#,
     },
     CommandSpec {
+        name: "mr ai-review",
+        summary: "A merge request's AI first pass by the local LLM, as advice only — it never blocks or approves a merge (M5 L5-5): the project's llm.review, the forge/ai-review run on the head (error when the LLM failed, never success) and the newest advice: summary, findings with their checked evidence, the deep-review mark, model and prompt version; none, shown, or withheld from an agent token when confidential; stale when made for another head.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr ai-review --project 7 --iid 3 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/ai-review"],
+        output: r#"{"type":"object","required":["iid","mode","head_sha","check","advice"],"properties":{"advice":{"type":"object","required":["state","label","stale","findings"]}}}"#,
+    },
+    CommandSpec {
         name: "mr status",
         summary: "Whether a merge request may merge now and every reason it may not, in ADR-0024's fixed order (the first is the one-line reason), with the approvals, the required checks, the discussions and CODEOWNERS enforcement. With --json: the stable merge status contract (schema_version 1, docs/api/merge-status.md) for agents.",
         args: &[

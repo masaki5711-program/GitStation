@@ -3037,6 +3037,17 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::conflicts,
         )
         .responds::<mr::ConflictsBody>(Verb::Get, mr::CONFLICTS)
+        // M5 L5-5 (plan 19 §3.1): the local LLM's first pass, read like the
+        // merge request; a confidential advice is withheld from agents.
+        .route_with(
+            Verb::Get,
+            mr::AI_REVIEW,
+            Action::MergeRequestRead,
+            "A merge request's AI first pass by the local LLM, as advice only (it never blocks or approves a merge): the project's llm.review (off, advisory, required), the forge/ai-review run on the current head (error when the LLM failed, never success) and the newest advice — summary, findings with their checked evidence, the deep-review mark (code rules first), model, prompt version and time; state none (no advice), shown, or withheld (a confidential advice read by an agent, an act-as request or Forge-Context-Audience: agent); stale when made for another head (as the merge request)",
+            mr::AI_REVIEW_OF,
+            mr::ai_review,
+        )
+        .responds::<mr::AiReviewBody>(Verb::Get, mr::AI_REVIEW)
         // M3 X5 (plan 03 §6): a merge request's review context, read like
         // the merge request itself.
         .route_with(

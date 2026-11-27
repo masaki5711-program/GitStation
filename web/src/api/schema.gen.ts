@@ -1968,6 +1968,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/ai-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A merge request's AI first pass by the local LLM, as advice only (it never blocks or approves a merge): the project's llm.review (off, advisory, required), the forge/ai-review run on the current head (error when the LLM failed, never success) and the newest advice — summary, findings with their checked evidence, the deep-review mark (code rules first), model, prompt version and time; state none (no advice), shown, or withheld (a confidential advice read by an agent, an act-as request or Forge-Context-Audience: agent); stale when made for another head (as the merge request) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_ai_review"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {
         parameters: {
             query?: never;
@@ -3811,6 +3828,79 @@ export interface components {
         /** @description What the caller could do now (a hint; the route decides again). */
         AiAssetsViewerBody: {
             can_change: boolean;
+        };
+        /** @description The newest advice. */
+        AiReviewAdviceBody: {
+            /** Format: int64 */
+            advice_id: number | null;
+            /** @description UTC. */
+            created_at: string | null;
+            /**
+             * @description Why a deeper review (Claude or a person) is recommended: code rules
+             *     first, then the model's words (`null`: not recommended).
+             */
+            deep_review: string | null;
+            /**
+             * @description Less trustworthy than its words (a verdict withheld, findings
+             *     dropped for missing evidence).
+             */
+            degraded: boolean | null;
+            findings: components["schemas"]["AiReviewFindingBody"][];
+            /** @description The head the advice was made for. */
+            head_sha: string | null;
+            /** @description `internal` or `confidential` (people only). */
+            input_class: string | null;
+            /** @description "AI の助言（提案） / AI advice (suggestion)". */
+            label: string;
+            /** @description `name:tag`. */
+            model: string | null;
+            /** @description For `none` and `withheld`: what the screen says instead. */
+            note: string | null;
+            /** Format: int32 */
+            prompt_version: number | null;
+            /** @description Made for another head than the current one. */
+            stale: boolean;
+            /**
+             * @description `none` (no advice: off, the LLM disabled or down, not answered yet),
+             *     `shown`, or `withheld` (confidential, read by an agent).
+             */
+            state: string;
+            summary: string | null;
+        };
+        /** @description `GET …/merge-requests/{iid}/ai-review`. */
+        AiReviewBody: {
+            advice: components["schemas"]["AiReviewAdviceBody"];
+            check: null | components["schemas"]["AiReviewCheckBody"];
+            /** @description The merge request's head now. */
+            head_sha: string | null;
+            /** Format: int64 */
+            iid: number;
+            /** @description The project's `llm.review`: `off`, `advisory` or `required`. */
+            mode: string;
+        };
+        /** @description The `forge/ai-review` run on the current head. */
+        AiReviewCheckBody: {
+            /**
+             * @description `success` (no finding), `neutral` (findings, low confidence, or not
+             *     reviewed), `failure` (a `required` project's critical / high
+             *     finding), `error` (the LLM failed: never a success).
+             */
+            conclusion: string | null;
+            /** @description `queued`, `in_progress` or `completed`. */
+            status: string;
+        };
+        /** @description One finding, with the evidence it was checked against. */
+        AiReviewFindingBody: {
+            /** Format: double */
+            confidence: number;
+            /** Format: int64 */
+            line: number | null;
+            message: string;
+            path: string | null;
+            /** @description Copied from the input (code checked it is there). */
+            quote: string;
+            /** @description `critical`, `high`, `medium` or `low`. */
+            severity: string;
         };
         /** @description One state name and its plain words (plan 08). */
         AiTermBody: {
@@ -14177,6 +14267,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfirmationBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_ai_review: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiReviewBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

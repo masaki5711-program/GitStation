@@ -918,6 +918,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "mr work-items",
             "mr link-work-item",
             "mr unlink-work-item",
+            "mr ai-review",
             "mr status",
             "mr merge-status",
             "mr revert",

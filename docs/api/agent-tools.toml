@@ -246,6 +246,18 @@ params = [
 ]
 
 [[tool]]
+name = "get_merge_request_ai_review"
+gstn = "mr ai-review"
+read_only = true
+method = "GET"
+path = "/api/v1/projects/{id}/merge-requests/{iid}/ai-review"
+description = "The local LLM's first-pass review of a merge request, as advice only (it never blocks or approves a merge): the forge/ai-review run on the head and the newest advice with its findings, quoted evidence and the deep-review mark. Use it as a starting point for a deeper review; a confidential advice is withheld from you."
+params = [
+  { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
+  { name = "iid", in = "path", type = "integer", required = true, description = "The merge request's number in the project." },
+]
+
+[[tool]]
 name = "list_merge_request_discussions"
 gstn = "mr discussions"
 read_only = true

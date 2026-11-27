@@ -93,6 +93,10 @@ pub struct Submission {
     pub project: Option<ProjectId>,
     pub requested_by: Option<UserId>,
     pub head_sha: Option<String>,
+    /// Why code rules recommend a deeper review (plan 19 §3.1: the rules
+    /// decide first, the model only adds words): stored before the model's
+    /// own reason in the advice's `deep_review`. `None`: no rule fired.
+    pub deep_review: Option<String>,
     pub prompt: Prompt,
     pub input: PreparedInput,
     pub policy: OutputPolicy,
@@ -567,7 +571,7 @@ impl Gateway {
             head_sha: s.head_sha.clone(),
             summary: advice.summary.clone(),
             findings: findings_json(&advice),
-            deep_review: advice.deep_review.as_ref().map(|d| d.reason.clone()),
+            deep_review: deep_review(s.deep_review.as_deref(), advice.deep_review.as_ref()),
             dropped_findings: i32::try_from(
                 advice.dropped_evidence
                     + advice.dropped_low_confidence
@@ -620,6 +624,21 @@ pub(crate) fn copy(e: &ForgeError) -> ForgeError {
         c = c.with_context("source", src);
     }
     c
+}
+
+/// The advice's deep-review text: the code rules' reason first, then the
+/// model's (`None`: neither recommends one).
+pub fn deep_review(
+    rules: Option<&str>,
+    model: Option<&forge_core::llm::DeepReview>,
+) -> Option<String> {
+    let model = model.map(|d| d.reason.trim()).filter(|r| !r.is_empty());
+    match (rules.map(str::trim).filter(|r| !r.is_empty()), model) {
+        (None, None) => None,
+        (Some(r), None) => Some(r.to_owned()),
+        (None, Some(m)) => Some(m.to_owned()),
+        (Some(r), Some(m)) => Some(format!("{r} / AI: {m}")),
+    }
 }
 
 /// The findings as stored (`forge.llm_advice.findings`).

@@ -197,7 +197,8 @@ async fn bench_report_matches_adr_0034_schema() {
     let result = run(&provider, &cfg, &model, &cases)
         .await
         .expect("measured");
-    assert_eq!(result.skipped, vec![Purpose::MrReview]);
+    // Every purpose has its prompt since L5-5: nothing is skipped.
+    assert!(result.skipped.is_empty(), "{:?}", result.skipped);
     let bytes = render_report(&result.report).expect("rendered");
     let parsed = ai_eval::parse(&bytes).expect("a v1 report forge/ai-eval accepts");
     assert_eq!(parsed, result.report);
@@ -208,16 +209,29 @@ async fn bench_report_matches_adr_0034_schema() {
     let mut sorted = ids.clone();
     sorted.sort_unstable();
     assert_eq!(ids, sorted);
-    assert!(ids
-        .iter()
-        .all(|id| id.starts_with("approval_summary/") || id.starts_with("incident_diagnosis/")));
+    for purpose in Purpose::ALL {
+        assert!(
+            ids.iter().any(|id| id.starts_with(&format!("{purpose}/"))),
+            "{purpose} runs"
+        );
+    }
     assert!(parsed.cases.iter().all(|c| c.runs == cfg.runs));
     // The report as its own baseline passes every gate.
     assert!(ai_eval::evaluate(&parsed, &parsed).passed());
-    // The answer names every fact: every regular case hits.
-    assert!((parsed.metrics.cause_hit_rate - 1.0).abs() < 1e-9);
-    // Nothing is `clean` among the cases in use, and no finding was kept.
-    assert!(result.empty_metrics.contains(&"false_alarm_rate"));
+    // The answer names every fact but finds no planted defect: the
+    // summaries' regular cases hit, the merge request ones miss.
+    assert!(parsed.metrics.cause_hit_rate < 1.0);
+    for c in &parsed.cases {
+        if c.kind == CaseKind::Regular && !c.id.starts_with("mr_review/") {
+            assert_eq!(c.passes, c.runs, "{}", c.id);
+        }
+    }
+    // The merge request set's clean cases are measured now: no finding,
+    // so no false alarm and every run a correct abstention.
+    assert!(!result.empty_metrics.contains(&"false_alarm_rate"));
+    assert!(parsed.metrics.false_alarm_rate.abs() < 1e-9);
+    assert!((parsed.metrics.abstain_accuracy - 1.0).abs() < 1e-9);
+    // No finding was kept or dropped.
     assert!(result.empty_metrics.contains(&"attach_precision"));
 }
 

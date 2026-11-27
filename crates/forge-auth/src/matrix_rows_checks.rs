@@ -70,6 +70,10 @@ const EXT: F = run(Ns::Ext, false, P::Private);
 /// worker writes it from the bench's `eval-report.json`; the CI job that
 /// ran the bench never reports it (ADR-0029 decision 8).
 const AI_EVAL: F = FORGE;
+/// `forge/ai-review` (plan 19 L5-5): a `forge/` name — forge's worker
+/// writes the local LLM's first pass; no caller writes the AI's conclusion.
+#[cfg(test)]
+const AI_REVIEW: F = FORGE;
 
 const SA: F = F::ServiceAccountTarget {
     human: false,
@@ -244,5 +248,37 @@ mod tests {
                 "{actor:?}"
             );
         }
+    }
+
+    /// Plan 19 L5-5: `forge/ai-review` is reserved from HTTP — the worker
+    /// alone writes it, so no token, agent, service account or
+    /// administrator can set the AI's conclusion (or fake one).
+    #[test]
+    fn forge_ai_review_reserved_from_http() {
+        let name = forge_core::CheckName::parse(forge_core::checks::AI_REVIEW_CHECK).expect("name");
+        assert_eq!(name.namespace(), Ns::Forge);
+        assert!(forge_core::checks::system_reports(&name));
+        for actor in [
+            W::ServiceAccountOwnerTokenApi,
+            W::ServiceAccountTokenApi,
+            W::DevTokenApi,
+            W::Admin,
+            W::AdminTokenAdmin,
+        ] {
+            assert_eq!(
+                reason_of(actor, AI_REVIEW),
+                "forge_namespace_internal",
+                "{actor:?}"
+            );
+        }
+        let agent = authorize(
+            &W::AgentTokenApi.principal(),
+            A::CheckWrite,
+            &AI_REVIEW.resource(W::AgentTokenApi),
+        );
+        assert!(
+            agent.is_err(),
+            "an agent token never writes forge/ai-review"
+        );
     }
 }

@@ -297,6 +297,11 @@ pub struct OutputPolicy {
     /// A finding about this path must cite one of its numbered lines
     /// (`L<n>: `) by `line` and quote that line only (module docs).
     pub cited_lines_of: Option<&'static str>,
+    /// Every finding must name the part (`path`) its quote is in: a
+    /// finding without a path - whose quote could come from free text such
+    /// as a merge request's title or description - is dropped for its
+    /// evidence (the merge request first pass, L5-5). Off by default.
+    pub require_path: bool,
 }
 
 impl Default for OutputPolicy {
@@ -309,6 +314,7 @@ impl Default for OutputPolicy {
             max_quote_chars: 500,
             forbid_mutating_steps: false,
             cited_lines_of: None,
+            require_path: false,
         }
     }
 }
@@ -532,8 +538,9 @@ fn evidence_in_input(finding: &Finding, input: &PreparedInput, policy: &OutputPo
         return false;
     }
     let parts = input.parts();
-    if policy.cited_lines_of.is_some() && finding.path.is_none() {
-        // A diagnosis names the part of every candidate.
+    if (policy.cited_lines_of.is_some() || policy.require_path) && finding.path.is_none() {
+        // A diagnosis names the part of every candidate; a review cites a
+        // file of the diff, never the author's free text.
         return false;
     }
     if let (Some(numbered), Some(path)) = (policy.cited_lines_of, finding.path.as_deref()) {

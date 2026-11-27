@@ -1247,6 +1247,16 @@ pub enum MrCommand {
         #[arg(long = "ref", value_parser = crate::mr_work_items::parse_unlink_target, value_name = "REF")]
         reference: String,
     },
+    /// The local LLM's first pass of a merge request (M5 L5-5), as advice
+    /// only: the forge/ai-review run on the head and the newest advice
+    /// (withheld from an agent token when confidential).
+    #[command(name = "ai-review")]
+    AiReview {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
     /// Whether a merge request may merge now, and every reason it may not
     /// (a stable JSON contract with --json).
     Status {

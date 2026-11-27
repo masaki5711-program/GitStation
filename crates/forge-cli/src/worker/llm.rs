@@ -12,7 +12,8 @@
 //!   (`FG-SYS-0002`).
 //!
 //!   With the gateway, the approval summaries of deployments waiting for
-//!   an approval ([`super::approval_summary`], plan 19 L5-8).
+//!   an approval ([`super::approval_summary`], plan 19 L5-8) and the merge
+//!   request first pass (`forge/ai-review`, [`super::ai_review`], L5-5).
 //!
 //! Disabled (the default, and production until a GPU host is named): no
 //! gateway, no call to any model; the features that would ask fall back
@@ -103,6 +104,21 @@ pub(crate) fn start(
                 gateway.clone(), // clone: the task's own handle
                 db.clone(),      // clone: the task's own pool handle
                 deploy,
+                stop.clone(), // clone: the task waits on its own receiver
+            ));
+            // Plan 19 L5-5: the merge request first pass (`forge/ai-review`).
+            let review_browse = Browser::new(
+                storage.git.clone(),  // clone: the browser owns its handles
+                storage.root.clone(), // clone: as git
+                BrowseLimits::default(),
+            );
+            handles.push(super::ai_review::spawn(
+                gateway.clone(), // clone: the task's own handle
+                db.clone(),      // clone: the task's own pool handle
+                Arc::new(super::ai_review::GitSource {
+                    db: db.clone(), // clone: the source's own pool handle
+                    browse: review_browse,
+                }),
                 stop.clone(), // clone: the task waits on its own receiver
             ));
             handles.push(background::spawn(

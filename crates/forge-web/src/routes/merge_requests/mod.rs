@@ -52,6 +52,7 @@ use crate::body::param_invalid;
 use crate::registry::{Dispatched, QueryParam, WriteParts};
 use crate::routes::write::{bounded, json, no_store};
 
+mod ai_review;
 mod approvals;
 mod auto_merge;
 // M4 C14: the autofix line.
@@ -70,6 +71,10 @@ mod status;
 mod versions;
 mod work_items;
 
+pub use ai_review::{
+    ai_review, ai_review_body, AiReviewAdviceBody, AiReviewBody, AiReviewCheckBody,
+    AiReviewFindingBody, AI_REVIEW, AI_REVIEW_SUFFIX,
+};
 pub use approvals::{
     approvals, approve, delete_rule as delete_approval_rule, put_rule as put_approval_rule,
     rules as approval_rules, unapprove, ApprovalAnswerBody, ApprovalRuleBody, ApprovalRulesBody,
@@ -99,7 +104,7 @@ pub use discussions::{
 pub use loaders::{
     MergeRequestOf, MergeRequestRead, MergeRequestToClose, MergeRequestToPurge,
     MergeRequestToReopen, MergeRequestToUpdate, MergeRequestsOf, NewMergeRequest, VersionDiffOf,
-    COMPARE_OF, CONFLICTS_OF, DISCUSSIONS_OF, MERGEABILITY_OF, VERSIONS_OF,
+    AI_REVIEW_OF, COMPARE_OF, CONFLICTS_OF, DISCUSSIONS_OF, MERGEABILITY_OF, VERSIONS_OF,
 };
 pub use mergeability::{mergeability, MergeabilityBody};
 pub use merges::{

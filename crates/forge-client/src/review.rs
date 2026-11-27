@@ -351,6 +351,10 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
         MrCommand::RunPipeline { project, iid } => {
             crate::mr_run_pipeline::run(cli, (*project, *iid), env, io)
         }
+        // M5 L5-5: the AI first pass (`mr_ai_review.rs`).
+        MrCommand::AiReview { project, iid } => {
+            crate::mr_ai_review::ai_review(cli, (*project, *iid), env, io)
+        }
         // M3 R6: the merge status (`mr_conditions.rs`).
         MrCommand::Status { project, iid } => {
             crate::mr_conditions::status(cli, (*project, *iid), env, io)

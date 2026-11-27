@@ -333,6 +333,20 @@ the reverted merge request's author and recorded as `merge_request.revert_drafte
 codes: FG-REVIEW-0029 RevertRefused, FG-REVIEW-0030 RevertConflict (a conflicting revert
 opens nothing). Tests: `tests/revert_git.rs`.
 
+**M5 L5-5 — AI first pass** (`src/ai_review.rs`, plan 19 §3.1, ADR-0039
+Amendment L5-5): the code around the local LLM's merge request review —
+`assemble` (title / description as data, one `diff` part per file of
+`merge base..head`; lock, generated, binary and oversized files left out and
+named; a confidential path makes the input `confidential`), the deep-review
+rules (`deep_review_reasons`: migrations, auth code, CI / deploy and agent
+config, secret-looking files, concurrency, a large or partly sent diff), the
+conclusion (`success` / `neutral`; `failure` only for a `required` project's
+critical / high finding; `error` when the LLM failed) and the
+`forge/ai-review` runs (a confidential advice's words never enter a run).
+`Review::ai_review` reads the view for `GET …/merge-requests/{iid}/ai-review`
+(the advice's words decided by `forge_auth::authorize_advice`). The worker
+task lives in forge-cli (`worker/ai_review.rs`).
+
 **Plan 17 P17-6 — nightly AI evaluation baseline candidate** (`src/ai_baseline.rs`,
 ADR-0034 Amendment P17-6): `BaselineProposer::propose` (the job `ai_eval.baseline_candidate`,
 `forge serve`, queued by the worker's `ci_ai_eval` task) puts the baseline a passing scheduled

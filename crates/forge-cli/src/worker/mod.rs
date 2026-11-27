@@ -109,6 +109,8 @@ mod portal_news;
 mod org_master;
 // Plan 19 L5-3: the local LLM gateway and its records' upkeep.
 mod llm;
+// Plan 19 L5-5: the merge request first pass with the gateway.
+mod ai_review;
 // Plan 19 L5-8: approval summaries with the gateway.
 mod approval_summary;
 // ── end M3 N1 ──
