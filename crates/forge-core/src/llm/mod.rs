@@ -23,6 +23,7 @@
 use std::fmt;
 use std::time::Duration;
 
+pub mod asset_draft;
 pub mod diagnosis;
 pub mod input;
 pub mod output;
@@ -30,8 +31,9 @@ pub mod provider;
 
 pub use input::{prepare, InputLimits, InputPart, PreparedInput};
 pub use output::{
-    check_output, names_a_mutating_step, next_look_is_read_only, Advice, DeepReview, Finding,
-    FindingSeverity, OutputPolicy, MUTATING_WITHHELD, VERDICT_REMOVED, WITHHELD_SUMMARY,
+    check_output, names_a_mutating_step, next_look_is_read_only, Advice, DeepReview, EditPolicy,
+    Finding, FindingSeverity, OutputPolicy, ProposedEdit, MUTATING_WITHHELD, VERDICT_REMOVED,
+    WITHHELD_SUMMARY,
 };
 pub use provider::{generate_checked, ChatFuture, ChatReply, ChatRequest, Generated, LlmProvider};
 
@@ -59,13 +61,17 @@ pub enum Purpose {
     IncidentDiagnosis,
     /// The deployment approval summary (W14-11).
     ApprovalSummary,
+    /// A draft fix of an AI asset from an improvement request's case
+    /// (plan 17 P17-10, stage 2): proposed on a separate branch only.
+    AiAssetDraft,
 }
 
 impl Purpose {
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
         Self::MrReview,
         Self::IncidentDiagnosis,
         Self::ApprovalSummary,
+        Self::AiAssetDraft,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -73,6 +79,7 @@ impl Purpose {
             Self::MrReview => "mr_review",
             Self::IncidentDiagnosis => "incident_diagnosis",
             Self::ApprovalSummary => "approval_summary",
+            Self::AiAssetDraft => "ai_asset_draft",
         }
     }
 
@@ -81,10 +88,12 @@ impl Purpose {
     }
 
     /// The tier a request of this purpose starts in: a person waits for a
-    /// diagnosis or an approval summary; a review runs from an event.
+    /// diagnosis or an approval summary; a review runs from an event; an
+    /// AI asset draft is a fix (ADR-0017 §3: the autofix tier).
     pub fn priority(self) -> Priority {
         match self {
             Self::MrReview => Priority::Review,
+            Self::AiAssetDraft => Priority::Autofix,
             Self::IncidentDiagnosis | Self::ApprovalSummary => Priority::Interactive,
         }
     }

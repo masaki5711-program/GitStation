@@ -111,6 +111,7 @@ mod org_master;
 mod llm;
 // Plan 19 L5-8: approval summaries with the gateway.
 mod approval_summary;
+mod asset_draft;
 // ── end M3 N1 ──
 mod seal;
 // Plan 20 K4: the `search.index_documents` job.

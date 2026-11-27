@@ -293,6 +293,7 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
         | Resource::Autofix(_)
+        | Resource::AssetDraft(_)
         | Resource::Deployment(_)
         | Resource::ActAsConfirm(_) => None,
     };

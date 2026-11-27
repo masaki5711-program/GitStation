@@ -573,7 +573,8 @@ impl Gateway {
                 advice.dropped_evidence
                     + advice.dropped_low_confidence
                     + advice.dropped_over_cap
-                    + advice.dropped_mutating,
+                    + advice.dropped_mutating
+                    + advice.dropped_edits,
             )
             .unwrap_or(i32::MAX),
             degraded: advice.degraded,
@@ -598,6 +599,8 @@ impl Gateway {
             outcome = "ok",
             attempts = generated.attempts,
             findings = advice.findings.len(),
+            edits = advice.edits.len(),
+            dropped_edits = advice.dropped_edits,
             input_class = %advice.input_class,
             "an LLM advice was written"
         );

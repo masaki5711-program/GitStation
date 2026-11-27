@@ -36,6 +36,30 @@ pub fn is_improve_branch(name: &RefName) -> bool {
         .is_some_and(|rest| !rest.is_empty())
 }
 
+/// The branch prefix of the local LLM's draft of an improvement (plan 17
+/// P17-10, after `refs/heads/`): never `improve/*`, so the bot's token
+/// cannot create or race it, and never the improvement's own branch (the
+/// draft is proposed beside it, a person applies it).
+pub const AI_DRAFT_PREFIX: &str = "ai-draft/";
+
+/// Whether `name` is `refs/heads/ai-draft/<something>`.
+pub fn is_ai_draft_branch(name: &RefName) -> bool {
+    name.branch()
+        .and_then(|b| b.strip_prefix(AI_DRAFT_PREFIX))
+        .is_some_and(|rest| !rest.is_empty())
+}
+
+/// The draft branch of the improvement branch `source`
+/// (`refs/heads/improve/<x>` → `refs/heads/ai-draft/<x>`); `None` for any
+/// other branch.
+pub fn ai_draft_branch_for(source: &RefName) -> Option<RefName> {
+    let rest = source.branch()?.strip_prefix(BRANCH_PREFIX)?;
+    if rest.is_empty() {
+        return None;
+    }
+    RefName::parse(&format!("refs/heads/{AI_DRAFT_PREFIX}{rest}")).ok()
+}
+
 /// Whether an improvement draft may not change `path` (see the module
 /// docs). `path` is repository-relative, `/`-separated. Each component is
 /// also read as a developer's file system reads it

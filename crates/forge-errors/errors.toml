@@ -4123,6 +4123,22 @@ fix = "Runbook llm-gateway: `reason=queued_past_deadline` — start or restart t
 runbook = "llm-gateway"
 test = "a_request_waiting_past_its_deadline_is_abandoned"
 
+# ── Plan 17 P17-10 (ADR-0039 Amendment P17-10): the AI asset draft ──
+
+[[error]]
+code = "FG-LLM-0007"
+name = "AiAssetDraftRefused"
+http_status = 422
+severity = "info"
+user_message_ja = "AI の修正の下書きは作りませんでした（提案が決まりの外でした）。改善要求の MR はそのままです。"
+user_message_en = "No AI draft fix was made (the proposal was outside the rules). The improvement merge request is unchanged."
+user_message_id = "Draf perbaikan AI tidak dibuat (usulan di luar aturan). Merge request perbaikan tidak berubah."
+cause = "Plan 17 P17-10 (ADR-0039 Amendment P17-10): the worker's AI asset draft (`asset_draft`) asked the local LLM to propose a fix of a skill or a playbook for a draft improvement merge request (`improve/<id>` in a project with `ai_assets.enabled`), and committed nothing to `ai-draft/<id>`. `reason`: `no_edit` (the answer proposed no acceptable file: every edit named a file the input did not give, an empty, unchanged or oversized content, a redaction marker, or none at all — `dropped` counts them), `not_editable` (a kept edit is not an unprotected `skills/*.md` / `playbooks/*.toml` of the request's outlet), `numbers_changed` (the proposal changes a number of the file: judgement thresholds are people's), `new_link` / `new_mention` (it adds a link or an `@mention` the file did not have: injected text), `secret` (the proposed content holds a secret-looking value), `path_refused` (git refused the path). The merge request, its branch and its draft state are never touched; the advice (the model's reasons) is kept on the merge request as usual."
+diagnosis = "The worker logs it once per merge request and input with `task=asset_draft`, `project_id`, `merge_request_id`, `llm_request_id`, `reason`, `dropped` and `path` (when one edit is named). Read the request and its advice: SELECT r.state, r.prompt_version, a.summary, a.degraded FROM forge.llm_requests r LEFT JOIN forge.llm_advice a ON a.llm_request_id = r.id WHERE r.id = <llm_request_id>. Many `no_edit` after a prompt or model change are the change's fault; `secret` means the model wrote a credential-looking value (from the case text: the case should not hold one)."
+fix = "Single ones need nothing: a person fixes the asset by hand (plan 17 §1.5). A run of `no_edit` after a prompt or model change: roll it back (runbook llm-advice-quality) and add the case to the eval set `crates/forge-llm/evals/ai_asset_draft/`. `secret`: check the case for a credential (a committed secret is a leak: runbook secret-removal)."
+runbook = "llm-advice-quality"
+test = "a_refused_draft_writes_no_branch"
+
 # ── Plan 20 W1/W2 (ADR-0040 §5): the project wiki link ──
 
 [[error]]

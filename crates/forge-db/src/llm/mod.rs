@@ -29,6 +29,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{query_error, read_query_error, Db};
 
+pub mod asset_draft;
 pub mod diagnosis;
 
 /// Requests kept this long (plan 19 §8.3).

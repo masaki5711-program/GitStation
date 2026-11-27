@@ -19,6 +19,7 @@ mod action;
 mod authorize;
 mod auto_merge;
 // M4 C14: the autofix bot's arm.
+mod asset_draft;
 mod autofix;
 // ADR-0036: the PFS portal's arm.
 mod codeowners_ctx;
@@ -75,6 +76,7 @@ mod matrix_rows_merge_queue;
 // M4 C9: auto-merge.
 mod matrix_rows_auto_merge;
 // M4 C14: autofix.
+mod matrix_rows_asset_draft;
 mod matrix_rows_autofix;
 // ADR-0036: the PFS portal.
 mod matrix_rows_portal;
@@ -120,6 +122,7 @@ mod spec_ref;
 pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action, CiRule};
+pub use asset_draft::{asset_draft_may, AssetDraftCtx};
 pub use authorize::{authorize, group_seen, GroupSeen};
 pub use auto_merge::{auto_merge_may, AutoMergeCtx};
 pub use autofix::{autofix_may, AutofixCtx};
@@ -133,13 +136,14 @@ pub use llm::{advice_reader, authorize_advice, AdviceReader};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
-    AgentPartView, AgentResource, ApproverGate, AssertionFacts, AssertionSubject, AutoMergeTarget,
-    AutofixTarget, BindingSubject, CodeownersToggle, CopyMark, Credential, DeploymentView,
-    GroupSight, IntegrationFeedView, JobCredential, JobTokenState, LessonView, MembershipChange,
-    MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView, PersonalDisclosure,
-    PinnedCopy, PortalCredential, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
-    ResolvedVia, Resource, Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView,
-    TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility, SSH_KEY_SCOPES,
+    AgentPartView, AgentResource, ApproverGate, AssertionFacts, AssertionSubject, AssetDraftTarget,
+    AutoMergeTarget, AutofixTarget, BindingSubject, CodeownersToggle, CopyMark, Credential,
+    DeploymentView, GroupSight, IntegrationFeedView, JobCredential, JobTokenState, LessonView,
+    MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView,
+    PersonalDisclosure, PinnedCopy, PortalCredential, Principal, ProjectView, RefKind,
+    RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob, Scope,
+    ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility,
+    SSH_KEY_SCOPES,
 };
 pub use portal::{portal_admin_menu, portal_may, portal_reader, PortalWidgetCtx};
 pub use prove::{

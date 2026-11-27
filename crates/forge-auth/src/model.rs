@@ -54,6 +54,14 @@ pub enum Credential {
     /// `Resource::Autofix`, nothing else — never an approval, a merge, a
     /// protected branch or path, a setting, a deploy or an act-as.
     Autofix,
+    /// The AI asset draft writer `forge-ai-draft` (plan 17 P17-10, ADR-0039
+    /// Amendment P17-10): forge's own worker creating the local LLM's draft
+    /// branch `ai-draft/<id>` beside a draft improvement merge request. No
+    /// person, no login, no token; built only by [`Principal::asset_draft`]
+    /// and decided in its own arm (`asset_draft.rs`): `RepoPush` (a branch
+    /// creation) on `Resource::AssetDraft`, nothing else — never marking a
+    /// merge request ready, an approval, a merge or any other write.
+    AssetDraft,
     /// The PFS portal forwarding a person's access token to a widget route
     /// (ADR-0036): read-only widget data of that person. Built by forge-web's
     /// authentication only, on the widget routes only
@@ -230,6 +238,7 @@ impl Principal {
             | Credential::Job(_)
             | Credential::AutoMerge
             | Credential::Autofix
+            | Credential::AssetDraft
             | Credential::Portal(_) => PersonalDisclosure::default(),
         }
     }
@@ -382,6 +391,7 @@ impl Principal {
             | Credential::Job(_)
             | Credential::AutoMerge
             | Credential::Autofix
+            | Credential::AssetDraft
             | Credential::Portal(_) => None,
         }
     }
@@ -430,6 +440,15 @@ impl Principal {
         matches!(self.credential, Credential::Autofix)
     }
 
+    /// The AI asset draft writer (plan 17 P17-10): forge-cli's
+    /// `asset_draft` worker task builds it, nothing else (no route
+    /// authenticates as it). No person, no administrator rights, the kind
+    /// of no person (`Bot`), never an agent token; `authorize()` decides it
+    /// in `asset_draft.rs` before any other rule.
+    pub fn asset_draft() -> Self {
+        Self::ci(Credential::AssetDraft)
+    }
+
     /// No user, active (the credential's own state decides), the kind of
     /// no person (`Bot`: never a member, never `Human`).
     fn ci(credential: Credential) -> Self {
@@ -463,6 +482,7 @@ impl Principal {
                 | Credential::Job(_)
                 | Credential::AutoMerge
                 | Credential::Autofix
+                | Credential::AssetDraft
                 | Credential::Portal(_) => false,
             }
     }
@@ -481,6 +501,7 @@ impl Principal {
             | Credential::Job(_)
             | Credential::AutoMerge
             | Credential::Autofix
+            | Credential::AssetDraft
             | Credential::Portal(_) => Vec::new(),
         }
     }
@@ -520,7 +541,8 @@ impl Principal {
             | Credential::Runner(_)
             | Credential::Job(_)
             | Credential::AutoMerge
-            | Credential::Autofix => None,
+            | Credential::Autofix
+            | Credential::AssetDraft => None,
         }
     }
 }
@@ -581,6 +603,28 @@ pub struct AutofixTarget {
     /// enabler).
     pub enabler_role: Option<Role>,
     pub enabler_active: bool,
+}
+
+/// What the AI asset draft writer is decided on (plan 17 P17-10): every
+/// fact read from the database (and the protection rules) right before the
+/// branch is created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetDraftTarget {
+    /// The project (the writer is no member: `role` is `None`).
+    pub project: ProjectView,
+    /// The ref written: `refs/heads/ai-draft/<id>`.
+    pub branch: RefName,
+    /// The merge request's source branch: `refs/heads/improve/<id>`.
+    pub source_branch: RefName,
+    /// What the write does to `branch` (only a creation is allowed).
+    pub update: RefUpdate,
+    /// The protection of `branch` (`Some`: refused).
+    pub protection: Option<RefProtection>,
+    pub mr_open: bool,
+    /// The merge request is still a draft (a ready one gets no draft).
+    pub mr_draft: bool,
+    /// The project's `ai_assets.enabled` now.
+    pub ai_assets_enabled: bool,
 }
 
 /// What a push does to one ref.
@@ -959,6 +1003,11 @@ pub enum Resource {
     /// and the landing). Every other principal is refused it
     /// (`reason=autofix_resource`).
     Autofix(AutofixTarget),
+    /// The draft branch of an improvement merge request as the AI asset
+    /// draft writer reaches it (plan 17 P17-10): `RepoPush` of its branch
+    /// creation. Every other principal is refused it
+    /// (`reason=asset_draft_resource`).
+    AssetDraft(AssetDraftTarget),
     /// One discussion of a merge request (M3 R3, ADR-0024 §12):
     /// `DiscussionResolve`. `mr_author` is the merge request's author,
     /// `started_by` the author of the thread's first note. The merge

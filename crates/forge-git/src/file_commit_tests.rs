@@ -715,3 +715,89 @@ async fn root_files_need_at_least_one_file() {
         .await
         .is_err());
 }
+
+/// Plan 17 P17-10: a draft's files over a parent make one commit on a new
+/// branch; the parent's branch never moves and an existing branch is never
+/// overwritten.
+#[tokio::test]
+async fn branch_files_commit_over_a_parent_on_a_new_branch_once() {
+    let f = fixture().await;
+    let main = RefName::parse("refs/heads/main").expect("ref");
+    let a = FilePath::parse("skills/pe-a.md").expect("path");
+    let b = FilePath::parse("playbooks/global.toml").expect("path");
+    let author = ident("Alice");
+    let base = f
+        .git
+        .commit_root_files(
+            &f.root,
+            f.id,
+            &RootFiles {
+                branch: &main,
+                files: &[(a.clone(), &b"old\n"[..]), (b, &b"x = 1\n"[..])],
+                message: "base",
+                author: &author,
+            },
+            T,
+        )
+        .await
+        .expect("base");
+    let draft = RefName::parse("refs/heads/ai-draft/ir-1").expect("ref");
+    let files = [(a, &b"new\n"[..])];
+    let req = BranchFiles {
+        branch: &draft,
+        parent: &base,
+        files: &files,
+        message: "ai-draft: proposal",
+        author: &author,
+    };
+    let commit = f
+        .git
+        .commit_branch_files(&f.root, f.id, &req, T)
+        .await
+        .expect("draft commit");
+    assert_eq!(
+        f.git
+            .read_ref(&f.root, f.id, &draft, T)
+            .await
+            .expect("read"),
+        Some(commit.clone())
+    );
+    assert_eq!(
+        f.git.read_ref(&f.root, f.id, &main, T).await.expect("read"),
+        Some(base.clone())
+    );
+    let parents = plumb(
+        &f.path,
+        &["rev-list", "--parents", "-n", "1", commit.as_str()],
+        None,
+    );
+    assert_eq!(
+        parents.trim(),
+        format!("{} {}", commit.as_str(), base.as_str())
+    );
+    let shown = plumb(
+        &f.path,
+        &["show", &format!("{}:skills/pe-a.md", commit.as_str())],
+        None,
+    );
+    assert_eq!(shown, "new");
+    let kept = plumb(
+        &f.path,
+        &[
+            "show",
+            &format!("{}:playbooks/global.toml", commit.as_str()),
+        ],
+        None,
+    );
+    assert_eq!(kept, "x = 1");
+    let again = f.git.commit_branch_files(&f.root, f.id, &req, T).await;
+    assert!(again.is_err());
+    assert_eq!(
+        f.git
+            .read_ref(&f.root, f.id, &draft, T)
+            .await
+            .expect("read"),
+        Some(commit)
+    );
+    let _ = &f.home;
+}

@@ -432,6 +432,30 @@ fn only_the_autofix_worker_builds_the_autofix_bot() {
     );
 }
 
+/// Plan 17 P17-10: the AI asset draft writer is built by forge-cli's
+/// `asset_draft` worker task only — no route, no other worker or crate.
+#[test]
+fn only_the_asset_draft_task_builds_the_draft_writer() {
+    // Assembled so this file's own code does not match the needles.
+    let needles = [["Principal::", "asset_draft("].concat()];
+    let allowed = [
+        // The constructor's own module, the matrix's fixtures, its tests.
+        "forge-auth/src/model.rs",
+        "forge-auth/src/matrix.rs",
+        "forge-auth/src/asset_draft_tests.rs",
+        // The production caller: the worker's asset_draft task.
+        "forge-cli/src/worker/asset_draft.rs",
+    ];
+    let offenders: Vec<_> = mentions(&needles)
+        .into_iter()
+        .filter(|f| !allowed.contains(&f.as_str()))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "only forge-cli's asset_draft task builds the draft writer: {offenders:?}"
+    );
+}
+
 /// M4 C4: the job fetch route's context decides exactly like
 /// `authorize_pinned_copy` — its own project at its own SHA while live; another
 /// project or SHA is the invisible project's 404; an ended job is

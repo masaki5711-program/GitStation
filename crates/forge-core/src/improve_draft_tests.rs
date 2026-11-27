@@ -1,4 +1,6 @@
-use crate::improve_draft::{is_improve_branch, is_protected_path};
+use crate::improve_draft::{
+    ai_draft_branch_for, is_ai_draft_branch, is_improve_branch, is_protected_path,
+};
 use crate::RefName;
 
 fn name(raw: &str) -> RefName {
@@ -61,4 +63,21 @@ fn skills_cases_and_playbooks_are_not_protected() {
     ] {
         assert!(!is_protected_path(path), "{path}");
     }
+}
+
+#[test]
+fn the_draft_branch_sits_beside_the_improvement_branch() {
+    let draft = ai_draft_branch_for(&name("refs/heads/improve/req-42")).expect("an improvement");
+    assert_eq!(draft.as_str(), "refs/heads/ai-draft/req-42");
+    assert!(is_ai_draft_branch(&draft));
+    // Never an improvement branch: the bot's token cannot create it.
+    assert!(!is_improve_branch(&draft));
+    for other in [
+        "refs/heads/main",
+        "refs/heads/ai-draft/x",
+        "refs/tags/improve/x",
+    ] {
+        assert!(ai_draft_branch_for(&name(other)).is_none(), "{other}");
+    }
+    assert!(!is_ai_draft_branch(&name("refs/heads/improve/x")));
 }
