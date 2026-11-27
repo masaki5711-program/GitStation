@@ -1134,3 +1134,85 @@ spec のジョブは小段が失敗したときだけ）。
    lint（予算 10 s）+ マージ結果（予算 90 s）+ 着地が最悪でも、手の間に他の手番がキューを取ることはない。手が 240 s で切られたら、
    バッチは `testing` か `landing` のまま残り、次の手（同じか別の手番）が試しの段か回復で引き継ぐ。貸し出しの延長は入れていない。
    測った値: 32 段のマージ結果の判定 22 s（Windows、試験環境）、33 件を 2 つのバッチで着地させる試験全体で 32 s。
+
+## 追記（2026-11-28、計画 18 S9 の実装）— (d) 4 の投機の列車: 作ったもの、決めたこと、既知の限界
+
+上の Decision (d) 4 の文は変えない。新しいエラーコードは無い（`predecessor_failed` はバッチの `reason` で、MR は外れず列に戻る）。
+
+### 作ったもの
+
+1. **スキーマ**（マイグレーション `20270115100000_merge_queue_speculation`）: `merge_queue_batches.depth`（1..8、既定 1、CHECK
+   `merge_queue_batches_depth`）と `parent_batch_id`（自分の表への外部キー `merge_queue_batches_parent`、索引つき）。
+   `depth = 1 OR parent_batch_id IS NOT NULL`（`merge_queue_batches_speculative`）。生きたバッチの一意性を (queue, depth) ごとに
+   （`merge_queue_batches_live_depth`）し、それを作ってから同じトランザクションで `merge_queue_batches_one_live` を落とした。新しい
+   CHECK と外部キーは `NOT VALID` + `VALIDATE`（ADR-0030 のレビューの型）。試験 `speculation_allows_one_live_batch_per_depth`。
+2. **設定** `merge_queue.speculation_depth`（1、1〜8。`forge_core::merge_queue::MAX_SPECULATION` = スキーマの上限）。
+   `QueueLimits::speculation_depth`、起動のログに `speculation_depth`。試験 `merge_queue_speculation_depth_has_a_default_and_a_range`。
+3. **worker**: 手番は先頭（depth 1）だけを判定する（今までの `poll` / `recover` のまま）。先頭が `waiting`（パイプライン待ち）で、止めて
+   おらず、生きたバッチが D 本未満なら（純粋な `builds_behind`）、いちばん深い生きたバッチの列車の上に 1 本作る（`build(.., Some(親))`:
+   土台 = 親の `train_sha`、target は読まない、同じ手番の判定はしない）。作る前に、後ろのバッチのエントリーが減っていれば
+   （外された等）そのバッチを `entry_left` で捨てる（その後ろも一緒に）。`db::create_batch` は、キューの行をロックしたまま、親がいちばん
+   深い生きたバッチであること・その列車が新しい土台であること・生きたバッチが D 本未満であることを確かめてから 1 つ深く書く
+   （違えば `raced`）。
+4. **着地は順に**: 先頭は今までどおり target が `base_sha` のときだけ着地する。`batch_landed` は同じトランザクションで後ろのバッチを
+   前から 1 行ずつ `depth - 1` にする（一意の索引が途中で 2 つを同じ場所に見ないように）。次の手番で、新しい先頭（土台 = 今の target）が
+   判定される。
+5. **前が着地しなければ後ろも**: `db::end_batch_chain` が、バッチを終える同じトランザクションで、それより深い `testing` のバッチを全部
+   `abandoned`、`reason=predecessor_failed` にし、エントリーを `queued` に戻す（数えない・外さない）。先頭の赤（二分は先頭にだけ）・
+   捨て（`target_moved` など）・期限切れ・列車の doc-lint の赤や lint できない・マージ結果・着地の途中の回復の作り直し、すべてが同じ
+   関数を通る（worker の `end_chain`）。捨てた後ろのバッチは 1 本ずつ `forge.merge_queue.batch_abandoned`（`depth`、
+   `predecessor_batch_id`、`predecessor_reason`）。`end_batch` は `end_batch_chain` の薄い包みで、署名は変えていない。
+6. **隠した ref**: `refs/merge-queue/<queue_id>/train` は 1 本のまま、いちばん深い生きた列車を指す（浅い列車はその祖先なので gc で
+   消えない。パイプラインは自分の `refs/pipelines/<id>/head` を使う）。着地で後ろが残るなら消さない。鎖が切れたら、生きたものが
+   無ければいちばん深かった列車の位置で消し、残れば残ったいちばん深い列車へ戻す（`update-ref` の旧値つき、タイムアウトつき）。
+   保守の掃除（生きたバッチの無いキューの ref だけを消す）は変えていない。
+7. 試験（forge-review、実 git + 開発 DB、`tests/queue_speculation/`）: `a_second_train_lands_only_after_the_first`、
+   `a_red_first_train_abandons_the_second`、`a_target_moved_by_a_direct_push_abandons_every_live_train`、
+   `recovery_with_two_live_batches_records_only_what_git_shows`（CAS の後で止まった先頭を、再起動が記録し、後ろは残って着地する。
+   さらに別の再起動が何も記録し直さない = 冪等）、`a_landing_interrupted_before_the_swap_drops_the_trains_behind_it`、
+   `an_entry_leaving_a_speculative_train_drops_it_and_those_behind`、`depth_1_behaves_like_adr_0030`。深さ 1 が今までと同じことは、
+   既存のマージキューの試験を**変えずに**全部通すことで示す（既定は 1）。
+
+### 決めたこと（利用者の常設の指示「推奨で進めて」による）
+
+- **深さは「生きた鎖の中の位置」**。着地で前へ詰める。位置を作ったときのまま増やし続ける案は、CHECK の上限が付けられず、
+  「深さ ≤ D」が表から読めないので退けた。
+- **判定は先頭だけ**。後ろのバッチのパイプラインが先に赤でも、それは前の列車の変更を含んだ結果なので、先頭が決まるまで待つ。
+  先頭が着地すれば、それが先頭になったときに今までどおり二分する。決定 4 の「二分は最初の赤のバッチにだけ」をこの形で守った。
+- **投機の組み立ては、列車の段で MR を外さない**（衝突、fast-forward できない、身元が正しくない）。まだ赤になりうる列車の上の答え
+  だから。バッチはその MR の前で止まり、MR は列に残って深さ 1 と同じ土台で試される。MR 自身の事実（閉じた、新しい head、
+  target の変更、自動マージの止まり）はどの深さでも今までどおり外す。
+- **文書のキューは深さを使わない**。計画は「doc のキューは深さ 2 を使ってよい」とするが、S7 で文書のバッチは作った手番の中で
+  着地まで進むので、後ろに作る隙間が無い（先頭が `waiting` にならない）。組み立てを着地と並べるには、1 つのキューを 2 つの手番が
+  同時に動かす必要があり（貸し出しは 1 つ）、それは S10 の「着地の区間」の仕事として残す。
+- **既定は 1 のまま**。計画 18 §5 決定 2（テスト用ランナー `docker-test-m4` の並行数）はまだ開いている。ランナーが D 本を並行
+  できなければ、投機は CI を無駄にするだけ。上げるのは並行数を測った環境だけ（Runbook `merge-queue` の「投機の列車」）。
+
+### 既知の限界
+
+- 期限（`deadline_at`）はバッチを作ったときから数える。先頭が遅いと、後ろのバッチは待っているだけで期限に近づき、先頭になった
+  ときにパイプラインがまだ終わっていなければ期限切れとして数える。`forge doctor` の `review.merge_queue` も、期限を過ぎた後ろの
+  バッチを「止まった」と数える。深さを上げるのは CI が期限よりずっと短い環境なので、今は変えない。
+- `gstn queue list`（API の `batch`）は先頭のバッチだけを示す。後ろのバッチのエントリーは `testing` として並びに出る。表示を
+  変えるのは API とクライアントの変更なので、ここではしていない。
+- 証明（深さ 3、ランナーが 3 本を並行できる `c` で ≥ 60/分）は負荷試験で測る。ランナーの並行数が分かるまで測れない。
+
+### レビュー対応（2026-11-28、database・rust のレビュー）
+
+1. **（db HIGH）版の番号の衝突**: 最初の版は `20270114100000` で、同じ日に `main` に入った計画 19 のマイグレーションと同じ番号だった。
+   `20270115100000` にした。
+2. **（db HIGH）鎖を終える・着地するトランザクションがキューの行をロックしていなかった**: `create_batch` はキューの行の下で鎖を読む
+   ので、同時に先頭を終えると、終えた列車の上に子が残りえた（先頭の無い深さ 2）。着地の詰め直しとも競合した。`end_batch_chain` と
+   `batch_landed_chain` は、自分のバッチの行を更新した直後（`dequeue_mr_decided` と同じ「バッチ → キュー」の順。逆順だとデッドロック
+   する）にキューの行を `FOR UPDATE` で取り、その後に鎖を読む。
+3. **（db MEDIUM）着地は先頭だけ、を DB でも**: `begin_landing` は `depth = 1` のときだけ `landing` にする。
+4. **（rust MEDIUM）着地の後の失敗しうる読み取り**: ref を消すかどうかを、着地のトランザクションが返す残りの数
+   （`batch_landed_chain` の `Some(n)`）で決める。着地の後に別の問い合わせをしない。
+5. **（rust MEDIUM）持ち主の無い列車を指す ref**: 鎖が切れて ref を戻すときは、今の値を読んでから（タイムアウトつき）それを旧値に
+   compare-and-swap する。
+6. **（rust LOW）後ろのバッチの MR の事実**: 後ろのバッチも先頭の `poll` と同じに、閉じた・新しい head・消えた MR を見て、そのバッチ
+   （と後ろ）を捨て、その MR は今までどおり外す（`a_new_head_in_a_speculative_train_drops_it_and_leaves_the_queue`）。
+7. **（rust LOW）期限**: 前へ進んで先頭になったバッチの期限は、その時から同じ長さで数え直す（上の既知の限界の 1 つ目はこれで
+   先頭になるまでの待ちについては解消。`forge doctor` が後ろのバッチを期限で数えることは残る）。
+8. 残したもの（rust MEDIUM）: 投機の組み立てで先頭の MR が断られると、先頭が決まるまで、見るたびに列車の 1 段（merge-tree 1 回）を
+   繰り返す。見回りの周期（既定 60 s、または起床）ごとに 1 回で上限があるので、覚えておく仕組みは入れていない。

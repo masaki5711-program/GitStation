@@ -278,6 +278,11 @@ pub const KEYS: &[Key] = &[
         "merge_queue.doc_index_bytes",
         "FORGE_MERGE_QUEUE_DOC_INDEX_BYTES",
     ),
+    // Plan 18 S9 (ADR-0037 (d) 4): live batches per queue (1: ADR-0030).
+    number(
+        "merge_queue.speculation_depth",
+        "FORGE_MERGE_QUEUE_SPECULATION_DEPTH",
+    ),
     // M3 I1c: the feed's seal-sink comparison (ADR-0018 §5; false only in M3).
     boolean(
         "feed.require_sink_compare",

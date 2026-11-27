@@ -43,6 +43,17 @@
 //!   `0` turns the index off: every train's trees are read and parsed
 //!   whole, as before S7.
 //!
+//! Plan 18 S9 — speculative trains:
+//!
+//! * `merge_queue.speculation_depth` (default 1; 1 ..= 8): the most live
+//!   batches of one queue. Behind a front that waits for its train's
+//!   pipeline, batch k+1 is built on batch k's train and tested at the
+//!   same time; they land in order. `1` is ADR-0030's one live batch — the
+//!   default and the way back. Raise it only where the runners test that
+//!   many trains at once (plan 18 §5 decision 2: their concurrency is not
+//!   known yet). A document queue (no CI definition) lands in the tick
+//!   that built it, so it has nothing to speculate on at any depth.
+//!
 //! The other key of the gate, `merge_queue.doc_lint_strict`, is per
 //! repository and therefore not here: it is read from the base's
 //! `.forge/repo.yml` (`forge_core::repo_config`).
@@ -62,6 +73,7 @@ const WORKERS_KEY: &str = "merge_queue.workers";
 const DOC_BATCH_KEY: &str = "merge_queue.doc_batch_max";
 const CI_BATCH_KEY: &str = "merge_queue.ci_batch_max";
 const DOC_INDEX_KEY: &str = "merge_queue.doc_index_bytes";
+const SPECULATION_KEY: &str = "merge_queue.speculation_depth";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MergeQueueConfig {
@@ -79,6 +91,8 @@ pub struct MergeQueueConfig {
     pub ci_batch_max: u32,
     /// `merge_queue.doc_index_bytes` (plan 18 S7; `0`: no index).
     pub doc_index_bytes: u32,
+    /// `merge_queue.speculation_depth` (plan 18 S9).
+    pub speculation_depth: u32,
 }
 
 impl Default for MergeQueueConfig {
@@ -91,6 +105,7 @@ impl Default for MergeQueueConfig {
             doc_batch_max: Self::DEFAULT_DOC_BATCH_MAX,
             ci_batch_max: Self::DEFAULT_CI_BATCH_MAX,
             doc_index_bytes: Self::DEFAULT_DOC_INDEX_BYTES,
+            speculation_depth: Self::DEFAULT_SPECULATION_DEPTH,
         }
     }
 }
@@ -116,6 +131,11 @@ impl MergeQueueConfig {
     pub const DEFAULT_DOC_INDEX_BYTES: u32 = 64 * 1024 * 1024;
     pub const MIN_DOC_INDEX_BYTES: u32 = 1024 * 1024;
     pub const MAX_DOC_INDEX_BYTES: u32 = 1024 * 1024 * 1024;
+    /// `forge_core::merge_queue::DEFAULT_SPECULATION` / `MAX_SPECULATION`
+    /// (the schema's `merge_queue_batches_depth`).
+    pub const DEFAULT_SPECULATION_DEPTH: u32 = 1;
+    pub const MIN_SPECULATION_DEPTH: u32 = 1;
+    pub const MAX_SPECULATION_DEPTH: u32 = 8;
 
     /// The train lint's budget; `None`: the gate is off.
     pub fn train_lint_budget(&self) -> Option<Duration> {
@@ -198,6 +218,12 @@ impl MergeQueueConfig {
                 Self::MAX_BATCH_MAX,
             )?,
             doc_index_bytes: index,
+            speculation_depth: ranged(
+                SPECULATION_KEY,
+                Self::DEFAULT_SPECULATION_DEPTH,
+                Self::MIN_SPECULATION_DEPTH,
+                Self::MAX_SPECULATION_DEPTH,
+            )?,
         })
     }
 }
