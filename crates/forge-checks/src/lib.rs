@@ -35,6 +35,8 @@ use forge_db::projects::ProjectAccessFacts;
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
+// Plan 19 L5-5: the AI first-pass review's check run.
+pub mod ai_review;
 pub mod ci_lint;
 pub mod confidential;
 pub mod doc_lint;
