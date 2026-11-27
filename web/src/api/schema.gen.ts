@@ -214,6 +214,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/marketplace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the agent marketplace */
+        get: operations["get_marketplace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the agent marketplace */
+        head: operations["head_marketplace"];
+        patch?: never;
+        trace?: never;
+    };
+    "/-/marketplace/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: one agent part of the marketplace */
+        get: operations["get_marketplace_slug"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: one agent part of the marketplace */
+        head: operations["head_marketplace_slug"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/merge-requests": {
         parameters: {
             query?: never;
@@ -10394,6 +10430,90 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_marketplace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_marketplace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_marketplace_slug: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_marketplace_slug: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

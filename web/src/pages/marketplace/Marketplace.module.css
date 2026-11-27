@@ -1,0 +1,253 @@
+/* /-/marketplace and one part (plan 16 A8). Tokens only; the head is
+ * ui/PageHeader. The catalog is a grid of calm cards: the slug leads, the
+ * channel sits at the right of it, then one muted line (kind · version ·
+ * date) and the capability marks — the thing to read before using a part.
+ * The accent rule on a card's top edge ties the screen to the brand. */
+.page {
+  max-width: var(--gs-content-max-width);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--gs-space-4);
+  margin: var(--gs-space-4) 0;
+}
+
+.search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--gs-space-2);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--gs-card-min-width)), 1fr));
+  gap: var(--gs-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  composes: card from '../../ui/surfaces.module.css';
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  min-height: var(--gs-card-min-height);
+  padding: var(--gs-space-4);
+  border-top: var(--gs-accent-border-width) solid var(--gs-color-accent);
+  transition:
+    box-shadow var(--gs-duration-base) var(--gs-ease),
+    border-color var(--gs-duration-base) var(--gs-ease);
+}
+
+.card:hover,
+.card:focus-within {
+  box-shadow: var(--gs-shadow-2);
+}
+
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gs-space-2);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: var(--gs-font-size-md);
+  font-weight: var(--gs-font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.cardLink {
+  color: var(--gs-color-heading);
+  font-family: var(--gs-font-mono);
+  text-decoration: none;
+}
+
+/* The whole card is the link's target (the link stays the one name). */
+.cardLink::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.cardLink:hover {
+  text-decoration: underline;
+}
+
+.cardLink:focus-visible {
+  outline: none;
+}
+
+/* The focus ring is drawn around the whole card (the link's stretched box). */
+.cardLink:focus-visible::after {
+  border-radius: var(--gs-radius-md);
+  outline: var(--gs-focus-ring);
+  outline-offset: var(--gs-focus-offset);
+}
+
+.meta {
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.deprecated,
+.warning {
+  margin: 0;
+  color: var(--gs-color-warning-text);
+  font-size: var(--gs-font-size-sm);
+}
+
+.warning {
+  margin: var(--gs-space-3) 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+}
+
+.back {
+  display: inline-block;
+  margin-bottom: var(--gs-space-2);
+  font-size: var(--gs-font-size-sm);
+}
+
+.headMarks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2);
+  margin-top: var(--gs-space-2);
+}
+
+.section {
+  margin: var(--gs-space-6) 0;
+}
+
+.sectionTitle {
+  margin: 0 0 var(--gs-space-3);
+  color: var(--gs-color-heading);
+  font-size: var(--gs-font-size-lg);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.statusLine {
+  min-height: var(--gs-status-min-height);
+  margin: var(--gs-space-2) 0 0;
+  color: var(--gs-color-success-text);
+  font-size: var(--gs-font-size-sm);
+}
+
+.reason {
+  display: block;
+  margin-top: var(--gs-space-1);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.note {
+  margin: var(--gs-space-1) 0 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-xs);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--gs-space-1) var(--gs-space-4);
+  margin: 0 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-sm);
+}
+
+.facts dt {
+  color: var(--gs-color-text-muted);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.hash {
+  overflow-wrap: anywhere;
+}
+
+.files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.files li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--gs-space-2);
+  padding: var(--gs-space-2) 0;
+  border-bottom: 1px solid var(--gs-color-border-subtle);
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.hint {
+  margin: var(--gs-space-2) 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+/* The publish dialog. */
+.dialogForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-3);
+}
+
+.block {
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-border-subtle);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-background);
+}
+
+.blockTitle {
+  margin: 0 0 var(--gs-space-2);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.diffTitle {
+  margin: var(--gs-space-3) 0 var(--gs-space-1);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+}
+
+.done {
+  padding: var(--gs-space-3);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-success-text);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-success-surface);
+}
+
+.done p {
+  margin: 0;
+}
+
+.doneTitle {
+  margin-bottom: var(--gs-space-1);
+  font-weight: var(--gs-font-weight-semibold);
+}

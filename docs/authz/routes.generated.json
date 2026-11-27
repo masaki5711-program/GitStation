@@ -182,6 +182,42 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/marketplace",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/marketplace",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/-/marketplace/{slug}",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/marketplace/{slug}",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/merge-requests",
     "people_only": false,
     "public": true,

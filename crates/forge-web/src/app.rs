@@ -3812,6 +3812,22 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: the caller's notes",
                 shell,
             )
+            // The agent marketplace (plan 16 A8): the catalog and one
+            // part, reloaded or opened from a shared link.
+            .route(
+                verb,
+                MARKETPLACE_PAGE,
+                Action::WebShell,
+                "SPA shell: the agent marketplace",
+                shell,
+            )
+            .route(
+                verb,
+                MARKETPLACE_PART_PAGE,
+                Action::WebShell,
+                "SPA shell: one agent part of the marketplace",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -4062,3 +4078,9 @@ pub const SEARCH_PAGE: &str = "/-/search";
 /// The "My work" sidebar's notes page (plan 20 N2; the API is
 /// `GET`/`POST /api/v1/user/notes`).
 pub const NOTES_PAGE: &str = "/-/notes";
+/// The agent marketplace's catalog (plan 16 A8; the API is
+/// `GET /api/v1/agent-parts`).
+pub const MARKETPLACE_PAGE: &str = "/-/marketplace";
+/// One agent part of the marketplace (plan 16 A8; the API is
+/// `GET /api/v1/agent-parts/{slug}`).
+pub const MARKETPLACE_PART_PAGE: &str = "/-/marketplace/{slug}";

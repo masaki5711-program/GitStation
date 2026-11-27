@@ -55,7 +55,7 @@ async function violations(root: HTMLElement): Promise<string[]> {
 }
 
 describe('sidebar', () => {
-  it('lists Home, Projects, Groups, Merge requests, Activity, Notes under "My work" (no placeholder items)', async () => {
+  it('lists Home, Projects, Groups, Merge requests, Activity, Notes, Marketplace under "My work" (no placeholder items)', async () => {
     const server = mockServer(routes());
     await renderApp({ fetch: server.fetch });
     await screen.findByRole('heading', { name: 'ホーム', level: 1 });
@@ -68,6 +68,7 @@ describe('sidebar', () => {
       ['マージリクエスト', '/-/merge-requests'],
       ['アクティビティ', '/-/activity'],
       ['ノート', '/-/notes'],
+      ['マーケットプレイス', '/-/marketplace'],
     ]);
   });
 
@@ -129,6 +130,7 @@ describe('sidebar', () => {
       'マージリクエスト',
       'アクティビティ',
       'ノート',
+      'マーケットプレイス',
     ]);
     fireEvent.click(expand);
     // Expanded, the names are on screen: no tooltip.
@@ -176,7 +178,7 @@ describe('sidebar', () => {
     await renderApp({ fetch: server.fetch });
     await screen.findByRole('heading', { name: 'ホーム', level: 1 });
     const focusable = [...nav().querySelectorAll<HTMLElement>('a[href], button')];
-    expect(focusable.map((e) => e.textContent)).toEqual(['サイドバーを畳む', 'ホーム', 'プロジェクト', 'グループ', 'マージリクエスト', 'アクティビティ', 'ノート']);
+    expect(focusable.map((e) => e.textContent)).toEqual(['サイドバーを畳む', 'ホーム', 'プロジェクト', 'グループ', 'マージリクエスト', 'アクティビティ', 'ノート', 'マーケットプレイス']);
     for (const el of focusable) {
       expect(el.tabIndex).toBe(0);
       el.focus();

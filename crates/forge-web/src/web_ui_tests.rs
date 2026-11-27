@@ -166,6 +166,9 @@ const SHELL_PATHS: &[&str] = &[
     "/-/search",
     // The caller's notes (plan 20 N2).
     "/-/notes",
+    // The agent marketplace and one part (plan 16 A8).
+    "/-/marketplace",
+    "/-/marketplace/review-skill",
 ];
 
 #[tokio::test]
@@ -375,6 +378,8 @@ fn the_shell_route_gate_reads_the_spa_route_tables() {
         "/-/activity",
         "/-/search",
         "/-/notes",
+        "/-/marketplace",
+        "/-/marketplace/1",
         "/-/notifications",
         "/-/projects/1",
         "/-/confirm/projects/1/merge-requests/1",

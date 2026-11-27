@@ -424,3 +424,37 @@ forge-auth / forge-git / forge-db → forge-core → forge-agent）。利用者�
 - `gstn agent recommend|preview|apply|status`（計画 §6）と画面は A8。更新・世代の移行・取り消しの更新 MR は A9。
 - ADR-0017 Amendment 2026-11-12 の残り: `CLAUDE.md` の `@` が `.claude` の外のファイルを取り込む変更は、まだ `agent_config` に当たらない。
 - A5 の MEDIUM（tag の裏の人に MR の作成者・承認者を足す）はこの MR では入れていない。
+
+## Amendment（2026-11-27、A8 `feat/ui-marketplace-builder`: 計画 16 §6 の画面）
+
+新しい API は足さない（A5 の `agent-parts`、A7 の `…/agent-builder` と、既存の project・namespace の解決・group・refs・blob の読みだけ）。
+サーバーに足したのは SPA の殻の 2 経路（`/-/marketplace`、`/-/marketplace/{slug}`、`Action::WebShell`）だけ。
+
+1. **`/-/marketplace`**: 種類のタブ（`?kind=`、リンクと `aria-current`）、チャンネル（`?channel=`）、名前の検索（`?q=`）。
+   部品ごとに最新の生きた版・beta / stable・**能力の印**（「コマンドを実行する」「ネットワークを使う」「権限の設定を広げる」
+   「ファイルを書き込む」）。印は「能力」という名前のリストの項目で、文字そのものが読み上げられる（色とアイコンは繰り返しだけ）。
+   「マイワーク」のサイドバーに「マーケットプレイス」。
+2. **部品の詳細**（`/-/marketplace/{slug}`）: すべての版（取り消しは「取り消し済み」と理由）、最新の生きた版のファイル・タグ・要約・鍵。
+3. **ボタンを出す人**は API が出している役割だけで決める（推測しない。サーバーがもう一度決める）。
+   - 公開・昇格・取り消し: 部品のプロジェクト（`source_project_id`）の親グループの役割（`GET /api/v1/groups/{id}` の `role`）が
+     Maintainer 以上か管理者。`network` を宣言した版の昇格は管理者だけ（印と一行の説明）。
+   - タグを打った人・書いた人の拒否（FG-AGENT-0009）は画面では分からないので、ボタンは出し、サーバーの `user_message` と
+     問い合わせ番号を出す。
+   - プロジェクトの「エージェント」: 推薦は Reporter 以上（読むだけ）、Dry-Run・組み立ての履歴・「MR を作る」は Developer 以上
+     （web のセッションは人なので compile の「人だけ」も満たす）。Reporter 未満には誰ができるかの一行だけで、何も読まない。
+4. **プロジェクトの設定 →「エージェント」**は設定の下の自分のページ（`/{project}/-/settings/agent`）。設定の本体には説明とリンクだけを置き、
+   部品の一覧・lock・推薦は開いたときだけ読む。アダプターは 1 つを選ぶラジオ、部品はチェックボックスで、推薦のものは理由
+   （基本のモデル・いまの lock・`<slug>` が必要とする）とともに最初から選ぶ。「MR を作る」は**同じ選択の Dry-Run を見た後だけ**出す
+   （選択を変えると Dry-Run を捨てる）。Dry-Run は追加・変更・削除を文字で、`permissions` を持つ部品は「権限の設定を広げます」の行で示す。
+5. **更新の帯**: 既定のブランチの `.gitstation/agent.lock.json` の版と、推薦（lock の部品の最新の stable）の版が違う部品を
+   「更新があります」に並べ、次に押すもの（Dry-Run → MR）を一行で言う。lock が無い・読めないときは出さない。
+6. **公開のダイアログ**: 公開の前にタグのパイプラインを読む API は無いので、前はいまの最新版の能力、後は公開された版の CI
+   パイプライン（公開はその成功が条件、リンク付き）と前の版との能力の差分（増えた・なくなった）。拒否（FG-AGENT-0004 など）は
+   `user_message` と問い合わせ番号。
+
+### 残すこと
+
+- 公開の前に CI の結果と能力の差分を見せる読み（`GET …/versions/preview?tag=` のような）は足していない。足すなら authorize() と
+  マトリクスの allow・deny の行とともに。
+- `…/compile` の `merge_request_error` には問い合わせ番号が無い（メッセージだけ）。履歴の表がその組み立ての問い合わせ番号を出す。
+- 取り消された版を lock が使っているときの帯と更新の MR は A9。

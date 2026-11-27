@@ -1,0 +1,244 @@
+/* Project settings → "Agent" (plan 16 A8). Tokens only. One column: the
+ * update band (when there is one) leads, then the choice, the Dry-Run and
+ * the history. A chosen part's row is tinted so the choice reads at a
+ * glance; widening permissions is a danger line in words. */
+.page {
+  max-width: var(--gs-content-max-width);
+}
+
+.back {
+  display: inline-block;
+  margin-bottom: var(--gs-space-2);
+  font-size: var(--gs-font-size-sm);
+}
+
+.hint,
+.meta {
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.hint {
+  margin: var(--gs-space-2) 0;
+}
+
+.lead {
+  margin: 0 0 var(--gs-space-3);
+  font-weight: var(--gs-font-weight-medium);
+}
+
+.warning {
+  margin: var(--gs-space-3) 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.danger {
+  margin: 0 0 var(--gs-space-2);
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-danger-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+  font-weight: var(--gs-font-weight-medium);
+}
+
+/* The update band: the one thing to act on when it is there. */
+.band {
+  margin: var(--gs-space-4) 0;
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-accent);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-info-surface);
+  color: var(--gs-color-info-text);
+}
+
+.bandTitle {
+  margin: 0 0 var(--gs-space-1);
+  font-size: var(--gs-font-size-md);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.bandList {
+  margin: 0;
+  padding-left: var(--gs-space-5);
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+}
+
+.bandNext {
+  margin: var(--gs-space-2) 0 0;
+}
+
+.section {
+  margin: var(--gs-space-6) 0;
+}
+
+.sectionTitle {
+  margin: 0 0 var(--gs-space-3);
+  color: var(--gs-color-heading);
+  font-size: var(--gs-font-size-lg);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.subTitle {
+  margin: var(--gs-space-4) 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.fieldset {
+  margin: 0 0 var(--gs-space-4);
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  margin-bottom: var(--gs-space-2);
+  padding: 0;
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.choices {
+  display: grid;
+  gap: var(--gs-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gs-space-3);
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-border-subtle);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.choiceOn {
+  border-color: var(--gs-color-accent);
+  background: var(--gs-color-active-surface);
+}
+
+.box {
+  flex: none;
+  width: var(--gs-space-5);
+  height: var(--gs-space-5);
+  margin: 0;
+  accent-color: var(--gs-color-action);
+}
+
+.choiceBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-1);
+  min-width: 0;
+}
+
+.choiceLabel {
+  cursor: pointer;
+}
+
+.slug {
+  font-family: var(--gs-font-mono);
+  font-weight: var(--gs-font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.version {
+  color: var(--gs-color-text-muted);
+  font-family: var(--gs-font-mono);
+}
+
+.about {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2);
+}
+
+.reason {
+  color: var(--gs-color-text);
+  font-size: var(--gs-font-size-sm);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-3);
+  margin: var(--gs-space-3) 0;
+}
+
+.changes,
+.built {
+  display: grid;
+  gap: var(--gs-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.changes li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gs-space-2);
+}
+
+.built li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2);
+  padding: var(--gs-space-2) 0;
+  border-bottom: 1px solid var(--gs-color-border-subtle);
+}
+
+.path {
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.change {
+  flex: none;
+  min-width: 3.5em;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-xs);
+  font-weight: var(--gs-font-weight-bold);
+  text-align: center;
+}
+
+.added {
+  composes: change;
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.modified {
+  composes: change;
+  background: var(--gs-color-info-surface);
+  color: var(--gs-color-info-text);
+}
+
+.removed {
+  composes: change;
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.result {
+  min-height: var(--gs-status-min-height);
+}
+
+.result p {
+  margin: var(--gs-space-2) 0 0;
+  color: var(--gs-color-success-text);
+  font-weight: var(--gs-font-weight-medium);
+}
