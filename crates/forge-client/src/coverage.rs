@@ -1349,6 +1349,10 @@ pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
         "part revoke",
         "plan 16 A5: revoking is a web session's (a token is refused); prints the page, nothing is sent",
     ),
+    (
+        "part import",
+        "plan 16 A6: converts part.json or .claude/ trees into part.toml directories with forge-agent's lint and scan; nothing is sent",
+    ),
     ("help", "describes the commands from the registry"),
     ("schema", "describes one command from the registry"),
 ];

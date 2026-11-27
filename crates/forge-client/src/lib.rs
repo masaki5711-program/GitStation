@@ -32,6 +32,8 @@ pub mod browse;
 pub mod checks;
 pub mod ci;
 pub mod part;
+// Plan 16 A6: `gstn part import`, local only.
+pub mod part_import;
 // Plan 21 E1 (ADR-0041): `gstn edge release verify`, local only.
 pub mod cli;
 pub mod config;

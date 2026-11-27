@@ -7514,6 +7514,114 @@
     {
       "args": [
         {
+          "description": "The source: a marketplace/ directory, or a repository holding .claude/.",
+          "kind": "option",
+          "name": "--from",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "marketplace or claude.",
+          "kind": "option",
+          "name": "--format",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Write <out>/<slug>/ for every part (a new or empty directory; only when every part passes).",
+          "kind": "option",
+          "name": "--out",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Keep only these slugs, comma-separated.",
+          "kind": "option",
+          "name": "--only",
+          "repeatable": true,
+          "required": false
+        },
+        {
+          "description": "The internal hosts an MCP server may name, comma-separated (an exact host, or .suffix for its subdomains).",
+          "kind": "option",
+          "name": "--mcp-allowed-hosts",
+          "repeatable": true,
+          "required": false
+        },
+        {
+          "description": "Declare these capabilities when the static scan asks for them, comma-separated: exec, network, fs-write (never permissions). Default: none.",
+          "kind": "option",
+          "name": "--declare-from-scan",
+          "repeatable": true,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn part import --from ../agent-model/marketplace --format marketplace --mcp-allowed-hosts .corp.internal --declare-from-scan exec,network",
+        "gstn part import --from . --format claude --only skill-tdd-workflow --out parts --json"
+      ],
+      "name": "part import",
+      "output": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "failed": {
+            "type": "array"
+          },
+          "format": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "integer"
+          },
+          "parts": {
+            "items": {
+              "required": [
+                "slug",
+                "source",
+                "problems"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "problems": {
+            "type": "integer"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "written": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "dry_run",
+          "parts",
+          "failed",
+          "skipped",
+          "ok",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Convert parts into part.toml part directories on this computer: --format marketplace reads a W1 marketplace/ tree (<category>/<id>/part.json; hook events become the part's .claude/settings.json, overlays move into the two adapter parts adapter-claude-code-tmux and adapter-claude-code-v2), --format claude reads a repository's .claude/ (each skill, agent, command and rule a 1.0.0 part). The slug is <kind>-<id>. Capabilities the static scan asks for are declared only when named in --declare-from-scan (exec, network, fs-write; never permissions), and the report lists the findings each came from; every other finding stays a problem (FG-AGENT-0001, 0005, 0013). Without --out a dry run; with --out every part is written as <out>/<slug>/ (and the report as import-report.json) only when all pass (FG-CLI-0007 when the directory is not empty). Exit 1 with the most serious problem's code. Nothing is sent."
+    },
+    {
+      "args": [
+        {
           "description": "The release file ({manifest, digest, key_id, signature}).",
           "kind": "option",
           "name": "--release",

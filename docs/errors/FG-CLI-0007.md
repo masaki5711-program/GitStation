@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-Writing to standard output or standard error failed (a closed pipe, a full disk, a redirected file that cannot be written) after the command ran. Also `gstn doc fmt` (plan 13 stage 2) failing to write a formatted document (`stream=file reason=write_failed`): it writes a new temporary file beside the document and renames it over the document, so a document is never half written; the temporary file is removed on failure. `reason=file_changed_while_formatting`: the document's length or time of change differs from when it was read (someone edited it meanwhile); it is left as it is — run gstn doc fmt again.
+Writing to standard output or standard error failed (a closed pipe, a full disk, a redirected file that cannot be written) after the command ran. Also `gstn doc fmt` (plan 13 stage 2) failing to write a formatted document (`stream=file reason=write_failed`): it writes a new temporary file beside the document and renames it over the document, so a document is never half written; the temporary file is removed on failure. `reason=file_changed_while_formatting`: the document's length or time of change differs from when it was read (someone edited it meanwhile); it is left as it is — run gstn doc fmt again. Also `gstn part import --out DIR` (plan 16 A6): `stream=file reason=out_not_empty` / `out_not_a_directory` (the output must be a new or empty directory; nothing is overwritten) or `reason=write_failed kind=…` (a part could not be written; the directory may hold the parts written before the failure — remove it and run again).
 
 ## 調べ方 (diagnosis)
 

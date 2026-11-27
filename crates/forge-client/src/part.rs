@@ -7,6 +7,7 @@
 //! - `gstn part publish|promote|revoke`: these are decided only in a
 //!   person's web session (ADR-0032 Amendment A4 §8: a token, an agent's
 //!   included, is refused). gstn sends nothing and names the page.
+//! - `gstn part import`: seeding parts, local only (`part_import`, A6).
 //! - `gstn agent keys`: the registered public keys; `--json` prints the
 //!   `agent-keys.json` that `gstn agent verify` reads from the gstn
 //!   configuration directory.
@@ -68,6 +69,25 @@ fn path_word(raw: &str) -> Result<&str> {
 /// `gstn part …` (module docs).
 pub fn part(cli: &Cli, cmd: &PartCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     match cmd {
+        PartCommand::Import {
+            from,
+            format,
+            out,
+            only,
+            mcp_allowed_hosts,
+            declare_from_scan,
+        } => crate::part_import::import(
+            cli,
+            io,
+            &crate::part_import::ImportArgs {
+                from,
+                format,
+                out: out.as_deref(),
+                only: only.as_deref(),
+                mcp_allowed_hosts: mcp_allowed_hosts.as_deref().unwrap_or(&[]),
+                declare_from_scan: declare_from_scan.as_deref().unwrap_or(&[]),
+            },
+        ),
         PartCommand::List { kind, channel, q } => {
             let c = client(cli, env, io)?;
             let mut query = Vec::new();
@@ -138,7 +158,8 @@ pub fn part(cli: &Cli, cmd: &PartCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Re
                 PartCommand::Promote { .. } => "promote",
                 PartCommand::Revoke { .. }
                 | PartCommand::List { .. }
-                | PartCommand::View { .. } => "revoke",
+                | PartCommand::View { .. }
+                | PartCommand::Import { .. } => "revoke",
             };
             let path = page(slug);
             let human = format!(

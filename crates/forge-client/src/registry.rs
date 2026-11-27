@@ -1411,6 +1411,23 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &[],
         output: r#"{"type":"object","required":["action","web_session_only","page"]}"#,
     },
+    // Plan 16 A6 (ADR-0032 Amendment A6): seeding marketplace/parts, local only.
+    CommandSpec {
+        name: "part import",
+        summary: "Convert parts into part.toml part directories on this computer: --format marketplace reads a W1 marketplace/ tree (<category>/<id>/part.json; hook events become the part's .claude/settings.json, overlays move into the two adapter parts adapter-claude-code-tmux and adapter-claude-code-v2), --format claude reads a repository's .claude/ (each skill, agent, command and rule a 1.0.0 part). The slug is <kind>-<id>. Capabilities the static scan asks for are declared only when named in --declare-from-scan (exec, network, fs-write; never permissions), and the report lists the findings each came from; every other finding stays a problem (FG-AGENT-0001, 0005, 0013). Without --out a dry run; with --out every part is written as <out>/<slug>/ (and the report as import-report.json) only when all pass (FG-CLI-0007 when the directory is not empty). Exit 1 with the most serious problem's code. Nothing is sent.",
+        args: &[
+            arg("--from", "option", true, "The source: a marketplace/ directory, or a repository holding .claude/."),
+            arg("--format", "option", true, "marketplace or claude."),
+            arg("--out", "option", false, "Write <out>/<slug>/ for every part (a new or empty directory; only when every part passes)."),
+            ArgSpec { name: "--only", kind: "option", required: false, repeatable: true, description: "Keep only these slugs, comma-separated." },
+            ArgSpec { name: "--mcp-allowed-hosts", kind: "option", required: false, repeatable: true, description: "The internal hosts an MCP server may name, comma-separated (an exact host, or .suffix for its subdomains)." },
+            ArgSpec { name: "--declare-from-scan", kind: "option", required: false, repeatable: true, description: "Declare these capabilities when the static scan asks for them, comma-separated: exec, network, fs-write (never permissions). Default: none." },
+        ],
+        examples: &["gstn part import --from ../agent-model/marketplace --format marketplace --mcp-allowed-hosts .corp.internal --declare-from-scan exec,network", "gstn part import --from . --format claude --only skill-tdd-workflow --out parts --json"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["dry_run","parts","failed","skipped","ok","problems"],"properties":{"from":{"type":"string"},"format":{"type":"string"},"dry_run":{"type":"boolean"},"written":{"type":["string","null"]},"parts":{"type":"array","items":{"type":"object","required":["slug","source","problems"]}},"failed":{"type":"array"},"skipped":{"type":"array","items":{"type":"string"}},"ok":{"type":"integer"},"problems":{"type":"integer"}}}"#,
+    },
     // Plan 21 E1 (ADR-0041): an edge release's checks, local only.
     CommandSpec {
         name: "edge release verify",

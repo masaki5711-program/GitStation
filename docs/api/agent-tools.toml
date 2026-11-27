@@ -1033,6 +1033,10 @@ gstn = "part revoke"
 reason = "A web session's only (plan 16 A5): prints the page, never an agent's."
 
 [[not_api]]
+gstn = "part import"
+reason = "Local only: converts part.json or .claude/ trees into part.toml directories for the marketplace/parts repository (plan 16 A6); publishing stays a person's web session."
+
+[[not_api]]
 gstn = "agent verify"
 reason = "Local only: checks .claude/ against agent.lock.json and part signatures with local keys (plan 16 A1)."
 
