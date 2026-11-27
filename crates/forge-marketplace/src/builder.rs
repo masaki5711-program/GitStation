@@ -86,6 +86,18 @@ pub struct BuildPlan {
     pub selection: serde_json::Value,
 }
 
+/// The branch a build is written on: `agent-builder/<12 hex of the lock
+/// digest>` (the same build, the same branch: a build asked again resumes
+/// it, and an update merge request is opened once).
+pub fn builder_branch(lock_digest: &str) -> Result<RefName, ForgeError> {
+    let hex = lock_digest.strip_prefix("sha256:").unwrap_or(lock_digest);
+    RefName::parse(&format!(
+        "refs/heads/agent-builder/{}",
+        hex.get(..12).unwrap_or(hex)
+    ))
+    .map_err(|_| ForgeError::new(ErrorCode::Internal).with_context("reason", "builder_branch"))
+}
+
 fn unresolved(reason: &'static str, subject: &str) -> ForgeError {
     ForgeError::new(ErrorCode::SelectionUnresolved)
         .with_context("reason", reason)
@@ -131,7 +143,10 @@ fn check_selection(selection: &[Selected]) -> Result<(), ForgeError> {
 impl Marketplace {
     /// The default branch and its tip (`FG-REPO-0023 reason=ref_not_found`
     /// for an empty repository: nothing to build on).
-    async fn default_tip(&self, repo: RepoId) -> Result<(RefName, ObjectId), ForgeError> {
+    pub(crate) async fn default_tip(
+        &self,
+        repo: RepoId,
+    ) -> Result<(RefName, ObjectId), ForgeError> {
         let list = self.browse.refs(repo).await?;
         let not_found = || {
             ForgeError::new(ErrorCode::RepositoryPathNotResolved)
@@ -155,7 +170,7 @@ impl Marketplace {
     /// The managed area of `commit`; a part of it that cannot be read
     /// whole is `FG-AGENT-0007 tree_unreadable` (nothing is built on what
     /// was not read).
-    async fn managed_at(
+    pub(crate) async fn managed_at(
         &self,
         repo: RepoId,
         commit: &ObjectId,
@@ -191,7 +206,7 @@ impl Marketplace {
         bounded("agent_build", self.plan_inner(project, repo, selection)).await
     }
 
-    async fn plan_inner(
+    pub(crate) async fn plan_inner(
         &self,
         project: ProjectId,
         repo: RepoId,
@@ -397,31 +412,38 @@ impl Marketplace {
             let slugs: Vec<String> = current
                 .map(|l| l.parts.into_iter().map(|p| p.slug).collect())
                 .unwrap_or_default();
-            let catalog: Vec<CatalogVersion> = builds::stable_versions(&self.db)
-                .await?
-                .into_iter()
-                .map(|v| CatalogVersion {
-                    requires: v
-                        .manifest
-                        .get("requires")
-                        .and_then(serde_json::Value::as_array)
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|r| r.as_str().map(str::to_owned))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    slug: v.slug,
-                    kind: v.kind,
-                    version: v.version,
-                })
-                .collect();
+            let catalog = self.stable_catalog().await?;
             recommend(&catalog, &adapter, &slugs).map_err(|p| problems_error(&p))
         })
         .await
     }
 
-    /// Keep one builder run (`forge.agent_builds`).
+    /// The stable catalog (published, not revoked, not deprecated) the
+    /// recommendation and the update pick from.
+    pub(crate) async fn stable_catalog(&self) -> Result<Vec<CatalogVersion>, ForgeError> {
+        Ok(builds::stable_versions(&self.db)
+            .await?
+            .into_iter()
+            .map(|v| CatalogVersion {
+                requires: v
+                    .manifest
+                    .get("requires")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|r| r.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                slug: v.slug,
+                kind: v.kind,
+                version: v.version,
+            })
+            .collect())
+    }
+
+    /// Keep one builder run (`forge.agent_builds`; `origin` `build`,
+    /// `update` or `revocation`).
     #[allow(clippy::too_many_arguments)] // one record's fields
     pub async fn record_build(
         &self,
@@ -432,6 +454,7 @@ impl Marketplace {
         dry_run: bool,
         outcome: &BuildOutcome<'_>,
         request_id: &str,
+        origin: &'static str,
     ) -> Result<i64, ForgeError> {
         builds::record_build(
             &self.db,
@@ -442,6 +465,7 @@ impl Marketplace {
                 selection,
                 dry_run,
                 request_id,
+                origin,
             },
             outcome,
         )

@@ -231,6 +231,27 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 )
                 .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
             )?),
+            // Plan 16 A9: the agent configuration's update merge requests
+            // (asked, or after a revocation) write a branch too.
+            Arc::new(crate::serve_agent_updates::AgentUpdateHandler::new(
+                forge_marketplace::AgentUpdater::new(
+                    forge_marketplace::Marketplace::new(
+                        db.clone(),                // clone: the pool handle is shared
+                        smart_http.browse.clone(), // clone: shares the ref cache
+                        cfg.agent.clone(),         // clone: the updater owns its settings
+                    ),
+                    smart_http.git.clone(),     // clone: Arc handles
+                    smart_http.storage.clone(), // clone: the root path
+                    // forge-review opens the merge request (the branch
+                    // checks read the same browse API and ref cache).
+                    Arc::new(crate::serve_agent_updates::ReviewOpener(
+                        forge_review::Review::new(
+                            db.clone(),                          // clone: the pool handle is shared
+                            Arc::new(smart_http.browse.clone()), // clone: shares the ref cache
+                        ),
+                    )),
+                ),
+            )?),
         )?;
         // M4 C14 (ADR-0017 Amendment C14): the deterministic autofix lands
         // the bot's commit on source branches: here, next to the browse

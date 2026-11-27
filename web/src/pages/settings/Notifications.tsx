@@ -34,6 +34,8 @@ function kindLabel(t: TFunction, kind: string): string {
       return t('notifications.kinds.mr_conflict_predicted');
     case 'mr_revert_drafted':
       return t('notifications.kinds.mr_revert_drafted');
+    case 'mr_agent_update':
+      return t('notifications.kinds.mr_agent_update');
     default:
       return kind;
   }

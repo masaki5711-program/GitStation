@@ -107,16 +107,19 @@ impl RevertTasks {
 }
 
 /// Start the draft runner under its supervisor. It also runs the nightly
-/// AI evaluation baseline candidate (plan 17 P17-6, `serve_ai_baseline`):
-/// the system's other draft that writes a branch.
+/// AI evaluation baseline candidate (plan 17 P17-6, `serve_ai_baseline`)
+/// and the agent configuration's update merge requests (plan 16 A9,
+/// `serve_agent_updates`): the system's other drafts that write a branch.
 pub(crate) fn spawn(
     db: &Db,
     reverter: Arc<Reverter>,
     baselines: Arc<crate::serve_ai_baseline::BaselineCandidateHandler>,
+    agent_updates: Arc<crate::serve_agent_updates::AgentUpdateHandler>,
 ) -> Result<RevertTasks, ForgeError> {
     let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
     runner.register(Arc::new(RevertDraftHandler::new(reverter)?))?;
     runner.register(baselines)?;
+    runner.register(agent_updates)?;
     tracing::info!(
         worker_id = runner.worker_id().as_str(),
         kind = REVERT_DRAFT_JOB,

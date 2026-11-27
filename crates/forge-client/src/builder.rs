@@ -9,6 +9,10 @@
 //!   written.
 //! - `apply --project ID --select slug@version … [--title T]`: the build as
 //!   a merge request (a person's token only; an agent's is refused).
+//! - `update --project ID [--adapter SLUG] [--dry-run]` (plan 16 A9): the
+//!   update merge request, queued as a job (`--adapter`: another base
+//!   model); `--dry-run` shows each locked part's version and the next one
+//!   with the Dry-Run and queues nothing.
 
 use serde_json::{json, Value};
 
@@ -141,6 +145,89 @@ pub fn recommend(cli: &Cli, project: i64, env: EnvFn<'_>, io: &mut Io<'_>) -> Re
         })
         .unwrap_or_default();
     emit(io, cli, out, &human)
+}
+
+/// `gstn agent update` (plan 16 A9).
+pub fn update(
+    cli: &Cli,
+    project: i64,
+    adapter: Option<&str>,
+    dry_run: bool,
+    env: EnvFn<'_>,
+    io: &mut Io<'_>,
+) -> Result<()> {
+    if let Some(a) = adapter {
+        let fine = (1..=64).contains(&a.len())
+            && a.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !fine || dry_run {
+            let reason = if dry_run {
+                "reason=adapter_with_dry_run"
+            } else {
+                "reason=adapter_not_a_slug"
+            };
+            return Err(ClientError::local(
+                forge_errors::ErrorCode::CliInputFailed,
+                reason,
+            ));
+        }
+    }
+    let c = client(cli, env, io)?;
+    let out = if dry_run {
+        call(
+            &c,
+            Method::Get,
+            &format!("{}/updates", base(project)),
+            &[],
+            None,
+        )?
+    } else {
+        let mut body = json!({});
+        if let Some(a) = adapter {
+            body["adapter"] = Value::from(a);
+        }
+        call(
+            &c,
+            Method::Post,
+            &format!("{}/update", base(project)),
+            &[],
+            Some(&body),
+        )?
+    };
+    let mut lines = Vec::new();
+    if let Some(reason) = out.get("reason").and_then(Value::as_str) {
+        lines.push(format!("no update ({reason})"));
+    }
+    for p in out
+        .get("parts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("-");
+        let revoked = if p.get("locked_revoked").and_then(Value::as_bool) == Some(true) {
+            " (revoked)"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "{} {}{revoked} -> {}",
+            s("slug"),
+            s("locked_version"),
+            p.get("next_version")
+                .and_then(Value::as_str)
+                .unwrap_or("removed")
+        ));
+    }
+    if out.get("preview").is_some_and(|v| !v.is_null()) {
+        lines.push(changes_text(&out));
+    }
+    match out.get("queued").and_then(Value::as_bool) {
+        Some(true) => lines.push("queued: the merge request opens shortly".to_owned()),
+        Some(false) => lines.push("already asked: the same update is queued or open".to_owned()),
+        None => {}
+    }
+    emit(io, cli, out, &lines.join("\n"))
 }
 
 /// `gstn agent preview` / `gstn agent apply`.

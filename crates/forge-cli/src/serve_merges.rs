@@ -433,6 +433,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PartChecksNotGreen
         | ErrorCode::PartVersionRevoked
         | ErrorCode::PartVersionExists
+        // Plan 16 A9: the update job's refusals, never a merge run's.
+        | ErrorCode::AgentUpdateNotNeeded
+        | ErrorCode::AgentUpdateNotOpened
         // Plan 21 E1: edge releases are linted and verified by forge-edge
         // (`gstn edge release verify` only), never by a merge.
         | ErrorCode::EdgeReleaseDefinitionInvalid

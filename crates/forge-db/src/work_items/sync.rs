@@ -560,6 +560,7 @@ impl Subscriber for WorkItemSync {
                 | EventType::WebhookDisabled
                 | EventType::SpecReleased
                 | EventType::MergeRequestRevertDrafted
+                | EventType::MergeRequestAgentUpdateOpened
                 | EventType::MergeRequestAutofixFinished
                 | EventType::DeploymentApprovalSummarized => Ok(()),
             }

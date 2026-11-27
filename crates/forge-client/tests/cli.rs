@@ -966,6 +966,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "agent recommend",
             "agent preview",
             "agent apply",
+            "agent update",
             "part list",
             "part view",
             "part publish",

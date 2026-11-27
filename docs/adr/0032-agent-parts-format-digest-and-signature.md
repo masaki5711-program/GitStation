@@ -458,3 +458,73 @@ forge-auth / forge-git / forge-db → forge-core → forge-agent）。利用者�
   マトリクスの allow・deny の行とともに。
 - `…/compile` の `merge_request_error` には問い合わせ番号が無い（メッセージだけ）。履歴の表がその組み立ての問い合わせ番号を出す。
 - 取り消された版を lock が使っているときの帯と更新の MR は A9。
+
+## Amendment（2026-11-27、A9 `feat/core-marketplace-updates`: 更新・世代の移行の MR、取り消しで更新の MR、通知）
+
+計画 16 A9 を入れた。利用者は不在で「推奨を選ぶ」と言っているので、計画に書かれていない点は次のとおり決めた。
+
+1. **更新の選び方**（`forge_marketplace::updates::update_selection`、純粋）: 既定の枝の先端の lock の各部品を、取り消していない最新の
+   stable へ（A7 の規則だけの推薦 `recommend` をそのまま使う。ベースモデルと `requires` も同じにたどる）。**下げない**: lock の版が最新の
+   stable より新しく、まだ公開中なら残す。stable が無い部品（人が選んだ beta）も公開中なら残す。取り消した版で置き換えが無いものは**外す**
+   （その部品を `requires` する部品があれば生成が FG-AGENT-0008 で止まる。半端な更新にしない）。何も変わらなければ新しいコード
+   **FG-AGENT-0015** AgentUpdateNotNeeded（`no_lock`・`up_to_date`・ジョブの `not_in_lock`）。生成は A7 の `plan_build`（要約・署名・選び方・
+   まとめ）をそのまま使う。
+2. **世代の移行** = ベースモデルの付け替え: `POST …/update {"adapter": "<adapter の slug>"}`。lock の前の adapter は残さず、新しい adapter の
+   `requires` をたどる（計画 09 の `target-adapter.yaml` は A7 と同じく作らない）。
+3. **経路**（`projects/{id}` の下、既存の Action を使う。新しい Action は無い）: `GET …/agent-builder/updates`（`AgentBuilderDryRun`: 部品ごとの
+   lock の版・取り消し・次の版と Dry-Run。無いときは `available: false` と `reason`）、`POST …/agent-builder/update`（`AgentBuilderCompile`、
+   人だけ。その場で計画して 409 / 422 を返し、ジョブを入れて **202**。同じ人の同じ lock の要約の更新はジョブの dedup
+   `agent_update:<project>:<user>:<digest>` で 1 つ）。gstn は `gstn agent update --project N [--adapter SLUG] [--dry-run]`（`--dry-run` は
+   GET で何も入れない。`--adapter` との組み合わせは手元で断る）。
+4. **ジョブ** `agent.update_merge_request`（`forge serve` のシステムの下書きの runner。revert と AI 評価の基準の候補と同じ所で、枝の書き込みが
+   閲覧のキャッシュを無効にする）。ジョブは走るときに計画し直す（202 の答えと違いうる。答えの `preview` は「今の計画」）。上限 300 秒、
+   失敗は `serve_merges::retryable` で再試行か終わり（終わりはジョブの runner が 1 回ログに出す）。
+5. **取り消しの更新は取り消しと同じトランザクション**（Outbox と同じ考え: 取り消しが確定したときだけジョブがある）。対象は
+   `forge.agent_builds` で、その `slug@version` を選んだ、終わった（Dry-Run でない）ビルドのあるプロジェクト（`selection @>`、部分 GIN の
+   索引。マイグレーション `20270113100000` で `agent_builds.origin`（`build`・`update`・`revocation`）と一緒に足した）。ジョブは先端の
+   lock がまだその版を使うかを確かめる（使っていなければ `not_in_lock` で何もしない）。dedup
+   `agent_update_revoked:<version_id>:<project_id>`、取り消しは最終なので 2 回目の取り消しは無い（`revoke_opens_update_mr_once`）。
+   lock を手で作ったプロジェクト（ビルドの記録が無い）は対象に入らない — `forge/agent-lock` が FG-AGENT-0006 で失敗するので見える。
+6. **誰の名前で開くか**: MR はいつも人のもの。頼んだ人（`update`）か、取り消しなら **そのプロジェクトの終わったビルドを頼んだ人を新しい順に
+   （最大 5 人）、最初に許される人**。
+   ジョブはその人の今の権限で、git が届く物を書く前に判定する: `AgentBuilderCompile`（人・Developer）、枝の作成をその人の push として
+   （`authorize_ref_updates`、保護ブランチの規則）、`MergeRequestCreate`（開くトランザクションの中でもう一度。生きたセッションが無いので
+   管理者の印は `standing_admin`）。資格は `Credential::Session`（AI 評価の基準の候補のスケジュールの持ち主と同じ形）。誰も許されなければ
+   新しいコード **FG-AGENT-0016** AgentUpdateNotOpened（`no_author`・`author_not_allowed` と `denied_code`・`closed_by_person`、
+   **alert**、runbook `agent-supply-chain`）でジョブが終わる（黙らない。`revocation_update_without_an_allowed_author_is_not_silent`）。
+7. **1 回だけ**: 枝は A7 と同じ `agent-builder/<lock の要約の 16 進 12 桁>`。その枝から開いている MR があれば何も作らない（`AlreadyOpen`）、
+   先端がこのビルドそのものの枝は使い直す（中断の再開）、違う中身の枝は FG-GIT-0027 `branch_exists`、人が閉じた（かマージした）MR は
+   開き直さない（FG-AGENT-0016 `closed_by_person`）。MR を開けなかったら、開いていないことを確かめてから、作った枝を compare-and-swap で消す。
+8. **書く順**（A7・revert の下書きと同じ）: 秘密の規則 → ボットのコミットと `update-ref` の作成（`commit_tree_change`）→ MR → push の記録
+   （`repository.pushed`、actor `system`、ラベル `forge-agent-builder`。MR の版とチェックが続く）→ ビルドの記録（`origin`）→ イベント。
+   push とビルドの記録の失敗はログに 1 回（枝と MR は残る）。イベントの失敗はジョブの失敗（再試行で `AlreadyOpen` からもう一度書く。
+   MR ごとに dedup）。
+9. **自動マージしない**: A7 と同じ。`forge/agent-lock` が確かめ、`forge/risk` が `agent_config_locked` と名づけ、自動マージは作成者ではない
+   Maintainer の承認を待つ。MR は下書きにしない（A7 の MR と同じ扱い）。
+10. **通知**: 既存の仕組み（`notify` の購読者）。新しいイベント `merge_request.agent_update_opened`（integration、actor `system`、MR ごとに
+    dedup。`origin`・`lock_digest`・`revoked` の `slug@version`）と通知の種類 **`mr_agent_update`**（メールとアプリ内。MR の作成者 = 開いた
+    相手に知らせる）。表の CHECK はマイグレーション `20270113100000` で広げた。画面は受信箱と設定の文言だけ（ja / en / id）。
+
+### A9 の独立レビュー（2026-11-27、database-reviewer・silent-failure-hunter）で変えた点
+
+- （HIGH、直した）ビルドの記録は後の取り消しがプロジェクトを見つける元なのに、MR の後に「ログだけ」で書いていた。MR ごとに 1 行
+  （`record_build_once`、`mr_id` で NOT EXISTS）を、開いた実行と `AlreadyOpen` の実行の両方で書き、失敗はジョブの失敗（再試行）にした。
+- （HIGH、直した）取り消しの更新を開く人が最後のビルドの人 1 人だけだった。新しい順に最大 5 人を試す（上の 6）。それでも誰もいなければ
+  FG-AGENT-0016 を **alert** にした（取り消した版が使われ続ける）。
+- （HIGH、受け入れ）ビルドの記録の無いプロジェクト（手で lock を書いた等）は取り消しのジョブに入らない。`forge/agent-lock` が
+  FG-AGENT-0006 で失敗して見える（上の 5）。lock の索引の表は後の MR。
+- （MEDIUM、直した）push の記録は、MR を開いた実行が（前の実行が枝を書いていても）書く。MR を開けなかった後の確認の失敗が元の誤りを
+  隠していた（確認の失敗は別にログに 1 回、元の誤りを返す）。取り消しのジョブで何も開かなかったとき（`not_in_lock` 以外）は warn。
+- （MEDIUM、直した）`POST …/update` は同じ更新の MR を先に見る: 開いていれば `queued: false`・`reason: already_open`・`merge_request_iid`、
+  人が閉じていれば 409 FG-AGENT-0016 `closed_by_person`、ジョブが dedup なら `reason: already_asked`。取り消しの対象から削除中の
+  プロジェクトを外した。
+- （MEDIUM、受け入れ）取り消しのトランザクションの中でプロジェクトの数だけジョブを入れる（上限なし）。社内の規模では数百までで、
+  ジョブの行は小さい。通知の表の CHECK の入れ替えは C10（`20261220100000`）と同じ形。
+- （LOW、直した）カタログに無い種類は `unknown`。
+
+### 残すこと
+
+- A8 の画面の「更新の帯」は推薦から作っている。取り消した版（`locked_revoked`）と「外れる」部品を出すには `GET …/updates` に替える。
+- doctor の `agent.revoked_in_use`（計画 16 §8）: 取り消した版を使う lock を先端で数える確かめはまだ無い（今はジョブの `dead` と
+  `forge/agent-lock` の失敗で見える）。
+- 取り消しの更新を、プロジェクトの Maintainer 全員にも知らせること（今は MR の作成者だけ）。

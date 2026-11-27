@@ -143,7 +143,8 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.approved",
             "merge_request.unapproved",
             "merge_request.revert_drafted",
-            "merge_request.autofix_finished"
+            "merge_request.autofix_finished",
+            "merge_request.agent_update_opened"
         ]
     );
 }
@@ -582,5 +583,44 @@ fn autofix_finished_is_a_transition_keyed_by_the_attempt() {
     assert_eq!(
         details.event_type(),
         Some(EventType::MergeRequestAutofixFinished)
+    );
+}
+
+/// Plan 16 A9: the agent builder's update merge request is a transition of
+/// the new merge request, keyed by it; the payload carries ids, the origin
+/// word, the lock digest and the revoked part version.
+#[test]
+fn agent_update_opened_is_a_transition_keyed_by_the_merge_request() {
+    use crate::AgentUpdateOrigin;
+    let opened = MergeRequestChange::AgentUpdateOpened {
+        merge_request: MergeRequestId::new(9),
+        iid: 3,
+        author: UserId::new(4),
+        origin: AgentUpdateOrigin::Revocation,
+        lock_digest: format!("sha256:{}", "a".repeat(64)),
+        revoked: Some("format-on-save@1.0.0".to_owned()),
+    };
+    assert_eq!(opened.transition(), MergeRequestTransition::AgentUpdateOpen);
+    assert_eq!(opened.dedup_prefix(), "merge_request_agent_update_opened");
+    assert_eq!(opened.action(), "merge_request.agent_update_opened");
+    assert_eq!(
+        opened.to_value(),
+        json!({
+            "merge_request_id": 9,
+            "iid": 3,
+            "author_id": 4,
+            "origin": "revocation",
+            "lock_digest": format!("sha256:{}", "a".repeat(64)),
+            "revoked": "format-on-save@1.0.0",
+        })
+    );
+    for o in AgentUpdateOrigin::ALL {
+        assert_eq!(AgentUpdateOrigin::parse(o.as_str()), Some(*o));
+    }
+    assert_eq!(AgentUpdateOrigin::parse("Update"), None);
+    let details = AuditDetails::MergeRequest(opened);
+    assert_eq!(
+        details.event_type(),
+        Some(EventType::MergeRequestAgentUpdateOpened)
     );
 }

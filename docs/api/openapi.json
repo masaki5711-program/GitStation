@@ -14866,6 +14866,44 @@
         },
         "type": "object"
       },
+      "UpdatePartBody": {
+        "additionalProperties": false,
+        "description": "One part of an update.",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "locked_revoked": {
+            "description": "The locked version is revoked.",
+            "type": "boolean"
+          },
+          "locked_version": {
+            "description": "The version the lock uses (null: a part the update adds).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_version": {
+            "description": "The version the update selects (null: the part is dropped).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "kind",
+          "locked_version",
+          "locked_revoked",
+          "next_version"
+        ],
+        "type": "object"
+      },
       "UpdateProject": {
         "additionalProperties": false,
         "description": "`PATCH /api/v1/projects/{id}`: at least one field.",
@@ -14877,6 +14915,72 @@
             ]
           },
           "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "UpdateQueuedBody": {
+        "additionalProperties": false,
+        "description": "`POST …/update` (202).",
+        "properties": {
+          "job_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "merge_request_iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/UpdatePartBody"
+            },
+            "type": "array"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/BuildPreviewBody",
+            "description": "The update as planned now (the job plans again when it runs)."
+          },
+          "queued": {
+            "description": "The job was queued (false: see `reason`).",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why nothing was queued: `already_open` (the same update's merge\nrequest is open: `merge_request_iid`) or `already_asked` (the same\nperson asked the same update; its job is queued or done). Null when\nqueued.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "queued",
+          "job_id",
+          "reason",
+          "merge_request_iid",
+          "parts",
+          "preview"
+        ],
+        "type": "object"
+      },
+      "UpdateRequest": {
+        "additionalProperties": false,
+        "description": "`POST …/update` (plan 16 A9).",
+        "properties": {
+          "adapter": {
+            "description": "The base model to move to (an adapter part's slug: the generation\nmigration); absent: the lock's own.",
             "type": [
               "string",
               "null"
@@ -15018,6 +15122,48 @@
           "outcome",
           "fields",
           "webhook"
+        ],
+        "type": "object"
+      },
+      "UpdatesBody": {
+        "additionalProperties": false,
+        "description": "`GET …/updates`.",
+        "properties": {
+          "available": {
+            "description": "An update would change the configuration.",
+            "type": "boolean"
+          },
+          "parts": {
+            "description": "Each locked part and what the update picks (empty when not available).",
+            "items": {
+              "$ref": "#/components/schemas/UpdatePartBody"
+            },
+            "type": "array"
+          },
+          "preview": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BuildPreviewBody",
+                "description": "The update's Dry-Run (null when not available)."
+              }
+            ]
+          },
+          "reason": {
+            "description": "Why not (`no_lock`, `up_to_date`); null when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "available",
+          "reason",
+          "parts",
+          "preview"
         ],
         "type": "object"
       },
@@ -20838,6 +20984,99 @@
         "summary": "The rules-only recommendation of agent parts ({}): the base model (the lock's adapter at the default branch, else claude-code-v2), the lock's parts and what they require, each at its newest stable version, with selected_by=rule and the reason; source=rules. Decided as AgentBuilderRecommend on a whole copy of the default tip (an AI agent audience only when the tip is open, 403 FG-AUTH-0022); 422 FG-AGENT-0008 when the base model or a requirement has no stable version",
         "x-forge-action": "RepoRead",
         "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/agent-builder/update": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_agent_builder_update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateQueuedBody"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Queue the agent configuration's update merge request ({\"adapter\"?}: another base model, the generation migration): planned now, then the job agent.update_merge_request writes the builder bot's commit on agent-builder/<lock digest> and opens the merge request for the caller (202; queued=false with reason already_open and the merge request's iid, or already_asked). 409 FG-AGENT-0016 reason=closed_by_person when a person closed the same update's merge request. forge/agent-lock verifies it and auto-merge waits for a Maintainer's approval. A person only, Developer; 409 FG-AGENT-0015 when there is nothing to update, 422 FG-AGENT-0008 when the update cannot be built",
+        "x-forge-action": "AgentBuilderCompile",
+        "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/agent-builder/updates": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_agent_builder_updates",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Whether the agent configuration at the default branch's tip has an update: each locked part's version (and whether it is revoked) and the version the update picks (the newest stable version that is not revoked, never down; a revoked one without a replacement is dropped), with the update's Dry-Run; available=false with reason no_lock or up_to_date otherwise (a Developer, an agent's token included)",
+        "x-forge-action": "AgentBuilderDryRun"
       }
     },
     "/api/v1/projects/{id}/ai-assets": {

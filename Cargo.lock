@@ -1129,6 +1129,7 @@ dependencies = [
  "aes-gcm 0.10.3",
  "clap",
  "flate2",
+ "forge-agent",
  "forge-auth",
  "forge-checks",
  "forge-core",
@@ -1158,6 +1159,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -24,6 +24,18 @@
 //!   reason=branch_exists` (the same build was asked for already); a build
 //!   that changes nothing is `FG-GIT-0031`.
 //!
+//! - `GET …/agent-builder/updates` (`AgentBuilderDryRun`, plan 16 A9):
+//!   whether the configuration at the default branch's tip has an update —
+//!   each locked part's version and the one the update picks (the newest
+//!   stable version that is not revoked; a revoked one without a
+//!   replacement is dropped), and the update's Dry-Run.
+//! - `POST …/agent-builder/update` `{adapter?}` (`AgentBuilderCompile`, a
+//!   person): queue the update merge request (`202`, the job
+//!   `agent.update_merge_request` in `forge serve`); `adapter` moves to
+//!   another base model (the generation migration). Nothing to update is
+//!   `409 FG-AGENT-0015`. A revocation queues the same job for every
+//!   project whose lock uses the revoked version (forge-marketplace).
+//!
 //! The merge request is never merged by itself without a person:
 //! `forge/agent-lock` verifies it and `forge/risk` names it
 //! `agent_config_locked`, and auto-merge waits for a Maintainer who is not
@@ -70,6 +82,10 @@ pub const RECOMMEND: &str = "/api/v1/projects/{id}/agent-builder/recommend";
 pub const PREVIEW: &str = "/api/v1/projects/{id}/agent-builder/preview";
 /// `POST` the build (the merge request).
 pub const COMPILE: &str = "/api/v1/projects/{id}/agent-builder/compile";
+/// `GET` the available update (plan 16 A9).
+pub const UPDATES: &str = "/api/v1/projects/{id}/agent-builder/updates";
+/// `POST` the update merge request (plan 16 A9).
+pub const UPDATE: &str = "/api/v1/projects/{id}/agent-builder/update";
 
 /// The body cap: a selection of at most 200 parts.
 pub const MAX_BODY: usize = 64 * 1024;
@@ -102,6 +118,69 @@ pub struct BuildRequest {
     /// default "Build the agent configuration").
     #[serde(default)]
     pub title: Option<String>,
+}
+
+/// `POST …/update` (plan 16 A9).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateRequest {
+    /// The base model to move to (an adapter part's slug: the generation
+    /// migration); absent: the lock's own.
+    #[serde(default)]
+    pub adapter: Option<String>,
+}
+
+/// One part of an update.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdatePartBody {
+    pub slug: String,
+    pub kind: String,
+    /// The version the lock uses (null: a part the update adds).
+    #[schema(required = true)]
+    pub locked_version: Option<String>,
+    /// The locked version is revoked.
+    pub locked_revoked: bool,
+    /// The version the update selects (null: the part is dropped).
+    #[schema(required = true)]
+    pub next_version: Option<String>,
+}
+
+/// `GET …/updates`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdatesBody {
+    /// An update would change the configuration.
+    pub available: bool,
+    /// Why not (`no_lock`, `up_to_date`); null when available.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+    /// Each locked part and what the update picks (empty when not available).
+    pub parts: Vec<UpdatePartBody>,
+    /// The update's Dry-Run (null when not available).
+    #[schema(required = true)]
+    pub preview: Option<BuildPreviewBody>,
+}
+
+/// `POST …/update` (202).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateQueuedBody {
+    /// The job was queued (false: see `reason`).
+    pub queued: bool,
+    #[schema(required = true, minimum = 1)]
+    pub job_id: Option<i64>,
+    /// Why nothing was queued: `already_open` (the same update's merge
+    /// request is open: `merge_request_iid`) or `already_asked` (the same
+    /// person asked the same update; its job is queued or done). Null when
+    /// queued.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+    #[schema(required = true, minimum = 1)]
+    pub merge_request_iid: Option<i64>,
+    pub parts: Vec<UpdatePartBody>,
+    /// The update as planned now (the job plans again when it runs).
+    pub preview: BuildPreviewBody,
 }
 
 /// `POST …/recommend` (no field yet; the body is `{}`).
@@ -249,6 +328,14 @@ pub const PREVIEW_OF: BuilderOf = BuilderOf {
 pub const COMPILE_OF: BuilderOf = BuilderOf {
     suffix: "/agent-builder/compile",
 };
+/// `GET …/updates`.
+pub const UPDATES_OF: BuilderOf = BuilderOf {
+    suffix: "/agent-builder/updates",
+};
+/// `POST …/update`.
+pub const UPDATE_OF: BuilderOf = BuilderOf {
+    suffix: "/agent-builder/update",
+};
 
 impl BuilderOf {
     async fn lookup(
@@ -284,6 +371,19 @@ impl BodyLoader<AppState, BuildRequest> for BuilderOf {
         state: &'a AppState,
         parts: &'a Parts,
         _: &'a BuildRequest,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, ProjectCtx> {
+        Box::pin(self.lookup(state, parts, viewer))
+    }
+}
+
+impl BodyLoader<AppState, UpdateRequest> for BuilderOf {
+    type Ctx = ProjectCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        _: &'a UpdateRequest,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, ProjectCtx> {
         Box::pin(self.lookup(state, parts, viewer))
@@ -424,6 +524,7 @@ async fn keep_record(
             dry_run,
             &outcome,
             ctx.request_id.as_str(),
+            "build",
         ),
     )
     .await;
@@ -568,6 +669,158 @@ async fn preview_inner(
             Err(e.with_context("project_id", target.project.get()))
         }
     }
+}
+
+fn update_parts(plan: &forge_marketplace::UpdatePlan) -> Vec<UpdatePartBody> {
+    plan.lines
+        .iter()
+        .map(|l| UpdatePartBody {
+            slug: l.slug.clone(),             // clone: the answer owns it
+            kind: l.kind.clone(),             // clone: as above
+            locked_version: l.locked.clone(), // clone: as above
+            locked_revoked: l.locked_revoked,
+            next_version: l.next.clone(), // clone: as above
+        })
+        .collect()
+}
+
+/// The reason of an `FG-AGENT-0015` (`no_lock`, `up_to_date`).
+fn not_needed_reason(e: &ForgeError) -> Option<String> {
+    (e.code() == ErrorCode::AgentUpdateNotNeeded).then(|| {
+        e.context()
+            .iter()
+            .find(|(k, _)| *k == "reason")
+            .map_or_else(|| "up_to_date".to_owned(), |(_, v)| v.clone()) // clone: the answer owns it
+    })
+}
+
+/// `GET …/agent-builder/updates` → `200` (plan 16 A9).
+pub async fn updates(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let ctx = request.ctx().clone(); // clone: the error path outlives the request
+    let target = Target::of(&state, &request);
+    // Nothing of the request (not `Sync`) is held across an await.
+    drop(request.into_write());
+    let built = async {
+        let target = target?;
+        let planned = marketplace(&state)?
+            .plan_update(target.project, target.repository.id, None)
+            .await;
+        match planned {
+            Ok(plan) => json(UpdatesBody {
+                available: true,
+                reason: None,
+                parts: update_parts(&plan),
+                preview: Some(preview_body(&plan.build)),
+            }),
+            Err(e) => match not_needed_reason(&e) {
+                Some(reason) => json(UpdatesBody {
+                    available: false,
+                    reason: Some(reason),
+                    parts: Vec::new(),
+                    preview: None,
+                }),
+                None => Err(e.with_context("project_id", target.project.get())),
+            },
+        }
+    }
+    .await;
+    match built {
+        Ok(v) => no_store(StatusCode::OK, v),
+        Err(e) => ctx
+            .fail(e.with_context("route", "agent_builder_updates"))
+            .into_response(),
+    }
+}
+
+/// `POST …/agent-builder/update` → `202` the update queued (plan 16 A9).
+pub async fn update(state: AppState, request: Dispatched<ProjectCtx, UpdateRequest>) -> Response {
+    let ctx = request.ctx().clone(); // clone: the error path outlives the request
+    match update_inner(&state, request).await {
+        Ok(v) => no_store(StatusCode::ACCEPTED, v),
+        Err(e) => ctx
+            .fail(e.with_context("route", "agent_builder_update"))
+            .into_response(),
+    }
+}
+
+async fn update_inner(
+    state: &AppState,
+    request: Dispatched<ProjectCtx, UpdateRequest>,
+) -> Result<serde_json::Value, ForgeError> {
+    let target = Target::of(state, &request)?;
+    let user = caller(request.principal())?;
+    let adapter = request.input().adapter.clone(); // clone: the plan and the job own it
+    if let Some(a) = &adapter {
+        let fine = !a.is_empty()
+            && a.len() <= 64
+            && a.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !fine {
+            return Err(param_invalid("adapter", "slug"));
+        }
+    }
+    // Nothing of the request (not `Sync`) is held across an await.
+    let w = request.into_write();
+    let market = marketplace(state)?;
+    let plan = market
+        .plan_update(target.project, target.repository.id, adapter.as_deref())
+        .await
+        .map_err(|e| e.with_context("project_id", target.project.get()))?;
+    // Review A9: the same update's merge request decides first — open: say
+    // so; closed by a person: never reopened (FG-AGENT-0016).
+    let existing = bounded(
+        state,
+        "agent_update_existing",
+        market.existing_update(target.project, &plan),
+    )
+    .await?;
+    let (job, reason, iid) = match existing {
+        Some((forge_core::MergeRequestState::Open, iid)) => {
+            (None, Some("already_open".to_owned()), Some(iid))
+        }
+        Some((
+            forge_core::MergeRequestState::Closed | forge_core::MergeRequestState::Merged,
+            iid,
+        )) => {
+            return Err(ForgeError::new(ErrorCode::AgentUpdateNotOpened)
+                .with_context("reason", "closed_by_person")
+                .with_context("iid", iid)
+                .with_context("project_id", target.project.get()))
+        }
+        None => {
+            let job = bounded(
+                state,
+                "agent_update_queue",
+                market.ask_update(
+                    target.project,
+                    user,
+                    adapter.as_deref(),
+                    &plan,
+                    &w.ctx.request_id,
+                ),
+            )
+            .await?;
+            let reason = job.is_none().then(|| "already_asked".to_owned());
+            (job, reason, None)
+        }
+    };
+    tracing::info!(
+        target: "forge_web::agent_builder",
+        event = "forge.agent_builder.update_queued",
+        request_id = %w.ctx.request_id,
+        project_id = target.project.get(),
+        lock_digest = %plan.build.compiled.lock_digest,
+        queued = job.is_some(),
+        job_id = job.unwrap_or(0),
+    );
+    json(UpdateQueuedBody {
+        queued: job.is_some(),
+        job_id: job,
+        reason,
+        merge_request_iid: iid,
+        parts: update_parts(&plan),
+        preview: preview_body(&plan.build),
+    })
 }
 
 /// The secret rules on each file the build writes (a published part never
@@ -766,16 +1019,7 @@ async fn write_build(
             .with_context("lock_digest", plan.compiled.lock_digest.clone())); // clone: the error owns it
     }
     scan_writes(&plan.writes)?;
-    let digest_hex = plan
-        .compiled
-        .lock_digest
-        .strip_prefix("sha256:")
-        .unwrap_or(&plan.compiled.lock_digest);
-    let branch = RefName::parse(&format!(
-        "refs/heads/agent-builder/{}",
-        digest_hex.get(..12).unwrap_or(digest_hex)
-    ))
-    .map_err(|_| ForgeError::new(ErrorCode::Internal).with_context("reason", "builder_branch"))?;
+    let branch = forge_marketplace::builder::builder_branch(&plan.compiled.lock_digest)?;
     // The ref update decided like a push of the caller's.
     let push_proof = prove(w.proof.principal(), Action::RepoPush, w.proof.ctx().clone())?; // clone: a proof owns its context
     let rules = bounded(

@@ -250,11 +250,21 @@ pub enum EventType {
     /// confidential one from agents). Actor `system`; deduplicated by
     /// `deployment_approval_summarized:<deployment_id>:<llm_request_id>`.
     DeploymentApprovalSummarized,
+    /// `merge_request.agent_update_opened` (plan 16 A9, ADR-0032 Amendment
+    /// A9; integration class): the agent builder's update job opened a
+    /// merge request that moves a project's agent configuration to newer
+    /// part versions — asked by a person (`origin` update), or because a
+    /// part version the project's lock uses was revoked (`origin`
+    /// revocation, with the revoked `slug@version`). The aggregate is the
+    /// new merge request (its author — the person it was opened for — is
+    /// told, kind `mr_agent_update`). Actor `system`. Deduplicated by
+    /// `merge_request_agent_update_opened:<merge_request_id>`.
+    MergeRequestAgentUpdateOpened,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 44] = [
+    pub const ALL: [EventType; 45] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -299,6 +309,7 @@ impl EventType {
         EventType::SpecReleased,
         EventType::MergeRequestAutofixFinished,
         EventType::DeploymentApprovalSummarized,
+        EventType::MergeRequestAgentUpdateOpened,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -352,6 +363,7 @@ impl EventType {
             EventType::SpecReleased => "spec.released",
             EventType::MergeRequestAutofixFinished => "merge_request.autofix_finished",
             EventType::DeploymentApprovalSummarized => "deployment.approval_summarized",
+            EventType::MergeRequestAgentUpdateOpened => "merge_request.agent_update_opened",
         }
     }
 
@@ -390,6 +402,7 @@ impl EventType {
             | EventType::SpecReleased
             | EventType::MergeRequestRevertDrafted
             | EventType::MergeRequestAutofixFinished
+            | EventType::MergeRequestAgentUpdateOpened
             | EventType::DeploymentApprovalSummarized => VisibilityClass::Integration,
             EventType::TokenCreated
             | EventType::TokenRevoked

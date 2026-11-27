@@ -1107,6 +1107,24 @@
     "word": "fixed"
   },
   {
+    "action": "AgentBuilderCompile",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/agent-builder/update",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AgentBuilderDryRun",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/agent-builder/updates",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/ai-assets",

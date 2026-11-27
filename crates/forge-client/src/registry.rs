@@ -1415,6 +1415,23 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["POST /api/v1/projects/{id}/agent-builder/compile"],
         output: r#"{"type":"object","required":["preview","branch","commit_sha"]}"#,
     },
+    // Plan 16 A9 (ADR-0032 Amendment A9): the update merge request.
+    CommandSpec {
+        name: "agent update",
+        summary: "Update a project's agent configuration to the newest stable part versions (a revoked one replaced, or dropped when nothing replaces it; never down) as a merge request opened by a job for you (a person's token only, Developer). --adapter moves to another base model; --dry-run only shows each part's locked and next version and the Dry-Run. FG-AGENT-0015 when there is nothing to update.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--adapter", "option", false, "Move to another base model (an adapter part's slug)."),
+            arg("--dry-run", "flag", false, "Show the update (each part's locked and next version, the Dry-Run); nothing is queued."),
+        ],
+        examples: &["gstn agent update --project 7 --dry-run", "gstn agent update --project 7"],
+        scopes: &["api"],
+        routes: &[
+            "GET /api/v1/projects/{id}/agent-builder/updates",
+            "POST /api/v1/projects/{id}/agent-builder/update",
+        ],
+        output: r#"{"type":"object","required":["parts"]}"#,
+    },
     CommandSpec {
         name: "part list",
         summary: "The agent parts catalog (plan 16): each part with its newest version that is not revoked (slug, version, channel, state, digest, capabilities). Every signed-in account.",

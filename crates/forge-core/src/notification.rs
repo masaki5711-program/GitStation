@@ -30,6 +30,10 @@ pub enum NotificationKind {
     /// pipeline failed after your merge request was merged, and a draft
     /// revert was opened (or could not be: it conflicts).
     MergeRequestRevertDrafted,
+    /// `merge_request.agent_update_opened` (plan 16 A9): the agent builder
+    /// opened a merge request for you that updates the project's agent
+    /// configuration (a newer version, or a revoked one replaced).
+    MergeRequestAgentUpdate,
 }
 
 impl NotificationKind {
@@ -39,6 +43,7 @@ impl NotificationKind {
         Self::MergeRequestCommented,
         Self::MergeRequestConflictPredicted,
         Self::MergeRequestRevertDrafted,
+        Self::MergeRequestAgentUpdate,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -48,6 +53,7 @@ impl NotificationKind {
             Self::MergeRequestCommented => "mr_commented",
             Self::MergeRequestConflictPredicted => "mr_conflict_predicted",
             Self::MergeRequestRevertDrafted => "mr_revert_drafted",
+            Self::MergeRequestAgentUpdate => "mr_agent_update",
         }
     }
 
@@ -64,6 +70,7 @@ impl NotificationKind {
             EventType::MergeRequestCommented => Some(Self::MergeRequestCommented),
             EventType::MergeRequestConflictPredicted => Some(Self::MergeRequestConflictPredicted),
             EventType::MergeRequestRevertDrafted => Some(Self::MergeRequestRevertDrafted),
+            EventType::MergeRequestAgentUpdateOpened => Some(Self::MergeRequestAgentUpdate),
             EventType::ProjectCreated
             | EventType::RepositoryCreated
             | EventType::TokenCreated
@@ -215,6 +222,7 @@ mod tests {
         assert_eq!(
             notifying,
             [
+                ("merge_request.agent_update_opened", "mr_agent_update"),
                 ("merge_request.approved", "mr_approved"),
                 ("merge_request.commented", "mr_commented"),
                 ("merge_request.conflict_predicted", "mr_conflict_predicted"),
