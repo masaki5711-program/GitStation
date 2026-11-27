@@ -225,7 +225,7 @@ async fn record(
         ForgeError::new(ErrorCode::Internal).with_context("reason", "candidate_head_invalid")
     })?;
     let ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the change owns its id
-    let write = forge_db::checks::record_forge_check_run(db, &ctx, (c.project, &head), run);
+    let write = forge_checks::ai_review::record_ai_review_run(db, &ctx, (c.project, &head), run);
     match tokio::time::timeout(WRITE_TIMEOUT, write).await {
         Ok(written) => {
             written?;
