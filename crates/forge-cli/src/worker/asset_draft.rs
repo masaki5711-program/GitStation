@@ -376,6 +376,8 @@ async fn one(
             prompt,
             input,
             policy: policy(),
+            // No deep-review rule applies to an asset draft.
+            deep_review: None,
             request_id: request_id.clone(), // clone: the submission owns it
         })
         .await;
