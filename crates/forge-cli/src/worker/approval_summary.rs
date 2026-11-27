@@ -194,6 +194,7 @@ async fn one(
             project: Some(project),
             requested_by: None,
             head_sha: Some(d.sha.clone()), // clone: the advice binds to it
+            deep_review: None,
             prompt: forge_llm::prompts::approval_summary(),
             input,
             policy: policy(),

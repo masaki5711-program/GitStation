@@ -46,6 +46,7 @@ pub mod gitcfg;
 pub mod hosting;
 pub mod http;
 pub mod integrations;
+pub mod mr_ai_review;
 pub mod mr_approvals;
 pub mod mr_conditions;
 pub mod mr_discussions;

@@ -51,6 +51,7 @@ pub mod activity;
 mod after_version;
 mod ai_assets_settings;
 pub mod ai_baseline;
+pub mod ai_review;
 pub mod approvals;
 mod auto_merge_settings;
 // M4 C14: the deterministic autofix worker and its settings.

@@ -463,6 +463,7 @@ pub(crate) async fn ask(
             project: None,
             requested_by: None,
             head_sha: None,
+            deep_review: None,
             prompt: forge_llm::prompts::incident_diagnosis(),
             input,
             policy: diagnosis::policy(),

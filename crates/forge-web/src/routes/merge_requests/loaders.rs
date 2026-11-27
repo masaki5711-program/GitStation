@@ -388,6 +388,8 @@ pub const MERGEABILITY_OF: MergeRequestRead = MergeRequestRead(MERGEABILITY_SUFF
 pub const CONFLICTS_OF: MergeRequestRead = MergeRequestRead(super::CONFLICTS_SUFFIX);
 /// `GET …/discussions` (M3 R3).
 pub const DISCUSSIONS_OF: MergeRequestRead = MergeRequestRead(super::DISCUSSIONS_SUFFIX);
+/// `GET …/ai-review` (M5 L5-5).
+pub const AI_REVIEW_OF: MergeRequestRead = MergeRequestRead(super::AI_REVIEW_SUFFIX);
 
 impl Loader<AppState> for MergeRequestRead {
     type Ctx = MergeRequestCtx;

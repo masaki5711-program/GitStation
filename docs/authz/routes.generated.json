@@ -1532,6 +1532,15 @@
   {
     "action": "MergeRequestRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/ai-review",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/approvals",
     "people_only": false,
     "public": false,

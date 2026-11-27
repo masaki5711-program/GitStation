@@ -23,6 +23,10 @@ checked retry, `ModelRef`) is pure and lives in `forge_core::llm`.
 - `background::spawn`: clock, Kanflow, `gpu-eval`, model digest (10 min),
   metrics snapshot (5 min).
 - `records::DbRecords` (`forge.llm_requests` / `forge.llm_advice`).
+- `prompts::mr_review()` (`prompts/mr_review.v1.txt`, L5-5: the merge
+  request first pass, `forge/ai-review`) and `Submission::deep_review` (the
+  code rules' deep-review reason, stored before the model's,
+  `forge_llm::deep_review`).
 - `prompts::approval_summary()` (`prompts/approval_summary.v1.txt`, L5-8): the
   versioned prompts, compiled in; a new text is a new file and version.
   `prompts::for_purpose` is the one list of prompts and output policies in

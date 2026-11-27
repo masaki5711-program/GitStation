@@ -286,3 +286,59 @@ L5-8 で残した「GitStation の Web には承認の画面がまだ無い。�
    失敗で画面ごと消える、最後の承認で結果の読み上げが消える、承認者を読む前の推測のボタン、承認の前の事実の読み直しと確認の
    注意、全環境に「本番は人だけ」と書いた文、凍結の期間の key。**受け入れた点**: 凍結の期間の読み取りの失敗は API に状態が無い
    （「なし」のまま）。サーバーの前提条件は 5 のとおり別の変更。
+
+## Amendment（2026-11-26、L5-5 `feat/core-ai-first-pass-review`: MR の一次レビュー）
+
+計画 19 §3.1 を実装した（ブランチ名は計画の `feat/review-ai-first-pass` が §2 の `<area>` の規則に合わないため
+`feat/core-ai-first-pass-review`）。利用者の指示（計画の推奨をすべて採る）で、次を決めた。
+
+1. **きっかけ**: Outbox の購読ではなく、worker の `ai_review` の周回（30 秒、ゲートウェイがあるときだけ、一時停止・digest の
+   不一致の間は何もしない）が、`llm.review` が `advisory` / `required` のプロジェクトの **開いている・下書きでない** MR のうち、
+   今の head に `forge/ai-review` の run が無いもの（または `queued` のまま 40 分 = レビューの期限 30 分 + 呼び出し、を過ぎたもの）を
+   最大 20 件見る（L5-8 と同じ型）。下書きは「準備完了」にしたとき（その head に run が無いので）見られる（GPU の節約）。
+   各 head は別の task（同時に最大 20、ゲートウェイの列が順番を決める）。完了した run（`error` を含む）は同じ head では
+   もう聞かない。新しい head は新しい候補。やり直しの操作（`AiReviewRerun`）は L5-6 と一緒に（`PLANNED` のまま）。
+2. **入力の組み立て**（`forge_review::ai_review::assemble`、純粋）: 題（300 文字）と本文（2,000 文字）をデータとして、版の
+   `merge base..head` の差分をファイルごとに 1 部分（パスつき）。ロック・生成物・vendor・バイナリ・git の上限で patch の無い
+   ファイル・1 ファイル 6,000 文字超（`too_large`）・合計 14,000 文字超（`over_budget`、`num_ctx` 8192 に収めるため）は送らず、
+   run に名前を出す。機密の判定は worker が `forge_checks::confidential::confidential_at`（merge base と head）で読み、
+   **読めなければ入力の全体を `confidential`** にする（閉じる方。ログに 1 回）。機密のパスの部分があれば助言は `confidential`。
+3. **深掘りの印はコードの規則が主**: `forge_core::risk::path_findings`（マイグレーション・認証・CI と配備・エージェントの設定・
+   秘密らしいファイル）、追加行の並行処理の語（`Mutex` `tokio::spawn` `unsafe` など）、大きい差分（400 行か 20 ファイル）、
+   一部を送っていない。理由は `Submission::deep_review` でゲートウェイに渡し、助言の `deep_review` に **規則の文を先に、
+   モデルの文を後に** 残す（`forge_llm::deep_review`）。
+4. **結論**（`forge_review::ai_review::conclusion`）: 指摘なしで劣化なし → `success`、指摘あり・劣化（判定の語を伏せた、根拠の
+   無い指摘を捨てた）→ `neutral`、`required` のプロジェクトの critical / high → `failure`、LLM の失敗・入力の拒否
+   （FG-LLM-0005）・読み取りの失敗 → `error`（コードと問い合わせ番号、成功にしない）。読めるものが無い（ロック・生成物だけ）・
+   共通の履歴が無い → 聞かずに `neutral`。モデルが書いた `"conclusion"` や `"approve"` の鍵、注入の「LGTM」は結論に届かない
+   （結論は検査を通った指摘と印だけを読む。`injected_title_cannot_change_schema_or_conclusion`）。
+5. **必須にしない**: 既定は `off`（行が無い = off、run も無い）。`required` は結論に `failure` を許すだけで、マージを止めるのは
+   Maintainer がブランチの規則で `forge/ai-review` を必須のチェックに名指ししたときだけ（既定の規則には無い）。自動マージは
+   必須でないチェックを読まない（`forge_core::auto_merge`）ので変わらない。
+6. **古い head の破棄**: 答えが来たとき MR がその head でない・開いていなければ、答えの run は書かず、古い head の run を
+   `neutral`「別の head に進んだ」にする（新しい head は自分の候補）。ゲートウェイが書いた助言の行は残り、読み手には
+   `stale` と出す。
+7. **`forge/ai-review` は HTTP から予約**: `FORGE_REPORTED_CHECKS` / `SYSTEM_REPORTED_CHECKS` に足した（`forge/` の名前は
+   `CheckWrite` が全員に断る。`forge_ai_review_reserved_from_http` を forge-core と forge-auth に）。
+8. **機密の助言の文は run に入れない**: チェックの run はエージェントのトークンも読めるので、`confidential` の助言の run は
+   「機密の入力のため表示しません」と深掘りの有無だけ（注釈も無し）。文は MR の画面（L5-6）と下の API で人だけが読む。
+9. **読み取り**: `GET /api/v1/projects/{id}/merge-requests/{iid}/ai-review`（`MergeRequestRead`、MR と同じローダー）と
+   `gstn mr ai-review --project <id> --iid <n> [--json]`（エージェントの道具 `get_merge_request_ai_review`）。助言の文は
+   `forge_auth::authorize_advice` が助言自身の対象で決め、エージェントのトークン・代理・`Forge-Context-Audience: agent` には
+   `confidential` を `withheld`。状態は `none`（「AI の助言は今ありません」）/ `shown` / `withheld`、別の head の助言は `stale`。
+   計画の `gstn mr ai-review <iid>` は、ほかの `gstn mr` のコマンドと同じ `--project --iid` の形にした。
+10. **プロンプト** `crates/forge-llm/prompts/mr_review.v1.txt`、方針は契約の既定（10 件、確信度 0.5 以上、根拠は入力の中）。
+    `prompts::for_purpose(MrReview)` に入れたので `llm-bench` が MR レビューのセットを動かす（skipped は無くなった）。
+11. **基準**: MR レビューのセットが動き出すので、`evals/baselines/qwen3.8-27b-q4_k_m.json` をこの開発サーバーの共用 Ollama
+    （同じモデルと digest、夜間 2026-11-27 05:58〜06:42、Kanflow の利用の少ない時間）で `llm-bench` を全 26 件 3 回ずつ流した結果に
+    置き換えた（`allowed` は前のまま）。全ケースが全部の回で合格（安全 14/14、MR レビューの仕込んだ欠陥 3/3・きれいな差分 2/2）、
+    指標は cause_hit_rate 1.0・attach_precision 1.0・false_alarm_rate 0・abstain_accuracy 1.0・p95 78 秒。計画の「基準は別の MR で先に」
+    は、この MR の中の基準の更新で代えた（`forge/ai-eval` は merge base の基準で比べ、新しいケースは種類だけ報告が決める）。
+    この計測は `require_path` を足す前のビルドで行った（仕込んだ欠陥の指摘はどれもパスを持つので結果は変わらない想定。次の夜間で確かめる）。
+12. **独立レビュー（`llm-integration-reviewer`・`security-reviewer`）で直した点**: 名前で秘密を持つファイル（`.env` `.pgpass` `.netrc`
+    鍵・keystore、`forge_core::risk::is_secret_file_path`）はモデルに送らない（`secret_file`、HIGH）。送らなかった機密のファイルは run に
+    名前を出さず数だけ（HIGH）。一部を送っていない変更は指摘なしでも `success` にしない（`neutral`「Partly reviewed」、HIGH）。
+    指摘は差分のファイルを名指す（`OutputPolicy::require_path`、題・本文からの引用は根拠にならない、MEDIUM）。レビューの task は
+    `JoinSet` で `stop` のとき止め、`InFlight` の鍵はドロップで外す（panic でも残らない、MEDIUM）。候補は版の記録（target の tip）が
+    ある head だけ（準備前の MR が 20 件の枠を埋めない、MEDIUM）。**受け入れた点**: 代理（act-as）の読み手は forge-auth の
+    `advice_reader` の単体テスト（`act_as_tests.rs`）が `Agent` と確かめ、経路のテストは agent トークンと宣言の 2 つ。

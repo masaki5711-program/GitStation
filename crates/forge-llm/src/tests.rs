@@ -141,6 +141,7 @@ fn submission(purpose: Purpose, class: InputClass) -> Submission {
         project: None,
         requested_by: None,
         head_sha: Some("a".repeat(40)),
+        deep_review: None,
         prompt: Prompt {
             id: "mr_review".to_owned(),
             version: 1,
@@ -521,4 +522,29 @@ async fn ollama_failures_are_unavailable_with_a_reason() {
             .expect("client");
     let err = provider.chat(&request).await.expect_err("down");
     assert_eq!(err.code(), ErrorCode::LlmUnavailable);
+}
+
+#[test]
+fn the_rules_deep_review_reason_comes_before_the_models() {
+    use forge_core::llm::DeepReview;
+    let model = DeepReview {
+        reason: "touches the session cookie".to_owned(),
+    };
+    assert_eq!(crate::deep_review(None, None), None);
+    assert_eq!(
+        crate::deep_review(Some("migration"), None).as_deref(),
+        Some("migration")
+    );
+    assert_eq!(
+        crate::deep_review(None, Some(&model)).as_deref(),
+        Some("touches the session cookie")
+    );
+    assert_eq!(
+        crate::deep_review(Some("migration"), Some(&model)).as_deref(),
+        Some("migration / AI: touches the session cookie")
+    );
+    let blank = DeepReview {
+        reason: "  ".to_owned(),
+    };
+    assert_eq!(crate::deep_review(Some(" "), Some(&blank)), None);
 }

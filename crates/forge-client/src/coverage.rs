@@ -703,6 +703,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ),
     // M3 R6 (ADR-0024 §7, §4.1, §9, §12): the merge status, settings, the
     // CODEOWNERS switch and the protected branch merge rules.
+    // M5 L5-5: the AI first pass.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/ai-review",
+        Coverage::Command("mr ai-review"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/merge-requests/{iid}/status",

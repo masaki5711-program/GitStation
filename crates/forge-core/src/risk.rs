@@ -524,6 +524,13 @@ fn is_auth_path(path: &str) -> bool {
     })
 }
 
+/// Whether `path` names a file that holds secrets by its name (`.env`,
+/// `.pgpass`, `.netrc`, an SSH key, a keystore): the `secret_file` rule's
+/// test, also used to keep such files away from the local LLM (L5-5).
+pub fn is_secret_file_path(path: &str) -> bool {
+    is_secret_file(path)
+}
+
 fn is_secret_file(path: &str) -> bool {
     let lower = basename(path).to_ascii_lowercase();
     if lower == ".env" {

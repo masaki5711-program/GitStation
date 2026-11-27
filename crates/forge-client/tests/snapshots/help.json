@@ -3879,6 +3879,56 @@
         }
       ],
       "examples": [
+        "gstn mr ai-review --project 7 --iid 3 --json"
+      ],
+      "name": "mr ai-review",
+      "output": {
+        "properties": {
+          "advice": {
+            "required": [
+              "state",
+              "label",
+              "stale",
+              "findings"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "iid",
+          "mode",
+          "head_sha",
+          "check",
+          "advice"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/ai-review"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A merge request's AI first pass by the local LLM, as advice only — it never blocks or approves a merge (M5 L5-5): the project's llm.review, the forge/ai-review run on the head (error when the LLM failed, never success) and the newest advice: summary, findings with their checked evidence, the deep-review mark, model and prompt version; none, shown, or withheld from an agent token when confidential; stale when made for another head."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
         "gstn mr status --project 7 --iid 3 --json"
       ],
       "name": "mr status",
@@ -8642,6 +8692,7 @@
         "GET /api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff",
         "GET /api/v1/projects/{id}/merge-requests/{iid}/compare",
         "GET /api/v1/projects/{id}/merge-requests/{iid}/status",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/ai-review",
         "GET /api/v1/projects/{id}/merge-requests/{iid}/discussions",
         "GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts",
         "GET /api/v1/projects/{id}/commits/{sha}/checks",
