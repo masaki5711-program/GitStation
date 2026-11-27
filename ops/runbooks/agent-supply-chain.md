@@ -18,6 +18,9 @@ Runbook に手順を足す）。
   `agent.update_merge_request` が `dead`）。`reason`: `no_author`（人が頼んだビルドが無い）、`author_not_allowed`（`denied_code`・`candidates`:
   ビルドを頼んだ人（新しい順に最大 5 人）がみな抜けた・無効になった・Developer でない・`agent-builder/*` が保護されている）、`closed_by_person`（同じ更新の MR を
   人が閉じた）。取り消した版がそのプロジェクトの lock に残り、`forge/agent-lock` は FG-AGENT-0006 で失敗し続ける。
+- （A12）`forge doctor` の `agent.revoked_in_use` が `warn`: 既定の枝の先端の lock が取り消した版を使うプロジェクトの数と
+  プロジェクト ID（名前・パスは出さない）。候補は取り消された版を選んだ終わったビルドのあるプロジェクトで、先端の lock で確かめる
+  （手で書いた lock は候補に入らない — `forge/agent-lock` が FG-AGENT-0006 で失敗して見える）。
 
 ## Impact
 
@@ -39,6 +42,8 @@ Runbook に手順を足す）。
    — 取り消しのトランザクションが、その版を選んだビルドのあるプロジェクトごとに 1 つ入れる（dedup `agent_update_revoked:<version_id>:<project_id>`）。
    `succeeded` のジョブはログの `forge.agent.update_opened`（`iid`）か `forge.agent.update_skipped`（`reason`: `not_in_lock` = もう誰かが更新した、
    `up_to_date`、`no_lock`）を持つ。`dead` は `last_error_code`（FG-AGENT-0016 なら `reason`）を見る。
+6. （A12）まだ使っているプロジェクトの数: `forge doctor` の `agent.revoked_in_use`（読むだけ、30 秒まで、候補は 200 件まで）。
+   `could not be read`・`cut at`・`stopped after` が付くときは数えきれていない（`repositories.storage` も見る）。
 
 ## Mitigate（変更は人の承認のあと）
 
@@ -61,6 +66,7 @@ Runbook に手順を足す）。
 - 原因の変更（コミット・MR）が特定され、インシデントの記録に書かれている。
 - （A9）取り消した版を使っていた各プロジェクトで、更新の MR がマージされ、`forge/agent-lock` が `main` で緑。`agent.update_merge_request` の
   `dead` のジョブが残っていない（残るものは 6 の手で頼んだ更新で置き換わっている）。
+- （A12）`forge doctor` の `agent.revoked_in_use` が `ok`。
 
 ## 関連
 

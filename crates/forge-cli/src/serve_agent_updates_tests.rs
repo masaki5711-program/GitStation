@@ -484,3 +484,39 @@ async fn revoke_opens_update_mr_once() {
     assert_eq!(builds.len(), 1, "{builds:?}");
     w.t.drop_now().await;
 }
+
+/// Plan 16 §8 (A12): `forge doctor`'s `agent.revoked_in_use` counts the
+/// projects whose lock at the default branch's tip pins a revoked version
+/// — confirmed at the tip, not only from the build's record.
+#[tokio::test]
+async fn doctor_counts_a_revoked_version_in_a_tips_lock() {
+    use crate::doctor::agent::{revoked_walk, RevokedWalk};
+    let w = world().await;
+    w.base_parts().await;
+    w.main_with(&[("README.md", "synthetic\n")]);
+    w.built(
+        &[
+            pick("claude-code-v2", "1.0.0"),
+            pick("format-on-save", "1.0.0"),
+        ],
+        w.alice,
+    )
+    .await;
+    let walk = |cap| revoked_walk(&w.t.db, &w.market, cap, std::time::Duration::from_secs(30));
+    // Nothing revoked: no candidate.
+    assert_eq!(walk(10).await.expect("walk"), RevokedWalk::default());
+
+    assert_eq!(w.revoke("1.0.0").await.expect("revoke"), 1);
+    let found = walk(10).await.expect("walk");
+    assert_eq!(found.in_use, vec![w.project.get()], "{found:?}");
+    assert_eq!((found.checked, found.unchecked), (1, 0));
+    assert!(!found.truncated && !found.timed_out);
+
+    // The tip moved on (the lock is gone): the build's record alone is
+    // not a use.
+    w.main_with(&[("README.md", "synthetic\n")]);
+    let after = walk(10).await.expect("walk");
+    assert!(after.in_use.is_empty(), "{after:?}");
+    assert_eq!(after.checked, 1);
+    w.t.drop_now().await;
+}

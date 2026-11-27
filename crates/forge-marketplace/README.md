@@ -13,6 +13,7 @@ SQL は `forge_db::agent_marketplace`、判定は `forge_auth::authorize()`、�
 | `load_version` / `promote`（`AgentPartPromote`）/ `revoke`（`AgentPartRevoke`） | 昇格は公開の監査の行が記録した事実（押した人・裏の人）で判定する。取り消しは理由 1〜500 文字、最終（FG-AGENT-0006） |
 | `plan_build` / `recommend_for` / `record_build`（A7） | ビルダーの Dry-Run と記録、規則だけの推薦（`builder`） |
 | `plan_update` / `ask_update` / `AgentUpdater`（A9） | 更新の MR（`updates`）: lock の各部品を取り消していない最新の stable へ（下げない。取り消した版で置き換えが無ければ外す）、`adapter` でベースモデルを移す（世代の移行）。`AgentUpdater::run` はジョブ `agent.update_merge_request`（`forge serve`）の中身で、頼んだ人か最後にビルドを頼んだ人の今の権限で判定し、A7 の枝 `agent-builder/<要約>` にボットのコミットを書いて MR を 1 回だけ開く。取り消しは同じトランザクションで、その版を選んだビルドのある各プロジェクトにジョブを入れる |
+| `revoked_at_tip`（A12） | 既定の枝の先端の lock のうち、もう公開されていない（取り消した）版の `slug@version`（lock が無ければ `None`）。読むだけ、計画と同じ上限。`forge doctor` の `agent.revoked_in_use` が使う |
 | `list` / `part` / `version` / `keys` | 目録（`AgentPartList`）、部品（`AgentPartRead`）、公開鍵（`AgentKeyRead`、`gstn` の `agent-keys.json` の形） |
 
 **エラーコード**: FG-AGENT-0001・0004・0005・0006・0008・0012・0013・0014・0015・0016（`errors.toml`）。**runbook**: `agent-signing-key`、`agent-supply-chain`。

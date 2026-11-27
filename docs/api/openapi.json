@@ -15363,6 +15363,10 @@
             "description": "An update would change the configuration.",
             "type": "boolean"
           },
+          "can_update": {
+            "description": "The caller may ask for the update merge request (`POST …/update`:\n`AgentBuilderCompile`, a person and a Developer). A hint for the\nscreen's button; the route decides again.",
+            "type": "boolean"
+          },
           "parts": {
             "description": "Each locked part and what the update picks (empty when not available).",
             "items": {
@@ -15393,7 +15397,8 @@
           "available",
           "reason",
           "parts",
-          "preview"
+          "preview",
+          "can_update"
         ],
         "type": "object"
       },

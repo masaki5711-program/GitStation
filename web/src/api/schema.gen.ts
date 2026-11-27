@@ -9832,6 +9832,12 @@ export interface components {
         UpdatesBody: {
             /** @description An update would change the configuration. */
             available: boolean;
+            /**
+             * @description The caller may ask for the update merge request (`POST …/update`:
+             *     `AgentBuilderCompile`, a person and a Developer). A hint for the
+             *     screen's button; the route decides again.
+             */
+            can_update: boolean;
             /** @description Each locked part and what the update picks (empty when not available). */
             parts: components["schemas"]["UpdatePartBody"][];
             preview: null | components["schemas"]["BuildPreviewBody"];

@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use forge_core::{
     AgentUpdateOrigin, AuditDetails, DedupKey as EventDedupKey, DedupPart, EventType,
-    MergeRequestChange, MergeRequestId, ProjectId, RequestId, UserId,
+    MergeRequestChange, MergeRequestId, ProjectId, RepoId, RequestId, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
@@ -388,6 +388,38 @@ pub(crate) async fn projects_using_on(
     .await
     .map_err(|e| query_error(QUERY, e))?;
     Ok(ids.into_iter().map(ProjectId::new).collect())
+}
+
+/// The most projects [`projects_with_revoked_builds`] answers.
+pub const MAX_REVOKED_CANDIDATES: i64 = 1000;
+
+/// The projects (with their ready repository) whose finished (not
+/// Dry-Run) builds selected a version that is revoked now, by project id,
+/// at most `limit` (clamped to 1..=[`MAX_REVOKED_CANDIDATES`]). The
+/// candidates of `forge doctor`'s `agent.revoked_in_use` (plan 16 §8):
+/// the caller confirms each against the lock at the default branch's tip.
+/// A lock written by hand (no build recorded) is not among them — its
+/// `forge/agent-lock` check fails instead (ADR-0032 Amendment A9 5).
+pub async fn projects_with_revoked_builds(
+    db: &Db,
+    limit: i64,
+) -> Result<Vec<(ProjectId, RepoId)>, ForgeError> {
+    const QUERY: &str = "agent_builder.projects_with_revoked_builds";
+    let rows: Vec<(i64, i64)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT DISTINCT b.project_id, r.id FROM forge.agent_builds AS b                  JOIN forge.projects AS p ON p.id = b.project_id                  JOIN forge.repositories AS r ON r.project_id = p.id                  WHERE b.state = 'succeeded' AND NOT b.dry_run                  AND p.deleted_at IS NULL AND r.state = 'ready'                  AND EXISTS (SELECT 1 FROM forge.agent_part_versions AS v                    JOIN forge.agent_parts AS ap ON ap.id = v.part_id                    WHERE v.state = 'revoked' AND b.selection @>                    jsonb_build_array(jsonb_build_object('slug', ap.slug, 'version', v.version)))                  ORDER BY b.project_id LIMIT $1",
+            )
+            .bind(limit.clamp(1, MAX_REVOKED_CANDIDATES))
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(p, r)| (ProjectId::new(p), RepoId::new(r)))
+        .collect())
 }
 
 /// The people who asked for the project's finished builds, the newest

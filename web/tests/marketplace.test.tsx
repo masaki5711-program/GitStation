@@ -9,7 +9,7 @@ import axe from 'axe-core';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { capabilityDiff, groupPathOf, lockedVersions, orderedCapabilities, updatesOf } from '../src/api/marketplace';
+import { capabilityDiff, groupPathOf, orderedCapabilities, updateChanges } from '../src/api/marketplace';
 import { CATALOG, marketRoutes, version } from './marketplace-fixtures';
 import { apiError, mockServer, SESSION, signedInAdmin, type Handler } from './mock';
 import { json, renderApp } from './render';
@@ -65,19 +65,27 @@ async function openPart(groupRole: string | null, over: Record<string, Handler> 
 }
 
 describe('marketplace helpers', () => {
-  it('orders capabilities, diffs them and reads a lock', () => {
+  it('orders capabilities, diffs them and orders an update', () => {
     expect(orderedCapabilities(['fs-write', 'zzz', 'exec'])).toEqual(['exec', 'fs-write', 'zzz']);
     expect(capabilityDiff(['exec'], ['exec', 'network'])).toEqual({ added: ['network'], removed: [], kept: ['exec'] });
     expect(capabilityDiff(['exec', 'permissions'], [])).toEqual({ added: [], removed: ['exec', 'permissions'], kept: [] });
     expect(groupPathOf('acme/sub/parts')).toBe('acme/sub');
     expect(groupPathOf('parts')).toBeNull();
-    const locked = lockedVersions(JSON.stringify({ schema_version: 1, parts: [{ slug: 'a', version: '1.0.0' }] }));
-    expect(locked?.get('a')).toBe('1.0.0');
-    expect(lockedVersions('{')).toBeNull();
-    expect(lockedVersions(JSON.stringify({ parts: [{ slug: 1 }] }))).toBeNull();
-    expect(updatesOf(locked ?? new Map<string, string>(), [{ slug: 'a', version: '1.1.0' }, { slug: 'b', version: '2.0.0' }])).toEqual([
-      { slug: 'a', from: '1.0.0', to: '1.1.0' },
-    ]);
+    const part = (slug: string, locked: string | null, revoked: boolean, next: string | null) => ({
+      slug,
+      kind: 'skill',
+      locked_version: locked,
+      locked_revoked: revoked,
+      next_version: next,
+    });
+    // Revoked first, unchanged parts left out, the server's order kept.
+    expect(
+      updateChanges([part('a', '1.0.0', false, '1.1.0'), part('b', '1.0.0', false, '1.0.0'), part('c', '2.0.0', true, null)]).map(
+        (p) => p.slug,
+      ),
+    ).toEqual(['c', 'a']);
+    // A revoked version picked again (no replacement yet) is still listed.
+    expect(updateChanges([part('d', '1.0.0', true, '1.0.0')]).map((p) => p.slug)).toEqual(['d']);
   });
 });
 

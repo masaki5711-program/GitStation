@@ -2,8 +2,16 @@
 // build the project's Claude Code configuration (.claude/, CLAUDE.md,
 // .mcp.json) from signed marketplace parts.
 //
-// - The update band: parts of the current lock (.gitstation/agent.lock.json
-//   on the default branch) with a newer stable version recommended.
+// - The update band (plan 16 A12, a Developer's): `GET …/agent-builder/
+//   updates` — the lock's parts at the default branch's tip whose version
+//   is revoked (named in words, first) or has a newer stable version, the
+//   parts the update adds or drops, and "Create the update merge request"
+//   (`POST …/update`) only when the API says `can_update`.
+// - The local LLM's reasons (plan 16 A11): each part's `llm_reason` and the
+//   suggested parts (never checked; with their capability marks), labelled
+//   「AI の助言（提案）」 in words, plain text only; a note says when there
+//   are no reasons now and why, and the recommendation is read again by
+//   itself while they are `pending`.
 // - The adapter (the base model, exactly one), the parts as checkboxes —
 //   the rules' recommendation checked, with its reason in words.
 // - "See the Dry-Run diff": the files added / modified / removed, each
@@ -23,25 +31,27 @@ import { Link } from 'react-router';
 
 import { useApi } from '../../api/context';
 import {
-  LOCK_PATH,
-  lockedVersions,
   mayBuild,
   mayRecommend,
-  updatesOf,
+  updateChanges,
+  useAskUpdate,
   useBuilderStatus,
   useCompile,
   useParts,
   usePreview,
   useRecommendation,
+  useUpdates,
   type BuildCompiled,
   type BuildPreview,
   type BuildRecord,
   type PartSummary,
   type Recommendation,
+  type RecommendLlm,
   type SelectionItem,
+  type UpdatePart,
+  type UpdateQueued,
 } from '../../api/marketplace';
 import { projectQuery } from '../../api/namespaces';
-import { useBlob, useRefs } from '../../api/repo';
 import controls from '../../components/controls.module.css';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
@@ -65,6 +75,10 @@ interface Choice {
   capabilities: string[];
   /** The rules' reason (`base_model`, `current_lock`, `required_by=<slug>`); `null`: not recommended. */
   reason: string | null;
+  /** The local LLM's reason (plain text, an AI proposal); `null`: none. */
+  llmReason: string | null;
+  /** Suggested by the LLM only (never checked by itself). */
+  suggested: boolean;
 }
 
 /** The reason of a recommendation in words (literal keys). */
@@ -77,8 +91,9 @@ function reasonText(t: TFunction, reason: string): string {
   return reason;
 }
 
-/** The choices: the recommendation first (its order), then every other
- * catalog part with a live version, by slug. */
+/** The choices: the recommendation first (its order), then the LLM's
+ * suggestions (unchecked), then every other catalog part with a live
+ * version, by slug. */
 export function choicesOf(rec: Recommendation | undefined, catalog: readonly PartSummary[]): Choice[] {
   const bySlug = new Map(catalog.map((p) => [p.slug, p]));
   const out: Choice[] = [];
@@ -92,8 +107,26 @@ export function choicesOf(rec: Recommendation | undefined, catalog: readonly Par
       channel: c !== null && c !== undefined && c.version === r.version ? c.channel : null,
       capabilities: c !== null && c !== undefined && c.version === r.version ? c.capabilities : [],
       reason: r.reason,
+      llmReason: r.llm_reason ?? null,
+      suggested: false,
     });
     seen.add(r.slug);
+  }
+  for (const s of rec?.suggested ?? []) {
+    if (seen.has(s.slug)) continue;
+    const c = bySlug.get(s.slug)?.latest;
+    out.push({
+      slug: s.slug,
+      kind: s.kind,
+      version: s.version,
+      channel: c !== null && c !== undefined && c.version === s.version ? c.channel : null,
+      // The API's own marks: the reason is never the only thing read.
+      capabilities: s.capabilities,
+      reason: null,
+      llmReason: s.reason,
+      suggested: true,
+    });
+    seen.add(s.slug);
   }
   const rest = catalog
     .filter((p) => !seen.has(p.slug) && p.latest !== null && !p.deprecated)
@@ -107,6 +140,8 @@ export function choicesOf(rec: Recommendation | undefined, catalog: readonly Par
       channel: p.latest.channel,
       capabilities: p.latest.capabilities,
       reason: null,
+      llmReason: null,
+      suggested: false,
     });
   }
   return out;
@@ -120,6 +155,21 @@ function selectionOf(choices: readonly Choice[], adapter: string | null, picked:
   const head = choices.filter((c) => c.kind === 'adapter' && c.slug === adapter).map(item);
   const parts = choices.filter((c) => c.kind !== 'adapter' && picked.has(c.slug)).map(item);
   return [...head, ...parts];
+}
+
+/** The selection's identity, whatever its order (the LLM's reasons may
+ * reorder the parts: the Dry-Run of the same choice stays valid). */
+function selectionKey(selection: readonly SelectionItem[]): string {
+  return JSON.stringify([...selection].sort((a, b) => a.slug.localeCompare(b.slug)));
+}
+
+/** The recommendation's identity: its parts and versions (not the LLM's
+ * reasons or order, which may arrive later — the choice is kept). */
+function recommendationKey(rec: Recommendation): string {
+  return rec.parts
+    .map((p) => `${p.slug}@${p.version}`)
+    .sort()
+    .join(',');
 }
 
 export function AgentBuilderScreen({ projectId, project }: { projectId: number; project: string }) {
@@ -165,15 +215,21 @@ function Builder({ projectId, project, canBuild }: { projectId: number; project:
   const { t } = useTranslation();
   const rec = useRecommendation(projectId, true);
   const catalog = useParts(null, null, '');
-  const refs = useRefs(projectId);
-  const branch = refs.data?.default_branch ?? null;
-  const lock = useBlob(projectId, branch ?? '', LOCK_PATH, branch !== null);
-  const locked = lock.isSuccess && lock.data.content !== null ? lockedVersions(lock.data.content) : null;
-  const updates = locked === null || !rec.isSuccess ? [] : updatesOf(locked, rec.data.parts);
 
   return (
     <>
-      {updates.length > 0 && <UpdateBand updates={updates} canBuild={canBuild} />}
+      {canBuild && <UpdateBand projectId={projectId} project={project} />}
+      {rec.isSuccess && (
+        <AiNote
+          llm={rec.data.llm}
+          source={rec.data.source}
+          degraded={rec.data.degraded}
+          busy={rec.isFetching}
+          onAgain={() => {
+            void rec.refetch();
+          }}
+        />
+      )}
       {rec.isSuccess && rec.data.unavailable.length > 0 && (
         <p className={styles.warning}>{t('agentBuilder.unavailable', { slugs: rec.data.unavailable.join(', ') })}</p>
       )}
@@ -197,15 +253,16 @@ function Builder({ projectId, project, canBuild }: { projectId: number; project:
       {rec.isSuccess && catalog.isSuccess && (
         canBuild ? (
           <Picker
-            // A new recommendation starts the choice again (its defaults and reasons).
-            key={JSON.stringify(rec.data.parts)}
+            // A new recommendation starts the choice again (its defaults);
+            // reasons arriving later keep it.
+            key={recommendationKey(rec.data)}
             projectId={projectId}
             project={project}
             choices={choicesOf(rec.data, catalog.data.parts)}
           />
         ) : (
           <>
-            <Recommended choices={choicesOf(rec.data, []).filter((c) => c.reason !== null)} />
+            <Recommended choices={choicesOf(rec.data, []).filter((c) => c.reason !== null || c.suggested)} />
             <p className={styles.hint}>{t('agentBuilder.developerOnly')}</p>
           </>
         )
@@ -215,21 +272,214 @@ function Builder({ projectId, project, canBuild }: { projectId: number; project:
   );
 }
 
-function UpdateBand({ updates, canBuild }: { updates: { slug: string; from: string; to: string }[]; canBuild: boolean }) {
+/** One changed part of the update in words (literal keys). */
+function updateLine(t: TFunction, p: UpdatePart): string {
+  const from = p.locked_version ?? '';
+  const to = p.next_version ?? '';
+  if (p.locked_revoked) {
+    return p.next_version === null
+      ? t('agentBuilder.update.itemRevokedDropped', { slug: p.slug, from })
+      : t('agentBuilder.update.itemRevoked', { slug: p.slug, from, to });
+  }
+  if (p.locked_version === null) return t('agentBuilder.update.itemAdded', { slug: p.slug, to });
+  if (p.next_version === null) return t('agentBuilder.update.itemDropped', { slug: p.slug, from });
+  return t('agentBuilder.update.item', { slug: p.slug, from, to });
+}
+
+/** The update band (a Developer's read): what the update changes and, when
+ * the API says the caller may, "Create the update merge request". */
+function UpdateBand({ projectId, project }: { projectId: number; project: string }) {
   const { t } = useTranslation();
   const id = useId();
+  const updates = useUpdates(projectId, true);
+  const ask = useAskUpdate(projectId);
+  const [asked, setAsked] = useState<UpdateQueued | null>(null);
+  // The button goes away once asked: the focus moves to the answer.
+  const result = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (asked !== null) result.current?.focus();
+  }, [asked]);
+  if (updates.isPending) {
+    return (
+      <p className={styles.hint} role="status">
+        {t('agentBuilder.update.checking')}
+      </p>
+    );
+  }
+  if (updates.isError) {
+    return (
+      <QueryError
+        error={updates.error}
+        onRetry={() => {
+          void updates.refetch();
+        }}
+      />
+    );
+  }
+  const body = updates.data;
+  if (!body.available) {
+    return (
+      <p className={styles.hint}>
+        {body.reason === 'no_lock' ? t('agentBuilder.update.noLock') : t('agentBuilder.update.upToDate')}
+      </p>
+    );
+  }
+  const changes = updateChanges(body.parts);
+  const revoked = changes.some((p) => p.locked_revoked);
   return (
-    <section className={styles.band} aria-labelledby={id}>
+    <section className={revoked ? `${styles.band} ${styles.bandRevoked}` : styles.band} aria-labelledby={id}>
       <h2 id={id} className={styles.bandTitle}>
-        {t('agentBuilder.update.title')}
+        {revoked ? t('agentBuilder.update.titleRevoked') : t('agentBuilder.update.title')}
       </h2>
       <ul className={styles.bandList}>
-        {updates.map((u) => (
-          <li key={u.slug}>{t('agentBuilder.update.item', { slug: u.slug, from: u.from, to: u.to })}</li>
+        {changes.map((p) => (
+          <li key={p.slug}>
+            {p.locked_revoked && (
+              <>
+                <span className={styles.revokedMark}>{t('agentBuilder.update.revokedMark')}</span>{' '}
+              </>
+            )}
+            {updateLine(t, p)}
+          </li>
         ))}
       </ul>
-      <p className={styles.bandNext}>{canBuild ? t('agentBuilder.update.next') : t('agentBuilder.update.nextReader')}</p>
+      {body.preview !== null && (
+        <p className={styles.bandMeta}>{t('agentBuilder.update.files', { n: body.preview.changes.length })}</p>
+      )}
+      {body.can_update ? (
+        asked === null && (
+          <>
+            <p className={styles.bandNext}>{t('agentBuilder.update.next')}</p>
+            <div className={styles.actions}>
+              <button
+                type="button"
+                className={controls.primary}
+                aria-disabled={ask.isPending ? 'true' : undefined}
+                onClick={() => {
+                  if (ask.isPending) return;
+                  ask.mutate(undefined, {
+                    onSuccess: (queued) => {
+                      setAsked(queued);
+                    },
+                  });
+                }}
+              >
+                {ask.isPending ? t('agentBuilder.update.asking') : t('agentBuilder.update.ask')}
+              </button>
+            </div>
+          </>
+        )
+      ) : (
+        <p className={styles.bandNext}>{t('agentBuilder.update.notAllowed')}</p>
+      )}
+      {ask.isError && <Denied error={ask.error} />}
+      <div role="status" className={styles.result} ref={result} tabIndex={-1}>
+        {asked !== null && <AskedLine asked={asked} project={project} />}
+      </div>
     </section>
+  );
+}
+
+function AskedLine({ asked, project }: { asked: UpdateQueued; project: string }) {
+  const { t } = useTranslation();
+  if (asked.queued) return <p>{t('agentBuilder.update.queued')}</p>;
+  if (asked.reason === 'already_open' && asked.merge_request_iid !== null) {
+    return (
+      <p>
+        {t('agentBuilder.update.alreadyOpen', { iid: asked.merge_request_iid })}{' '}
+        <Link to={pullUrl(project, asked.merge_request_iid)}>
+          {t('agentBuilder.openMr', { iid: asked.merge_request_iid })}
+        </Link>
+      </p>
+    );
+  }
+  return <p>{t('agentBuilder.update.alreadyAsked')}</p>;
+}
+
+/** Why there are no AI reasons now, in words (literal keys). */
+function noReasonWhy(t: TFunction, state: string): string {
+  switch (state) {
+    case 'pending':
+      return t('agentBuilder.ai.why.pending');
+    case 'unavailable':
+      return t('agentBuilder.ai.why.unavailable');
+    case 'paused':
+      return t('agentBuilder.ai.why.paused');
+    case 'refused':
+      return t('agentBuilder.ai.why.refused');
+    case 'withheld':
+      return t('agentBuilder.ai.why.withheld');
+    default:
+      return t('agentBuilder.ai.why.other');
+  }
+}
+
+/** The local LLM's part of the recommendation: its summary (plain text) or
+ * why there are no reasons now. A live region: reasons arriving are said. */
+function AiNote({
+  llm,
+  source,
+  degraded,
+  busy,
+  onAgain,
+}: {
+  llm: RecommendLlm;
+  source: string;
+  degraded: boolean;
+  busy: boolean;
+  onAgain: () => void;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const ready = llm.state === 'ready';
+  // Rules only and nothing to say about the LLM: no note.
+  if (ready && source !== 'rules+llm' && !degraded) return null;
+  const summary = llm.summary ?? null;
+  const again = llm.state === 'pending' || llm.state === 'unavailable';
+  // A named region; only the sentences are the live part (the button is
+  // outside it, so a new answer is said without the button's name).
+  return (
+    <section aria-labelledby={id} className={styles.ai}>
+      <h2 id={id} className={styles.aiTitle}>
+        <span className={styles.aiTag}>{t('agentBuilder.ai.label')}</span>
+      </h2>
+      <div role="status">
+        {ready ? (
+          <>
+            {summary !== null && summary !== '' && <p className={styles.aiText}>{summary}</p>}
+            {degraded && <p className={styles.aiText}>{t('agentBuilder.ai.partial')}</p>}
+            <p className={styles.meta}>{t('agentBuilder.ai.disclaimer')}</p>
+          </>
+        ) : (
+          <p className={styles.aiText}>{t('agentBuilder.ai.none', { why: noReasonWhy(t, llm.state) })}</p>
+        )}
+        {busy && <p className={styles.meta}>{t('agentBuilder.ai.reading')}</p>}
+      </div>
+      {!ready && again && (
+        <button
+          type="button"
+          className={controls.button}
+          aria-disabled={busy ? 'true' : undefined}
+          onClick={() => {
+            if (!busy) onAgain();
+          }}
+        >
+          {t('agentBuilder.ai.again')}
+        </button>
+      )}
+    </section>
+  );
+}
+
+/** A part's AI reason (plain text), labelled in words. */
+function AiReason({ c, id }: { c: Choice; id?: string }) {
+  const { t } = useTranslation();
+  if (c.llmReason === null) return null;
+  return (
+    <p id={id} className={styles.aiReason}>
+      <span className={styles.aiTag}>{c.suggested ? t('agentBuilder.ai.suggested') : t('agentBuilder.ai.label')}</span>{' '}
+      <span>{c.llmReason}</span>
+    </p>
   );
 }
 
@@ -247,6 +497,8 @@ function Recommended({ choices }: { choices: Choice[] }) {
             <span className={styles.slug}>{c.slug}</span>
             <span className={styles.meta}>{t('agentBuilder.kindVersion', { kind: kindLabel(t, c.kind), version: c.version })}</span>
             {c.reason !== null && <span className={styles.reason}>{reasonText(t, c.reason)}</span>}
+            <AiReason c={c} />
+            {c.suggested && <CapabilityMarks caps={c.capabilities} none={null} />}
           </li>
         ))}
       </ul>
@@ -265,7 +517,7 @@ function Picker({ projectId, project, choices }: { projectId: number; project: s
     () => new Set(parts.filter((p) => p.reason !== null).map((p) => p.slug)),
   );
   const selection = useMemo(() => selectionOf(choices, adapter, picked), [choices, adapter, picked]);
-  const key = JSON.stringify(selection);
+  const key = selectionKey(selection);
   const preview = usePreview(projectId);
   const compile = useCompile(projectId);
   const [previewed, setPreviewed] = useState<{ key: string; body: BuildPreview } | null>(null);
@@ -399,7 +651,7 @@ function ChoiceRow({
         className={styles.box}
         checked={checked}
         onChange={onChange}
-        aria-describedby={`${id}-about`}
+        aria-describedby={c.llmReason === null ? `${id}-about` : `${id}-about ${id}-ai`}
       />
       <div className={styles.choiceBody}>
         <label htmlFor={id} className={styles.choiceLabel}>
@@ -410,6 +662,7 @@ function ChoiceRow({
           {c.channel !== null && <ChannelBadge channel={c.channel} />}
           {c.reason !== null && <span className={styles.reason}>{reasonText(t, c.reason)}</span>}
         </div>
+        <AiReason c={c} id={`${id}-ai`} />
         <CapabilityMarks caps={c.capabilities} none={null} />
       </div>
     </li>

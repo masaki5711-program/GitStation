@@ -567,3 +567,67 @@ forge-auth / forge-git / forge-db → forge-core → forge-agent）。利用者�
    （パスごとの権限ができたら、文書ごとに人として `authorize()` してから送る）。`part` の manifest の文も信じないデータとして囲む。
 6. **残すこと**: 画面（A8）での `llm_reason`・`suggested`・`llm.state` の表示と自動の読み直し。カタログが変わっただけ（先端が同じ）の
    ときの聞き直し（今は先端が変わったときだけ）。部品の説明文（`SKILL.md` の frontmatter など）を入力に足すこと（今は manifest の事実だけ）。
+
+## Amendment（2026-11-28、A12 `feat/ui-agent-builder-followups`: A8・A9・A11 の残すこと）
+
+A8・A9・A11 の「残すこと」のうち、doctor・更新の帯・AI の理由の画面を入れた。利用者は不在で「推奨を選ぶ」と言っているので、次のとおり決めた。
+
+1. **doctor `agent.revoked_in_use`**（計画 16 §8）: 候補は「今は取り消された版を選んだ、終わった（Dry-Run でない）ビルドのある、削除中でない
+   プロジェクトの ready なリポジトリ」（`forge_db::agent_builder::projects_with_revoked_builds`、A9 の取り消しの対象と同じ考え）。各候補を
+   **既定の枝の先端の lock** で確かめる（`Marketplace::revoked_at_tip`: lock の `slug@version` のうちもう公開されていないもの。A9 の
+   `locked_revoked` と同じ判定）。候補は 200 件まで、全体で 30 秒、git の 1 回は 20 秒。読むだけ。
+   - 使っていれば **`warn`**（計画のとおり。`fail` にはしない — 取り消しの対応は更新の MR で、doctor の失敗で止めるものではない）。
+     数・プロジェクトの数値の ID（最大 20 個。名前・パス・部品のファイルは出さない）・直し方（画面の「更新の MR を作る」か
+     `gstn agent update --project <id>`、runbook `agent-supply-chain`）。ID は運用者が該当を見つけるための最小の情報で、機密ではない。
+   - 読めない候補・上限・時間切れは `ok` にせず `warn`（`could not be read (first: <FG コード>)`・`cut at 200`・`stopped after 30 s`）。
+     読めない理由はコードだけ（メッセージはパスを含みうる）。新しいエラーコードは作らない（DB の失敗は既存のコードで `fail`）。
+   - 手で書いた lock（ビルドの記録が無い）は候補にならない（A9 5 と同じ。`forge/agent-lock` が FG-AGENT-0006 で失敗して見える）。
+     全リポジトリの先端を読む案は、社内の規模でも doctor の 30 秒に収まらないので採らない。
+   - テスト: `revoked_in_use_warns_with_the_count_and_how_to_update`・`an_incomplete_walk_warns`（純粋）、
+     `doctor_counts_a_revoked_version_in_a_tips_lock`（実 DB・実リポジトリ: 取り消し前 0、取り消し後 1、先端から lock が消えたら 0）。
+2. **更新の帯は `GET …/agent-builder/updates`**: A8 の「lock と推薦の版の差」をやめ、A9 の答えをそのまま出す。取り消された版を先に、
+   「取り消し済み」の印（文字。色は繰り返しだけ）と「→ 新しい版」か「置き換える版がないので外します」を文で。足す部品・外す部品も文で、
+   変わらない部品は出さない。取り消しがあれば題は「取り消された部品があります」（危険の色）、無ければ「更新があります」。
+   Dry-Run の変わるファイルの数を一行。読み込み中・最新（`up_to_date`）・lock が無い（`no_lock`）は一行、読めないときは
+   `user_message` と問い合わせ番号。
+   - **ボタンは API が言うときだけ**: `UpdatesBody` に `can_update` を足した（`POST …/update` の Action `AgentBuilderCompile` を、その経路の
+     `authorize()` で試しに判定した答え。人で Developer。エージェントのトークンは `GET` は読めるが `false`）。新しい経路・Action は無い
+     （openapi と `schema.gen.ts` を作り直した）。サーバーは `POST` でもう一度決める。
+   - `GET …/updates` は Developer の読み（`AgentBuilderDryRun`）なので、**Reporter には帯を出さない**（A8 では Reporter にも lock と推薦から
+     帯を出していた。今は Reporter に呼ぶと 403 になる読みなので呼ばない。Reporter の「Developer 以上が作れます」の行は消した）。
+   - 「更新の MR を作る」は `POST …/update {}`（世代の移行の `adapter` は画面に出さない — gstn の `--adapter` だけ）。答えの `queued`・
+     `already_open`（MR へのリンク）・`already_asked` を `role="status"` の一行で。拒否（FG-AGENT-0016 `closed_by_person` など）は
+     `user_message` と問い合わせ番号。MR は Maintainer の承認を待つと文で言う。
+3. **AI の理由の表示**（A11 の残すこと）: 部品ごとの `llm_reason` を「AI の助言（提案）」という**文字の札**とともに（色だけにしない）、
+   `suggested` は「AI の提案（まだ選んでいません）」の札・理由・**能力の印**（API の `capabilities`）とともに、**最初は選ばない**（チェックを
+   入れると `selected_by: "user"` で送る）。Reporter の読みだけの一覧にも理由と提案を出す。文はすべて React の文字（HTML として解かない。
+   テストは `<b>` が要素にならないことを確かめる）。
+   - 「AI の助言（提案）」の欄（札を見出しにした region。文だけが `role="status"` で、ボタンはその外）: `ready` は要約（あれば）と「AI の助言は提案です。部品を選ぶのはあなたです。」、
+     `degraded` なら「一部は使えませんでした」。`ready` 以外は「AI の理由は今ありません（<理由>）。おすすめは規則だけで選んでいます。」で、
+     理由は `pending`・`unavailable`・`paused`・`refused`・`withheld`・その他をそれぞれ文で。`llm.error_code`・`cause` は画面に出さない
+     （利用者に見せるのは文と問い合わせ番号だけ。原因はログと `forge diagnose`）。規則だけで `ready`・劣化なし（LLM を使っていない）なら欄を出さない。
+   - **自動の読み直し**: `pending` の間だけ 20 秒ごとに推薦を読み直す（サーバーが 6 分で `unavailable` に変えるので止まる）。「もう一度読む」の
+     ボタンは `pending` と `unavailable`（LLM が戻れば答えが変わりうる）の間、読み直し中は「読み直しています…」。理由が届いても**選択は消さない**: 選ぶ画面の作り直しの鍵を推薦の部品と版（順と理由は除く）にし、Dry-Run の
+     一致も選択の順によらない鍵にした（LLM の並べ替えで Dry-Run と「MR を作る」が消えない）。
+4. 文言は ja / en / id（`agentBuilder.update.*` を足し、`agentBuilder.ai.*` を新設、使わなくなった `update.nextReader` を削除）。
+   テスト（vitest）: 更新の帯 6 件・AI の理由 9 件（`tests/agent-builder.test.tsx`）、`updateChanges`（`tests/marketplace.test.tsx`）。
+   画面で使わなくなった `lockedVersions`・`updatesOf`・`LOCK_PATH` は消した。
+
+### A12 の独立レビュー（2026-11-28、design-reviewer・a11y-architect。CRITICAL・HIGH なし）で変えた点
+
+- （MEDIUM、直した）`can_update: false` の行は「今は更新の MR を頼めません。下で部品を選び、Dry-Run から MR を作れます。」（帯は
+  Developer にしか出ないので「Developer 以上」は次の一手にならない）。「AI の理由は今ありません」の文に「このまま部品を選べます。」、
+  `unavailable` にも「もう一度読む」。
+- （MEDIUM、直した）頼んだ後にボタンが消えるので、フォーカスを答えの行（`tabIndex=-1` の status）へ移す。AI の欄は region と status を
+  分け、ボタンを status の外に出した。
+- （MEDIUM・LOW、直した）印と札の文字を `--gs-font-size-sm`（xs は節の見出しだけ）、帯の行に `overflow-wrap`・等幅の数字、危険の帯の
+  リンクは文字色と下線、頼んだ後に `updates` も読み直す。
+- （MEDIUM、受け入れ）理由のある行ごとに「AI の助言（提案）」の札が繰り返す: 依頼の条件（文字の札で示す、色だけにしない）なので
+  短くしない。（LOW、受け入れ）帯から Dry-Run の差分を開く切り替えは作らない（下の選択の Dry-Run で見られる）。
+
+### 残すこと
+
+- 取り消しの更新を、プロジェクトの Maintainer 全員にも知らせること（A9 のまま）。
+- 手で書いた lock の索引（doctor と取り消しの対象に入れるため。A9 のまま）。
+- 画面からの世代の移行（`adapter` を選んで `POST …/update`）。
+- カタログが変わっただけのときの聞き直しと、部品の説明文を LLM の入力に足すこと（A11 のまま）。
