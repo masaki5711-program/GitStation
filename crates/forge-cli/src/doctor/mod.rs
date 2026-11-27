@@ -43,7 +43,7 @@ mod act_as;
 // Plan 17 P17-8: the AI evaluation bench (FG-AIASSET-0002).
 mod ai_eval;
 // Plan 16 A3: the agent part signing keys (FG-AGENT-0003).
-mod agent;
+pub(crate) mod agent;
 mod checks;
 // M4 C2: CI pipelines.
 mod ci;
@@ -110,7 +110,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 49] = [
+const DB_CHECKS: [&str; 50] = [
     "db.bootstrap",
     "db.connections",
     // Plan 18 S2: FG-DB-0023 (the server's NOTIFY queue).
@@ -189,6 +189,8 @@ const DB_CHECKS: [&str; 49] = [
     org::NAME,
     // Plan 16 A3: FG-AGENT-0003 (the agent part signing keys).
     agent::NAME,
+    // Plan 16 §8 (A12): revoked part versions still in a tip's lock (warn).
+    agent::REVOKED_IN_USE,
     // Plan 19 L5-11: FG-LLM-0004 (a request queued past its deadline).
     llm::QUEUE_AGE,
     // Plan 17 P17-8: FG-AIASSET-0002 (no live gpu-eval runner for a waiting
@@ -368,6 +370,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let admin_role = oidc::admin_role_check(db, cfg).await;
     let org_master = org::master_check(db, cfg).await;
     let agent_keys = agent::signing_keys_check(db, cfg).await;
+    let agent_revoked = agent::revoked_in_use_check(db, cfg, root).await;
     let llm_queue = llm::queue_check(db, &cfg.llm).await;
     let ai_eval_runner = ai_eval::runner_check(db).await;
     let ai_eval_baseline = ai_eval::baseline_check(db).await;
@@ -421,6 +424,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         admin_role,
         org_master,
         agent_keys,
+        agent_revoked,
         llm_queue,
         ai_eval_runner,
         ai_eval_baseline,

@@ -56,7 +56,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use forge_auth::{
     authorize_ref_updates, prove, Action, LoadedMergeRequest, MergeRequestCtx, MergeRequestState,
-    ProjectCtx, RefUpdate, RefUpdateCtx,
+    ProjectCtx, RefUpdate, RefUpdateCtx, ResourceCtx as _,
 };
 use forge_core::llm::agent_recommend::{findings_of, merge, ReasonsState, RulePick};
 use forge_core::{
@@ -170,6 +170,10 @@ pub struct UpdatesBody {
     /// The update's Dry-Run (null when not available).
     #[schema(required = true)]
     pub preview: Option<BuildPreviewBody>,
+    /// The caller may ask for the update merge request (`POST …/update`:
+    /// `AgentBuilderCompile`, a person and a Developer). A hint for the
+    /// screen's button; the route decides again.
+    pub can_update: bool,
 }
 
 /// `POST …/update` (202).
@@ -849,6 +853,14 @@ fn not_needed_reason(e: &ForgeError) -> Option<String> {
 pub async fn updates(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let ctx = request.ctx().clone(); // clone: the error path outlives the request
     let target = Target::of(&state, &request);
+    // A trial decision of the update's own action (plan 16 A12: the
+    // screen shows the button only when the API says so).
+    let can_update = forge_auth::authorize(
+        request.principal(),
+        Action::AgentBuilderCompile,
+        &request.proof().ctx().resource(),
+    )
+    .is_ok();
     // Nothing of the request (not `Sync`) is held across an await.
     drop(request.into_write());
     let built = async {
@@ -862,6 +874,7 @@ pub async fn updates(state: AppState, request: Dispatched<ProjectCtx>) -> Respon
                 reason: None,
                 parts: update_parts(&plan),
                 preview: Some(preview_body(&plan.build)),
+                can_update,
             }),
             Err(e) => match not_needed_reason(&e) {
                 Some(reason) => json(UpdatesBody {
@@ -869,6 +882,7 @@ pub async fn updates(state: AppState, request: Dispatched<ProjectCtx>) -> Respon
                     reason: Some(reason),
                     parts: Vec::new(),
                     preview: None,
+                    can_update,
                 }),
                 None => Err(e.with_context("project_id", target.project.get())),
             },

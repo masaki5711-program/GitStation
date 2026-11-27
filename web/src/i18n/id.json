@@ -2406,8 +2406,23 @@
     "update": {
       "title": "Pembaruan tersedia",
       "item": "{{slug}} {{from}} → {{to}}",
-      "next": "Pilihan di bawah sudah memakai versi baru. Tekan \"Lihat diff Dry-Run\", periksa, lalu tekan \"Buat merge request\".",
-      "nextReader": "Developer ke atas dapat membuat merge request pembaruan."
+      "next": "Tekan \"Buat merge request pembaruan\": bot membuka merge request dengan lock baru. Merge request menunggu persetujuan Maintainer.",
+      "titleRevoked": "Ada komponen yang dicabut",
+      "revokedMark": "Dicabut",
+      "itemRevoked": "{{slug}} {{from}} telah dicabut → {{to}}",
+      "itemRevokedDropped": "{{slug}} {{from}} telah dicabut. Tidak ada pengganti, jadi dihapus",
+      "itemDropped": "{{slug}} {{from}} dihapus",
+      "itemAdded": "{{slug}} {{to}} ditambahkan (sekarang dibutuhkan)",
+      "files": "{{n}} file berubah.",
+      "ask": "Buat merge request pembaruan",
+      "asking": "Meminta merge request pembaruan…",
+      "notAllowed": "Saat ini Anda tidak dapat meminta merge request pembaruan. Pilih komponen di bawah dan buat merge request dari Dry-Run.",
+      "queued": "Merge request pembaruan sudah diminta. Anda akan diberi tahu saat siap (menunggu persetujuan Maintainer).",
+      "alreadyOpen": "Merge request !{{iid}} untuk pembaruan yang sama sudah terbuka.",
+      "alreadyAsked": "Pembaruan ini sudah diminta. Anda akan diberi tahu saat siap.",
+      "upToDate": "Semua komponen sudah terbaru.",
+      "noLock": "Belum ada lock. Pilih komponen di bawah dan buat merge request pertama.",
+      "checking": "Memeriksa pembaruan…"
     },
     "recommended": "Komponen yang disarankan",
     "kindVersion": "{{kind}} · {{version}}",
@@ -2457,6 +2472,23 @@
       "succeeded": "Berhasil",
       "failed": "Gagal",
       "requested": "Berjalan"
+    },
+    "ai": {
+      "label": "Saran AI (usulan)",
+      "suggested": "Usulan AI (belum dipilih)",
+      "disclaimer": "Saran AI hanyalah usulan. Anda yang memilih komponen.",
+      "partial": "Sebagian saran AI tidak dapat dipakai. Anggap alasannya sebagai petunjuk saja.",
+      "none": "Belum ada alasan dari AI ({{why}}). Rekomendasi hanya memakai aturan. Anda tetap dapat memilih komponen.",
+      "again": "Baca lagi",
+      "why": {
+        "pending": "AI masih menyusun alasannya; halaman ini akan membaca ulang sendiri sebentar lagi",
+        "unavailable": "AI tidak menjawab",
+        "paused": "AI sedang dijeda",
+        "refused": "tidak ada spesifikasi terbuka, jadi tidak ada yang dikirim ke AI; spesifikasi yang berisi rahasia tidak pernah dikirim",
+        "withheld": "saran ini tidak dapat ditampilkan",
+        "other": "alasannya tidak diketahui"
+      },
+      "reading": "Membaca ulang…"
     }
   },
   "aiAdvice": {

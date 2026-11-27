@@ -2406,8 +2406,23 @@
     "update": {
       "title": "更新があります",
       "item": "{{slug}} {{from}} → {{to}}",
-      "next": "下の選択は新しい版になっています。「Dry-Run で差分を見る」を押し、差分を確かめてから「MR を作る」を押してください。",
-      "nextReader": "Developer 以上の人が更新の MR を作れます。"
+      "next": "「更新の MR を作る」を押すと、ボットが新しい lock の MR を開きます。MR は Maintainer の承認を待ちます。",
+      "titleRevoked": "取り消された部品があります",
+      "revokedMark": "取り消し済み",
+      "itemRevoked": "{{slug}} {{from}} は取り消されました → {{to}}",
+      "itemRevokedDropped": "{{slug}} {{from}} は取り消されました。置き換える版がないので外します",
+      "itemDropped": "{{slug}} {{from}} を外します",
+      "itemAdded": "{{slug}} {{to}} を足します（必要になった部品）",
+      "files": "{{n}} 件のファイルが変わります。",
+      "ask": "更新の MR を作る",
+      "asking": "更新の MR を頼んでいます…",
+      "notAllowed": "今は更新の MR を頼めません。下で部品を選び、Dry-Run から MR を作れます。",
+      "queued": "更新の MR を頼みました。できたら通知が届きます（MR は Maintainer の承認を待ちます）。",
+      "alreadyOpen": "同じ更新の MR !{{iid}} がもう開いています。",
+      "alreadyAsked": "この更新はもう頼まれています。できたら通知が届きます。",
+      "upToDate": "部品はすべて最新です。",
+      "noLock": "まだ lock がありません。下で部品を選び、最初の MR を作ってください。",
+      "checking": "更新を確かめています…"
     },
     "recommended": "おすすめの部品",
     "kindVersion": "{{kind}} · {{version}}",
@@ -2457,6 +2472,23 @@
       "succeeded": "成功",
       "failed": "失敗",
       "requested": "実行中"
+    },
+    "ai": {
+      "label": "AI の助言（提案）",
+      "suggested": "AI の提案（まだ選んでいません）",
+      "disclaimer": "AI の助言は提案です。部品を選ぶのはあなたです。",
+      "partial": "AI の助言の一部は使えませんでした。理由は参考にとどめてください。",
+      "none": "AI の理由は今ありません（{{why}}）。おすすめは規則だけで選んでいます。このまま部品を選べます。",
+      "again": "もう一度読む",
+      "why": {
+        "pending": "AI が理由を考えています。少し待つと自動で読み直します",
+        "unavailable": "AI が答えませんでした",
+        "paused": "AI は一時停止中です",
+        "refused": "開いた仕様書がないため、AI には何も送っていません。秘密を含む仕様書も送りません",
+        "withheld": "この助言は見せられません",
+        "other": "理由は分かりません"
+      },
+      "reading": "読み直しています…"
     }
   },
   "aiAdvice": {

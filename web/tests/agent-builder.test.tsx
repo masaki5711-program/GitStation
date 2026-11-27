@@ -4,6 +4,13 @@
 // is shown a button the server would refuse — a Reporter reads the
 // recommendation only; the Dry-Run and the merge request are a
 // Developer's. axe checks the screen.
+//
+// Plan 16 A12: the update band reads `GET …/agent-builder/updates` (revoked
+// and dropped parts, "Create the update merge request" only when the API
+// says `can_update`), and the recommendation shows the local LLM's
+// reasons — labelled 「AI の助言（提案）」 in words, plain text, the
+// suggested parts never pre-selected and with their capability marks, and
+// a note when there are no reasons now.
 import axe from 'axe-core';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -16,8 +23,13 @@ const API = '/api/v1/projects/7';
 const B = `${API}/agent-builder`;
 const PATH = '/acme/forge-web/-/settings/agent';
 
+const NO_LLM = { state: 'ready', dropped: 0 };
+
 const RECOMMEND = {
   source: 'rules',
+  degraded: false,
+  llm: NO_LLM,
+  suggested: [],
   unavailable: [],
   parts: [
     { kind: 'adapter', slug: 'claude-code-v2', version: '2.1.0', selected_by: 'rule', reason: 'base_model' },
@@ -43,27 +55,21 @@ const PREVIEW = {
   ],
 };
 
-const LOCK = JSON.stringify({
-  schema_version: 1,
-  parts: [
-    { slug: 'claude-code-v2', version: '2.1.0' },
-    { slug: 'review-skill', version: '1.1.0' },
-  ],
-});
+const UP_TO_DATE = { available: false, reason: 'up_to_date', parts: [], preview: null, can_update: true };
 
-const blob = (content: string) =>
-  json(200, {
-    binary: false,
-    content,
-    mode: '100644',
-    name: 'agent.lock.json',
-    oid: 'b'.repeat(40),
-    path: '.gitstation/agent.lock.json',
-    ref: { commit: 'a'.repeat(40), full_name: 'refs/heads/main', name: 'main', type: 'branch' },
-    size: content.length,
-    truncated: false,
-    type: 'blob',
-  });
+const UPDATES = {
+  available: true,
+  reason: null,
+  can_update: true,
+  preview: PREVIEW,
+  parts: [
+    { slug: 'claude-code-v2', kind: 'adapter', locked_version: '2.1.0', locked_revoked: false, next_version: '2.1.0' },
+    { slug: 'fmt-hook', kind: 'hook', locked_version: '0.1.0', locked_revoked: true, next_version: '0.2.0' },
+    { slug: 'lint-skill', kind: 'skill', locked_version: null, locked_revoked: false, next_version: '1.0.0' },
+    { slug: 'old-rule', kind: 'rule', locked_version: '1.0.0', locked_revoked: true, next_version: null },
+    { slug: 'review-skill', kind: 'skill', locked_version: '1.1.0', locked_revoked: false, next_version: '1.2.0' },
+  ],
+};
 
 function routes(role: string, over: Record<string, Handler> = {}): Record<string, Handler> {
   return {
@@ -71,8 +77,8 @@ function routes(role: string, over: Record<string, Handler> = {}): Record<string
     'GET /api/v1/namespaces/resolve': () => json(200, RESOLVE_PROJECT),
     [`GET ${API}`]: () => json(200, { ...PROJECT, role }),
     [`GET ${API}/repository/refs`]: () => json(200, REFS_FILLED),
-    [`GET ${API}/repository/blob`]: () => blob(LOCK),
     [`GET ${B}`]: () => json(200, { builds: [] }),
+    [`GET ${B}/updates`]: () => json(200, UP_TO_DATE),
     [`POST ${B}/recommend`]: () => json(200, RECOMMEND),
     'GET /api/v1/agent-parts': () =>
       json(200, {
@@ -111,8 +117,9 @@ describe('agent builder', () => {
     expect(screen.queryByRole('button', { name: 'MR を作る' })).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.getByText('部品を選んで MR を作れるのは Developer 以上の人です。')).toBeTruthy();
-    // The builds are a Developer's read: not asked.
+    // The builds and the updates are a Developer's read: not asked.
     expect(server.to('GET', B)).toHaveLength(0);
+    expect(server.to('GET', `${B}/updates`)).toHaveLength(0);
     expect(await violations(document.body)).toEqual([]);
   });
 
@@ -125,6 +132,7 @@ describe('agent builder', () => {
 
   it('a Developer: adapter, recommended checkboxes, Dry-Run diff with the marks, then the merge request', async () => {
     const { server } = await open('developer', {
+      [`GET ${B}/updates`]: () => json(200, UPDATES),
       [`POST ${B}/preview`]: () => json(200, PREVIEW),
       [`POST ${B}/compile`]: () =>
         json(201, {
@@ -135,8 +143,8 @@ describe('agent builder', () => {
           merge_request_error: null,
         }),
     });
-    // The update band: one part has a newer stable version than the lock.
-    const band = await screen.findByRole('region', { name: '更新があります' });
+    // The update band (GET …/updates): revoked parts lead its title.
+    const band = await screen.findByRole('region', { name: '取り消された部品があります' });
     expect(band.textContent).toContain('review-skill 1.1.0 → 1.2.0');
     // The adapter: one choice, the recommended one picked.
     const adapter = screen.getByRole('radiogroup', { name: 'アダプター（基本のモデル）' });
@@ -200,11 +208,13 @@ describe('agent builder', () => {
   it('a failed recommendation shows its message; no lock means no band', async () => {
     await open('developer', {
       [`POST ${B}/recommend`]: () => apiError(422, '基本のモデルに stable の版がありません。', 'req-rec-1', 'FG-AGENT-0008'),
-      [`GET ${API}/repository/blob`]: () => apiError(404, '見つかりません。', 'req-blob', 'FG-REPO-0005'),
+      [`GET ${B}/updates`]: () => json(200, { ...UP_TO_DATE, reason: 'no_lock' }),
     });
     expect(await screen.findByText('基本のモデルに stable の版がありません。')).toBeTruthy();
     expect(screen.getByText('req-rec-1')).toBeTruthy();
+    expect(await screen.findByText('まだ lock がありません。下で部品を選び、最初の MR を作ってください。')).toBeTruthy();
     expect(screen.queryByRole('region', { name: '更新があります' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '更新の MR を作る' })).toBeNull();
   });
 
   it('the builds history lists each build with its request id', async () => {
@@ -254,5 +264,195 @@ describe('agent builder', () => {
     await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/settings', lang: 'ja' });
     const link = await screen.findByRole('link', { name: 'エージェントの設定を開く' });
     expect(link.getAttribute('href')).toBe(PATH);
+  });
+});
+
+describe('agent builder: the update band (A12)', () => {
+  it('names revoked and dropped parts in words and asks for the update merge request', async () => {
+    const { server } = await open('developer', {
+      [`GET ${B}/updates`]: () => json(200, UPDATES),
+      [`POST ${B}/update`]: () =>
+        json(202, { queued: true, job_id: 41, reason: null, merge_request_iid: null, parts: UPDATES.parts, preview: PREVIEW }),
+    });
+    const band = await screen.findByRole('region', { name: '取り消された部品があります' });
+    const items = within(band)
+      .getAllByRole('listitem')
+      .map((li) => li.textContent);
+    // Revoked parts first; unchanged parts are not listed; each line says
+    // what happens in words.
+    expect(items).toEqual([
+      '取り消し済み fmt-hook 0.1.0 は取り消されました → 0.2.0',
+      '取り消し済み old-rule 1.0.0 は取り消されました。置き換える版がないので外します',
+      'lint-skill 1.0.0 を足します（必要になった部品）',
+      'review-skill 1.1.0 → 1.2.0',
+    ]);
+    expect(within(band).getByText('3 件のファイルが変わります。')).toBeTruthy();
+    fireEvent.click(within(band).getByRole('button', { name: '更新の MR を作る' }));
+    await waitFor(() => {
+      expect(server.to('POST', `${B}/update`)).toHaveLength(1);
+    });
+    const asked = server.to('POST', `${B}/update`)[0];
+    expect(asked?.body).toEqual({});
+    expect(asked?.headers.get('X-GitStation-CSRF')).toBe(SESSION.csrf_token);
+    expect(
+      await within(band).findByText('更新の MR を頼みました。できたら通知が届きます（MR は Maintainer の承認を待ちます）。'),
+    ).toBeTruthy();
+    expect(within(band).queryByRole('button', { name: '更新の MR を作る' })).toBeNull();
+    expect(await violations(document.body)).toEqual([]);
+  });
+
+  it('shows no update button when the API says the caller may not', async () => {
+    await open('developer', { [`GET ${B}/updates`]: () => json(200, { ...UPDATES, can_update: false }) });
+    const band = await screen.findByRole('region', { name: '取り消された部品があります' });
+    expect(within(band).queryByRole('button', { name: '更新の MR を作る' })).toBeNull();
+    expect(
+      within(band).getByText('今は更新の MR を頼めません。下で部品を選び、Dry-Run から MR を作れます。'),
+    ).toBeTruthy();
+  });
+
+  it('a newer version only is "Updates available"; an open update links to its merge request', async () => {
+    await open('developer', {
+      [`GET ${B}/updates`]: () =>
+        json(200, { ...UPDATES, parts: UPDATES.parts.filter((p) => !p.locked_revoked && p.locked_version !== null) }),
+      [`POST ${B}/update`]: () =>
+        json(202, { queued: false, job_id: null, reason: 'already_open', merge_request_iid: 15, parts: [], preview: PREVIEW }),
+    });
+    const band = await screen.findByRole('region', { name: '更新があります' });
+    expect(within(band).queryByText('取り消し済み')).toBeNull();
+    fireEvent.click(within(band).getByRole('button', { name: '更新の MR を作る' }));
+    const link = await within(band).findByRole('link', { name: 'MR !15 を開く' });
+    expect(link.getAttribute('href')).toBe('/acme/forge-web/-/pull/15');
+    expect(within(band).getByText('同じ更新の MR !15 がもう開いています。')).toBeTruthy();
+  });
+
+  it('a refused update shows the server message and the request id', async () => {
+    await open('developer', {
+      [`GET ${B}/updates`]: () => json(200, UPDATES),
+      [`POST ${B}/update`]: () => apiError(409, '人が閉じた更新の MR は開き直しません。', 'req-upd-1', 'FG-AGENT-0016'),
+    });
+    const band = await screen.findByRole('region', { name: '取り消された部品があります' });
+    fireEvent.click(within(band).getByRole('button', { name: '更新の MR を作る' }));
+    expect(await within(band).findByText('人が閉じた更新の MR は開き直しません。')).toBeTruthy();
+    expect(within(band).getByText('req-upd-1')).toBeTruthy();
+  });
+
+  it('a failed updates read shows its message and request id', async () => {
+    await open('developer', {
+      [`GET ${B}/updates`]: () => apiError(500, '更新を確かめられませんでした。', 'req-upds-1', 'FG-SYS-0001'),
+    });
+    expect(await screen.findByText('更新を確かめられませんでした。')).toBeTruthy();
+    expect(screen.getByText('req-upds-1')).toBeTruthy();
+  });
+
+  it('up to date: one quiet line, no band', async () => {
+    await open('developer');
+    expect(await screen.findByText('部品はすべて最新です。')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '更新があります' })).toBeNull();
+  });
+});
+
+describe("agent builder: the AI's reasons (A11 on screen)", () => {
+  const WITH_LLM = {
+    ...RECOMMEND,
+    source: 'rules+llm',
+    llm: { state: 'ready', dropped: 0, model: 'synthetic:1b', summary: '<b>仕様書</b>はレビューと整形を求めています。' },
+    parts: [
+      RECOMMEND.parts[0],
+      { ...RECOMMEND.parts[1], llm_reason: '仕様書がレビューの手順を求めています。' },
+      RECOMMEND.parts[2],
+    ],
+    suggested: [
+      {
+        slug: 'kanflow-mcp',
+        kind: 'mcp',
+        version: '2.0.0',
+        selected_by: 'llm',
+        reason: 'カンバンの課題を読むため。',
+        capabilities: ['network'],
+      },
+    ],
+  };
+
+  it('labels the reasons in words, never pre-selects a suggestion, and shows its marks', async () => {
+    await open('developer', { [`POST ${B}/recommend`]: () => json(200, WITH_LLM) });
+    const review = await screen.findByRole<HTMLInputElement>('checkbox', { name: /review-skill/ });
+    const reviewRow = review.closest('li') as HTMLElement;
+    expect(within(reviewRow).getByText('AI の助言（提案）')).toBeTruthy();
+    expect(within(reviewRow).getByText('仕様書がレビューの手順を求めています。')).toBeTruthy();
+    // The suggestion: unchecked, labelled, with its capability in words.
+    const mcp = screen.getByRole<HTMLInputElement>('checkbox', { name: /kanflow-mcp/ });
+    expect(mcp.checked).toBe(false);
+    const mcpRow = mcp.closest('li') as HTMLElement;
+    expect(within(mcpRow).getByText('AI の提案（まだ選んでいません）')).toBeTruthy();
+    expect(within(mcpRow).getByText('カンバンの課題を読むため。')).toBeTruthy();
+    expect(within(mcpRow).getByText('ネットワークを使う')).toBeTruthy();
+    // The summary is plain text: markup stays characters.
+    const note = screen.getByRole('region', { name: 'AI の助言（提案）' });
+    expect(note.textContent).toContain('<b>仕様書</b>はレビューと整形を求めています。');
+    expect(note.querySelector('b')).toBeNull();
+    expect(await violations(document.body)).toEqual([]);
+  });
+
+  it('a Reporter reads the reasons and the suggestions too', async () => {
+    await open('reporter', { [`POST ${B}/recommend`]: () => json(200, WITH_LLM) });
+    expect(await screen.findByText('仕様書がレビューの手順を求めています。')).toBeTruthy();
+    expect(screen.getByText('カンバンの課題を読むため。')).toBeTruthy();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('no reasons now: the state in words, and "read again" asks again', async () => {
+    const { server } = await open('developer', {
+      [`POST ${B}/recommend`]: () =>
+        json(200, { ...RECOMMEND, degraded: true, llm: { state: 'pending', dropped: 0, error_code: null } }),
+    });
+    const note = await screen.findByRole('region', { name: 'AI の助言（提案）' });
+    expect(note.textContent).toContain('AI の理由は今ありません');
+    expect(note.textContent).toContain('AI が理由を考えています');
+    expect(note.textContent).toContain('おすすめは規則だけで選んでいます。');
+    expect(server.to('POST', `${B}/recommend`)).toHaveLength(1);
+    fireEvent.click(within(note).getByRole('button', { name: 'もう一度読む' }));
+    await waitFor(() => {
+      expect(server.to('POST', `${B}/recommend`)).toHaveLength(2);
+    });
+  });
+
+  it.each([
+    ['unavailable', 'AI が答えませんでした', true],
+    ['paused', 'AI は一時停止中です', false],
+    ['refused', '開いた仕様書がないため、AI には何も送っていません', false],
+    ['withheld', 'この助言は見せられません', false],
+  ])('state %s is said in words', async (state, words, again) => {
+    await open('developer', {
+      [`POST ${B}/recommend`]: () =>
+        json(200, { ...RECOMMEND, degraded: true, llm: { state, dropped: 0, error_code: 'FG-AGENT-0011' } }),
+    });
+    const note = await screen.findByRole('region', { name: 'AI の助言（提案）' });
+    expect(note.textContent).toContain('AI の理由は今ありません');
+    expect(note.textContent).toContain(words);
+    expect(note.textContent).toContain('このまま部品を選べます。');
+    // Read again where the answer may change by itself (the LLM may come back).
+    expect(within(note).queryByRole('button', { name: 'もう一度読む' }) !== null).toBe(again);
+  });
+
+  it('ready but degraded says the advice is partial', async () => {
+    await open('developer', {
+      [`POST ${B}/recommend`]: () => json(200, { ...WITH_LLM, degraded: true, llm: { state: 'ready', dropped: 2 } }),
+    });
+    const note = await screen.findByRole('region', { name: 'AI の助言（提案）' });
+    expect(note.textContent).toContain('AI の助言の一部は使えませんでした');
+  });
+
+  it('a picked suggestion is sent as the person\'s choice', async () => {
+    const { server } = await open('developer', {
+      [`POST ${B}/recommend`]: () => json(200, WITH_LLM),
+      [`POST ${B}/preview`]: () => json(200, PREVIEW),
+    });
+    fireEvent.click(await screen.findByRole('checkbox', { name: /kanflow-mcp/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dry-Run で差分を見る' }));
+    await waitFor(() => {
+      expect(server.to('POST', `${B}/preview`)).toHaveLength(1);
+    });
+    const sent = server.to('POST', `${B}/preview`)[0]?.body as { selection: { slug: string; selected_by: string }[] };
+    expect(sent.selection.find((s) => s.slug === 'kanflow-mcp')?.selected_by).toBe('user');
   });
 });

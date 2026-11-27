@@ -2406,8 +2406,23 @@
     "update": {
       "title": "Updates available",
       "item": "{{slug}} {{from}} → {{to}}",
-      "next": "The choice below has the new versions. Press \"See the Dry-Run diff\", check it, then press \"Create the merge request\".",
-      "nextReader": "A Developer or above can create the update's merge request."
+      "next": "Press \"Create the update merge request\": the bot opens a merge request with the new lock. It waits for a Maintainer's approval.",
+      "titleRevoked": "Revoked parts are in use",
+      "revokedMark": "Revoked",
+      "itemRevoked": "{{slug}} {{from}} was revoked → {{to}}",
+      "itemRevokedDropped": "{{slug}} {{from}} was revoked. There is no replacement, so it is removed",
+      "itemDropped": "{{slug}} {{from}} is removed",
+      "itemAdded": "{{slug}} {{to}} is added (now required)",
+      "files": "{{n}} file(s) change.",
+      "ask": "Create the update merge request",
+      "asking": "Asking for the update merge request…",
+      "notAllowed": "You cannot ask for the update merge request now. Choose the parts below and create a merge request from the Dry-Run.",
+      "queued": "The update merge request was asked for. You will be notified when it is ready (it waits for a Maintainer's approval).",
+      "alreadyOpen": "The same update's merge request !{{iid}} is already open.",
+      "alreadyAsked": "This update was already asked for. You will be notified when it is ready.",
+      "upToDate": "Every part is up to date.",
+      "noLock": "There is no lock yet. Choose parts below and create the first merge request.",
+      "checking": "Checking for updates…"
     },
     "recommended": "Recommended parts",
     "kindVersion": "{{kind}} · {{version}}",
@@ -2457,6 +2472,23 @@
       "succeeded": "Succeeded",
       "failed": "Failed",
       "requested": "Running"
+    },
+    "ai": {
+      "label": "AI advice (a proposal)",
+      "suggested": "AI suggestion (not selected)",
+      "disclaimer": "The AI's advice is a proposal. You choose the parts.",
+      "partial": "Part of the AI's advice could not be used. Treat the reasons as a hint only.",
+      "none": "No AI reasons right now ({{why}}). The recommendation uses the rules only. You can still choose the parts.",
+      "again": "Read again",
+      "why": {
+        "pending": "the AI is still working on them; this page reads again by itself shortly",
+        "unavailable": "the AI did not answer",
+        "paused": "the AI is paused",
+        "refused": "there is no open specification, so nothing was sent to the AI; a specification holding a secret is never sent",
+        "withheld": "this advice cannot be shown",
+        "other": "the reason is unknown"
+      },
+      "reading": "Reading again…"
     }
   },
   "aiAdvice": {

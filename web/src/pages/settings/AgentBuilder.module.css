@@ -62,10 +62,13 @@
 }
 
 .bandList {
+  display: grid;
+  gap: var(--gs-space-1);
   margin: 0;
   padding-left: var(--gs-space-5);
-  font-family: var(--gs-font-mono);
   font-size: var(--gs-font-size-sm);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .bandNext {
@@ -241,4 +244,73 @@
   margin: var(--gs-space-2) 0 0;
   color: var(--gs-color-success-text);
   font-weight: var(--gs-font-weight-medium);
+}
+
+/* Plan 16 A12: a band with a revoked part in use is the danger tone; the
+ * word 「取り消し済み」 is the mark (the colour only repeats it). */
+.bandRevoked {
+  border-left-color: var(--gs-color-danger-border);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.bandMeta {
+  margin: var(--gs-space-2) 0 0;
+  font-size: var(--gs-font-size-sm);
+}
+
+.revokedMark {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-danger-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+  color: var(--gs-color-danger-text);
+  font-family: var(--gs-font-body);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-bold);
+}
+
+/* The local LLM's advice (plan 16 A11): labelled 「AI の助言（提案）」 in
+ * words; a quiet neutral frame, never the accent (it is not the choice). */
+.ai {
+  margin: var(--gs-space-4) 0;
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border: 1px dashed var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.aiTitle {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.bandRevoked a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.aiText {
+  margin: 0 0 var(--gs-space-2);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.aiTag {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px dashed var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  color: var(--gs-color-text);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.aiReason {
+  margin: 0;
+  color: var(--gs-color-text);
+  font-size: var(--gs-font-size-sm);
+  overflow-wrap: anywhere;
 }

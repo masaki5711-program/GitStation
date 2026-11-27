@@ -320,6 +320,47 @@ impl Marketplace {
 }
 
 impl Marketplace {
+    /// The parts of the lock at `repo`'s default branch's tip whose locked
+    /// version is no longer published (revoked), as `slug@version`;
+    /// `None`: no lock there (or an empty repository). Read only, bounded
+    /// like the plan (`forge doctor`'s `agent.revoked_in_use`, plan 16 §8).
+    pub async fn revoked_at_tip(&self, repo: RepoId) -> Result<Option<Vec<String>>, ForgeError> {
+        bounded("agent_revoked_at_tip", self.revoked_at_tip_inner(repo)).await
+    }
+
+    async fn revoked_at_tip_inner(&self, repo: RepoId) -> Result<Option<Vec<String>>, ForgeError> {
+        let tip = match self.default_tip(repo).await {
+            Ok((_, tip)) => tip,
+            Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let managed = self.managed_at(repo, &tip).await?;
+        let Some(bytes) = managed.lock.as_deref() else {
+            return Ok(None);
+        };
+        let lock = Lock::parse(bytes).map_err(|p| problems_error(&[p]))?;
+        let pairs: Vec<(String, String)> = lock
+            .parts
+            .iter()
+            .map(|p| (p.slug.clone(), p.version.clone())) // clone: the query owns them
+            .collect();
+        let published: BTreeSet<(String, String)> = builds::versions(&self.db, &pairs)
+            .await?
+            .into_iter()
+            .filter(|v| v.state == "published")
+            .map(|v| (v.slug, v.version))
+            .collect();
+        Ok(Some(
+            pairs
+                .into_iter()
+                .filter(|pair| !published.contains(pair))
+                .map(|(slug, version)| format!("{slug}@{version}"))
+                .collect(),
+        ))
+    }
+}
+
+impl Marketplace {
     /// The merge request of the same update (the branch of `plan`'s lock
     /// digest into its target), the newest: its state and iid.
     pub async fn existing_update(

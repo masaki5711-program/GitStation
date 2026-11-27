@@ -1,8 +1,8 @@
 // The agent marketplace and the project's agent builder (plan 16 A8, §6):
 // the catalog (`GET /api/v1/agent-parts`), one part and one version, the
 // publishing actions (publish, promote, revoke), and a project's builder
-// (`…/agent-builder`: status, recommend, preview, compile). Keys start with
-// ['agentParts'] or ['agentBuilder', projectId].
+// (`…/agent-builder`: status, recommend, preview, compile, updates, update).
+// Keys start with ['agentParts'] or ['agentBuilder', projectId].
 //
 // Who sees which button is decided from roles the API already exposes,
 // never guessed, and the server decides again on every request:
@@ -10,9 +10,10 @@
 //   (the parts project's parent group, `GET /api/v1/groups/{id}`), a
 //   Maintainer or an administrator; promoting a part that uses the
 //   network: an administrator (forge-auth `AgentPart*`);
-// - recommend: a Reporter of the project; Dry-Run, status and "Create the
+// - recommend: a Reporter of the project; Dry-Run, status, updates and "Create the
 //   merge request": a Developer (forge-auth `AgentBuilder*`). A web session
-//   is always a person, so the people-only rule of compile holds here.
+//   is always a person, so the people-only rule of compile holds here;
+//   "Create the update merge request" follows the API's own `can_update`.
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { roleRank } from './fileCommits';
@@ -31,6 +32,11 @@ export type BuildCompiled = S['BuildCompiledBody'];
 export type BuildRecord = S['BuildRecordBody'];
 export type Recommendation = S['RecommendBody'];
 export type SelectionItem = S['SelectionItem'];
+export type SuggestedPart = S['SuggestedBody'];
+export type RecommendLlm = S['RecommendLlmBody'];
+export type Updates = S['UpdatesBody'];
+export type UpdatePart = S['UpdatePartBody'];
+export type UpdateQueued = S['UpdateQueuedBody'];
 export type BlobBody = S['BlobBody'];
 
 /** The kinds of part, in the order of the catalog's tabs. */
@@ -242,6 +248,7 @@ export const builderKeys = {
   all: (project: number) => ['agentBuilder', project] as const,
   status: (project: number) => ['agentBuilder', project, 'status'] as const,
   recommend: (project: number) => ['agentBuilder', project, 'recommend'] as const,
+  updates: (project: number) => ['agentBuilder', project, 'updates'] as const,
 };
 
 /** May the caller see the recommendation (a Reporter)? */
@@ -267,13 +274,21 @@ export function useBuilderStatus(project: number, enabled: boolean) {
   });
 }
 
-/** The rules-only recommendation: a read (it writes nothing), asked as a
- * POST with `{}`. */
+/** How often a recommendation whose AI reasons are `pending` is read again
+ * (the worker answers within about 20 s; the server turns a request
+ * unanswered for 6 minutes into `unavailable`, which stops this). */
+export const RECOMMEND_PENDING_REFETCH_MS = 20_000;
+
+/** The recommendation: a read (it writes nothing), asked as a POST with
+ * `{}`. The rules' selection, with the local LLM's reasons when the worker
+ * has them (plan 16 A11); read again by itself while they are `pending`. */
 export function useRecommendation(project: number, enabled: boolean) {
   const api = useApi();
   return useQuery({
     queryKey: builderKeys.recommend(project),
     enabled,
+    refetchInterval: (q: { state: { data: Recommendation | undefined } }) =>
+      q.state.data?.llm.state === 'pending' ? RECOMMEND_PENDING_REFETCH_MS : false,
     queryFn: ({ signal }) =>
       call(() =>
         api.POST('/api/v1/projects/{id}/agent-builder/recommend', {
@@ -319,41 +334,50 @@ export function useCompile(project: number) {
   });
 }
 
-/** The lock's path in a repository (`forge-agent`). */
-export const LOCK_PATH = '.gitstation/agent.lock.json';
 
-/** The parts a lock pins (slug → version); `null` when the text is not a
- * lock this screen can read (the band is then not shown). */
-export function lockedVersions(text: string): Map<string, string> | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const parts = (parsed as { parts?: unknown }).parts;
-  if (!Array.isArray(parts)) return null;
-  const out = new Map<string, string>();
-  for (const p of parts) {
-    if (typeof p !== 'object' || p === null) return null;
-    const { slug, version } = p as { slug?: unknown; version?: unknown };
-    if (typeof slug !== 'string' || typeof version !== 'string') return null;
-    out.set(slug, version);
-  }
-  return out;
+// ---- The update (plan 16 A9 routes, A12 screen) ---------------------
+
+/** `GET …/agent-builder/updates`: each locked part, whether its version is
+ * revoked, what the update picks and the update's Dry-Run; `can_update`
+ * says whether the caller may ask for the update merge request (the
+ * route's own trial decision; the server decides again). A Developer's
+ * read. */
+export function useUpdates(project: number, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: builderKeys.updates(project),
+    enabled,
+    queryFn: ({ signal }) =>
+      call(() =>
+        api.GET('/api/v1/projects/{id}/agent-builder/updates', { signal, params: { path: { id: project } } }),
+      ),
+  });
 }
 
-/** The recommended parts whose version differs from the lock's (the
- * update band). Parts the lock does not have are not updates. */
-export function updatesOf(
-  locked: Map<string, string>,
-  recommended: readonly { slug: string; version: string }[],
-): { slug: string; from: string; to: string }[] {
-  const out: { slug: string; from: string; to: string }[] = [];
-  for (const r of recommended) {
-    const from = locked.get(r.slug);
-    if (from !== undefined && from !== r.version) out.push({ slug: r.slug, from, to: r.version });
-  }
-  return out;
+/** `POST …/agent-builder/update` `{}`: queue the update merge request
+ * (`202`; the bot's commit and the merge request come from a job). */
+export function useAskUpdate(project: number) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      call(() =>
+        api.POST('/api/v1/projects/{id}/agent-builder/update', {
+          params: { path: { id: project } },
+          body: {},
+        }),
+      ),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: builderKeys.status(project) });
+      await queryClient.invalidateQueries({ queryKey: builderKeys.updates(project) });
+    },
+  });
+}
+
+/** The parts an update changes: revoked versions first, then the rest in
+ * the server's order; a part whose version stays (and is not revoked) is
+ * left out. */
+export function updateChanges(parts: readonly UpdatePart[]): UpdatePart[] {
+  const changed = parts.filter((p) => p.locked_revoked || p.locked_version !== p.next_version);
+  return [...changed.filter((p) => p.locked_revoked), ...changed.filter((p) => !p.locked_revoked)];
 }
