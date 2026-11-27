@@ -79,6 +79,13 @@ pub fn agent(cli: &Cli, cmd: &AgentCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> 
             select,
             title,
         } => crate::builder::build(cli, *project, select, Some(title.as_deref()), env, io),
+        // Plan 16 A9: the update merge request (and the generation
+        // migration with `--adapter`).
+        AgentCommand::Update {
+            project,
+            adapter,
+            dry_run,
+        } => crate::builder::update(cli, *project, adapter.as_deref(), *dry_run, env, io),
     }
 }
 

@@ -1531,6 +1531,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/agent-builder/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue the agent configuration's update merge request ({"adapter"?}: another base model, the generation migration): planned now, then the job agent.update_merge_request writes the builder bot's commit on agent-builder/<lock digest> and opens the merge request for the caller (202; queued=false with reason already_open and the merge request's iid, or already_asked). 409 FG-AGENT-0016 reason=closed_by_person when a person closed the same update's merge request. forge/agent-lock verifies it and auto-merge waits for a Maintainer's approval. A person only, Developer; 409 FG-AGENT-0015 when there is nothing to update, 422 FG-AGENT-0008 when the update cannot be built */
+        post: operations["post_api_v1_projects_id_agent_builder_update"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/agent-builder/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether the agent configuration at the default branch's tip has an update: each locked part's version (and whether it is revoked) and the version the update picks (the newest stable version that is not revoked, never down; a revoked one without a replacement is dropped), with the update's Dry-Run; available=false with reason no_lock or up_to_date otherwise (a Developer, an agent's token included) */
+        get: operations["get_api_v1_projects_id_agent_builder_updates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/ai-assets": {
         parameters: {
             query?: never;
@@ -9643,10 +9677,48 @@ export interface components {
             target_branch?: string | null;
             title?: string | null;
         };
+        /** @description One part of an update. */
+        UpdatePartBody: {
+            kind: string;
+            /** @description The locked version is revoked. */
+            locked_revoked: boolean;
+            /** @description The version the lock uses (null: a part the update adds). */
+            locked_version: string | null;
+            /** @description The version the update selects (null: the part is dropped). */
+            next_version: string | null;
+            slug: string;
+        };
         /** @description `PATCH /api/v1/projects/{id}`: at least one field. */
         UpdateProject: {
             description?: string | null;
             display_name?: string | null;
+        };
+        /** @description `POST …/update` (202). */
+        UpdateQueuedBody: {
+            /** Format: int64 */
+            job_id: number | null;
+            /** Format: int64 */
+            merge_request_iid: number | null;
+            parts: components["schemas"]["UpdatePartBody"][];
+            /** @description The update as planned now (the job plans again when it runs). */
+            preview: components["schemas"]["BuildPreviewBody"];
+            /** @description The job was queued (false: see `reason`). */
+            queued: boolean;
+            /**
+             * @description Why nothing was queued: `already_open` (the same update's merge
+             *     request is open: `merge_request_iid`) or `already_asked` (the same
+             *     person asked the same update; its job is queued or done). Null when
+             *     queued.
+             */
+            reason: string | null;
+        };
+        /** @description `POST …/update` (plan 16 A9). */
+        UpdateRequest: {
+            /**
+             * @description The base model to move to (an adapter part's slug: the generation
+             *     migration); absent: the lock's own.
+             */
+            adapter?: string | null;
         };
         /** @description `PATCH /api/v1/admin/service-accounts/{id}`: the fields to change. */
         UpdateServiceAccount: {
@@ -9689,6 +9761,16 @@ export interface components {
             /** @description `updated`, or `unchanged` (nothing was written). */
             outcome: string;
             webhook: components["schemas"]["WebhookBody"];
+        };
+        /** @description `GET …/updates`. */
+        UpdatesBody: {
+            /** @description An update would change the configuration. */
+            available: boolean;
+            /** @description Each locked part and what the update picks (empty when not available). */
+            parts: components["schemas"]["UpdatePartBody"][];
+            preview: null | components["schemas"]["BuildPreviewBody"];
+            /** @description Why not (`no_lock`, `up_to_date`); null when available. */
+            reason: string | null;
         };
         /** @description `201` of an upload. */
         UploadedArtifactBody: {
@@ -13526,6 +13608,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecommendBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_agent_builder_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateQueuedBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_agent_builder_updates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatesBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

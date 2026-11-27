@@ -77,6 +77,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/agent-builder/compile",
         Coverage::Command("agent apply"),
     ),
+    // Plan 16 A9 (ADR-0032 Amendment A9): the update merge requests.
+    (
+        "GET",
+        "/api/v1/projects/{id}/agent-builder/updates",
+        Coverage::Command("agent update"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/agent-builder/update",
+        Coverage::Command("agent update"),
+    ),
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
     // The gstn distribution: the browser download and the desktop setup
     // tool fetch it; `gstn self-update` is reserved, not implemented.

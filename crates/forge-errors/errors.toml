@@ -3236,6 +3236,33 @@ diagnosis = "The route's answer and its log event carry `reason`, `subject` and 
 fix = "Pick versions whose requirements hold (or publish the missing part), select exactly one adapter, or drop one of the two parts that write the same file / key. Then preview again."
 test = "compile_refuses_conflicting_paths"
 
+[[error]]
+code = "FG-AGENT-0015"
+name = "AgentUpdateNotNeeded"
+http_status = 409
+severity = "info"
+user_message_ja = "このプロジェクトのエージェントの設定は更新できるものがありません（lock が無いか、もう新しい版です）。"
+user_message_en = "There is nothing to update in this project's agent configuration (no lock, or it already uses the newest versions)."
+user_message_id = "Tidak ada yang perlu diperbarui pada konfigurasi agen proyek ini (tidak ada lock, atau sudah memakai versi terbaru)."
+cause = "Plan 16 A9 (ADR-0032 Amendment A9): the agent builder's update (`GET …/agent-builder/updates`, `POST …/agent-builder/update`, the `agent.update_merge_request` job) found nothing to do. `reason`: `no_lock` (the default branch's tip has no `.gitstation/agent.lock.json` — build the configuration first), `up_to_date` (every locked part is already at its newest stable version that is not revoked, and the base model is the one asked for: the build would change nothing), `not_in_lock` (the job of a revocation: the project's lock at the tip no longer uses the revoked version — someone updated it already). Nothing was written. The job completes with it (logged as `forge.agent.update_skipped`), it is not retried."
+diagnosis = "The route's answer and log event carry `reason`, `project_id` and `request_id`; `gstn agent status --project <id>` lists the builds; `GET …/agent-builder/updates` shows each locked part's version and the newest stable one."
+fix = "Nothing to fix. For `no_lock`, build the configuration once (`…/agent-builder/compile`). To move to another base model, ask the update with `adapter`."
+test = "update_refused_when_up_to_date"
+
+[[error]]
+code = "FG-AGENT-0016"
+name = "AgentUpdateNotOpened"
+http_status = 409
+severity = "alert"
+user_message_ja = "エージェントの設定の更新の MR を開けませんでした。プロジェクトの Developer 以上の人が、もう一度更新を頼んでください。"
+user_message_en = "The merge request that updates the agent configuration could not be opened. A Developer of the project should ask for the update again."
+user_message_id = "Merge request yang memperbarui konfigurasi agen tidak dapat dibuka. Developer proyek sebaiknya meminta pembaruan lagi."
+cause = "Plan 16 A9 (ADR-0032 Amendment A9): the `agent.update_merge_request` job (`forge serve`) could not open the update merge request because nobody it may act for is allowed to. The merge request is always opened for a person, decided with that person's current rights (`AgentBuilderCompile`, a push of the branch, `MergeRequestCreate`): the person who asked (origin `update`) or, for a revocation, the first who may of the people who asked for the project's finished builds (newest first, at most 5). `reason`: `no_author` (the project has no finished build by a person), `author_not_allowed` (with `denied_code` of the first refusal and `candidates`: each left, was deactivated, lost the Developer role, or the branch `agent-builder/*` is protected against them), `closed_by_person` (the same update's merge request was closed — or merged — by a person: never reopened; also the `POST …/agent-builder/update` route's 409). Nothing was written. A revocation whose update is not opened leaves the revoked version in the project's lock: `forge/agent-lock` fails on it (FG-AGENT-0006) until someone updates."
+diagnosis = "The job's log line (`error_code`, `reason`, `project_id`, `author_id`, `origin`, `revoked`, `request_id` = the revocation's) and `SELECT id, state, last_error_code, payload FROM forge.jobs WHERE kind = 'agent.update_merge_request' ORDER BY id DESC` on the read pool. Runbook agent-supply-chain (the revoked part's projects)."
+fix = "A Developer of the project asks the update (`POST /api/v1/projects/{id}/agent-builder/update`, or the builder screen): it is opened for them. For `closed_by_person`, delete the branch `agent-builder/<digest>` first if the update is wanted after all."
+runbook = "agent-supply-chain"
+test = "revocation_update_without_an_allowed_author_is_not_silent"
+
 # ── Plan 17 P17-1 (ADR-0029 amendment 2026-11-14): the GPU runner ──
 
 [[error]]

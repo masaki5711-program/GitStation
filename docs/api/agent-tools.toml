@@ -1040,6 +1040,10 @@ reason = "The builder's MCP tools come with the builder screen (plan 16 A8); gst
 gstn = "agent apply"
 reason = "The builder's merge request is a person's (AgentBuilderCompile, people only): an agent never rewrites its own guard rails (plan 16 §4)."
 
+[[excluded]]
+gstn = "agent update"
+reason = "The update merge request is a person's (AgentBuilderCompile, people only; its --dry-run reads GET …/agent-builder/updates): an agent never rewrites its own guard rails (plan 16 §4, A9)."
+
 [[deferred]]
 gstn = "part list"
 reason = "The builder's tools (recommend, preview) come with plan 16 A7; gstn and the marketplace page show the catalog meanwhile."

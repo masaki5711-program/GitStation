@@ -47,6 +47,8 @@ function sentence(t: TFunction, item: InAppNotification): string {
       return t('inbox.kind.conflictPredicted');
     case 'mr_revert_drafted':
       return t('inbox.kind.revertDrafted');
+    case 'mr_agent_update':
+      return t('inbox.kind.agentUpdate');
     default:
       return t('inbox.kind.other');
   }

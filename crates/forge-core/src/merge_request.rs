@@ -107,6 +107,8 @@ pub enum MergeRequestTransition {
     RevertDraft,
     /// One attempt of the deterministic autofix ended (M4 C14).
     AutofixFinish,
+    /// The agent builder opened an update merge request (plan 16 A9).
+    AgentUpdateOpen,
 }
 
 impl MergeRequestTransition {
@@ -128,6 +130,7 @@ impl MergeRequestTransition {
         Self::Unapprove,
         Self::RevertDraft,
         Self::AutofixFinish,
+        Self::AgentUpdateOpen,
     ];
 
     /// The one event the transition publishes.
@@ -149,6 +152,7 @@ impl MergeRequestTransition {
             Self::Unapprove => EventType::MergeRequestUnapproved,
             Self::RevertDraft => EventType::MergeRequestRevertDrafted,
             Self::AutofixFinish => EventType::MergeRequestAutofixFinished,
+            Self::AgentUpdateOpen => EventType::MergeRequestAgentUpdateOpened,
         }
     }
 }
@@ -341,6 +345,46 @@ pub enum MergeRequestChange {
     /// commit. Deduplicated by
     /// `merge_request_autofix_finished:<merge_request_id>:<attempt_id>`.
     AutofixFinished(crate::autofix::AutofixFinished),
+    /// `merge_request.agent_update_opened` (plan 16 A9, ADR-0032 Amendment
+    /// A9): the agent builder's update job opened this merge request for
+    /// `author` — `origin` `update` (a person asked) or `revocation`
+    /// (`revoked` is the revoked `slug@version` the project's lock used).
+    /// The lock digest the merge request writes. Ids, a fixed word, a
+    /// digest and a validated part name only. Deduplicated by
+    /// `merge_request_agent_update_opened:<merge_request_id>`.
+    AgentUpdateOpened {
+        merge_request: MergeRequestId,
+        iid: i64,
+        author: UserId,
+        origin: AgentUpdateOrigin,
+        lock_digest: String,
+        revoked: Option<String>,
+    },
+}
+
+/// Why the agent builder's update merge request was opened (plan 16 A9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgentUpdateOrigin {
+    /// A person asked for the update (`POST …/agent-builder/update`).
+    Update,
+    /// A part version the project's lock uses was revoked.
+    Revocation,
+}
+
+impl AgentUpdateOrigin {
+    pub const ALL: &'static [AgentUpdateOrigin] = &[Self::Update, Self::Revocation];
+
+    /// The stored word (`forge.agent_builds.origin`, the job's payload).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Update => "update",
+            Self::Revocation => "revocation",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|o| o.as_str() == raw)
+    }
 }
 
 /// What the system's revert draft did (M4 C10).
@@ -387,6 +431,7 @@ impl MergeRequestChange {
             Self::Unapproved { .. } => MergeRequestTransition::Unapprove,
             Self::RevertDrafted { .. } => MergeRequestTransition::RevertDraft,
             Self::AutofixFinished(_) => MergeRequestTransition::AutofixFinish,
+            Self::AgentUpdateOpened { .. } => MergeRequestTransition::AgentUpdateOpen,
         }
     }
 
@@ -407,7 +452,8 @@ impl MergeRequestChange {
             | Self::SourceBranchDeleted { merge_request, .. }
             | Self::Approved { merge_request, .. }
             | Self::Unapproved { merge_request, .. }
-            | Self::RevertDrafted { merge_request, .. } => *merge_request,
+            | Self::RevertDrafted { merge_request, .. }
+            | Self::AgentUpdateOpened { merge_request, .. } => *merge_request,
             Self::AutofixFinished(f) => f.merge_request,
         }
     }
@@ -443,6 +489,7 @@ impl MergeRequestChange {
             Self::Unapproved { .. } => "merge_request_unapproved",
             Self::RevertDrafted { .. } => "merge_request_revert_drafted",
             Self::AutofixFinished(_) => "merge_request_autofix_finished",
+            Self::AgentUpdateOpened { .. } => "merge_request_agent_update_opened",
         }
     }
 
@@ -465,7 +512,8 @@ impl MergeRequestChange {
     /// `{"merge_request_id","iid","approval_id","approver_id","head_sha","reason"}`,
     /// RevertDrafted `{"merge_request_id","iid","merge_id","target_branch","merged_sha",
     /// "outcome","revert_iid","conflict_files"}`, AutofixFinished
-    /// `{"merge_request_id","iid","attempt_id","trigger","fixer","state","reason","commit_sha"}`.
+    /// `{"merge_request_id","iid","attempt_id","trigger","fixer","state","reason","commit_sha"}`,
+    /// AgentUpdateOpened `{"merge_request_id","iid","author_id","origin","lock_digest","revoked"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -696,6 +744,21 @@ impl MergeRequestChange {
                 "state": f.state.as_str(),
                 "reason": f.reason,
                 "commit_sha": f.commit.as_ref().map(ObjectId::as_str),
+            }),
+            Self::AgentUpdateOpened {
+                merge_request,
+                iid,
+                author,
+                origin,
+                lock_digest,
+                revoked,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "author_id": author.get(),
+                "origin": origin.as_str(),
+                "lock_digest": lock_digest,
+                "revoked": revoked,
             }),
         }
     }

@@ -804,6 +804,13 @@ pub async fn set_channel_stable(
 /// Revoke `slug` `version` by `by` for `reason` (1..=500 characters): one
 /// `agent_part.version_revoked` audit row. A revoked version is
 /// `FG-AGENT-0006` (final).
+///
+/// Plan 16 A9: in the same transaction, one `agent.update_merge_request`
+/// job per project whose finished builds selected the version (dedup
+/// `agent_update_revoked:<version_id>:<project_id>`: once per project,
+/// however often the job runs) — the update exists exactly when the
+/// revocation does. The answer is the number of projects (the audit row
+/// carries it as `update_jobs`).
 pub async fn revoke_version(
     db: &Db,
     ctx: &ChangeContext,
@@ -811,7 +818,7 @@ pub async fn revoke_version(
     version: &str,
     by: UserId,
     reason: &str,
-) -> Result<(), ForgeError> {
+) -> Result<usize, ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let (id, part_id, _channel, state) = tx.step(|c| lock_version(c, slug, version)).await?;
@@ -832,10 +839,31 @@ pub async fn revoke_version(
             .map(drop)
         })
         .await?;
+        let projects = tx
+            .step(|c| crate::agent_builder::projects_using_on(c, slug, version))
+            .await?;
+        for project in &projects {
+            let job = crate::agent_builder::agent_update_job(
+                &crate::agent_builder::AgentUpdateRequest {
+                    project: *project,
+                    origin: forge_core::AgentUpdateOrigin::Revocation,
+                    requested_by: None,
+                    adapter: None,
+                    revoked: Some((slug.to_owned(), version.to_owned())),
+                },
+                &format!("agent_update_revoked:{id}:{}", project.get()),
+                ctx.request_id.clone(), // clone: the job keeps the revocation's id
+            )?;
+            let _enqueued = tx.enqueue_job(&job).await?;
+        }
         let details = serde_json::json!({
             "slug": slug, "version": version, "version_id": id, "reason": reason,
+            "update_jobs": projects.len(),
         });
-        Ok(Settle::Commit(change_record(REVOKED, part_id, details), ()))
+        Ok(Settle::Commit(
+            change_record(REVOKED, part_id, details),
+            projects.len(),
+        ))
     }
     .await;
     tx.settle(REVOKED, outcome).await

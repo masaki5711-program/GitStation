@@ -53,6 +53,7 @@ mod serve_merge_queue;
 mod serve_merges;
 // Plan 18 S3: `forge_refs` (ref writes announced to and heard from the
 // other processes).
+mod serve_agent_updates;
 mod serve_ai_baseline;
 mod serve_refs;
 mod serve_reverts;

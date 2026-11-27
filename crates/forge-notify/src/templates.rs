@@ -81,6 +81,11 @@ fn headline(kind: NotificationKind, lang: Lang) -> &'static str {
         (Lang::Id, NotificationKind::MergeRequestRevertDrafted) => {
             "diikuti pipeline yang gagal setelah di-merge"
         }
+        (Lang::Ja, NotificationKind::MergeRequestAgentUpdate) => {
+            "でエージェントの設定の更新を用意しました"
+        }
+        (Lang::En, NotificationKind::MergeRequestAgentUpdate) => "updates the agent configuration",
+        (Lang::Id, NotificationKind::MergeRequestAgentUpdate) => "memperbarui konfigurasi agen",
     }
 }
 
@@ -175,6 +180,23 @@ fn sentence(kind: NotificationKind, lang: Lang, actor: Option<&str>, title: &str
                 "Pipeline pada branch tujuan gagal setelah permintaan merge Anda \"{title}\" di-merge. Draf merge request yang membatalkan merge tersebut telah disiapkan (kecuali pembatalannya berkonflik). Periksa penyebab kegagalan pada merge request, lalu batalkan atau perbaiki."
             )
         }
+        // Plan 16 A9: the agent builder opened it for you (no actor): a
+        // newer part version, or a revoked one replaced.
+        (Lang::Ja, NotificationKind::MergeRequestAgentUpdate, _) => {
+            format!(
+                "エージェントの設定を更新するマージリクエスト「{title}」を、あなたの名前で開きました（新しい版、または取り消された部品の置き換え）。差分と `forge/agent-lock` を確かめてください。作成者ではない Maintainer の承認でマージできます。"
+            )
+        }
+        (Lang::En, NotificationKind::MergeRequestAgentUpdate, _) => {
+            format!(
+                "The merge request \"{title}\" that updates the agent configuration was opened in your name (a newer version, or a revoked part replaced). Check the changes and `forge/agent-lock`; a Maintainer who is not the author approves it before it merges."
+            )
+        }
+        (Lang::Id, NotificationKind::MergeRequestAgentUpdate, _) => {
+            format!(
+                "Merge request \"{title}\" yang memperbarui konfigurasi agen dibuka atas nama Anda (versi yang lebih baru, atau bagian yang dicabut diganti). Periksa perubahan dan `forge/agent-lock`; Maintainer yang bukan pembuatnya menyetujuinya sebelum di-merge."
+            )
+        }
     }
 }
 
@@ -244,8 +266,10 @@ mod tests {
                     // The scan acted, never a person: no name in the mail.
                     assert!(!body.contains("Bob"), "{lang:?} {kind:?}: {body}");
                     assert!(body.contains("gstn conflicts"), "where to look: {body}");
-                } else if *kind == NotificationKind::MergeRequestRevertDrafted {
-                    // M4 C10: the system acted after a failed pipeline.
+                } else if *kind == NotificationKind::MergeRequestRevertDrafted
+                    || *kind == NotificationKind::MergeRequestAgentUpdate
+                {
+                    // M4 C10 / plan 16 A9: the system acted, no person.
                     assert!(!body.contains("Bob"), "{lang:?} {kind:?}: {body}");
                 } else {
                     assert!(body.contains("Bob"), "{lang:?} {kind:?}: {body}");

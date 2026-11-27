@@ -7552,6 +7552,50 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Move to another base model (an adapter part's slug).",
+          "kind": "option",
+          "name": "--adapter",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Show the update (each part's locked and next version, the Dry-Run); nothing is queued.",
+          "kind": "flag",
+          "name": "--dry-run",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn agent update --project 7 --dry-run",
+        "gstn agent update --project 7"
+      ],
+      "name": "agent update",
+      "output": {
+        "required": [
+          "parts"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/agent-builder/updates",
+        "POST /api/v1/projects/{id}/agent-builder/update"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Update a project's agent configuration to the newest stable part versions (a revoked one replaced, or dropped when nothing replaces it; never down) as a merge request opened by a job for you (a person's token only, Developer). --adapter moves to another base model; --dry-run only shows each part's locked and next version and the Dry-Run. FG-AGENT-0015 when there is nothing to update."
+    },
+    {
+      "args": [
+        {
           "description": "skill, agent, rule, hook, command, mcp or adapter.",
           "kind": "option",
           "name": "--kind",

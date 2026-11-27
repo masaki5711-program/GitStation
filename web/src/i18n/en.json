@@ -1199,7 +1199,8 @@
       "mr_merged": "Merge request merged",
       "mr_commented": "Comment on a merge request",
       "mr_conflict_predicted": "Likely conflict with another merge request",
-      "mr_revert_drafted": "Pipeline failed after a merge (draft revert)"
+      "mr_revert_drafted": "Pipeline failed after a merge (draft revert)",
+      "mr_agent_update": "An agent configuration update was opened"
     }
   },
   "inbox": {
@@ -1236,6 +1237,7 @@
       "commentedBySystem": "Your merge request has a new comment",
       "conflictPredicted": "Your merge request is likely to conflict with another one",
       "revertDrafted": "The pipeline failed after this was merged. Check the draft revert.",
+      "agentUpdate": "An agent configuration update was opened in your name. Check the changes.",
       "other": "There is a new notification about your merge request"
     }
   },

@@ -2575,6 +2575,20 @@ pub enum AgentCommand {
         #[arg(long, value_parser = parse_text)]
         title: Option<String>,
     },
+    /// Update the configuration to the newest stable part versions (a
+    /// revoked one replaced or dropped) as a merge request, queued as a
+    /// job (a person's token only). `--dry-run` only shows the update.
+    Update {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Move to another base model (an adapter part's slug).
+        #[arg(long, value_name = "SLUG")]
+        adapter: Option<String>,
+        /// Show the update (each part's locked and next version, the
+        /// Dry-Run); nothing is queued.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// `gstn part` (plan 16 A5, ADR-0032 Amendment A5): the marketplace's

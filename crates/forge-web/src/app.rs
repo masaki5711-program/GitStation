@@ -907,6 +907,26 @@ fn agent_builder_routes(registry: Registry<AppState>) -> Registry<AppState> {
             b::compile,
         )
         .responds_created::<b::BuildCompiledBody>(Verb::Post, b::COMPILE)
+        // Plan 16 A9: the update and the generation migration.
+        .route_with(
+            Verb::Get,
+            b::UPDATES,
+            Action::AgentBuilderDryRun,
+            "Whether the agent configuration at the default branch's tip has an update: each locked part's version (and whether it is revoked) and the version the update picks (the newest stable version that is not revoked, never down; a revoked one without a replacement is dropped), with the update's Dry-Run; available=false with reason no_lock or up_to_date otherwise (a Developer, an agent's token included)",
+            b::UPDATES_OF,
+            b::updates,
+        )
+        .responds::<b::UpdatesBody>(Verb::Get, b::UPDATES)
+        .route_with_body(
+            Verb::Post,
+            b::UPDATE,
+            Action::AgentBuilderCompile,
+            "Queue the agent configuration's update merge request ({\"adapter\"?}: another base model, the generation migration): planned now, then the job agent.update_merge_request writes the builder bot's commit on agent-builder/<lock digest> and opens the merge request for the caller (202; queued=false with reason already_open and the merge request's iid, or already_asked). 409 FG-AGENT-0016 reason=closed_by_person when a person closed the same update's merge request. forge/agent-lock verifies it and auto-merge waits for a Maintainer's approval. A person only, Developer; 409 FG-AGENT-0015 when there is nothing to update, 422 FG-AGENT-0008 when the update cannot be built",
+            b::MAX_BODY,
+            b::UPDATE_OF,
+            b::update,
+        )
+        .responds_accepted::<b::UpdateQueuedBody>(Verb::Post, b::UPDATE)
 }
 
 /// A project's wiki (plan 20 W2, ADR-0040 §5): create and link, unlink;

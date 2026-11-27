@@ -8,6 +8,7 @@
 //! | `merge_request.merged` | the author | the person who merged is the author |
 //! | `merge_request.commented` | the author | the commenter is the author, or the event is a thread being resolved or reopened |
 //! | `merge_request.conflict_predicted` (M3 X6) | the author of the event's merge request (each side of the pair has its own event) | — (the scan is the system's) |
+//! | `merge_request.agent_update_opened` (plan 16 A9) | the update merge request's author (the person it was opened for) | — (the builder's job is the system's) |
 //!
 //! Every other event concerns nobody (decided in `NotificationKind::
 //! from_event`, which matches every event type). A "review requested"
@@ -146,6 +147,9 @@ fn actor_of(
         // the target's pipeline failed; the reverted merge request's
         // author is told.
         NotificationKind::MergeRequestRevertDrafted => Some(None),
+        // Plan 16 A9: the agent builder's update job opened the merge
+        // request for its author (actor system); the author is told.
+        NotificationKind::MergeRequestAgentUpdate => Some(None),
     })
 }
 

@@ -613,6 +613,26 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                 .expect("revert drafted");
                 assert!(recorded);
             }
+            // Plan 16 A9: the agent builder's update merge request.
+            MergeRequestTransition::AgentUpdateOpen => {
+                let change = forge_core::MergeRequestChange::AgentUpdateOpened {
+                    merge_request: drafted.id,
+                    iid: drafted.iid,
+                    author: alice,
+                    origin: forge_core::AgentUpdateOrigin::Update,
+                    lock_digest: format!("sha256:{}", "c".repeat(64)),
+                    revoked: None,
+                };
+                let recorded = crate::agent_builder::record_agent_update_opened(
+                    &t.db,
+                    &system(&request),
+                    p,
+                    change,
+                )
+                .await
+                .expect("agent update opened");
+                assert!(recorded);
+            }
             // M4 C14: the end of an autofix attempt (the worker's).
             MergeRequestTransition::AutofixFinish => {
                 t.exec_superuser(&format!(

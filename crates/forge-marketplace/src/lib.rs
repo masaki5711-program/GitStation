@@ -66,8 +66,14 @@ use forge_git::browse::{Browser, EntryKind as GitKind, ListedBlob, RefLookup, Re
 // Plan 16 A7: the agent builder (Dry-Run, the build, the recommendation).
 pub mod builder;
 pub use builder::{BuildPlan, FileChange, PlannedPart, Selected, BUILDER_EMAIL, BUILDER_NAME};
+// Plan 16 A9: update merge requests (asked, and after a revocation).
+pub mod updates;
 pub use forge_agent::{Recommendation, Recommended};
+pub use forge_db::agent_builder::{
+    agent_update_job, agent_update_payload, AgentUpdateRequest, AGENT_UPDATE_JOB,
+};
 pub use forge_db::agent_builder::{BuildOutcome, StoredBuild};
+pub use updates::{AgentUpdater, UpdateLine, UpdatePlan, UpdateReport};
 
 /// The stored rows the routes show (forge-web does not depend on
 /// forge-db).
@@ -693,7 +699,8 @@ impl Marketplace {
         }
         let target = proof.ctx().target();
         let ctx = change_context(request, proof.principal(), user);
-        db::revoke_version(&self.db, &ctx, &target.slug, &target.version, user, reason).await?;
+        let update_jobs =
+            db::revoke_version(&self.db, &ctx, &target.slug, &target.version, user, reason).await?;
         tracing::warn!(
             target: "forge_marketplace",
             event = "forge.agent.part_revoked",
@@ -701,6 +708,7 @@ impl Marketplace {
             slug = %target.slug,
             version = %target.version,
             by = user.get(),
+            update_jobs,
             "agent part version revoked"
         );
         self.version(&target.slug, &target.version)
