@@ -618,6 +618,7 @@ impl Marketplace {
         };
         // The marketplace's publish step is the one caller (ADR-0032
         // Amendment A5); the seed is dropped (zeroized) on return.
+        #[allow(clippy::disallowed_methods)]
         let signer = forge_core::agent_signing::read_signing_seed(path)?;
         let kid = signer.kid().to_string();
         let public_key =

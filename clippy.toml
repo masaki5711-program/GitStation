@@ -16,5 +16,8 @@ disallowed-methods = [
     # wrappers of each signed kind (forge_edge::sign_manifest), and edge
     # manifests have no production signer (only the optional E4 builder).
     { path = "forge_agent::sign_digest_in", reason = "sign through the signed kind's own function (forge_agent::sign_digest, forge_edge::sign_manifest), never with a domain of your choosing (ADR-0041)" },
+    # Plan 16 A5 (ADR-0032 Amendment A5): the signing seed file is read only by
+    # the marketplace publish step, after the authorized publish decision.
+    { path = "forge_core::agent_signing::read_signing_seed", reason = "only forge-marketplace's publish step reads the agent signing seed (ADR-0032 Amendment A5)" },
     { path = "forge_edge::sign_manifest", reason = "no production caller signs edge manifests; only the optional plan 21 E4 release builder may (ADR-0041 Amendment 2026-11-25)" },
 ]
