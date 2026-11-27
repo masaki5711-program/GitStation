@@ -451,3 +451,52 @@ ADR-0032 Amendment A11。
    この開発サーバーの共用 Ollama で測った基準を足す MR が載せる（ADR-0034 Amendment 1 の順序）。
 7. **独立レビューで直した・受け入れた点**: ADR-0032 Amendment A11 の 5。ゲートウェイ側では、優先度を対話のままにした（人が画面を開いて
    いる。worker は依頼を 1 件ずつ待つので、対話の層を占めるのは同時に 1 つまで）。
+## Amendment（2026-11-28、`feat/core-llm-settings-and-rerun`: `llm.review` の設定・一時停止・やり直し）
+
+計画 19 §8.2 の残りの 4 つの Action（`LlmSettingsManage`・`LlmPause`・`LlmResume`・`AiReviewRerun`）に経路を作り、`PLANNED` から外した
+（権限の行は L5-4 のまま）。利用者の指示（計画の推奨をすべて採る）で、次を決めた。
+
+1. **`llm.review` の経路**: `GET /api/v1/projects/{id}/llm`（`ProjectRead`、`review`・最後に変えた人と時刻・`viewer.can_change`）と
+   `PUT …/llm`（`{"review": "off" | "advisory" | "required"}`、`LlmSettingsManage` = Maintainer 以上の人の Web セッションだけ）。
+   ai_assets と同じ形で、ロックしたプロジェクトで決め直し（`reconfirm`）、同じトランザクションで監査 `llm.review_changed`
+   （`from` / `to`）。同じ値なら何も書かない。`off` にしても助言・run・評価は消さない。gstn は読み取りだけ `gstn llm review`
+   （変更はセッションだけなので `BrowserOnly`）。Web はプロジェクトの設定に「AI の一次レビュー」の節（3 つの選択肢と説明、
+   読み込み中・読めない・変えられない人への一文）。
+2. **一時停止と再開**: `POST /api/v1/admin/llm/pause` / `…/resume`（管理者の人、トークンは `api` + `admin`、エージェントのトークンは
+   403）。ゲートウェイは worker のプロセスにあり Web からは触れないので、**状態は DB の 1 行**（新しい表 `forge.llm_gateway`、
+   id = 1）に置き、worker の背景の task が **10 秒ごと** に読んで従う（`Gateway::follow_stored_pause`、変わったときだけ
+   `forge.llm.pause_followed` を 1 回）。設定の `llm.paused = true` は API の再開より強い（どちらかが止めていれば止まる）。
+   読めないときは失敗の続きの最初に 1 回ログ（`task=llm_pause_poll`）し、**3 回続けて（30 秒）読めなければ止める**（閉じる方。
+   次に読めたら保存された状態に従う）。監査 `llm.paused` / `llm.resumed`
+   （インスタンス）。本番では従来どおり承認された runbook の手順（`llm-gateway` に `gstn llm pause` を足した）。状態を読む
+   GET は作らなかった（読み取りの Action が無い。押した答えが状態を返す）。
+3. **やり直し（`AiReviewRerun`）**: `POST …/merge-requests/{iid}/ai-review/rerun`。L5-5 の 1 の worker の規則「完了した run は同じ
+   head ではもう聞かない」を **「その run より新しいやり直しの記録があれば 1 回だけ聞く」** に変えた（`review_candidates`）。
+   worker が `queued` を書くと run の `updated_at` がやり直しより新しくなるので、1 回のやり直しは 1 回だけ聞く。
+   回数の記録は新しい表 `forge.llm_review_reruns`（MR・head・人・request_id・時刻、プロジェクトの purge で消す）。
+   MR の行を `FOR UPDATE` で取り、その中で: 開いていない・head が無い・`llm.review = off` → 409 **`FG-LLM-0008`
+   `AiReviewRerunRefused`**（`reason=not_open` / `no_head` / `review_off`、新規）、今の head がまだ待っている（run が無い・完了して
+   いない・前のやり直しを worker がまだ拾っていない）→ 200 `pending`（何も書かず数えない）、直近 1 時間に 3 回 → 429
+   `FG-WEB-0010 route=ai_review_rerun`（`retry_after_s` は 3 回のうち最も古いものが 1 時間を出るまで、`Retry-After`）、それ以外 →
+   1 行と監査 `llm.review_rerun_requested` を同じトランザクションで書き 200 `queued`（`remaining`）。決定は経路の `authorize()`
+   （評価と同じ）、`Forge-Context-Audience: agent` を宣言した人のトークンは 403 `reason=agent_audience`（エージェントに共用の GPU を
+   使わせない）。gstn は `gstn mr ai-review-rerun`（人のトークン用、エージェントの道具からは外した）。
+4. **ボタンを出すか**: 読み取りの答えに `can_rerun`（MR が開いていて head があり、`llm.review` が on、今の head の run が完了して
+   いて、待っているやり直しが無く、読み手が `AiReviewRerun` を許され、エージェントの宣言が無い）と `rerun_asked`（やり直しを
+   worker がまだ拾っていない）を足した。上限は答えに入れない（ヒントの外。押せば 429 と問い合わせ番号）。画面は `can_rerun` の
+   ときだけ「もう一度レビュー」と一行の説明を出し、押した答えを読み上げ、`rerun_asked` の間は「確認しています」にして 30 秒ごとに
+   読み直す。
+5. **`forge_llm_advice_feedback_total{purpose,verdict}`**: 評価は `forge serve` が受け、ゲートウェイの数は worker にあるので、
+   worker の 5 分ごとの metrics の記録のときに `forge.llm_advice_feedback` を数えて置き換える（行は消さないので数が合計になる。
+   評価を変えた人は一方のラベルから他方へ動く）。数えられなかったときは古い値を残さず消す。
+6. **マイグレーション** `20270114100000_llm_rerun_and_pause.sql`（追記、main の最新 20270112170000 と、並行の枝が使う
+   20270113100000 の後）。2 つの表は `derived`（監査はコマンドが書く）。
+7. **独立レビュー（`authz-matrix-auditor`・`llm-integration-reviewer`）で直した点**: やり直しもロックした MR・プロジェクト・
+   アカウントで決め直す（`reconfirm`、HIGH。他の 2 つの書き込みと同じ）。やり直しの記録の時刻は挿入の時刻
+   （`clock_timestamp()`、トランザクションの開始の時刻だと、その間に完了した run より古くなり worker が拾わない）。一時停止を
+   読めないときは閉じる（上の 2）。数えられない評価の数は消す（上の 5）。**受け入れた点**: 設定の `llm.paused = true` の間の再開の
+   答えは `paused: false`（保存された状態）で、worker は止まったまま（Web のプロセスは worker の設定を知らない。経路の説明・
+   gstn・runbook に書いた）。やり直しの上限は計画どおり MR ごとに 1 時間 3 回で、head ごとの合計の上限は作らない（`required` で
+   緑になるまで押す使い方は、各回が監査と `forge.llm_review_reruns` に head つきで残り、マージを止めるのはブランチの規則で
+   名指したときだけ）。`LlmPause` / `LlmResume` のボット・サービスアカウント・自動マージ・代理の deny は `matrix_rows_people.rs`
+   と生成の行（`act_as_rule` / `auto_merge_may`）が持つ。公開プロジェクトの `GET …/llm` の `changed_by` は ai_assets と同じ。

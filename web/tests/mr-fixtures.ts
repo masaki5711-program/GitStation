@@ -250,6 +250,8 @@ export function aiReview(over: Record<string, unknown> = {}, advice: Record<stri
     head_sha: 'b'.repeat(40),
     check: null,
     can_feedback: false,
+    can_rerun: false,
+    rerun_asked: false,
     ...over,
     advice: {
       state: 'none',

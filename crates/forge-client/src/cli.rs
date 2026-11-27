@@ -122,6 +122,13 @@ pub enum Command {
         #[command(subcommand)]
         command: AutoMergeCommand,
     },
+    /// The local LLM (plan 19 §8.2): a project's llm.review, and the
+    /// gateway's pause and resume (an administrator).
+    #[command(disable_help_subcommand = true)]
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommand,
+    },
     /// The deterministic autofix (M4 C14): a project's switch (off by
     /// default; a Maintainer turns it on or off) and a merge request's line.
     #[command(disable_help_subcommand = true)]
@@ -1270,6 +1277,16 @@ pub enum MrCommand {
         #[arg(long, value_parser = parse_id, value_name = "IID")]
         iid: i64,
     },
+    /// Ask the local LLM's first pass of the merge request's current head
+    /// again (plan 19 §8.2): Developer and above, a person — never an
+    /// agent's token; 3 an hour per merge request.
+    #[command(name = "ai-review-rerun")]
+    AiReviewRerun {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
     /// Whether a merge request may merge now, and every reason it may not
     /// (a stable JSON contract with --json).
     Status {
@@ -1865,6 +1882,22 @@ pub enum AutofixCommand {
         #[arg(long, value_parser = parse_id, value_name = "IID")]
         iid: i64,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LlmCommand {
+    /// A project's llm.review (off, advisory, required) and who changed it
+    /// last. Changing it is a Maintainer's in the browser.
+    Review {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Pause the LLM gateway (an administrator, a token needs admin): no
+    /// new inference until resumed. In production only as an approved
+    /// runbook step (llm-gateway).
+    Pause,
+    /// Resume the paused LLM gateway (an administrator).
+    Resume,
 }
 
 #[derive(Subcommand, Debug)]

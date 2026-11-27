@@ -654,6 +654,15 @@
   gap: var(--gs-space-1) var(--gs-space-3);
 }
 
+/* 「もう一度レビュー」 and its one-line hint, apart from the findings. */
+.aiRerun {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  margin-top: var(--gs-space-3);
+}
+
 .aiVotes {
   display: flex;
   flex-wrap: wrap;

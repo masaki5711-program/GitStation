@@ -14,6 +14,7 @@ pub mod auth;
 // M4 C9: auto-merge's mode and emergency stops.
 pub mod ai_assets;
 pub mod auto_merge;
+pub mod llm;
 // M4 C14: a project's autofix switch.
 pub mod autofix;
 pub mod browse;

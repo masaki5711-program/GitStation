@@ -611,6 +611,22 @@ gstn = "auto-merge resume"
 reason = "As auto-merge stop."
 
 [[excluded]]
+gstn = "mr ai-review-rerun"
+reason = "Asking the AI first pass again spends the shared GPU and is a person's (an agent's token is refused, plan 19 §8.2)."
+
+[[excluded]]
+gstn = "llm review"
+reason = "The project's llm.review is already the mode of get_merge_request_ai_review; the setting itself is a Maintainer's."
+
+[[excluded]]
+gstn = "llm pause"
+reason = "Pausing the LLM gateway is an administrator's runbook step (people only; an agent's token is refused)."
+
+[[excluded]]
+gstn = "llm resume"
+reason = "As llm pause."
+
+[[excluded]]
 gstn = "auto-merge instance-stop"
 reason = "The instance's emergency stop is an administrator's (people only)."
 

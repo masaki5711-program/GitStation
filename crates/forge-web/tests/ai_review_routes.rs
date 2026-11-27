@@ -529,3 +529,131 @@ async fn an_advice_of_another_merge_request_is_not_voted_on_through_this_one() {
     assert!(rows.is_empty(), "{rows:?}");
     foreign.t.drop_now().await;
 }
+
+impl World {
+    async fn rerun(&self, who: Principal, header: Option<(&str, &str)>) -> Answer {
+        self.send("POST", "/rerun", who, header, None).await
+    }
+
+    async fn review_on(&self) {
+        self.t
+            .exec_superuser(&format!(
+                "INSERT INTO forge.project_llm (project_id, review, changed_by) VALUES ({}, 'advisory', {})",
+                self.web.get(),
+                self.owner.get()
+            ))
+            .await;
+    }
+
+    async fn completed_run(&self) {
+        forge_db::test_support::record_forge_check(
+            &self.t.db,
+            self.web,
+            &ObjectId::parse(&"a".repeat(40)).expect("sha"),
+            &forge_db::checks::NewCheckRun {
+                name: CheckName::parse(AI_REVIEW_CHECK).expect("name"),
+                status: CheckStatus::Completed,
+                conclusion: Some(CheckConclusion::Neutral),
+                summary: "synthetic".to_owned(),
+                details_url: None,
+                annotations: Vec::new(),
+            },
+        )
+        .await;
+    }
+
+    async fn reruns(&self) -> usize {
+        self.t
+            .json_rows("SELECT id FROM forge.llm_review_reruns")
+            .await
+            .len()
+    }
+}
+
+#[tokio::test]
+async fn a_developer_reruns_a_completed_head_and_the_read_offers_it_only_then() {
+    let w = World::new().await;
+    // Off: not offered, and refused with its reason.
+    let read = w.get(session(w.developer), None).await;
+    assert_eq!(read.json["can_rerun"], false, "{}", read.json);
+    w.completed_run().await;
+    let off = w.rerun(session(w.developer), None).await;
+    assert_eq!(off.status, StatusCode::CONFLICT, "{}", off.json);
+    assert_eq!(off.json["error_code"], "FG-LLM-0008", "{}", off.json);
+    w.review_on().await;
+    let read = w.get(session(w.developer), None).await;
+    assert_eq!(read.json["can_rerun"], true, "{}", read.json);
+    assert_eq!(read.json["rerun_asked"], false, "{}", read.json);
+    let a = w.rerun(session(w.developer), None).await;
+    assert_eq!(a.status, StatusCode::OK, "{}", a.json);
+    assert_eq!(a.json["outcome"], "queued");
+    assert_eq!(a.json["remaining"], 2);
+    assert_eq!(a.json["head_sha"], "a".repeat(40));
+    // The worker has not picked it up: offered no more, a press waits.
+    let read = w.get(session(w.developer), None).await;
+    assert_eq!(read.json["can_rerun"], false, "{}", read.json);
+    assert_eq!(read.json["rerun_asked"], true, "{}", read.json);
+    let again = w.rerun(full_token(w.owner), None).await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.json);
+    assert_eq!(again.json["outcome"], "pending");
+    assert_eq!(again.json["remaining"], Value::Null);
+    assert_eq!(w.reruns().await, 1);
+    let audit =
+        w.t.json_rows(
+            "SELECT action, actor_user_id FROM forge.audit_log \
+             WHERE action = 'llm.review_rerun_requested'",
+        )
+        .await;
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert_eq!(audit[0]["actor_user_id"], w.developer.get());
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn agents_act_as_guests_and_read_tokens_never_rerun() {
+    let w = World::new().await;
+    w.review_on().await;
+    w.completed_run().await;
+    let cases: [(Principal, Option<(&str, &str)>); 4] = [
+        (full_token(w.developer).as_agent(true), None),
+        (
+            full_token(w.developer),
+            Some(("forge-context-audience", "agent")),
+        ),
+        (token(w.developer), None),
+        (session(w.guest), None),
+    ];
+    for (who, header) in cases {
+        let read = w.get(who.clone(), header).await;
+        if read.status == StatusCode::OK {
+            assert_eq!(read.json["can_rerun"], false, "{who:?} {header:?}");
+        }
+        let a = w.rerun(who, header).await;
+        assert_eq!(a.status, StatusCode::FORBIDDEN, "{header:?} {}", a.json);
+        assert!(a.json["request_id"].is_string(), "{}", a.json);
+    }
+    let outsider = w.rerun(session(w.outsider), None).await;
+    assert_eq!(outsider.status, StatusCode::NOT_FOUND, "{}", outsider.json);
+    assert_eq!(w.reruns().await, 0, "nothing was counted");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn the_fourth_rerun_in_an_hour_answers_429_with_retry_after() {
+    let w = World::new().await;
+    w.review_on().await;
+    for _ in 0..3 {
+        w.completed_run().await;
+        let a = w.rerun(session(w.developer), None).await;
+        assert_eq!(a.json["outcome"], "queued", "{}", a.json);
+    }
+    w.completed_run().await;
+    let read = w.get(session(w.developer), None).await;
+    // A hint only: the limit is the rerun's.
+    assert_eq!(read.json["can_rerun"], true, "{}", read.json);
+    let a = w.rerun(session(w.developer), None).await;
+    assert_eq!(a.status, StatusCode::TOO_MANY_REQUESTS, "{}", a.json);
+    assert_eq!(a.json["error_code"], "FG-WEB-0010", "{}", a.json);
+    assert_eq!(w.reruns().await, 3);
+    w.t.drop_now().await;
+}

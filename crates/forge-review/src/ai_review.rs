@@ -762,6 +762,15 @@ pub struct AiReviewView {
     /// request, a person: M5 L5-6). A hint for the screen; the vote's route
     /// decides again.
     pub can_feedback: bool,
+    /// The reader may ask the first pass of the current head again now
+    /// (`AiReviewRerun` decided on this merge request, a person who did
+    /// not declare an agent audience; the merge request open with a head,
+    /// `llm.review` not `off`, its run completed and no rerun waiting). A
+    /// hint: the rerun's route decides again and answers 429 past 3 an hour.
+    pub can_rerun: bool,
+    /// Someone asked the current head again and the worker has not picked
+    /// it up yet (the screen says "asked again" and reads again).
+    pub rerun_asked: bool,
     /// The reader's own verdicts on the shown advice's findings (empty when
     /// none, withheld, or not a signed-in person).
     pub my_feedback: Vec<(u8, forge_core::llm::Verdict)>,
@@ -840,6 +849,19 @@ impl crate::Review {
             ),
             Ok(AdviceReader::Person)
         );
+        let rerun = match mr.head_sha.as_deref() {
+            Some(head)
+                if mode != forge_core::llm::ReviewMode::Off
+                    && mr.state == forge_core::MergeRequestState::Open =>
+            {
+                forge_db::llm::ops::rerun_state(&self.db, project, mr.id, head).await?
+            }
+            _ => forge_db::llm::ops::RerunState::NotDone,
+        };
+        let rerun_asked = rerun == forge_db::llm::ops::RerunState::Asked;
+        let can_rerun = rerun == forge_db::llm::ops::RerunState::Possible
+            && !declared_agent
+            && forge_auth::authorize(proof.principal(), Action::AiReviewRerun, &resource).is_ok();
         let Some(label) = label else {
             return Ok(AiReviewView {
                 iid,
@@ -848,6 +870,8 @@ impl crate::Review {
                 check,
                 advice: AdviceState::None,
                 can_feedback,
+                can_rerun,
+                rerun_asked,
                 my_feedback: Vec::new(),
             });
         };
@@ -899,6 +923,8 @@ impl crate::Review {
             check,
             advice,
             can_feedback,
+            can_rerun,
+            rerun_asked,
             my_feedback,
         })
     }

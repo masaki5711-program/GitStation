@@ -725,6 +725,23 @@
       "maintainerOnly": "Hanya Maintainer ke atas yang dapat mengubahnya, masuk lewat web (bukan agen, bot, atau akun layanan).",
       "offKeeps": "Menonaktifkan tetap menyimpan riwayat, rilis sebelumnya, tanda tangan, dan catatan deploy; hanya pemeriksaan, aturan, dan rilis baru yang berhenti."
     },
+    "llm": {
+      "title": "Tinjauan awal AI",
+      "intro": "AI lokal membaca commit terbaru setiap merge request yang terbuka dan memberi ringkasan serta temuan sebagai saran. Saran tidak pernah menyetujui atau memblokir merge.",
+      "legend": "Tinjauan awal AI",
+      "off": "Mati (bawaan)",
+      "offHelp": "AI tidak membaca merge request dan tidak ada cek forge/ai-review.",
+      "advisory": "Sebagai saran",
+      "advisoryHelp": "Temuan tidak pernah membuat forge/ai-review gagal.",
+      "required": "Wajib",
+      "requiredHelp": "Temuan kritis dan tinggi membuat forge/ai-review gagal. Merge hanya terblokir jika aturan branch mewajibkan cek ini.",
+      "current": "Sekarang: {{mode}}",
+      "changedAt": "Terakhir diubah: {{at}}",
+      "save": "Simpan",
+      "saved": "Tersimpan: {{mode}}",
+      "maintainerOnly": "Hanya Maintainer ke atas yang dapat mengubah ini, masuk lewat web (bukan agen, bot, atau akun layanan).",
+      "offKeeps": "Mematikannya tetap menyimpan saran, cek, dan penilaian yang sudah ada."
+    },
     "docLint": {
       "title": "Pemeriksaan dokumen selama migrasi",
       "intro": "Referensi rusak antar dokumen adalah error di pemeriksaan forge/doc-lint. Selama dokumen dipindahkan ke GitStation, Anda dapat menjadikannya peringatan sampai suatu tanggal. Setelah tanggal itu, otomatis menjadi error lagi.",
@@ -2489,6 +2506,9 @@
     "adviceOnly": "Ini hanya saran. Saran tidak pernah menyetujui atau menghentikan merge: tes, check wajib, dan orang yang memutuskan.",
     "arrived": "Saran AI sudah tersedia.",
     "usefulFor": "Berguna (temuan {{n}})",
-    "wrongFor": "Salah (temuan {{n}})"
+    "wrongFor": "Salah (temuan {{n}})",
+    "rerun": "Tinjau lagi",
+    "rerunHint": "Meminta AI meninjau commit terbaru lagi (paling banyak 3 kali per jam untuk satu merge request).",
+    "rerunPending": "Commit ini sudah menunggu tinjauannya."
   }
 }

@@ -31,6 +31,7 @@ import { DeployApproversSection } from './DeployApprovers';
 import { DocLintMigrationSection } from './DocLintMigration';
 import { GeneralForm, MoveForm } from './Forms';
 import { IntegrationBindingsSection } from './IntegrationBindings';
+import { LlmSection } from './LlmSettings';
 import { ApprovalRulesSection, MergeConditionsSection, MergingSection, useMergeViewer } from './MergeSettings';
 import { patternProblem } from './patterns';
 import styles from './Settings.module.css';
@@ -98,6 +99,7 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       <AutoMergeSection projectId={projectId} />
       <AutofixSection projectId={projectId} />
       <AiAssetsSection projectId={projectId} />
+      <LlmSection projectId={projectId} />
       {/* Plan 16 A8: the agent builder has its own page (it reads the
           marketplace and the lock only when opened). */}
       <Section id="agent-title" title={t('agentBuilder.title')}>

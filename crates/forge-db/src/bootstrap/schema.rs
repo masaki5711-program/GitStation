@@ -1210,6 +1210,9 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── Plan 19 §8.2: reruns and the gateway's pause (20270114100000) ──
+        ("forge.llm_review_reruns", operational()),
+        ("forge.llm_gateway", operational()),
     ])
 }
 
@@ -1475,6 +1478,9 @@ const LATER_TABLES: &[&str] = &[
     "user_notes",
     // ── Plan 16 A11: the recommendation's LLM asks (20270113110000) ──
     "agent_recommend_asks",
+    // ── Plan 19 §8.2: reruns and the gateway's pause (20270114100000) ──
+    "llm_review_reruns",
+    "llm_gateway",
 ];
 
 /// Every table the first migration creates.

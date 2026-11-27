@@ -12,8 +12,10 @@
 // - a failed first pass says it failed (never shown as a pass).
 // Every word of the advice is plain text (never HTML, never Markdown). The
 // only controls are 「役に立った / 誤り」 per finding, drawn only when the
-// server says the reader may vote (`can_feedback`); nothing here approves,
-// merges or blocks anything. Shown only when the project uses the first
+// server says the reader may vote (`can_feedback`), and 「もう一度レビュー」
+// (plan 19 §8.2), drawn only when the server says the reader may ask the
+// current head again (`can_rerun`: a Developer, a person, the pass done);
+// nothing here approves, merges or blocks anything. Shown only when the project uses the first
 // pass or something was made (as the autofix and auto-merge lines).
 import type { TFunction } from 'i18next';
 import { useEffect, useRef } from 'react';
@@ -23,6 +25,7 @@ import {
   aiAdviceVisible,
   myVerdict,
   useAiFeedback,
+  useAiRerun,
   useAiReview,
   type AiReview,
   type AiReviewAdvice,
@@ -63,7 +66,7 @@ function verdictLabel(t: TFunction, verdict: AiVerdict): string {
 export type AiPhase = 'running' | 'failed' | 'none' | 'shown' | 'withheld';
 
 export function aiPhase(data: AiReview): AiPhase {
-  if (data.check !== null && data.check.status !== 'completed') return 'running';
+  if (data.rerun_asked || (data.check !== null && data.check.status !== 'completed')) return 'running';
   if (data.check?.status === 'completed' && data.check.conclusion === 'error') return 'failed';
   if (data.advice.state === 'shown') return 'shown';
   if (data.advice.state === 'withheld') return 'withheld';
@@ -128,8 +131,8 @@ export function AiAdviceSection({ projectId, iid, open }: { projectId: number; i
 function AdviceBody({ projectId, iid, data }: { projectId: number; iid: number; data: AiReview }) {
   const { t, i18n } = useTranslation();
   const advice = data.advice;
-  const running = data.check !== null && data.check.status !== 'completed';
-  const failed = data.check?.status === 'completed' && data.check.conclusion === 'error';
+  const running = data.rerun_asked || (data.check !== null && data.check.status !== 'completed');
+  const failed = !running && data.check?.status === 'completed' && data.check.conclusion === 'error';
   return (
     <div className={styles.aiAdvice}>
       <p className={styles.aiAdviceLabel}>
@@ -164,9 +167,47 @@ function AdviceBody({ projectId, iid, data }: { projectId: number; iid: number; 
           )}
         </p>
       )}
+      {data.can_rerun && <Rerun projectId={projectId} iid={iid} />}
       <p className={styles.aiAdviceMeta} data-testid="ai-advice-only">
         {t('aiAdvice.adviceOnly')}
       </p>
+    </div>
+  );
+}
+
+/** 「もう一度レビュー」: only when the server says the reader may (the
+ * pass of the current head is done; 3 an hour per merge request). The
+ * answer is said once; a refusal shows its message and 問い合わせ番号. */
+function Rerun({ projectId, iid }: { projectId: number; iid: number }) {
+  const { t } = useTranslation();
+  const rerun = useAiRerun(projectId, iid);
+  const announce = useAnnounce();
+  const busy = rerun.isPending;
+  return (
+    <div className={styles.aiRerun} data-testid="ai-advice-rerun">
+      <button
+        type="button"
+        className={`${controls.button} ${controls.small}`}
+        aria-disabled={busy ? 'true' : undefined}
+        onClick={() => {
+          if (busy) return;
+          rerun.mutate(undefined, {
+            // `queued` is said once by the phase change it causes ("the AI
+            // is reviewing"); `pending` changes nothing on the screen.
+            onSuccess: (answer) => {
+              if (answer.outcome !== 'queued') announce(t('aiAdvice.rerunPending'));
+            },
+          });
+        }}
+      >
+        {t('aiAdvice.rerun')}
+      </button>
+      <p className={styles.aiAdviceMeta}>{t('aiAdvice.rerunHint')}</p>
+      {rerun.isError && (
+        <div data-testid="ai-advice-rerun-error">
+          <QueryError error={rerun.error} />
+        </div>
+      )}
     </div>
   );
 }

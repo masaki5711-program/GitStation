@@ -270,6 +270,23 @@ async fn paused_gateway_queues_nothing_new() {
     assert!(gw.is_paused());
 }
 
+#[test]
+fn the_stored_pause_is_followed_and_the_config_pause_wins() {
+    let records = Arc::new(Memory::default());
+    let fake = Arc::new(Fake::answering(vec![]));
+    let gw = Gateway::new(config(false), fake.clone(), records.clone());
+    // An administrator's pause (forge.llm_gateway) pauses; its resume resumes.
+    assert!(gw.follow_stored_pause(true));
+    assert!(gw.is_paused());
+    assert!(!gw.follow_stored_pause(true), "no change, nothing to log");
+    assert!(gw.follow_stored_pause(false));
+    assert!(!gw.is_paused());
+    // `llm.paused = true` in the config: the stored resume never overrides it.
+    let held = Gateway::new(config(true), fake, records);
+    assert!(!held.follow_stored_pause(false));
+    assert!(held.is_paused());
+}
+
 #[tokio::test]
 async fn model_digest_mismatch_stops_gateway() {
     let records = Arc::new(Memory::default());

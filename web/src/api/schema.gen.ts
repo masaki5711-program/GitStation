@@ -716,6 +716,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/llm/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause the local LLM gateway (people only; an administrator, a token needs admin; never an agent's token): no new inference until resumed, what runs finishes; the worker follows within 10 s; audited. In production only as an approved runbook step (llm-gateway) */
+        post: operations["post_api_v1_admin_llm_pause"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/llm/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume the paused local LLM gateway (people only; an administrator, a token needs admin); the worker follows within 10 s (llm.paused in the config still pauses it); audited */
+        post: operations["post_api_v1_admin_llm_resume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/runners": {
         parameters: {
             query?: never;
@@ -2120,6 +2154,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/llm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's llm.review: off (the default: no AI first pass), advisory (the local LLM's first pass of each open merge request as advice, never a failure) or required (critical / high findings make forge/ai-review a failure, which blocks a merge only if a branch rule names it); who changed it last and when */
+        get: operations["get_api_v1_projects_id_llm"];
+        /** Set a project's llm.review ({"review": "off" | "advisory" | "required"}; people only: Maintainer and above in a web session, never a token, an agent, a bot, a service account or the auto-merge principal); audited. Off removes no advice or run */
+        put: operations["put_api_v1_projects_id_llm"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/members": {
         parameters: {
             query?: never;
@@ -2288,6 +2340,23 @@ export interface paths {
         put?: never;
         /** Vote on one finding of a merge request's AI first pass: useful or wrong (people only: whoever reads the merge request, Reporter and above; an agent's token, a service account, a bot, act-as and Forge-Context-Audience: agent are refused, 403). One verdict per person and finding: a new one replaces theirs (outcome recorded, changed or unchanged). No such advice or finding, or an advice of another merge request: 404 FG-REPO-0005 */
         post: operations["post_api_v1_projects_id_merge_requests_iid_ai_review_feedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask a merge request's AI first pass again on its current head (people only: Developer and above; an agent's token, a service account, a bot, act-as and Forge-Context-Audience: agent are refused, 403): queued (the worker asks again on its next pass) or pending (the head still waits: nothing counted). Closed, without a head or llm.review off: 409 FG-LLM-0008; more than 3 in an hour per merge request: 429 FG-WEB-0010 with Retry-After */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_ai_review_rerun"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4317,6 +4386,13 @@ export interface components {
              *     a read-only token). A hint: the vote decides again.
              */
             can_feedback: boolean;
+            /**
+             * @description The reader may ask the first pass of the current head again now
+             *     (plan 19 §8.2: a Developer and above, a person; the merge request
+             *     open, `llm.review` on, its run completed and no rerun waiting). A
+             *     hint: the rerun decides again and allows 3 an hour.
+             */
+            can_rerun: boolean;
             check: null | components["schemas"]["AiReviewCheckBody"];
             /** @description The merge request's head now. */
             head_sha: string | null;
@@ -4324,6 +4400,11 @@ export interface components {
             iid: number;
             /** @description The project's `llm.review`: `off`, `advisory` or `required`. */
             mode: string;
+            /**
+             * @description Someone asked the current head again and the worker has not picked
+             *     it up yet (about 30 s): the screen says so and reads again.
+             */
+            rerun_asked: boolean;
         };
         /** @description The `forge/ai-review` run on the current head. */
         AiReviewCheckBody: {
@@ -4358,6 +4439,24 @@ export interface components {
             finding_index: number;
             /** @description `useful` or `wrong`. */
             verdict: string;
+        };
+        /** @description `POST …/ai-review/rerun`. */
+        AiReviewRerunBody: {
+            /** @description The head that will be reviewed. */
+            head_sha: string;
+            /** Format: int64 */
+            iid: number;
+            /**
+             * @description `queued` (the worker asks the head again on its next pass, within
+             *     about 30 s) or `pending` (the head still waits for its pass: nothing
+             *     was recorded or counted).
+             */
+            outcome: string;
+            /**
+             * Format: int64
+             * @description Reruns left in this hour after a `queued` one (`null`: `pending`).
+             */
+            remaining: number | null;
         };
         /** @description One state name and its plain words (plan 08). */
         AiTermBody: {
@@ -7148,6 +7247,41 @@ export interface components {
             /** @description The group's own setting, `private` or `internal` (plan 15 MR 3). */
             visibility: string;
         };
+        /** @description The instance's pause of the LLM gateway. */
+        LlmGatewayBody: {
+            /** @description UTC, RFC 3339 (`null`: never changed). */
+            changed_at: string | null;
+            /** Format: int64 */
+            changed_by: number | null;
+            /** @description `changed` or `unchanged` (it was so already). */
+            outcome: string;
+            /**
+             * @description Stored: the worker follows within 10 s (`llm.paused` in the config
+             *     also pauses it).
+             */
+            paused: boolean;
+        };
+        /** @description A project's `llm.review`. */
+        LlmSettingBody: {
+            /** @description UTC, RFC 3339 (`null`: never changed). */
+            changed_at: string | null;
+            /** Format: int64 */
+            changed_by: number | null;
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * @description `off` (the default: no AI first pass, no `forge/ai-review` run),
+             *     `advisory` (the first pass as advice; `forge/ai-review` is never
+             *     `failure`) or `required` (critical / high findings make it
+             *     `failure`; it blocks a merge only if a branch rule names it).
+             */
+            review: string;
+            viewer: components["schemas"]["LlmViewerBody"];
+        };
+        /** @description What the caller could do now (a hint; the route decides again). */
+        LlmViewerBody: {
+            can_change: boolean;
+        };
         /** @description The answer of a log append. */
         LogAnswer: {
             /** @description `false`: the chunk was stored already (a resend). */
@@ -8357,6 +8491,11 @@ export interface components {
         PutFullAuto: {
             /** @description Whether projects may select `full` and whether `full` acts. */
             allowed: boolean;
+        };
+        /** @description `PUT …/llm`. */
+        PutLlm: {
+            /** @description `off`, `advisory` or `required`. */
+            review: string;
         };
         /**
          * @description `PUT …/merge-rule` (absent fields: off / 0, except
@@ -11591,6 +11730,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IntegrationBindingList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_llm_pause: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmGatewayBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_llm_resume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmGatewayBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -15197,6 +15394,72 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_llm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmSettingBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_llm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutLlm"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmSettingBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_members: {
         parameters: {
             query?: {
@@ -15675,6 +15938,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AiAdviceVoteBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_ai_review_rerun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiReviewRerunBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

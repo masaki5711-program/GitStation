@@ -27,6 +27,7 @@ pub mod agent_recommend;
 pub mod asset_draft;
 pub mod diagnosis;
 pub mod input;
+pub mod ops;
 pub mod output;
 pub mod provider;
 

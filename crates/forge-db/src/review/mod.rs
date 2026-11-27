@@ -44,7 +44,7 @@ use crate::{read_query_error, Db};
 pub mod activity;
 pub mod approvals;
 pub mod auto_merge;
-mod commands;
+pub(crate) mod commands;
 pub mod conflicts;
 pub mod discussions;
 pub mod merge_pipeline;

@@ -8,6 +8,10 @@
 //! - `forge_llm_yield_total{reason}` (`kanflow_busy` / `kanflow_unreachable` /
 //!   `gpu_eval`)
 //! - `forge_llm_evidence_dropped_total{purpose}`
+//! - `forge_llm_advice_feedback_total{purpose,verdict}`: people's verdicts
+//!   on the advice, counted from `forge.llm_advice_feedback` (rows are never
+//!   deleted) at each snapshot — the votes are taken by `forge serve`, not
+//!   the worker, so the table is the one counter both processes share.
 //!
 //! In-process counters; [`Metrics::render`] writes the Prometheus text
 //! format, and the worker logs a snapshot (`forge.llm.metrics`) every
@@ -65,6 +69,24 @@ impl Metrics {
             }
             h.count += 1;
             h.sum += secs;
+        });
+    }
+
+    /// Replace the feedback totals with `totals` (`(purpose, verdict, n)`,
+    /// [`forge_db::llm::ops::feedback_totals`]): a label that is gone
+    /// from the table is gone here too.
+    pub fn set_feedback_totals(&self, totals: &[(String, String, u64)]) {
+        self.with(|m| {
+            m.counters.retain(|(name, _), _| *name != ADVICE_FEEDBACK);
+            for (purpose, verdict, n) in totals {
+                m.counters.insert(
+                    (
+                        ADVICE_FEEDBACK,
+                        label(&[("purpose", purpose), ("verdict", verdict)]),
+                    ),
+                    *n,
+                );
+            }
         });
     }
 
@@ -135,6 +157,7 @@ pub const OUTPUT_INVALID: &str = "forge_llm_output_invalid_total";
 pub const TOKENS: &str = "forge_llm_tokens_total";
 pub const YIELDS: &str = "forge_llm_yield_total";
 pub const EVIDENCE_DROPPED: &str = "forge_llm_evidence_dropped_total";
+pub const ADVICE_FEEDBACK: &str = "forge_llm_advice_feedback_total";
 
 #[cfg(test)]
 mod tests {
@@ -166,5 +189,24 @@ mod tests {
         assert!(
             text.contains("forge_llm_queue_wait_seconds_bucket{priority=\"review\",le=\"2\"} 0")
         );
+    }
+
+    #[test]
+    fn feedback_totals_replace_the_last_snapshot() {
+        let m = Metrics::default();
+        m.set_feedback_totals(&[
+            ("mr_review".to_owned(), "useful".to_owned(), 3),
+            ("mr_review".to_owned(), "wrong".to_owned(), 1),
+        ]);
+        assert_eq!(
+            m.counter(ADVICE_FEEDBACK, "purpose=\"mr_review\",verdict=\"useful\""),
+            3
+        );
+        m.set_feedback_totals(&[("mr_review".to_owned(), "useful".to_owned(), 4)]);
+        let text = m.render();
+        assert!(text.contains(
+            "forge_llm_advice_feedback_total{purpose=\"mr_review\",verdict=\"useful\"} 4"
+        ));
+        assert!(!text.contains("verdict=\"wrong\""), "{text}");
     }
 }

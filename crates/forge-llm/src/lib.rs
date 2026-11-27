@@ -219,6 +219,23 @@ impl Gateway {
         self.dispatch();
     }
 
+    /// Follow the instance's stored pause (`forge.llm_gateway`, set by an
+    /// administrator over HTTP): paused while it or `llm.paused` in the
+    /// config says so — a stored resume never overrides the config.
+    /// `true` when the state changed (the caller logs it once).
+    pub fn follow_stored_pause(&self, stored: bool) -> bool {
+        let want = self.inner.cfg.paused || stored;
+        if want == self.is_paused() {
+            return false;
+        }
+        if want {
+            self.pause();
+        } else {
+            self.resume();
+        }
+        true
+    }
+
     pub fn is_paused(&self) -> bool {
         lock(&self.inner.state).paused
     }

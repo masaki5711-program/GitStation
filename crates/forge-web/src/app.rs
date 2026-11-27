@@ -504,17 +504,13 @@ impl Default for AppConfig {
 }
 
 /// Actions that have permission-matrix rows but no route yet (API
-/// resources: phase 8b; the local LLM's: plan 19 L5-5 to L5-9).
+/// resources: phase 8b).
 /// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
 /// stale row; an action leaves this list in the commit that routes it.
 pub const PLANNED: &[Action] = &[
     Action::UserCreate,
     Action::AuditRead,
     Action::Metrics,
-    Action::AiReviewRerun,
-    Action::LlmSettingsManage,
-    Action::LlmPause,
-    Action::LlmResume,
     // Plan 16 §4 (A4): the lesson injection lands with A10 (the
     // builder's routes with A7, the marketplace's with A5).
     Action::RuleInjectLesson,
@@ -741,16 +737,16 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    let all = autofix_routes(ai_assets_routes(schedule_routes(auto_merge_routes(
-        deploy_routes(user_activity_routes(user_merge_request_routes(
-            runner_routes(pipeline_routes(merge_queue_routes(doc_lint_routes(
-                binding_routes(act_as_routes(mirror_routes(webhook_routes(
-                    notification_routes(check_routes(dev_status_routes(feed_routes(
-                        integration_routes(service_account_routes(account_routes(history_routes(
-                            browse_routes(git_routes(shell_routes(merge_request_routes(
-                                org_binding_routes(member_routes(move_routes(hosting_routes(
-                                    fixed,
-                                )))),
+    let all = autofix_routes(llm_routes(ai_assets_routes(schedule_routes(
+        auto_merge_routes(deploy_routes(user_activity_routes(
+            user_merge_request_routes(runner_routes(pipeline_routes(merge_queue_routes(
+                doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
+                    webhook_routes(notification_routes(check_routes(dev_status_routes(
+                        feed_routes(integration_routes(service_account_routes(account_routes(
+                            history_routes(browse_routes(git_routes(shell_routes(
+                                merge_request_routes(org_binding_routes(member_routes(
+                                    move_routes(hosting_routes(fixed)),
+                                ))),
                             )))),
                         )))),
                     )))),
@@ -1015,6 +1011,49 @@ fn ai_assets_routes(registry: Registry<AppState>) -> Registry<AppState> {
             a::put,
         )
         .responds::<a::AiAssetsBody>(Verb::Put, a::ONE)
+}
+
+/// The local LLM's settings (plan 19 §8.2): a project's `llm.review` and
+/// the gateway's pause. The rerun of a merge request's first pass is in
+/// `merge_request_routes` (next to its read).
+fn llm_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::llm as l;
+    registry
+        .route_with(
+            Verb::Get,
+            l::ONE,
+            Action::ProjectRead,
+            "A project's llm.review: off (the default: no AI first pass), advisory (the local LLM's first pass of each open merge request as advice, never a failure) or required (critical / high findings make forge/ai-review a failure, which blocks a merge only if a branch rule names it); who changed it last and when",
+            l::LlmOf,
+            l::read,
+        )
+        .responds::<l::LlmSettingBody>(Verb::Get, l::ONE)
+        .route_with_body(
+            Verb::Put,
+            l::ONE,
+            Action::LlmSettingsManage,
+            "Set a project's llm.review ({\"review\": \"off\" | \"advisory\" | \"required\"}; people only: Maintainer and above in a web session, never a token, an agent, a bot, a service account or the auto-merge principal); audited. Off removes no advice or run",
+            l::MAX_BODY,
+            l::LlmOf,
+            l::put,
+        )
+        .responds::<l::LlmSettingBody>(Verb::Put, l::ONE)
+        .route(
+            Verb::Post,
+            l::PAUSE,
+            Action::LlmPause,
+            "Pause the local LLM gateway (people only; an administrator, a token needs admin; never an agent's token): no new inference until resumed, what runs finishes; the worker follows within 10 s; audited. In production only as an approved runbook step (llm-gateway)",
+            l::pause,
+        )
+        .responds::<l::LlmGatewayBody>(Verb::Post, l::PAUSE)
+        .route(
+            Verb::Post,
+            l::RESUME,
+            Action::LlmResume,
+            "Resume the paused local LLM gateway (people only; an administrator, a token needs admin); the worker follows within 10 s (llm.paused in the config still pauses it); audited",
+            l::resume,
+        )
+        .responds::<l::LlmGatewayBody>(Verb::Post, l::RESUME)
 }
 
 /// Auto-merge (M4 C9, ADR-0017 Amendment 2026-11-13): a project's
@@ -3235,6 +3274,16 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::ai_review_feedback,
         )
         .responds::<mr::AiAdviceVoteBody>(Verb::Post, mr::AI_FEEDBACK)
+        // Plan 19 §8.2: asking the first pass again (3 an hour per MR).
+        .route_with(
+            Verb::Post,
+            mr::AI_RERUN,
+            Action::AiReviewRerun,
+            "Ask a merge request's AI first pass again on its current head (people only: Developer and above; an agent's token, a service account, a bot, act-as and Forge-Context-Audience: agent are refused, 403): queued (the worker asks again on its next pass) or pending (the head still waits: nothing counted). Closed, without a head or llm.review off: 409 FG-LLM-0008; more than 3 in an hour per merge request: 429 FG-WEB-0010 with Retry-After",
+            mr::AI_RERUN_OF,
+            mr::ai_review_rerun,
+        )
+        .responds::<mr::AiReviewRerunBody>(Verb::Post, mr::AI_RERUN)
         // M3 X5 (plan 03 §6): a merge request's review context, read like
         // the merge request itself.
         .route_with(

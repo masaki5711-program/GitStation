@@ -678,6 +678,10 @@
             "description": "The reader may vote 「役に立った / 誤り」 on the findings (a person\nwho reads the merge request, Reporter and above, never an agent or\na read-only token). A hint: the vote decides again.",
             "type": "boolean"
           },
+          "can_rerun": {
+            "description": "The reader may ask the first pass of the current head again now\n(plan 19 §8.2: a Developer and above, a person; the merge request\nopen, `llm.review` on, its run completed and no rerun waiting). A\nhint: the rerun decides again and allows 3 an hour.",
+            "type": "boolean"
+          },
           "check": {
             "oneOf": [
               {
@@ -704,6 +708,10 @@
           "mode": {
             "description": "The project's `llm.review`: `off`, `advisory` or `required`.",
             "type": "string"
+          },
+          "rerun_asked": {
+            "description": "Someone asked the current head again and the worker has not picked\nit up yet (about 30 s): the screen says so and reads again.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -712,7 +720,9 @@
           "head_sha",
           "check",
           "advice",
-          "can_feedback"
+          "can_feedback",
+          "can_rerun",
+          "rerun_asked"
         ],
         "type": "object"
       },
@@ -800,6 +810,42 @@
         "required": [
           "finding_index",
           "verdict"
+        ],
+        "type": "object"
+      },
+      "AiReviewRerunBody": {
+        "additionalProperties": false,
+        "description": "`POST …/ai-review/rerun`.",
+        "properties": {
+          "head_sha": {
+            "description": "The head that will be reviewed.",
+            "type": "string"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "outcome": {
+            "description": "`queued` (the worker asks the head again on its next pass, within\nabout 30 s) or `pending` (the head still waits for its pass: nothing\nwas recorded or counted).",
+            "type": "string"
+          },
+          "remaining": {
+            "description": "Reruns left in this hour after a `queued` one (`null`: `pending`).",
+            "format": "int64",
+            "maximum": 2,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "outcome",
+          "head_sha",
+          "remaining"
         ],
         "type": "object"
       },
@@ -8492,6 +8538,96 @@
         ],
         "type": "object"
       },
+      "LlmGatewayBody": {
+        "additionalProperties": false,
+        "description": "The instance's pause of the LLM gateway.",
+        "properties": {
+          "changed_at": {
+            "description": "UTC, RFC 3339 (`null`: never changed).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outcome": {
+            "description": "`changed` or `unchanged` (it was so already).",
+            "type": "string"
+          },
+          "paused": {
+            "description": "Stored: the worker follows within 10 s (`llm.paused` in the config\nalso pauses it).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "paused",
+          "changed_by",
+          "changed_at",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "LlmSettingBody": {
+        "additionalProperties": false,
+        "description": "A project's `llm.review`.",
+        "properties": {
+          "changed_at": {
+            "description": "UTC, RFC 3339 (`null`: never changed).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "review": {
+            "description": "`off` (the default: no AI first pass, no `forge/ai-review` run),\n`advisory` (the first pass as advice; `forge/ai-review` is never\n`failure`) or `required` (critical / high findings make it\n`failure`; it blocks a merge only if a branch rule names it).",
+            "type": "string"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/LlmViewerBody"
+          }
+        },
+        "required": [
+          "project_id",
+          "review",
+          "changed_by",
+          "changed_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "LlmViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do now (a hint; the route decides again).",
+        "properties": {
+          "can_change": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_change"
+        ],
+        "type": "object"
+      },
       "LogAnswer": {
         "additionalProperties": false,
         "description": "The answer of a log append.",
@@ -11472,6 +11608,20 @@
         },
         "required": [
           "allowed"
+        ],
+        "type": "object"
+      },
+      "PutLlm": {
+        "additionalProperties": false,
+        "description": "`PUT …/llm`.",
+        "properties": {
+          "review": {
+            "description": "`off`, `advisory` or `required`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review"
         ],
         "type": "object"
       },
@@ -18226,6 +18376,64 @@
         "x-forge-action": "IntegrationRead"
       }
     },
+    "/api/v1/admin/llm/pause": {
+      "post": {
+        "operationId": "post_api_v1_admin_llm_pause",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmGatewayBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Pause the local LLM gateway (people only; an administrator, a token needs admin; never an agent's token): no new inference until resumed, what runs finishes; the worker follows within 10 s; audited. In production only as an approved runbook step (llm-gateway)",
+        "x-forge-action": "LlmPause"
+      }
+    },
+    "/api/v1/admin/llm/resume": {
+      "post": {
+        "operationId": "post_api_v1_admin_llm_resume",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmGatewayBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Resume the paused local LLM gateway (people only; an administrator, a token needs admin); the worker follows within 10 s (llm.paused in the config still pauses it); audited",
+        "x-forge-action": "LlmResume"
+      }
+    },
     "/api/v1/admin/runners": {
       "get": {
         "operationId": "get_api_v1_admin_runners",
@@ -23537,6 +23745,97 @@
         "x-forge-max-body-bytes": 8192
       }
     },
+    "/api/v1/projects/{id}/llm": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_llm",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmSettingBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's llm.review: off (the default: no AI first pass), advisory (the local LLM's first pass of each open merge request as advice, never a failure) or required (critical / high findings make forge/ai-review a failure, which blocks a merge only if a branch rule names it); who changed it last and when",
+        "x-forge-action": "ProjectRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_llm",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutLlm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmSettingBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set a project's llm.review ({\"review\": \"off\" | \"advisory\" | \"required\"}; people only: Maintainer and above in a web session, never a token, an agent, a bot, a service account or the auto-merge principal); audited. Off removes no advice or run",
+        "x-forge-action": "LlmSettingsManage",
+        "x-forge-max-body-bytes": 256
+      }
+    },
     "/api/v1/projects/{id}/members": {
       "get": {
         "operationId": "get_api_v1_projects_id_members",
@@ -24331,6 +24630,55 @@
         "summary": "Vote on one finding of a merge request's AI first pass: useful or wrong (people only: whoever reads the merge request, Reporter and above; an agent's token, a service account, a bot, act-as and Forge-Context-Audience: agent are refused, 403). One verdict per person and finding: a new one replaces theirs (outcome recorded, changed or unchanged). No such advice or finding, or an advice of another merge request: 404 FG-REPO-0005",
         "x-forge-action": "AiAdviceFeedback",
         "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/rerun": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_ai_review_rerun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiReviewRerunBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Ask a merge request's AI first pass again on its current head (people only: Developer and above; an agent's token, a service account, a bot, act-as and Forge-Context-Audience: agent are refused, 403): queued (the worker asks again on its next pass) or pending (the head still waits: nothing counted). Closed, without a head or llm.review off: 409 FG-LLM-0008; more than 3 in an hour per merge request: 429 FG-WEB-0010 with Retry-After",
+        "x-forge-action": "AiReviewRerun"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {

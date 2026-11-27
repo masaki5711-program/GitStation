@@ -3929,6 +3929,44 @@
         }
       ],
       "examples": [
+        "gstn mr ai-review-rerun --project 7 --iid 3"
+      ],
+      "name": "mr ai-review-rerun",
+      "output": {
+        "required": [
+          "iid",
+          "outcome",
+          "head_sha",
+          "remaining"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/ai-review/rerun"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Ask the local LLM's first pass of a merge request's current head again (plan 19 §8.2): Developer and above, people only (an agent's token, act-as and Forge-Context-Audience: agent are refused). queued (the worker asks again on its next pass, remaining of 3 this hour) or pending (the head still waits: nothing counted). Closed, without a head or llm.review off: FG-LLM-0008; a fourth in an hour: FG-WEB-0010."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
         "gstn mr status --project 7 --iid 3 --json"
       ],
       "name": "mr status",
@@ -12789,6 +12827,86 @@
         "admin"
       ],
       "summary": "Resume auto-merge on the instance (people only; an administrator, a token needs admin)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn llm review --project 7 --json"
+      ],
+      "name": "llm review",
+      "output": {
+        "required": [
+          "project_id",
+          "review",
+          "changed_by",
+          "changed_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/llm"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's llm.review (plan 19 §3.1): off (the default: no AI first pass), advisory (the local LLM's first pass of each open merge request as advice) or required (critical / high findings make forge/ai-review a failure); who changed it last. Changing it is a Maintainer's in the browser."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn llm pause"
+      ],
+      "name": "llm pause",
+      "output": {
+        "required": [
+          "paused",
+          "changed_by",
+          "changed_at",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/admin/llm/pause"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Pause the local LLM gateway (people only; an administrator, a token needs api and admin; never an agent's token): no new inference until resumed, what runs finishes; the worker follows within 10 s. In production only as an approved runbook step (llm-gateway)."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn llm resume"
+      ],
+      "name": "llm resume",
+      "output": {
+        "required": [
+          "paused",
+          "changed_by",
+          "changed_at",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/admin/llm/resume"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Resume the paused local LLM gateway (people only; an administrator, a token needs api and admin); llm.paused in the server's config still pauses it."
     },
     {
       "args": [

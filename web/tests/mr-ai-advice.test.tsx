@@ -324,3 +324,58 @@ describe('AI advice: axe', () => {
     });
   }
 });
+
+describe('AI advice: 「もう一度レビュー」 (plan 19 §8.2)', () => {
+  const RERUN_API = `${MR_API}/3/ai-review/rerun`;
+  const done = { check: { status: 'completed', conclusion: 'neutral' } };
+
+  it('no button unless the server says the reader may', async () => {
+    await open(() => json(200, shown({ ...done, can_rerun: false })));
+    const box = await section();
+    expect(within(box).queryByRole('button', { name: 'Review again' })).toBeNull();
+  });
+
+  it('asks again, says so, and shows "checking" while it waits', async () => {
+    let asked = false;
+    const { server } = await open(
+      () => json(200, shown(asked ? { ...done, can_rerun: false, rerun_asked: true } : { ...done, can_rerun: true })),
+      'en',
+      {
+        [`POST ${RERUN_API}`]: () => {
+          asked = true;
+          return json(200, { iid: 3, outcome: 'queued', head_sha: 'b'.repeat(40), remaining: 2 });
+        },
+      },
+    );
+    const box = await section();
+    expect(await violations(box)).toEqual([]);
+    fireEvent.click(within(box).getByRole('button', { name: 'Review again' }));
+    await waitFor(() => {
+      expect(server.to('POST', RERUN_API)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      // Said once, by the change it causes.
+      expect(screen.getByTestId('mr-announce').textContent).toContain('The AI is reviewing the latest commit');
+    });
+    expect(await within(await section()).findByTestId('ai-advice-running')).toBeTruthy();
+    expect(within(await section()).queryByRole('button', { name: 'Review again' })).toBeNull();
+    expect(aiReviewPollInterval(aiReview({ mode: 'advisory', ...done, rerun_asked: true }), true)).toBe(AI_REVIEW_POLL_MS);
+  });
+
+  it('a refused rerun (the hourly limit) shows user_message and request_id', async () => {
+    await open(() => json(200, shown({ ...done, can_rerun: true })), 'en', {
+      [`POST ${RERUN_API}`]: () => apiError(429, 'Too many requests in a short time.', 'req-rerun-4', 'FG-WEB-0010'),
+    });
+    const box = await section();
+    fireEvent.click(within(box).getByRole('button', { name: 'Review again' }));
+    const err = await within(box).findByTestId('ai-advice-rerun-error');
+    expect(err.textContent).toContain('Too many requests in a short time.');
+    expect(err.textContent).toContain('req-rerun-4');
+  });
+
+  it('ja: 「もう一度レビュー」', async () => {
+    await open(() => json(200, shown({ ...done, can_rerun: true })), 'ja');
+    const box = await section();
+    expect(within(box).getByRole('button', { name: 'もう一度レビュー' })).toBeTruthy();
+  });
+});

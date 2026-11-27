@@ -2,7 +2,9 @@
 // L5-6; ADR-0039): `GET …/ai-review` (the project's llm.review, the
 // forge/ai-review run on the head and the newest advice, read like the
 // merge request) and a person's 「役に立った / 誤り」 on one finding
-// (`POST …/ai-review/feedback`, AiAdviceFeedback). The advice never decides
+// (`POST …/ai-review/feedback`, AiAdviceFeedback), and asking the first pass
+// of the current head again (`POST …/ai-review/rerun`, AiReviewRerun: a
+// Developer, a person, 3 an hour). The advice never decides
 // anything: nothing here is read by the merge, approve or deploy controls.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -22,6 +24,7 @@ export type AiVerdict = 'useful' | 'wrong';
 export const AI_REVIEW_POLL_MS = 30000;
 
 export const aiReviewKeys = {
+  all: (project: number) => ['ai-review', project] as const,
   mr: (project: number, iid: number) => ['ai-review', project, iid] as const,
 };
 
@@ -33,9 +36,12 @@ export function aiAdviceVisible(data: AiReview): boolean {
 }
 
 /** Read again only while an open merge request's head waits for its first
- * pass (no run yet, or a run not completed); never when it is off. */
+ * pass (no run yet, a run not completed, or asked again); never when it is
+ * off. */
 export function aiReviewPollInterval(data: AiReview | undefined, open: boolean): number | false {
   if (data === undefined || !open || data.mode === 'off') return false;
+  // Asked again: the worker picks it up on its next pass.
+  if (data.rerun_asked) return AI_REVIEW_POLL_MS;
   return data.check === null || data.check.status !== 'completed' ? AI_REVIEW_POLL_MS : false;
 }
 
@@ -89,6 +95,33 @@ export function useAiFeedback(project: number, iid: number) {
         );
         return { ...old, advice: { ...old.advice, my_feedback: mine } };
       });
+    },
+    onError: (error) => {
+      // A 403 is most often a stale CSRF token: read the session again.
+      if (error instanceof ApiFailure && error.failure.kind === 'api' && error.failure.status === 403) {
+        void client.invalidateQueries({ queryKey: SESSION_KEY });
+      }
+    },
+  });
+}
+
+export type AiRerun = S['AiReviewRerunBody'];
+
+/** `POST …/ai-review/rerun` from this web session: the worker asks the
+ * current head again on its next pass. The read is refetched so the panel
+ * shows "checking" and the button goes away until the new answer. */
+export function useAiRerun(project: number, iid: number) {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      call(() =>
+        api.POST('/api/v1/projects/{id}/merge-requests/{iid}/ai-review/rerun', {
+          params: { path: { id: project, iid: String(iid) } },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: aiReviewKeys.mr(project, iid) });
     },
     onError: (error) => {
       // A 403 is most often a stale CSRF token: read the session again.

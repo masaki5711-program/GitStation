@@ -1143,3 +1143,17 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── Plan 19 §8.2 (20270114100000): the reruns of a merge request's AI first
+# pass (each one also a `llm.review_rerun_requested` audit row, purged with
+# the project) and the instance's pause of the LLM gateway (audited
+# `llm.paused` / `llm.resumed` by the command) ──
+[tables.llm_review_reruns]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.llm_gateway]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]

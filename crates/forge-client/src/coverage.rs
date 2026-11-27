@@ -747,6 +747,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/feedback",
         Coverage::NotForCli("a person's 役に立った / 誤り on a finding, from the merge request screen: agents never vote (plan 19 §4) and gstn is the agents' tool"),
     ),
+    // Plan 19 §8.2: asking the first pass again (a person's token).
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/rerun",
+        Coverage::Command("mr ai-review-rerun"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/merge-requests/{iid}/status",
@@ -1024,6 +1030,27 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "GET",
         "/api/v1/projects/{id}/auto-merge",
         Coverage::Command("auto-merge status"),
+    ),
+    // Plan 19 §8.2: a project's llm.review and the gateway's pause.
+    (
+        "GET",
+        "/api/v1/projects/{id}/llm",
+        Coverage::Command("llm review"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/llm",
+        Coverage::BrowserOnly("sessions only: a Maintainer sets llm.review in the browser (FG-AUTH-0002 session_required for a token)"),
+    ),
+    (
+        "POST",
+        "/api/v1/admin/llm/pause",
+        Coverage::Command("llm pause"),
+    ),
+    (
+        "POST",
+        "/api/v1/admin/llm/resume",
+        Coverage::Command("llm resume"),
     ),
     // Plan 17 P17-3 (ADR-0035): a project's ai_assets.enabled.
     (
