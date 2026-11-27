@@ -25,6 +25,9 @@ export const loaders = {
   compare: () => import('./repo/CompareScreen'),
   search: () => import('./search/SearchScreen'),
   notes: () => import('./notes/NotesScreen'),
+  marketplace: () => import('./marketplace/MarketplaceScreen'),
+  marketplacePart: () => import('./marketplace/PartScreen'),
+  agentBuilder: () => import('./settings/AgentBuilder'),
   activity: () => import('./Activity'),
   wiki: () => import('./wiki/WikiScreen'),
 };

@@ -16592,6 +16592,102 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/-/marketplace": {
+      "get": {
+        "operationId": "get_marketplace",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the agent marketplace",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_marketplace",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the agent marketplace",
+        "x-forge-action": "WebShell"
+      }
+    },
+    "/-/marketplace/{slug}": {
+      "get": {
+        "operationId": "get_marketplace_slug",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: one agent part of the marketplace",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_marketplace_slug",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: one agent part of the marketplace",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/merge-requests": {
       "get": {
         "operationId": "get_merge_requests",

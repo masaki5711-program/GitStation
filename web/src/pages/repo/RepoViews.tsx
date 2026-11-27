@@ -39,6 +39,7 @@ import { MergeRequestsScreen } from './mr/MergeRequestsScreen';
 import { NewMergeRequestScreen } from './mr/NewMergeRequestScreen';
 import { parseHookId } from '../webhooks/common';
 import {
+  AgentBuilderScreen,
   DeliveriesScreen,
   DeploymentScreen,
   DeploymentsScreen,
@@ -207,7 +208,15 @@ export function RepoViews({
       screen = <WikiScreen projectId={projectId} project={project} role={role} view={tail} />;
       break;
     case 'settings':
-      screen = <ProjectSettings projectId={projectId} />;
+      // `/-/settings/agent`: the agent builder (plan 16 A8).
+      screen =
+        tail.length === 0 ? (
+          <ProjectSettings projectId={projectId} />
+        ) : tail.length === 1 && tail[0] === 'agent' ? (
+          <AgentBuilderScreen projectId={projectId} project={project} />
+        ) : (
+          <NotFound />
+        );
       break;
     case 'members':
       screen = <MembersScreen scope={{ kind: 'project', id: projectId }} />;

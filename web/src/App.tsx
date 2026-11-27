@@ -15,6 +15,8 @@ import {
   ActAsConfirm,
   Activity,
   AdminRedirect,
+  MarketplacePart,
+  MarketplaceScreen,
   NotesScreen,
   SearchScreen,
 } from './pages/lazyScreens';
@@ -68,6 +70,8 @@ export function AppRoutes() {
         <Route path="-/admin" element={<AdminRedirect />} />
         <Route path="-/search" element={<SearchScreen />} />
         <Route path="-/notes" element={<NotesScreen />} />
+        <Route path="-/marketplace" element={<MarketplaceScreen />} />
+        <Route path="-/marketplace/:slug" element={<MarketplacePart />} />
         <Route path="-/*" element={<NotFound />} />
         <Route path="*" element={<NamespaceRoute />} />
       </Route>

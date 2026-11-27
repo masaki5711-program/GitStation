@@ -1,0 +1,92 @@
+/* The marks of an agent part (plan 16 A8). Tokens only. Each mark is a
+ * word with a small icon on a tinted chip; the tint repeats the word, it
+ * never carries the meaning alone. Widening permissions is the loudest
+ * (danger), running commands and writing files a warning, the network an
+ * attention info chip. */
+.marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gs-space-1);
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-pill);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-medium);
+  line-height: var(--gs-line-height);
+  white-space: nowrap;
+}
+
+.icon {
+  flex: none;
+}
+
+.capExec,
+.capWrite {
+  composes: chip;
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.capNetwork {
+  composes: chip;
+  background: var(--gs-color-info-surface);
+  color: var(--gs-color-info-text);
+}
+
+.capPermissions {
+  composes: chip;
+  border-color: var(--gs-color-danger-border);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.capOther {
+  composes: chip;
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text);
+}
+
+.none {
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-xs);
+  font-weight: var(--gs-font-weight-bold);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.stable {
+  composes: badge;
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.beta {
+  composes: badge;
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.revoked {
+  composes: badge;
+  border-color: var(--gs-color-danger-border);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}

@@ -8,7 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 
 import { call, callNoContent } from '../../api/client';
 import { useApi } from '../../api/context';
@@ -20,6 +20,7 @@ import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { ErrorSummary } from '../../features/CreateDialogs';
 import { formatDateTime, roleLabel } from '../../features/labels';
+import { encodePath } from '../../features/repoUrls';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
@@ -97,6 +98,14 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       <AutoMergeSection projectId={projectId} />
       <AutofixSection projectId={projectId} />
       <AiAssetsSection projectId={projectId} />
+      {/* Plan 16 A8: the agent builder has its own page (it reads the
+          marketplace and the lock only when opened). */}
+      <Section id="agent-title" title={t('agentBuilder.title')}>
+        <p className={styles.hint}>{t('agentBuilder.settingsIntro')}</p>
+        <Link to={`/${encodePath(p.path)}/-/settings/agent`} className={controls.button}>
+          {t('agentBuilder.open')}
+        </Link>
+      </Section>
       <DocLintMigrationSection projectId={projectId} />
       <IntegrationBindingsSection project={p} />
       <Section id="move-title" title={t('settings.move.title')}>
