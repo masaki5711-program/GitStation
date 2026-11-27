@@ -1158,6 +1158,11 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             "forge.agent_lesson_injections",
             [dml("forge_app"), ro("agent_lesson_injections")?].concat(),
         ),
+        // ── Plan 16 A11: the recommendation's LLM asks (20270113100000) ──
+        (
+            "forge.agent_recommend_asks",
+            [dml("forge_app"), ro("agent_recommend_asks")?].concat(),
+        ),
         // ── Plan 13 stage 4 part A: document revisions (20270105100000) ──
         ("forge.merge_request_documents", operational()),
         ("forge.document_edit_claims", operational()),
@@ -1468,6 +1473,8 @@ const LATER_TABLES: &[&str] = &[
     "project_wikis",
     // ── Plan 20 N1: a person's notes pointer (20270111100000) ──
     "user_notes",
+    // ── Plan 16 A11: the recommendation's LLM asks (20270113100000) ──
+    "agent_recommend_asks",
 ];
 
 /// Every table the first migration creates.

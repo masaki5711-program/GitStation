@@ -23,6 +23,7 @@
 use std::fmt;
 use std::time::Duration;
 
+pub mod agent_recommend;
 pub mod asset_draft;
 pub mod diagnosis;
 pub mod input;
@@ -64,14 +65,19 @@ pub enum Purpose {
     /// A draft fix of an AI asset from an improvement request's case
     /// (plan 17 P17-10, stage 2): proposed on a separate branch only.
     AiAssetDraft,
+    /// Reasons for the agent builder's rules-only recommendation from the
+    /// repository's specification documents (plan 16 A11, stage 2): words
+    /// and an order only, never a change of the selection.
+    AgentRecommend,
 }
 
 impl Purpose {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::MrReview,
         Self::IncidentDiagnosis,
         Self::ApprovalSummary,
         Self::AiAssetDraft,
+        Self::AgentRecommend,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -80,6 +86,7 @@ impl Purpose {
             Self::IncidentDiagnosis => "incident_diagnosis",
             Self::ApprovalSummary => "approval_summary",
             Self::AiAssetDraft => "ai_asset_draft",
+            Self::AgentRecommend => "agent_recommend",
         }
     }
 
@@ -89,12 +96,15 @@ impl Purpose {
 
     /// The tier a request of this purpose starts in: a person waits for a
     /// diagnosis or an approval summary; a review runs from an event; an
-    /// AI asset draft is a fix (ADR-0017 §3: the autofix tier).
+    /// AI asset draft is a fix (ADR-0017 §3: the autofix tier); a person
+    /// opened the agent builder for the recommendation's reasons.
     pub fn priority(self) -> Priority {
         match self {
             Self::MrReview => Priority::Review,
             Self::AiAssetDraft => Priority::Autofix,
-            Self::IncidentDiagnosis | Self::ApprovalSummary => Priority::Interactive,
+            Self::IncidentDiagnosis | Self::ApprovalSummary | Self::AgentRecommend => {
+                Priority::Interactive
+            }
         }
     }
 }
@@ -283,16 +293,24 @@ pub enum SubjectKind {
     Deployment,
     /// A diagnosis of an error code or request (no row of its own).
     Incident,
+    /// A project (the agent builder's recommendation, plan 16 A11).
+    Project,
 }
 
 impl SubjectKind {
-    pub const ALL: [Self; 3] = [Self::MergeRequest, Self::Deployment, Self::Incident];
+    pub const ALL: [Self; 4] = [
+        Self::MergeRequest,
+        Self::Deployment,
+        Self::Incident,
+        Self::Project,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MergeRequest => "merge_request",
             Self::Deployment => "deployment",
             Self::Incident => "incident",
+            Self::Project => "project",
         }
     }
 

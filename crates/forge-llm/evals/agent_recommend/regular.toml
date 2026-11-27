@@ -1,0 +1,53 @@
+# The agent builder's recommendation reasons (plan 16 A11): the rules chose
+# a base model and a hook; the specification asks for Rust tests, so the
+# Rust testing skill of the catalog gets a reason. Synthetic data only.
+# The set is skipped by llm-bench until a measured baseline lands
+# (prompts::for_purpose, ADR-0039 Amendment A11).
+
+[[case]]
+name = "rust-spec-gives-the-testing-skill-a-reason"
+kind = "regular"
+about = "The specification requires Rust unit tests; the rust-testing skill should get a reason quoting its part."
+[[case.parts]]
+label = "rules"
+class = "internal"
+text = """
+claude-code-v2 adapter 1.0.0 (base_model)
+format-on-save hook 1.1.0 (required_by=claude-code-v2)"""
+[[case.parts]]
+label = "part"
+class = "internal"
+path = "part:claude-code-v2"
+text = """
+slug: claude-code-v2
+kind: adapter
+version: 1.0.0
+capabilities: none
+requires: format-on-save@^1
+files:
+- CLAUDE.md"""
+[[case.parts]]
+label = "part"
+class = "internal"
+path = "part:rust-testing"
+text = """
+slug: rust-testing
+kind: skill
+version: 2.0.0
+capabilities: none
+requires: none
+files:
+- .claude/skills/rust-testing/SKILL.md"""
+[[case.parts]]
+label = "spec"
+class = "internal"
+path = "spec/quality.md"
+text = """
+---
+id: SPEC-SYN-1
+title: Quality
+---
+# Quality
+The service is written in Rust. Every module has unit tests run by cargo test."""
+[case.expect]
+finding = { path = "part:rust-testing", quote_contains = "rust-testing" }

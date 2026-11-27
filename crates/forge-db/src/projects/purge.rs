@@ -735,6 +735,11 @@ async fn finish_steps(
             "DELETE FROM forge.agent_lesson_injections WHERE project_id = $1",
             "projects.purge.finish.agent_lesson_injections",
         ),
+        // Plan 16 A11: the recommendation's LLM ask.
+        (
+            "DELETE FROM forge.agent_recommend_asks WHERE project_id = $1",
+            "projects.purge.finish.agent_recommend_asks",
+        ),
     ] {
         delete_rows(tx, sql, project.get(), query).await?;
     }

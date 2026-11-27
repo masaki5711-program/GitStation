@@ -14,7 +14,10 @@
 //!   opens the merge request for the person who asked (forge-web), and
 //!   [`Marketplace::record_build`] keeps the run in `forge.agent_builds`.
 //! - [`Marketplace::recommend_for`]: forge-agent's rules-only
-//!   [`recommend`] on the stable catalog, from the tip's lock.
+//!   [`recommend`] on the stable catalog, from the tip's lock;
+//!   [`Marketplace::recommend_at`] also gives the tip and the catalog (the
+//!   LLM's input, plan 16 A11), [`Marketplace::reasons`] what the local
+//!   LLM said about them ([`reasons`]).
 
 use std::collections::BTreeSet;
 
@@ -22,12 +25,25 @@ use forge_agent::{
     compile, recommend, CatalogVersion, CompileInput, Compiled, CustomFile, KeyRing, Lock,
     Recommendation, SourcePart, DEFAULT_ADAPTER, LOCK_PATH,
 };
+use forge_core::llm::agent_recommend::CatalogEntry;
 use forge_core::{ObjectId, ProjectId, RefName, RepoId, UserId};
 use forge_db::agent_builder::{self as builds, BuildOutcome, NewBuild, StoredBuild};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{AgentConfigListing, RefLookup};
 
+use crate::reasons::{reasons, Reasons};
 use crate::{bounded, internal, problems_error, Marketplace};
+
+/// The rules-only recommendation with the tip and the catalog it was made
+/// at (plan 16 A11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecommendedAt {
+    /// `None`: an empty repository.
+    pub tip: Option<ObjectId>,
+    pub recommendation: Recommendation,
+    /// The published stable versions, as the LLM's input names them.
+    pub catalog: Vec<CatalogEntry>,
+}
 
 /// The most files the managed area of a tip is read with.
 pub const MAX_TIP_FILES: usize = 2000;
@@ -378,18 +394,29 @@ impl Marketplace {
     /// lock at the default branch's tip (its adapter and parts), or the
     /// default base model.
     pub async fn recommend_for(&self, repo: RepoId) -> Result<Recommendation, ForgeError> {
+        Ok(self.recommend_at(repo).await?.recommendation)
+    }
+
+    /// [`Self::recommend_for`] with the tip it was made at (`None`: an
+    /// empty repository) and the stable catalog it was made from, as the
+    /// LLM's input and the merge read it (plan 16 A11).
+    pub async fn recommend_at(&self, repo: RepoId) -> Result<RecommendedAt, ForgeError> {
         bounded("agent_recommend", async {
-            let current: Option<Lock> = match self.default_tip(repo).await {
-                Ok((_, tip)) => self
-                    .managed_at(repo, &tip)
-                    .await?
-                    .lock
-                    .as_deref()
-                    .and_then(|b| Lock::parse(b).ok()),
-                // An empty repository: nothing locked yet.
-                Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => None,
-                Err(e) => return Err(e),
-            };
+            let (tip, current): (Option<ObjectId>, Option<Lock>) =
+                match self.default_tip(repo).await {
+                    Ok((_, tip)) => {
+                        let lock = self
+                            .managed_at(repo, &tip)
+                            .await?
+                            .lock
+                            .as_deref()
+                            .and_then(|b| Lock::parse(b).ok());
+                        (Some(tip), lock)
+                    }
+                    // An empty repository: nothing locked yet.
+                    Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => (None, None),
+                    Err(e) => return Err(e),
+                };
             let adapter = current
                 .as_ref()
                 .and_then(|l| l.parts.iter().find(|p| p.kind == "adapter"))
@@ -397,27 +424,68 @@ impl Marketplace {
             let slugs: Vec<String> = current
                 .map(|l| l.parts.into_iter().map(|p| p.slug).collect())
                 .unwrap_or_default();
-            let catalog: Vec<CatalogVersion> = builds::stable_versions(&self.db)
-                .await?
-                .into_iter()
-                .map(|v| CatalogVersion {
-                    requires: v
-                        .manifest
-                        .get("requires")
-                        .and_then(serde_json::Value::as_array)
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|r| r.as_str().map(str::to_owned))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+            let stored = builds::stable_versions(&self.db).await?;
+            let strings = |v: &serde_json::Value, key: &str| -> Vec<String> {
+                v.get(key)
+                    .and_then(serde_json::Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|r| r.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let mut catalog: Vec<CatalogVersion> = Vec::with_capacity(stored.len());
+            let mut entries: Vec<CatalogEntry> = Vec::with_capacity(stored.len());
+            for v in stored {
+                let requires = strings(&v.manifest, "requires");
+                entries.push(CatalogEntry {
+                    slug: v.slug.clone(),                 // clone: both lists own it
+                    kind: v.kind.clone(),                 // clone: as above
+                    version: v.version.clone(),           // clone: as above
+                    capabilities: v.capabilities.clone(), // clone: as above
+                    requires: requires.clone(),           // clone: as above
+                    files: strings(&v.manifest, "files"),
+                });
+                catalog.push(CatalogVersion {
+                    requires,
                     slug: v.slug,
                     kind: v.kind,
                     version: v.version,
-                })
-                .collect();
-            recommend(&catalog, &adapter, &slugs).map_err(|p| problems_error(&p))
+                });
+            }
+            let recommendation =
+                recommend(&catalog, &adapter, &slugs).map_err(|p| problems_error(&p))?;
+            Ok(RecommendedAt {
+                tip,
+                recommendation,
+                catalog: entries,
+            })
         })
+        .await
+    }
+
+    /// The LLM's reasons for `project`'s recommendation at `tip` (plan 16
+    /// A11, module docs of [`reasons`]): records the read
+    /// (`forge.agent_recommend_asks`) and returns what the reader is told.
+    pub async fn reasons(
+        &self,
+        project: ProjectId,
+        tip: Option<&ObjectId>,
+        request_id: &str,
+        reader: forge_auth::AdviceReader,
+    ) -> Result<Reasons, ForgeError> {
+        let reader = match reader {
+            forge_auth::AdviceReader::Person => forge_db::llm::ReaderKind::Person,
+            forge_auth::AdviceReader::Agent => forge_db::llm::ReaderKind::Agent,
+        };
+        reasons(
+            &self.db,
+            project,
+            tip.map(ObjectId::as_str),
+            request_id,
+            reader,
+        )
         .await
     }
 

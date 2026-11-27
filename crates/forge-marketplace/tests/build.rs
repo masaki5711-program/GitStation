@@ -422,3 +422,33 @@ async fn the_recommendation_is_the_base_model_and_its_requirements() {
     );
     w.t.drop_now().await;
 }
+
+#[tokio::test]
+async fn the_recommendation_names_its_tip_and_its_reasons_wait_for_the_worker() {
+    use forge_core::llm::agent_recommend::ReasonsState;
+    let w = world().await;
+    w.base_parts().await;
+    let tip = w.main_with(&[("README.md", "synthetic\n")]);
+    let at = w.market.recommend_at(w.repo_id).await.expect("recommend");
+    assert_eq!(at.tip.as_ref().map(|t| t.as_str()), Some(tip.as_str()));
+    assert!(at.catalog.iter().any(|c| c.slug == "format-on-save"));
+    assert_eq!(
+        at.recommendation,
+        w.market.recommend_for(w.repo_id).await.expect("rules")
+    );
+    // Plan 16 A11: no worker answered yet — no reasons, no error.
+    let r = w
+        .market
+        .reasons(
+            w.project,
+            at.tip.as_ref(),
+            "req-reasons",
+            forge_auth::AdviceReader::Person,
+        )
+        .await
+        .expect("reasons");
+    assert_eq!(r.state, ReasonsState::Pending);
+    assert!(r.advice.is_none());
+    assert_eq!(r.error_code, None);
+    w.t.drop_now().await;
+}

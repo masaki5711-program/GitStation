@@ -458,3 +458,42 @@ forge-auth / forge-git / forge-db → forge-core → forge-agent）。利用者�
   マトリクスの allow・deny の行とともに。
 - `…/compile` の `merge_request_error` には問い合わせ番号が無い（メッセージだけ）。履歴の表がその組み立ての問い合わせ番号を出す。
 - 取り消された版を lock が使っているときの帯と更新の MR は A9。
+
+## Amendment（2026-11-27、A11 `feat/core-llm-agent-recommend`: 推薦の理由をローカル LLM で）
+
+計画 16 A11 を入れた（計画のブランチ名 `feat/llm-agent-recommend` は `<area>` の規則に合わないため `feat/core-llm-agent-recommend`）。
+利用者は不在で「推奨を選ぶ」と言っているので、計画に書かれていない点は次のとおり決めた。ゲートウェイ側の決定は ADR-0039 Amendment A11。
+
+1. **選択は規則のまま**: `POST …/agent-builder/recommend` の `parts` は A7 の規則の選択と同じ部品・同じ版・同じ規則の理由。LLM が足すのは
+   部品ごとの `llm_reason`（200 文字まで）と並び（ベースモデルを先頭に、理由のある部品を確信度の順に、残りは規則の順）だけ。カタログの
+   ほかの部品（アダプターを除く、最大 5 つ）は `suggested`（`selected_by: "llm"`）に出すが **選ばない**: 人がチェックを入れ、Dry-Run で能力の
+   印を見る。カタログに無い slug・アダプターの差し替え・仕様書のパスを名指す答え・重複は捨てて `llm.dropped` に数える
+   （`forge_core::llm::agent_recommend::merge`、テスト `the_model_never_invents_a_part_or_swaps_the_base_model`・
+   `reasons_reorder_the_rules_parts_and_never_change_the_selection`）。`project_type`・仕様書のタグを部品に結びつける欄はまだ作らない
+   （A7 の 4 の保留のまま。LLM が仕様書の文から理由を書く）。
+2. **経路は待たない**: ゲートウェイは worker の中、経路は `forge serve` の中なので、経路は読んだことを `forge.agent_recommend_asks`
+   （プロジェクトごとに 1 行、追記のマイグレーション `20270113100000`）に記録し、worker の `agent_recommend` の周回（20 秒）が答える。
+   経路はその時点の答えを返す: その先端の答えがあれば `source: "rules+llm"`、無ければ規則だけで `degraded: true` と `llm.state`
+   （`pending` / `unavailable` / `paused` / `refused` / `withheld`）。LLM が落ちている・一時停止・時間切れ・不正な答え・6 分答えが無い
+   （`llm.enabled = false`・worker が止まっている）はどれも **エラーにも成功にもしない**（`FG-AGENT-0011` RecommendDegraded を
+   `llm.error_code`、原因の FG コードを `llm.cause` に。テスト `llm_down_returns_rules_with_degraded_flag`）。理由の読み取り自体の
+   DB の失敗も同じ劣化の答えにし、ログに 1 回。画面は「もう一度読む」で答えを取りに来る（画面の変更はこの MR には無い）。
+3. **入力は開いた仕様書だけ**: worker が既定の枝の先端の仕様書（`forge_checks::spec_index::index_commit` の文書）を読み、
+   `forge_checks::confidential::confidential_at` と文書自身の印の **両方** が開いているものだけを最大 6 つ・各 4,000 文字まで送る。
+   機密の文書はパスも送らない。分類できない（git の失敗・上限）先端は何も送らない（`refused`、閉じる側。テスト
+   `confidential_spec_not_sent_to_llm`・`a_tip_with_only_confidential_specs_sends_nothing`）。開いた仕様書が無ければ聞かない（`no_spec`）。
+4. **権限**: 新しい Action は作らない。推薦の判定は A7 の `authorize_agent_recommend`（エージェントは機密の印の無い先端だけ）のまま。
+   助言の文は `forge_db::llm::advice_decided` が助言自身の対象（この `project`）で読み、読み手の種類は `forge_auth::advice_reader`
+   （機密の助言はエージェントに `withheld`。機密の文書は送らないので起きない想定だが閉じておく）。
+5. **独立レビュー（2026-11-27、llm-integration-reviewer・security-reviewer）で直した点**: 併合は入力に渡した部品
+   （`catalog_given`、最大 60）だけを名指せる（保存した指摘を信じない、HIGH）。worker が読む聞いたことは答えを待つものだけを
+   SQL で選び、新しく読まれた順（答えたものが 20 の枠を埋めて新しい依頼が 1 時間届かない穴、HIGH）。読み直しは `asked_at` だけを
+   動かし、`updated_at` は答えの時刻（読み直すたびに再試行が延びる穴、MEDIUM）。提案に部品の能力（`capabilities`）を付ける
+   （理由の文だけを人が読むことにしない、MEDIUM）。仕様書は行の終わりで切ってから伏せ字にする（秘密を半分で切らない、LOW）。
+   助言が掃除された `ready` はもう一度聞く（LOW）。**受け入れた点**: 呼び出し人ごとの上限は作らない — worker は聞くのを 1 件ずつ
+   待つので、この機能の対話の依頼は同時に 1 つまで、同じ入力は 3 回まで（MR レビューの予約 20 % は変わらない）。理由の文が
+   仕様書を名指すことはコードで確かめない（引用は部品があることだけを示す。文は助言で、選択には効かない）。助言は
+   プロジェクトの `RepoRead` の人全員に見える: 入力は機密の印の無い先端の文書だけなので、読める範囲は推薦そのものと同じ
+   （パスごとの権限ができたら、文書ごとに人として `authorize()` してから送る）。`part` の manifest の文も信じないデータとして囲む。
+6. **残すこと**: 画面（A8）での `llm_reason`・`suggested`・`llm.state` の表示と自動の読み直し。カタログが変わっただけ（先端が同じ）の
+   ときの聞き直し（今は先端が変わったときだけ）。部品の説明文（`SKILL.md` の frontmatter など）を入力に足すこと（今は manifest の事実だけ）。

@@ -65,9 +65,13 @@ use forge_git::browse::{Browser, EntryKind as GitKind, ListedBlob, RefLookup, Re
 
 // Plan 16 A7: the agent builder (Dry-Run, the build, the recommendation).
 pub mod builder;
-pub use builder::{BuildPlan, FileChange, PlannedPart, Selected, BUILDER_EMAIL, BUILDER_NAME};
+pub mod reasons;
+pub use builder::{
+    BuildPlan, FileChange, PlannedPart, RecommendedAt, Selected, BUILDER_EMAIL, BUILDER_NAME,
+};
 pub use forge_agent::{Recommendation, Recommended};
 pub use forge_db::agent_builder::{BuildOutcome, StoredBuild};
+pub use reasons::{Reasons, ShownReasons};
 
 /// The stored rows the routes show (forge-web does not depend on
 /// forge-db).

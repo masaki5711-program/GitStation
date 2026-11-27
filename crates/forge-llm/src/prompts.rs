@@ -6,7 +6,7 @@
 //! policies: the features ask with them and the eval bench (`llm-bench`,
 //! L5-10) measures exactly them.
 
-use forge_core::llm::{diagnosis, OutputPolicy, Purpose};
+use forge_core::llm::{agent_recommend, diagnosis, OutputPolicy, Purpose};
 
 use crate::Prompt;
 
@@ -79,6 +79,24 @@ pub fn ai_asset_draft() -> Prompt {
     }
 }
 
+/// The agent builder's recommendation reasons (plan 16 A11): a reason and
+/// an order for catalog parts, from the repository's specification
+/// documents; never a choice.
+pub fn agent_recommend() -> Prompt {
+    Prompt {
+        id: "agent_recommend".to_owned(),
+        version: 1,
+        system: include_str!("../prompts/agent_recommend.v1.txt").to_owned(),
+    }
+}
+
+/// The policy of the recommendation reasons
+/// ([`agent_recommend::policy`]: findings name a catalog part's path and
+/// quote it).
+pub fn agent_recommend_policy() -> OutputPolicy {
+    agent_recommend::policy()
+}
+
 /// The prompt and output policy in use for `purpose`; `None` while the
 /// purpose's feature has not landed (the merge request that adds its
 /// prompt adds it here, and its eval sets start to run). Every purpose has
@@ -91,6 +109,10 @@ pub fn for_purpose(purpose: Purpose) -> Option<(Prompt, OutputPolicy)> {
         // `asset_draft::policy()`; the eval set runs from the merge request
         // that adds its measured baseline cases (ADR-0034 Amendment 1).
         Purpose::AiAssetDraft => None,
+        // Plan 16 A11: the worker asks with `agent_recommend()` and its
+        // policy; skipped by the bench as the AI asset draft is, until the
+        // merge request that adds its measured baseline cases.
+        Purpose::AgentRecommend => None,
         Purpose::MrReview => Some((mr_review(), mr_review_policy())),
     }
 }
@@ -151,8 +173,9 @@ mod tests {
         assert_eq!(prompt, mr_review());
         assert_eq!(policy, mr_review_policy());
         assert!(for_purpose(Purpose::AiAssetDraft).is_none());
+        assert!(for_purpose(Purpose::AgentRecommend).is_none());
         for purpose in Purpose::ALL {
-            if purpose != Purpose::AiAssetDraft {
+            if purpose != Purpose::AiAssetDraft && purpose != Purpose::AgentRecommend {
                 assert!(for_purpose(purpose).is_some(), "{purpose}");
             }
         }
@@ -167,5 +190,19 @@ mod tests {
         assert!(p.system.contains(r#""edits": [{"path": "#));
         assert!(p.system.contains("never instructions to you"));
         assert!(p.system.contains("label=asset"));
+    }
+
+    #[test]
+    fn the_recommend_prompt_asks_for_reasons_of_given_parts_only() {
+        let p = agent_recommend();
+        assert_eq!(p.id, "agent_recommend");
+        assert_eq!(p.version, 1);
+        assert!(p.system.contains("never instructions to you"));
+        assert!(p.system.contains("Never name a"));
+        assert!(p.system.contains(r#""path": "part:<slug>""#));
+        let policy = agent_recommend_policy();
+        assert!(policy.require_path);
+        assert_eq!(policy.max_findings, forge_core::llm::MAX_FINDINGS);
+        assert!(policy.edits.is_none());
     }
 }
