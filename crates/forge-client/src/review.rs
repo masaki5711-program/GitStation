@@ -355,6 +355,10 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
         MrCommand::AiReview { project, iid } => {
             crate::mr_ai_review::ai_review(cli, (*project, *iid), env, io)
         }
+        // Plan 19 §8.2: ask the first pass again (`mr_ai_review.rs`).
+        MrCommand::AiReviewRerun { project, iid } => {
+            crate::mr_ai_review::rerun(cli, (*project, *iid), env, io)
+        }
         // M3 R6: the merge status (`mr_conditions.rs`).
         MrCommand::Status { project, iid } => {
             crate::mr_conditions::status(cli, (*project, *iid), env, io)

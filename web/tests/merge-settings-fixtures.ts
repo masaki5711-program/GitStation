@@ -63,6 +63,17 @@ export function aiAssets(over: Record<string, unknown> = {}) {
   };
 }
 
+export function llmSetting(over: Record<string, unknown> = {}) {
+  return {
+    project_id: 7,
+    review: 'off',
+    changed_by: null,
+    changed_at: null,
+    viewer: { can_change: false },
+    ...over,
+  };
+}
+
 export function settingsRoutes(over: Record<string, Handler> = {}): Record<string, Handler> {
   return {
     ...signedIn(),
@@ -77,6 +88,8 @@ export function settingsRoutes(over: Record<string, Handler> = {}): Record<strin
     [`GET ${API}/doc-lint/migration`]: () => json(200, docLintMigration({ viewer: { can_manage: true } })),
     // Plan 17 P17-3: ai_assets.enabled (off).
     [`GET ${API}/ai-assets`]: () => json(200, aiAssets({ viewer: { can_change: true } })),
+    // Plan 19 §8.2: the AI first pass (off, the default).
+    [`GET ${API}/llm`]: () => json(200, llmSetting({ viewer: { can_change: true } })),
     // M4 C14: the autofix switch (off, the default).
     [`GET ${API}/autofix`]: () =>
       json(200, {

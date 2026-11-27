@@ -60,6 +60,7 @@ mod autofix_settings;
 pub mod conflicts;
 pub mod discussions;
 mod fields;
+mod llm_settings;
 mod merge_conditions;
 pub mod mergeability;
 pub mod merges;
@@ -87,6 +88,9 @@ pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
 pub use forge_db::ai_assets::AiAssetsSetting;
 pub use forge_db::autofix::{
     AutofixSettings, DetailPath as AutofixDetailPath, StoredAttempt as StoredAutofixAttempt,
+};
+pub use forge_db::llm::ops::{
+    GatewayPause, Rerun as AiReviewRerun, ReviewSetting as LlmReviewSetting,
 };
 pub use forge_db::review::auto_merge::{
     AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, FullAutoSetting, StopMark,

@@ -8,8 +8,12 @@
 //!   known: a head not ready yet never crowds the others out), whose
 //!   current head has no `forge/ai-review` run yet — or a run
 //!   still waiting longer than `stale_secs` (a worker stopped while it
-//!   waited). A completed run (success, neutral, failure, error) is never
-//!   asked again on the same head: a new head is.
+//!   waited). A completed run (success, neutral, failure, error) is not
+//!   asked again on the same head — a new head is — unless a person asked
+//!   for a rerun of that head after the run was written
+//!   (`forge.llm_review_reruns`, `ops::request_rerun`): the worker's
+//!   `queued` write makes the run newer than the rerun, so one rerun asks
+//!   once.
 //! - [`current_head`]: the merge request's head and state now (the worker
 //!   drops an answer for a head the merge request moved on from).
 
@@ -59,8 +63,12 @@ pub async fn review_candidates(
                      SELECT 1 FROM forge.check_runs c \
                      WHERE c.project_id = m.project_id AND c.head_sha = m.head_sha \
                        AND c.name = $2 \
-                       AND (c.status = 'completed' \
-                            OR c.updated_at > now() - make_interval(secs => $3))) \
+                       AND ((c.status = 'completed' AND NOT EXISTS ( \
+                              SELECT 1 FROM forge.llm_review_reruns r \
+                              WHERE r.merge_request_id = m.id AND r.head_sha = m.head_sha \
+                                AND r.requested_at > c.updated_at)) \
+                            OR (c.status <> 'completed' \
+                                AND c.updated_at > now() - make_interval(secs => $3)))) \
                  ORDER BY m.updated_at, m.id LIMIT $1",
             )
             .bind(limit.clamp(1, MAX_REVIEW_CANDIDATES))

@@ -91,6 +91,7 @@ pub mod mirror;
 pub mod merge_queue;
 // M4 C9: auto-merge.
 pub mod auto_merge;
+pub mod llm;
 // M4 C14: the deterministic autofix.
 pub mod autofix;
 pub mod pipelines;

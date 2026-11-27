@@ -790,6 +790,14 @@ async fn finish_steps(
         "projects.purge.finish.llm_requests",
     )
     .await?;
+    // Plan 19 §8.2: the reruns of its merge requests' first pass.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.llm_review_reruns WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.llm_review_reruns",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.project_llm WHERE project_id = $1",

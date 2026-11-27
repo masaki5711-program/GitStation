@@ -16,6 +16,15 @@
 //! finding — a new verdict replaces theirs. Decided again on the advice's
 //! own subject (`Review::ai_review_feedback`). The read says whether the
 //! reader may vote (`can_feedback`) and what they said (`my_feedback`).
+//!
+//! `POST …/ai-review/rerun` (plan 19 §8.2, `AiReviewRerun`: Developer and
+//! above, people only — an agent's token, act-as and a request declaring
+//! `Forge-Context-Audience: agent` are refused): the worker asks the
+//! current head again on its next pass. `queued` (recorded and counted,
+//! `remaining` of 3 an hour), `pending` (the head still waits: nothing
+//! written); closed, without a head or `llm.review = off`: 409
+//! `FG-LLM-0008`; a fourth in an hour: 429 `FG-WEB-0010` with
+//! `Retry-After`. The read says whether the reader may (`can_rerun`).
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -46,6 +55,12 @@ pub const AI_FEEDBACK: &str = "/api/v1/projects/{id}/merge-requests/{iid}/ai-rev
 pub const AI_FEEDBACK_MAX_BODY: usize = 1024;
 /// `POST …/ai-review/feedback`: the merge request, loaded as for a read.
 pub const AI_FEEDBACK_OF: MergeRequestRead = MergeRequestRead(AI_FEEDBACK_SUFFIX);
+/// The path after `{iid}` of [`AI_RERUN`].
+pub const AI_RERUN_SUFFIX: &str = "/ai-review/rerun";
+/// `POST`: ask the AI first pass of the current head again.
+pub const AI_RERUN: &str = "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/rerun";
+/// `POST …/ai-review/rerun`: the merge request, loaded as for a read.
+pub const AI_RERUN_OF: MergeRequestRead = MergeRequestRead(AI_RERUN_SUFFIX);
 /// What the screens say when there is no advice (plan 19 §0.3 5).
 pub const NO_ADVICE_JA: &str = "AI の助言は今ありません";
 
@@ -154,6 +169,14 @@ pub struct AiReviewBody {
     /// who reads the merge request, Reporter and above, never an agent or
     /// a read-only token). A hint: the vote decides again.
     pub can_feedback: bool,
+    /// The reader may ask the first pass of the current head again now
+    /// (plan 19 §8.2: a Developer and above, a person; the merge request
+    /// open, `llm.review` on, its run completed and no rerun waiting). A
+    /// hint: the rerun decides again and allows 3 an hour.
+    pub can_rerun: bool,
+    /// Someone asked the current head again and the worker has not picked
+    /// it up yet (about 30 s): the screen says so and reads again.
+    pub rerun_asked: bool,
 }
 
 /// `POST …/ai-review/feedback`.
@@ -279,6 +302,8 @@ pub fn ai_review_body(view: AiReviewView) -> AiReviewBody {
         check: view.check.map(check_body),
         advice,
         can_feedback: view.can_feedback,
+        can_rerun: view.can_rerun,
+        rerun_asked: view.rerun_asked,
     }
 }
 
@@ -356,6 +381,67 @@ pub async fn ai_review_feedback(
             verdict: verdict.as_str().to_owned(),
             outcome: outcome.as_str().to_owned(),
         })
+    }
+    .await;
+    match built {
+        Ok(value) => no_store(StatusCode::OK, value),
+        Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
+/// `POST …/ai-review/rerun`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AiReviewRerunBody {
+    #[schema(minimum = 1)]
+    pub iid: i64,
+    /// `queued` (the worker asks the head again on its next pass, within
+    /// about 30 s) or `pending` (the head still waits for its pass: nothing
+    /// was recorded or counted).
+    pub outcome: String,
+    /// The head that will be reviewed.
+    pub head_sha: String,
+    /// Reruns left in this hour after a `queued` one (`null`: `pending`).
+    #[schema(required = true, minimum = 0, maximum = 2)]
+    pub remaining: Option<i64>,
+}
+
+/// `POST …/ai-review/rerun` → `200` (module docs).
+pub async fn ai_review_rerun(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
+    let audience = crate::routes::context::audience(&request);
+    let w = request.into_write();
+    let built = async {
+        let declared_agent = audience?.is_agent();
+        let req = forge_review::ReviewRequest {
+            request_id: w.ctx.request_id.clone(), // clone: the context stays for the error path
+            credential_id: w.credential_id,
+        };
+        let iid = w.proof.id().1.ok_or_else(|| {
+            forge_errors::ForgeError::new(forge_errors::ErrorCode::Internal)
+                .with_context("reason", "proof_without_iid")
+        })?;
+        // The change has its own timeout (`ChangeTx`).
+        let rerun = review(&state)?
+            .ai_review_rerun(&req, &w.proof, declared_agent)
+            .await?;
+        let body = match rerun {
+            forge_review::AiReviewRerun::Queued {
+                head_sha,
+                remaining,
+            } => AiReviewRerunBody {
+                iid,
+                outcome: "queued".to_owned(),
+                head_sha,
+                remaining: Some(remaining),
+            },
+            forge_review::AiReviewRerun::Pending { head_sha } => AiReviewRerunBody {
+                iid,
+                outcome: "pending".to_owned(),
+                head_sha,
+                remaining: None,
+            },
+        };
+        json(body)
     }
     .await;
     match built {

@@ -12,6 +12,7 @@ use crate::event_type::EventType;
 use crate::history_import::HistoryImportChange;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::integration::IntegrationChange;
+use crate::llm::ops::LlmChange;
 use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
 use crate::merge_paths::{LandedPaths, LANDED_KEY};
 use crate::merge_queue::MergeQueueChange;
@@ -474,6 +475,11 @@ pub enum AuditDetails {
     /// or off (resource the project, no event). Shape:
     /// [`AiAssetsChange::to_value`].
     AiAssets(AiAssetsChange),
+    /// Plan 19 §8.2: a person changed a project's `llm.review` (resource
+    /// the project), paused or resumed the LLM gateway (the instance), or
+    /// asked a merge request's first pass again (the merge request); no
+    /// event. Shapes: [`LlmChange::to_value`].
+    Llm(LlmChange),
     /// Plan 20 W1/W2 (ADR-0040 §5): a wiki linked to or unlinked from its
     /// owner project (resource the owner project, no event). Shape:
     /// [`WikiLinkChange::to_value`].
@@ -682,6 +688,7 @@ impl AuditDetails {
             Self::AutoMerge(change) => change.action(),
             Self::Autofix(change) => change.action(),
             Self::AiAssets(change) => change.action(),
+            Self::Llm(change) => change.action(),
             Self::WikiLink(change) => change.action(),
             Self::CiVariable(change) => change.action(),
             Self::Deploy(change) => change.action(),
@@ -756,6 +763,7 @@ impl AuditDetails {
             | Self::AutoMerge(_)
             | Self::Autofix(_)
             | Self::AiAssets(_)
+            | Self::Llm(_)
             | Self::WikiLink(_)
             | Self::CiVariable(_) => None,
             // M5 L5-8: the approval summary is the one deploy event.
@@ -1256,6 +1264,7 @@ impl AuditDetails {
             Self::AutoMerge(change) => change.to_value(),
             Self::Autofix(change) => change.to_value(),
             Self::AiAssets(change) => change.to_value(),
+            Self::Llm(change) => change.to_value(),
             Self::WikiLink(change) => change.to_value(),
             Self::CiVariable(change) => change.to_value(),
             Self::Deploy(change) => change.to_value(),
@@ -1370,6 +1379,7 @@ impl AuditDetails {
             | Self::AutoMerge(_)
             | Self::Autofix(_)
             | Self::AiAssets(_)
+            | Self::Llm(_)
             | Self::WikiLink(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => self.to_value(),

@@ -725,6 +725,23 @@
       "maintainerOnly": "Only a Maintainer or above can change this, signed in on the web (never an agent, a bot or a service account).",
       "offKeeps": "Turning it off keeps the history, past releases, signatures and deployment records; only the checks, the rules and new releases stop."
     },
+    "llm": {
+      "title": "AI first-pass review",
+      "intro": "A local AI reads the latest commit of each open merge request and gives a summary and findings as advice. The advice never approves or blocks a merge.",
+      "legend": "AI first-pass review",
+      "off": "Off (default)",
+      "offHelp": "The AI reads no merge request and no forge/ai-review check is made.",
+      "advisory": "As advice",
+      "advisoryHelp": "Findings never make forge/ai-review fail.",
+      "required": "Required",
+      "requiredHelp": "Critical and high findings make forge/ai-review fail. It blocks a merge only if a branch rule makes this check required.",
+      "current": "Now: {{mode}}",
+      "changedAt": "Last changed: {{at}}",
+      "save": "Save",
+      "saved": "Saved: {{mode}}",
+      "maintainerOnly": "Only a Maintainer or above can change this, signed in on the web (never an agent, a bot or a service account).",
+      "offKeeps": "Turning it off keeps the advice, checks and votes made so far."
+    },
     "docLint": {
       "title": "Document checks during a migration",
       "intro": "Broken references between documents are errors in the forge/doc-lint check. While documents are being moved into GitStation, you can treat them as warnings until a date. After that date they are errors again by themselves.",
@@ -2521,6 +2538,9 @@
     "adviceOnly": "This is advice. It never approves or blocks a merge: tests, required checks and people decide.",
     "arrived": "The AI advice has arrived.",
     "usefulFor": "Useful (finding {{n}})",
-    "wrongFor": "Wrong (finding {{n}})"
+    "wrongFor": "Wrong (finding {{n}})",
+    "rerun": "Review again",
+    "rerunHint": "Asks the AI to review the latest commit again (at most 3 times an hour per merge request).",
+    "rerunPending": "This commit is already waiting for its review."
   }
 }

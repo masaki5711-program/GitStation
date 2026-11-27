@@ -168,3 +168,57 @@ async fn a_head_with_a_run_is_asked_once_unless_its_wait_went_stale() {
     let found = review_candidates(&w.t.db, 20, 1).await.expect("read");
     assert_eq!(heads(&found), vec!["b".repeat(40)]);
 }
+
+#[tokio::test]
+async fn a_rerun_asks_a_completed_head_again_once() {
+    let w = world().await;
+    let on = project(&w, "on", Some("advisory"), &[('a', false, "open")]).await;
+    let pid = forge_core::ProjectId::new(on);
+    let a = ObjectId::parse(&"a".repeat(40)).expect("sha");
+    record_forge_check(
+        &w.t.db,
+        pid,
+        &a,
+        &run(CheckStatus::Completed, Some(CheckConclusion::Neutral)),
+    )
+    .await;
+    assert!(review_candidates(&w.t.db, 20, 2400)
+        .await
+        .expect("read")
+        .is_empty());
+    let alice = forge_core::UserId::new(w.alice);
+    let queued = super::super::ops::request_rerun(
+        &w.t.db,
+        &ChangeContext::new(
+            Actor::User(alice),
+            RequestId::parse("req-rerun").expect("id"),
+        ),
+        pid,
+        1,
+        alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect("rerun")
+    .0;
+    assert!(matches!(queued, super::super::ops::Rerun::Queued { .. }));
+    let found = review_candidates(&w.t.db, 20, 2400).await.expect("read");
+    assert_eq!(heads(&found), vec!["a".repeat(40)]);
+    // The worker's queued write makes the run newer than the rerun.
+    record_forge_check(&w.t.db, pid, &a, &run(CheckStatus::Queued, None)).await;
+    assert!(review_candidates(&w.t.db, 20, 2400)
+        .await
+        .expect("read")
+        .is_empty());
+    record_forge_check(
+        &w.t.db,
+        pid,
+        &a,
+        &run(CheckStatus::Completed, Some(CheckConclusion::Success)),
+    )
+    .await;
+    assert!(review_candidates(&w.t.db, 20, 2400)
+        .await
+        .expect("read")
+        .is_empty());
+}

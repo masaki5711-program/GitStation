@@ -74,7 +74,14 @@ GPU と Ollama は Kanflow と共用する。forge は Kanflow の利用者を�
 - Ollama が落ちた・モデルが無い: Kanflow の側（Ollama の持ち主）に戻してもらう。forge からは Ollama を操作しない。
 - GPU のメモリ不足が夜間のベンチと重なる: ベンチの時間（夜間 01:00〜05:00）を確かめる。一括処理はベンチの間は始まらない。
 - 混雑が続く: `llm.concurrency` を 2 に上げるのは GPU に余裕があるときだけ。続くなら forge 専用の GPU のホスト（計画 19 §1.1 G3）を提案する。
-- 止めたい: `llm.paused = true` で worker を再起動する（新しい依頼は並ばず「一時停止中」。並んでいたものは続く）。戻すときは `false`。
+- 止めたい: 管理者が `gstn llm pause`（`POST /api/v1/admin/llm/pause`、`api` と `admin` のスコープ、人だけ）。worker は
+  `forge.llm_gateway` を 10 秒ごとに読み、`forge.llm.pause_followed`（`paused=true`）を 1 回出して止まる（新しい依頼は並ばず
+  「一時停止中」。並んでいたもの・動いているものは続く）。戻すときは `gstn llm resume`。監査は `llm.paused` / `llm.resumed`。
+  再起動しても止めたままにしたいとき・DB に届かないときは、従来どおり `llm.paused = true` で worker を再起動する
+  （設定の一時停止は API の再開より強い。`llm.paused = true` の間は `gstn llm resume` しても止まったまま）。
+- 同じ MR の「もう一度レビュー」が多い（FG-WEB-0010 `route=ai_review_rerun`）: 1 MR 1 時間 3 回の上限が GPU を守っている。
+  `SELECT merge_request_id, requested_by, count(*) FROM forge.llm_review_reruns WHERE requested_at > now() - interval '1 day'
+  GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10;` で誰がどの MR を押しているかを見る。上限は変えない（計画 19 §8.2）。
 - 不正な答え（FG-LLM-0002）が続く: runbook `llm-advice-quality`（プロンプトの版を戻す）か `llm-model-update`（モデルを戻す）。
 
 ## Verify

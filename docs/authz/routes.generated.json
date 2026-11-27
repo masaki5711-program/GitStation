@@ -540,6 +540,24 @@
     "word": "fixed"
   },
   {
+    "action": "LlmPause",
+    "method": "POST",
+    "path": "/api/v1/admin/llm/pause",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "LlmResume",
+    "method": "POST",
+    "path": "/api/v1/admin/llm/resume",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RunnerManage",
     "method": "GET",
     "path": "/api/v1/admin/runners",
@@ -1512,6 +1530,24 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/llm",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "LlmSettingsManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/llm",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MemberList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/members",
@@ -1632,6 +1668,15 @@
     "action": "AiAdviceFeedback",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/feedback",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AiReviewRerun",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/ai-review/rerun",
     "people_only": true,
     "public": false,
     "scope": "fixed",
@@ -3328,22 +3373,6 @@
   },
   {
     "action": "Metrics",
-    "planned": true
-  },
-  {
-    "action": "AiReviewRerun",
-    "planned": true
-  },
-  {
-    "action": "LlmSettingsManage",
-    "planned": true
-  },
-  {
-    "action": "LlmPause",
-    "planned": true
-  },
-  {
-    "action": "LlmResume",
     "planned": true
   },
   {

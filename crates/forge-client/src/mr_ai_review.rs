@@ -28,6 +28,34 @@ pub fn ai_review(
     emit(io, cli, body, &h)
 }
 
+/// `gstn mr ai-review-rerun --project ID --iid N` (plan 19 §8.2): `POST
+/// …/ai-review/rerun`. `queued` (the worker asks the head again on its next
+/// pass) or `pending` (it still waits: nothing counted); 409 `FG-LLM-0008`
+/// when closed or off, 429 `FG-WEB-0010` past 3 an hour.
+pub fn rerun(cli: &Cli, (project, iid): (i64, i64), env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
+    let c = client(cli, env, io)?;
+    let path = format!("/api/v1/projects/{project}/merge-requests/{iid}/ai-review/rerun");
+    let body = call(&c, Method::Post, &path, &[], None)?;
+    let h = rerun_human(&body);
+    emit(io, cli, body, &h)
+}
+
+pub(crate) fn rerun_human(body: &Value) -> String {
+    match body.get("outcome").and_then(Value::as_str) {
+        Some("queued") => format!(
+            "!{}: the AI first pass of {} is asked again ({} left this hour)",
+            text(body, "iid"),
+            text(body, "head_sha"),
+            text(body, "remaining")
+        ),
+        _ => format!(
+            "!{}: {} still waits for its AI first pass (nothing asked again)",
+            text(body, "iid"),
+            text(body, "head_sha")
+        ),
+    }
+}
+
 /// The mode and the run, then the advice with its label (server text
 /// sanitized).
 pub(crate) fn human(body: &Value) -> String {
@@ -124,5 +152,21 @@ mod tests {
         assert!(h.contains("(stale: made for head b)"));
         assert!(h.contains("deep review: a migration"));
         assert!(h.contains("- high src/a.rs:4 — panics"));
+    }
+
+    #[test]
+    fn the_rerun_says_whether_it_was_asked_again() {
+        let queued =
+            serde_json::json!({"iid": 3, "outcome": "queued", "head_sha": "a", "remaining": 2});
+        assert_eq!(
+            rerun_human(&queued),
+            "!3: the AI first pass of a is asked again (2 left this hour)"
+        );
+        let pending =
+            serde_json::json!({"iid": 3, "outcome": "pending", "head_sha": "a", "remaining": null});
+        assert_eq!(
+            rerun_human(&pending),
+            "!3: a still waits for its AI first pass (nothing asked again)"
+        );
     }
 }

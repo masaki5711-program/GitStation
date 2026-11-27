@@ -796,6 +796,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["iid","mode","head_sha","check","advice"],"properties":{"advice":{"type":"object","required":["state","label","stale","findings"]}}}"#,
     },
     CommandSpec {
+        name: "mr ai-review-rerun",
+        summary: "Ask the local LLM's first pass of a merge request's current head again (plan 19 §8.2): Developer and above, people only (an agent's token, act-as and Forge-Context-Audience: agent are refused). queued (the worker asks again on its next pass, remaining of 3 this hour) or pending (the head still waits: nothing counted). Closed, without a head or llm.review off: FG-LLM-0008; a fourth in an hour: FG-WEB-0010.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr ai-review-rerun --project 7 --iid 3"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/merge-requests/{iid}/ai-review/rerun"],
+        output: r#"{"type":"object","required":["iid","outcome","head_sha","remaining"]}"#,
+    },
+    CommandSpec {
         name: "mr status",
         summary: "Whether a merge request may merge now and every reason it may not, in ADR-0024's fixed order (the first is the one-line reason), with the approvals, the required checks, the discussions and CODEOWNERS enforcement. With --json: the stable merge status contract (schema_version 1, docs/api/merge-status.md) for agents.",
         args: &[
@@ -2554,6 +2566,34 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api", "admin"],
         routes: &["POST /api/v1/admin/auto-merge/resume"],
         output: r#"{"type":"object","required":["stop"]}"#,
+    },
+    // ── Plan 19 §8.2: the local LLM's settings ──
+    CommandSpec {
+        name: "llm review",
+        summary: "A project's llm.review (plan 19 §3.1): off (the default: no AI first pass), advisory (the local LLM's first pass of each open merge request as advice) or required (critical / high findings make forge/ai-review a failure); who changed it last. Changing it is a Maintainer's in the browser.",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn llm review --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/llm"],
+        output: r#"{"type":"object","required":["project_id","review","changed_by","changed_at","viewer"]}"#,
+    },
+    CommandSpec {
+        name: "llm pause",
+        summary: "Pause the local LLM gateway (people only; an administrator, a token needs api and admin; never an agent's token): no new inference until resumed, what runs finishes; the worker follows within 10 s. In production only as an approved runbook step (llm-gateway).",
+        args: &[],
+        examples: &["gstn llm pause"],
+        scopes: &["api", "admin"],
+        routes: &["POST /api/v1/admin/llm/pause"],
+        output: r#"{"type":"object","required":["paused","changed_by","changed_at","outcome"]}"#,
+    },
+    CommandSpec {
+        name: "llm resume",
+        summary: "Resume the paused local LLM gateway (people only; an administrator, a token needs api and admin); llm.paused in the server's config still pauses it.",
+        args: &[],
+        examples: &["gstn llm resume"],
+        scopes: &["api", "admin"],
+        routes: &["POST /api/v1/admin/llm/resume"],
+        output: r#"{"type":"object","required":["paused","changed_by","changed_at","outcome"]}"#,
     },
     // ── M4 C2: CI pipelines (runbook ci-pipelines) ──
     CommandSpec {

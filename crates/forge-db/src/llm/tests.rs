@@ -543,6 +543,14 @@ async fn feedback_one_per_user_and_finding() {
         my_feedback(db, id, w.bob).await.expect("bob"),
         vec![(0, Verdict::Useful)]
     );
+    // The metric `forge_llm_advice_feedback_total{purpose,verdict}`.
+    assert_eq!(
+        ops::feedback_totals(db).await.expect("totals"),
+        vec![
+            ("mr_review".to_owned(), "useful".to_owned(), 3),
+            ("mr_review".to_owned(), "wrong".to_owned(), 1),
+        ]
+    );
     // The database refuses a second row for the same triple.
     let mut su = w.t.superuser().await;
     let dup = sqlx::query(

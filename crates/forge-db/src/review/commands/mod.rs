@@ -187,7 +187,7 @@ pub(super) async fn refuse_open_duplicate(
 
 /// Lock the project row, merge request `iid` (when `Some`), then the
 /// caller's roles and account (module docs of `review`).
-pub(super) async fn facts(
+pub(crate) async fn facts(
     tx: &mut ChangeTx,
     project: ProjectId,
     iid: Option<i64>,
