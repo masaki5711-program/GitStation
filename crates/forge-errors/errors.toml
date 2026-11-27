@@ -3628,6 +3628,32 @@ fix = "Fix the bench's report writer (the PFS `bench` entry point) to the v1 sch
 runbook = "ai-eval-bench"
 test = "report_with_passes_above_runs_is_invalid"
 
+[[error]]
+code = "FG-AIASSET-0008"
+name = "BundleReleaseRefused"
+http_status = 422
+severity = "info"
+user_message_ja = "この tag から AI 資産のリリースを作れません。理由を確かめて、条件を満たした tag でもう一度作ってください。"
+user_message_en = "An AI asset release cannot be made from this tag. Check the reason and make it again from a tag that meets the conditions."
+user_message_id = "Rilis aset AI tidak dapat dibuat dari tag ini. Periksa alasannya dan buat lagi dari tag yang memenuhi syarat."
+cause = "Plan 17 P17-7 §1.8 (ADR-0031 Amendment P17-7): a `pfs-ai-bundle` release is made only from a tag `assets/vYYYY.WW.N` of a project whose `ai_assets.enabled` is on, pinned to the commit the tag names when the release is made, on a protected branch, whose `forge/ai-eval` check (the release candidate's bench) concluded `success`, whose bundle files lint clean and fit the bounds. `reason`: `ai_assets_disabled`, `tag_invalid` (not `assets/v<yyyy>.<ww>.<n>`), `tag_not_found`, `tag_not_a_commit`, `already_released` (the version, or another tag at the same commit, was released before: a moved tag has no effect), `not_on_protected_branch`, `bench_missing` (no `forge/ai-eval` run on the commit), `bench_not_green` (with `conclusion`), `lint_failed` (with the first `rule` and `subject` of forge_doc::ai_asset::lint or release_problems), `not_a_regular_file` (a symlink or submodule in a bundle directory), `too_many_files`, `too_large`, `bundle_empty`, `manifest_invalid` (a manifest that does not parse or verify). Nothing was written or signed."
+diagnosis = "The route logs `forge.deploy.bundle_refused` with `error_code=FG-AIASSET-0008`, `request_id`, `project_id`, `version`, `reason` (and `conclusion` / `rule` / `subject`). Read: SELECT name, status, conclusion FROM forge.check_runs WHERE project_id = <id> AND head_sha = <sha> AND name = 'forge/ai-eval'; SELECT version, commit_sha, tag FROM forge.ai_bundle_releases WHERE project_id = <id> ORDER BY id DESC LIMIT 5; `gstn ai-asset lint` in a checkout of the tag."
+fix = "Merge the change into the protected branch, wait for the bench (forge/ai-eval success) on that commit, fix the lint, and cut a new tag with the next version (a released version never changes; never move a released tag)."
+test = "bundle_signed_only_when_bench_green"
+
+[[error]]
+code = "FG-AIASSET-0009"
+name = "BundleDeployRefused"
+http_status = 409
+severity = "info"
+user_message_ja = "この AI 資産のリリースはこの環境にデプロイできません。段の順（影 → カナリア → 本番）と承認の設定を確かめてください。"
+user_message_en = "This AI asset release cannot be deployed to this environment. Check the stage order (shadow, canary, production) and the approval settings."
+user_message_id = "Rilis aset AI ini tidak dapat di-deploy ke lingkungan ini. Periksa urutan tahap (shadow, canary, produksi) dan pengaturan persetujuan."
+cause = "Plan 17 P17-7 §1.9 (ADR-0031 Amendment P17-7): a project whose `ai_assets.enabled` is on deploys only signed `pfs-ai-bundle` releases, through the release routes, to the three stages dev = pfs-ai-shadow, stg = pfs-ai-canary, prod = pfs-ai-prod, each requiring a person's approval, in order (canary needs the release succeeded on shadow, prod on canary). `reason`: `release_required` (a plain SHA request or an automatic deployment in such a project), `release_not_found`, `approval_required` (the environment does not require an approval), `stage_skipped` (with `needs`: the earlier stage it has not succeeded on), `no_rollback_target` (no earlier release succeeded with an approval on that environment), `already_current` (the rollback target is what runs). Nothing was written."
+diagnosis = "The route logs `forge.deploy.bundle_deploy_refused` with `error_code=FG-AIASSET-0009`, `request_id`, `project_id`, `environment`, `version` and `reason`. Read: SELECT d.id, d.tier, d.sha, d.status, d.approved_by FROM forge.deployments d WHERE d.project_id = <id> ORDER BY d.id DESC LIMIT 20; SELECT tier, requires_approval FROM forge.deploy_environments WHERE project_id = <id>;"
+fix = "Deploy the release to the earlier stage first and wait for it to succeed, set the environment to require an approval, or request the release through POST …/ai-asset-releases/{version}/deployments. A rollback needs an earlier approved release on that environment."
+test = "rollback_targets_last_approved"
+
 # ── M4 C10 (plan 14 C10, plan 04 M-4, ADR-0024 Amendment C10): one-step
 # revert of a merged merge request ──
 

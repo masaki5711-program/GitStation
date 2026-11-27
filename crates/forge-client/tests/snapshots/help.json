@@ -8139,6 +8139,165 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        },
+        {
+          "description": "The tag assets/v<yyyy>.<ww>.<n>.",
+          "kind": "option",
+          "name": "--tag",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn ai-asset release --project 7 --tag assets/v2026.48.1 --json"
+      ],
+      "name": "ai-asset release",
+      "output": {
+        "required": [
+          "id",
+          "kind",
+          "version",
+          "tag",
+          "commit_sha",
+          "digest",
+          "key_id",
+          "signature",
+          "files",
+          "manifest"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/ai-asset-releases"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Make a signed pfs-ai-bundle release from a tag assets/vYYYY.WW.N (plan 17): the commit the tag names now (a moved tag has no effect), on a protected branch with a green forge/ai-eval bench; its skills, playbooks, agents, tools, models and bench files are linted and listed with their SHA-256 in a manifest signed with the agent signing key. FG-AIASSET-0008 when refused (a Maintainer, people only)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "One release v<yyyy>.<ww>.<n>.",
+          "kind": "option",
+          "name": "--version",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn ai-asset releases --project 7",
+        "gstn ai-asset releases --project 7 --version v2026.48.1 --json"
+      ],
+      "name": "ai-asset releases",
+      "output": {
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/ai-asset-releases",
+        "GET /api/v1/projects/{id}/ai-asset-releases/{version}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's pfs-ai-bundle releases, newest first; with --version one release with its signed manifest (what the PFS loader verifies) (project readers)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The release v<yyyy>.<ww>.<n>.",
+          "kind": "option",
+          "name": "--version",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "pfs-ai-shadow, pfs-ai-canary or pfs-ai-prod.",
+          "kind": "option",
+          "name": "--environment",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn ai-asset release-deploy --project 7 --version v2026.48.1 --environment pfs-ai-shadow"
+      ],
+      "name": "ai-asset release-deploy",
+      "output": {
+        "required": [
+          "id",
+          "environment",
+          "sha",
+          "status"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/ai-asset-releases/{version}/deployments"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Request a release on a stage: pfs-ai-shadow, then pfs-ai-canary, then pfs-ai-prod (each after the one before succeeded with an approval). It waits for a person's approval in the browser. FG-AIASSET-0009 out of order (Developer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "pfs-ai-shadow, pfs-ai-canary or pfs-ai-prod.",
+          "kind": "option",
+          "name": "--environment",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn ai-asset rollback --project 7 --environment pfs-ai-canary"
+      ],
+      "name": "ai-asset rollback",
+      "output": {
+        "required": [
+          "release",
+          "deployment"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/ai-asset-rollbacks"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Request the release last approved before the running one on a stage (older by release order, succeeded there with an approval). It waits for a person's approval in the browser. FG-AIASSET-0009 no_rollback_target (Developer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         }
       ],
       "examples": [

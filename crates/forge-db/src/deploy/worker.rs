@@ -173,13 +173,26 @@ pub async fn claim_next(db: &Db, request_id: &RequestId) -> Result<Claim, ForgeE
                 },
             ));
         }
+        // Plan 17 P17-7: a pfs-ai-bundle release rolls back only to an
+        // older release that succeeded here with a person's approval and a
+        // key that is not revoked (never to a plain SHA, never forward to a
+        // newer release: a failed rollback does not return to the release it
+        // left); any other deployment to the environment's last succeeded
+        // SHA, as before.
+        let sha_bind = sha.clone(); // clone: the step owns its bind
         let previous_sha: Option<String> = tx
             .step(|c| async move {
-                sqlx::query_scalar(
-                    "SELECT sha FROM forge.deployments WHERE environment_id = $1 \
-                       AND status = 'succeeded' ORDER BY finished_at DESC, id DESC LIMIT 1",
-                )
+                sqlx::query_scalar(&format!(
+                    "SELECT d.sha FROM forge.deployments d WHERE d.environment_id = $1 \
+                       AND d.status = 'succeeded' \
+                       AND (NOT EXISTS (SELECT 1 FROM forge.ai_bundle_releases r \
+                              WHERE r.project_id = d.project_id AND r.commit_sha = $2) \
+                         OR {}) \
+                     ORDER BY d.finished_at DESC, d.id DESC LIMIT 1",
+                    super::ai_bundle::approved_older_release_sql("d", "$2")
+                ))
                 .bind(env_id)
+                .bind(sha_bind)
                 .fetch_optional(c)
                 .await
                 .map_err(|e| query_error(QUERY, e))

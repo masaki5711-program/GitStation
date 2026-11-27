@@ -91,6 +91,8 @@ guarded_functions = [
     # A request moves forward only; a verdict changes only its verdict.
     "llm_requests_guard",
     "llm_advice_feedback_guard",
+    # Plan 17 P17-7: a pfs-ai-bundle release never changes, never goes.
+    "ai_bundle_releases_guard",
 ]
 
 [tables.events]
@@ -1157,3 +1159,16 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── Plan 17 P17-7 (20270115100000, ADR-0031 Amendment P17-7): signed
+# pfs-ai-bundle releases — inserted with `ai_asset_release.created` on the
+# project in the same transaction; never changed or deleted (the guard), no
+# foreign key to the project (they outlive its purge, as agent parts do) ──
+[tables.ai_bundle_releases]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []

@@ -33,6 +33,8 @@ use forge_errors::{ErrorCode, ForgeError};
 pub use forge_db::deploy::{StoredDeployment, StoredEnvironment, StoredTarget};
 
 pub mod approvers;
+// Plan 17 P17-7: pfs-ai-bundle releases.
+pub mod bundle;
 pub mod commits;
 pub mod portal;
 pub mod run;
@@ -40,6 +42,7 @@ pub mod summary;
 pub mod transport;
 
 pub use approvers::{ApproverFact, ApproversSpec, GateFacts};
+pub use bundle::{BundleSource, GitBundles, StoredRelease, TagFacts, TreeFile};
 pub use forge_db::deploy::{DeploymentApproval, EnvironmentApprovers};
 pub use forge_db::review::ApproverNames;
 
@@ -227,6 +230,10 @@ pub struct Deploy {
     db: Db,
     commits: Arc<dyn CommitSource>,
     policy: TargetPolicy,
+    /// Plan 17 P17-7: the release reads (`None`: releases unconfigured).
+    bundles: Option<Arc<dyn BundleSource>>,
+    /// `agent.signing_keys_file` (the release signs with the agent key).
+    signing_keys_file: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for Deploy {
@@ -243,7 +250,22 @@ impl Deploy {
             db,
             commits,
             policy,
+            bundles: None,
+            signing_keys_file: None,
         }
+    }
+
+    /// Plan 17 P17-7: read releases through `source` and sign them with
+    /// `signing_keys_file` (`agent.signing_keys_file`; `None`: a release is
+    /// refused with `FG-AGENT-0014 reason=not_configured`).
+    pub fn with_bundles(
+        mut self,
+        source: Arc<dyn BundleSource>,
+        signing_keys_file: Option<std::path::PathBuf>,
+    ) -> Self {
+        self.bundles = Some(source);
+        self.signing_keys_file = signing_keys_file;
+        self
     }
 
     /// `GET …/deploy/environments` (`DeployRead`): the environments and

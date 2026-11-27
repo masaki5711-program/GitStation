@@ -1599,6 +1599,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/ai-asset-releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest (project readers) */
+        get: operations["get_api_v1_projects_id_ai_asset_releases"];
+        put?: never;
+        /** Make a signed pfs-ai-bundle release from a tag ({"tag": "assets/v2026.48.1"}): the commit the tag names now is pinned (a moved tag has no effect), it must be on a protected branch with a green forge/ai-eval bench, its skills/playbooks/agents/tools/models/bench files are linted and listed with their SHA-256 in a manifest signed with the agent signing key; 201; 422 FG-AIASSET-0008 (ai_assets disabled, tag, already released, bench, lint); audited (people only; Maintainer, a session or an api token) */
+        post: operations["post_api_v1_projects_id_ai_asset_releases"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/ai-asset-releases/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One pfs-ai-bundle release with its signed manifest (files and SHA-256, models, bench), digest, key id and signature: what the PFS loader verifies; 404 FG-REPO-0005 without it (project readers) */
+        get: operations["get_api_v1_projects_id_ai_asset_releases_version"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/ai-asset-releases/{version}/deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request a release on a stage ({"environment": "pfs-ai-shadow" | "pfs-ai-canary" | "pfs-ai-prod"}, the dev / stg / prod environments): 201 pending_approval (every stage needs a person's approval in a session); 409 FG-AIASSET-0009 out of stage order (shadow, canary, prod), without the release or on an environment that needs no approval; 422 FG-DEPLOY-0011 off the protected branches (Developer) */
+        post: operations["post_api_v1_projects_id_ai_asset_releases_version_deployments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/ai-asset-rollbacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Roll a stage back ({"environment"}): 201 a deployment of the release last approved before the running one (older by release order, succeeded there with an approval), waiting for a person's approval; 409 FG-AIASSET-0009 no_rollback_target (Developer) */
+        post: operations["post_api_v1_projects_id_ai_asset_rollbacks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/ai-assets": {
         parameters: {
             query?: never;
@@ -7781,6 +7850,11 @@ export interface components {
             /** @description The branch: `main` or `refs/heads/main`. */
             ref: string;
         };
+        /** @description `POST …/ai-asset-releases`. */
+        NewRelease: {
+            /** @description `assets/v<yyyy>.<ww>.<n>`. */
+            tag: string;
+        };
         /** @description `POST /api/v1/integrations/{id}/bindings`. */
         NewRepositoryBinding: {
             /** @description The kanflow project (1..=100 of `A-Z a-z 0-9 . _ : -`). */
@@ -8813,6 +8887,41 @@ export interface components {
              */
             token: string;
         };
+        /** @description A release. */
+        ReleaseBody: {
+            /** Format: int64 */
+            bench_check_run_id: number;
+            /** @description The commit the tag named when the release was made. */
+            commit_sha: string;
+            created_at: string;
+            /** Format: int64 */
+            created_by: number;
+            /** @description `sha256:<hex>` of the manifest. */
+            digest: string;
+            /** Format: int32 */
+            files: number;
+            /** Format: int64 */
+            id: number;
+            key_id: string;
+            /** @description `pfs-ai-bundle`. */
+            kind: string;
+            /** @description The signed manifest (one release only; `null` in lists). */
+            manifest: Record<string, never> | null;
+            /** @description Base64 Ed25519 in the `forge-pfs-ai-bundle-signature-v1` domain. */
+            signature: string;
+            tag: string;
+            tag_object: string;
+            version: string;
+        };
+        /** @description `POST …/{version}/deployments`, `POST …/ai-asset-rollbacks`. */
+        ReleaseEnvironment: {
+            /** @description `pfs-ai-shadow` (dev), `pfs-ai-canary` (stg) or `pfs-ai-prod` (prod). */
+            environment: string;
+        };
+        /** @description `GET …/ai-asset-releases`. */
+        ReleaseList: {
+            releases: components["schemas"]["ReleaseBody"][];
+        };
         /** @description `POST /api/v1/namespaces/tombstones/release`. */
         ReleaseTombstone: {
             /** @description The tombstoned path, exactly (`group/sub/project`). */
@@ -8984,6 +9093,11 @@ export interface components {
          * @enum {string}
          */
         RoleName: "guest" | "reporter" | "developer" | "maintainer" | "owner";
+        /** @description A rollback: the release gone back to and its deployment. */
+        RollbackBody: {
+            deployment: components["schemas"]["DeploymentBody"];
+            release: components["schemas"]["ReleaseBody"];
+        };
         /** @description A rotated secret (shown this once). */
         RotatedWebhookSecret: {
             /** @description The previous secret still signs until then (UTC, RFC 3339). */
@@ -13943,6 +14057,175 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdatesBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_ai_asset_releases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_ai_asset_releases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRelease"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_ai_asset_releases_version: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_ai_asset_releases_version_deployments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseEnvironment"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_ai_asset_rollbacks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseEnvironment"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RollbackBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

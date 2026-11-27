@@ -60,3 +60,79 @@
 6. **リモートのロック（ターゲットのスクリプトの契約）**: ssh を時間切れで止めてもリモートのスクリプトは動き続けうる（`-T` には端末が無く、SIGHUP が届かないことがある）。スクリプトは `deploy` と `rollback` で**同じ排他ロック**（例: `flock /var/lock/forge-deploy-<script>`）を取り、`rollback` はそのロックを待ってから前の版に戻す（forge の `rollback` の時間切れは `deploy.script_timeout_secs`）。こうして時間切れの後のロールバックが、まだ動いている `deploy` を追い越さない。
 7. **接続先の制限**: ループバック・未指定・リンクローカル（169.254.169.254 を含む）・マルチキャストのアドレスと、forge 自身の HTTP のポートには接続しない。`deploy.allowed_networks`（CIDR）を設定するとその中だけ。登録時（アドレスの直書き）と**接続のたびに名前を引いた後**に確かめ、ssh は確かめたアドレスに `HostKeyAlias=<名前>` で接続する（確かめと接続の間の DNS の変化で行き先が変わらない）。外れたら FG-DEPLOY-0013。API の読み手にはコードだけ、詳しい理由はログ。
 8. **細部**: スクリプトの名前にシェル・インタプリタ（sh・bash・python… など）は使えない。ssh の `HOME` は呼び出しごとの空のディレクトリ。ssh の失敗の分類（上の 5 の class）をログの `reason` に出す。
+
+## Amendment 2026-11-28（計画 17 P17-7 `feat/deploy-pfs-ai-bundle`: 種類 `pfs-ai-bundle` のリリース・3 つの段・直前の承認済みへの戻し）
+
+計画 17 §1.8〜§1.11 の GitStation 側を入れた。利用者は不在で「推奨を選ぶ」と言っているので、計画に書かれていない点は次のとおり決めた。
+
+1. **置き場所**: 新しいクレートは作らない。リリースの作成・段・戻しは `forge-deploy`（`bundle`）、SQL は `forge_db::deploy::ai_bundle`。
+   マニフェスト・要約・署名は純粋な `forge_agent::bundle`（計画 16 A1 と同じ鍵 `agent.signing_keys_file`、同じ長さ付きの SHA-256 の符号化）。
+   署名の文は **専用の領域** `"forge-pfs-ai-bundle-signature-v1\0"` ‖ 要約（要約の前置きも `"forge-pfs-ai-bundle-digest-v1\n"`）。部品の署名・
+   エッジのマニフェストの署名は、同じ鍵・同じ 32 バイトでも束としては通らない（ADR-0041 §3 と同じ考え。テスト
+   `a_part_signature_never_verifies_as_a_bundle`）。`forge-deploy` の依存に純粋な `forge-agent`・`forge-doc` と `toml` を足した（契約 9 の向きのまま、
+   他の機能クレートには依存しない。`dependency_direction.rs`）。
+2. **表 `forge.ai_bundle_releases`**（追記のマイグレーション `20270115100000`、`audited`、資源はプロジェクト）: 版・tag・**作成のときに tag が
+   指したコミット**・tag の object・マニフェスト（JSON）・要約・kid・署名・ベンチのチェックの行の id・ファイル数・作った人。守り
+   `ai_bundle_releases_guard` が UPDATE と DELETE を断る（XF001）。forge_app には SELECT と呼ぶ側の列の INSERT だけ。部品（ADR-0032 Amendment A3 §3）と
+   同じく **プロジェクトへの外部キーを張らず、消去より長く残す**（PFS のローダーが入れた版を確かめ続けられる）。`UNIQUE (project_id, version)` と
+   `UNIQUE (project_id, commit_sha)`: 版もコミットも 1 回だけ。デプロイの行は普通の `deployments`（その SHA）で、リリースとは SHA で結ぶ。
+3. **tag の形** `assets/v<yyyy>.<ww>.<n>`（週は 01〜53、番号は 1〜999、先頭の 0 なし。表の CHECK も同じ）。hotfix も同じ形。
+4. **作成の手順**（`POST …/ai-asset-releases`）: tag を git で引いて **その時のコミットを固定** → 既に出した版・コミットなら `already_released`
+   （tag を動かしても効かない。テスト `moved_tag_has_no_effect`）→ 保護ブランチにあること（デプロイと同じ `CommitSource`）→ そのコミットの
+   `forge/ai-eval` が `completed` かつ `success`（無ければ `bench_missing`、他は `bench_not_green`。**ベンチが緑でなければ何も署名しない**。テスト
+   `bundle_signed_only_when_bench_green`）→ 束のディレクトリ（`skills`・`playbooks`・`agents`・`tools`・`models`・`bench`。`evals`・`thresholds`・
+   `manifest` は入れない）のファイルを固定したコミットから読む（2000 ファイル・32 MiB まで、symlink・submodule は `not_a_regular_file`）→
+   `gstn ai-asset lint` と同じ `forge_doc::ai_asset::lint` と `release_problems`（`lint_failed`）→ マニフェスト（ファイルごとの path・SHA-256・大きさ、
+   `models/models.toml` の `name:tag@sha256`、ベンチの結論と要約 4 KiB まで）→ 鍵ファイルのいちばん大きい kid（登録済み・退役も失効もなし・同じ公開鍵。
+   違えば FG-AGENT-0014）で署名 → 登録した公開鍵で **保存する JSON から** 確かめ直す → ロックしたプロジェクトで判定をやり直し、`ai_assets.enabled` を
+   ロックの下で読み直して、行と監査の行 `ai_asset_release.created` を同じトランザクションで書く。全体に 60 秒の時間切れ。誤りは新しいコード
+   **FG-AIASSET-0008** `BundleReleaseRefused`（info）。
+5. **権限**: 新しい操作 `AiAssetReleaseCreate`（人だけ、Maintainer 以上、`api`）。部品の公開（A5）と違い **人のトークンも通す**（`gstn ai-asset release`）:
+   リリースはどの環境も変えず、どの段も人の `DeployApprove`（Web のセッションだけ）が要るため。エージェントのトークン・ボット（`pfs-ai-bot`）・
+   サービスアカウント・自動マージの主体・CI のジョブ・代理は断る。読み取りは `DeployRead`、段への要求と戻しは `DeployCreate`（新しい操作を作らない）。
+   権限の表に allow / deny の行（`matrix_rows_ai_release.rs`、`matrix_rows_people.rs`）とテスト `prod_approve_denied_for_bot`。
+6. **3 つの段 = 既存の 3 つの環境**: `dev` = `pfs-ai-shadow`、`stg` = `pfs-ai-canary`、`prod` = `pfs-ai-prod`（列も階層も足さない。API と gstn は
+   段の名前でも層の名前でも受ける）。リリースの要求（`POST …/ai-asset-releases/{version}/deployments`）は同じトランザクションで: リリースが
+   ある（`release_not_found`）、**環境が承認を要する**（`approval_required`。prod は ADR-0031 の CHECK のとおり常に）、**前の段で同じリリースが
+   承認つきで成功している**（影 → カナリア → 本番、`stage_skipped` と `needs`）。誤りは新しいコード **FG-AIASSET-0009** `BundleDeployRefused`（info）。
+   計画 §1.9 の「3 日・30 件・新旧の差を approver が見た」は PFS の指標（PFS-6・7）で、GitStation は数えない（承認する人が判断する）。
+7. **リリースだけのプロジェクト**: `ai_assets.enabled` が真のプロジェクトでは、普通の SHA の要求（`POST …/deployments`）は `release_required`、
+   自動のデプロイ（決定 9）は候補にしない。`false` に戻すと普通の要求に戻る（Maintainer の人だけ、監査つき）。既存のリリースの段への要求は
+   設定によらず通る（計画 §0.4: 止まるのは新しいリリースだけ）。
+8. **戻し**（`POST …/ai-asset-rollbacks {"environment"}`）: その環境で最後に成功した版のリリースより **古い**（リリースの順）リリースのうち、その環境で
+   **承認つきで成功した** いちばん新しいものの、新しいデプロイの要求を作る（テスト `rollback_targets_last_approved`。2 回戻すとさらに古くなり、
+   離れたばかりの版へは戻らない）。**戻しも承認が要る**（同じ SHA の再要求にも新しい承認、ADR-0029 の義務 6）。worker の失敗時の自動の戻し
+   （`auto_rollback` の環境）は、リリースのデプロイなら **承認つきで成功した別のリリース** だけを前の版にする（承認なしの成功・普通の SHA へは戻さない）。
+   計画 §8 の決定 2（本番でも直前の承認済みへは人の承認なしに戻す）は **PFS のローダー（PFS-5）が手元で行う runbook の手順**で、GitStation は
+   リリースの一覧・確かめる材料・戻し先の要求の道を出す（GitStation の prod の環境は今までどおり自動の戻しを持てない）。
+9. **gstn**: `gstn ai-asset release --project N --tag assets/v…`（作成）、`releases [--version v…]`（一覧・1 件とマニフェスト）、`release-deploy
+   --version v… --environment pfs-ai-shadow|pfs-ai-canary|pfs-ai-prod`、`rollback --environment …`。承認は画面だけ（トークンは `session_required`）。
+
+### P17-7 の独立レビュー（2026-11-28、deploy-safety-reviewer・security-reviewer）で変えた点
+
+- （deploy HIGH、直した）worker の自動の戻し先が「承認つきで成功した別のリリース」だけで、**新しい方** にも戻りえた（v3 → v2 への戻しが失敗すると
+  v3 へ「戻る」）。戻し先は **いま入れようとしているリリースより古い** リリースだけ（`approved_older_release_sql`。手の戻しと同じ順の規則）。
+  テスト `a_failed_rollback_never_returns_to_the_newer_release`。
+- （security HIGH、直した）束のファイルの path は `/` の区切りと `.`・`..` しか見ていなかった。ローダーがどの OS でもそのまま書ける形だけ
+  （各区切りは ASCII の英数字と `.`・`_`・`-`、`.` で終わらない、255 バイトまで。`\`・`:`・制御文字・空白・非 ASCII を断る）、大文字・小文字だけが
+  違う 2 つの path も断る（`canonical` と `parse_manifest` の両方）。
+- （deploy MEDIUM、直した）**失効した鍵** で署名したリリースは段に要求できない（`signing_key_revoked`）し、手の戻し・worker の戻しの先にもならない。
+- （deploy MEDIUM、直した）戻しの要求は、そのコミットが今も保護ブランチにあることを求めない（作成のときに確かめ、署名し、その段で承認された版。
+  事故の最中にブランチが動いても最後の良い版へ戻れる）。承認は今までどおり要る。
+- （security MEDIUM、直した）束のディレクトリの中で lint が知らないファイル（スクリプト・入れ子のファイル）は署名しない（`lint_failed`
+  `rule=not_an_asset_file`。空のディレクトリの `.gitkeep` だけは許す）。
+- （security LOW、直した）信頼できないマニフェストの大きさの和は桁あふれを確かめる（`too_large`）。署名の後の確かめは、**DB に入った jsonb の
+  マニフェスト** でも同じトランザクションの中で行う（通らなければ何も残らない）。
+- （security MEDIUM、受け入れ）作成は Maintainer の人 1 人で、人のトークンでもよい（上の 5）。署名した束は段の外でも確かめられるので、盗まれた
+  トークンは緑のベンチのコミットに署名させうる。緩和: 段はすべて人のセッションでの承認、監査の行とログ `forge.deploy.bundle_released` に
+  `credential_id`（トークンで作ったものを数えられる）。二人の目やセッションだけにするかは PFS-5 のローダーの信じ方と合わせて決める。
+- （deploy LOW、受け入れ）`ai_assets.enabled` を切ると普通の SHA の要求に戻る（上の 7。Maintainer の人だけ、監査つき）。悪いと分かったリリースの
+  「取り下げ」の印はまだ無い（戻し先から外すには、鍵の失効か新しい版）。
+
+### 残すこと
+
+- マニフェストに計画 §1.8 の「プレイブックの行」「元の MR と改善要求の一覧」はまだ入れていない（プレイブックはファイルの SHA-256 で覆う）。
+  PFS-5（ローダー）の形が決まったら v2 のマニフェストで足す。
+- `clippy.toml` の `disallowed-methods` に `forge_agent::bundle::sign_bundle` を足す変更は、エージェントモデルの設定の保護のフックが止めたため
+  入れていない（人が足す。`read_signing_seed` の禁止は効いており、forge-deploy の 1 か所だけが `#[allow]` で呼ぶ）。
+- 段の画面（リリースの一覧・承認の画面に版とマニフェストの要約）は無い（承認は既存のデプロイの承認の画面で行う）。

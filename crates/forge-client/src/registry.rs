@@ -1546,6 +1546,56 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["GET /api/v1/projects/{id}/ai-assets"],
         output: r#"{"type":"object","required":["project_id","enabled","changed_by","changed_at","viewer"]}"#,
     },
+    // Plan 17 P17-7 (ADR-0031 Amendment P17-7): pfs-ai-bundle releases.
+    CommandSpec {
+        name: "ai-asset release",
+        summary: "Make a signed pfs-ai-bundle release from a tag assets/vYYYY.WW.N (plan 17): the commit the tag names now (a moved tag has no effect), on a protected branch with a green forge/ai-eval bench; its skills, playbooks, agents, tools, models and bench files are linted and listed with their SHA-256 in a manifest signed with the agent signing key. FG-AIASSET-0008 when refused (a Maintainer, people only).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--tag", "option", true, "The tag assets/v<yyyy>.<ww>.<n>."),
+        ],
+        examples: &["gstn ai-asset release --project 7 --tag assets/v2026.48.1 --json"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/ai-asset-releases"],
+        output: r#"{"type":"object","required":["id","kind","version","tag","commit_sha","digest","key_id","signature","files","manifest"]}"#,
+    },
+    CommandSpec {
+        name: "ai-asset releases",
+        summary: "A project's pfs-ai-bundle releases, newest first; with --version one release with its signed manifest (what the PFS loader verifies) (project readers).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--version", "option", false, "One release v<yyyy>.<ww>.<n>."),
+        ],
+        examples: &["gstn ai-asset releases --project 7", "gstn ai-asset releases --project 7 --version v2026.48.1 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/ai-asset-releases", "GET /api/v1/projects/{id}/ai-asset-releases/{version}"],
+        output: r#"{"type":"object"}"#,
+    },
+    CommandSpec {
+        name: "ai-asset release-deploy",
+        summary: "Request a release on a stage: pfs-ai-shadow, then pfs-ai-canary, then pfs-ai-prod (each after the one before succeeded with an approval). It waits for a person's approval in the browser. FG-AIASSET-0009 out of order (Developer).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--version", "option", true, "The release v<yyyy>.<ww>.<n>."),
+            arg("--environment", "option", true, "pfs-ai-shadow, pfs-ai-canary or pfs-ai-prod."),
+        ],
+        examples: &["gstn ai-asset release-deploy --project 7 --version v2026.48.1 --environment pfs-ai-shadow"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/ai-asset-releases/{version}/deployments"],
+        output: r#"{"type":"object","required":["id","environment","sha","status"]}"#,
+    },
+    CommandSpec {
+        name: "ai-asset rollback",
+        summary: "Request the release last approved before the running one on a stage (older by release order, succeeded there with an approval). It waits for a person's approval in the browser. FG-AIASSET-0009 no_rollback_target (Developer).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--environment", "option", true, "pfs-ai-shadow, pfs-ai-canary or pfs-ai-prod."),
+        ],
+        examples: &["gstn ai-asset rollback --project 7 --environment pfs-ai-canary"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/ai-asset-rollbacks"],
+        output: r#"{"type":"object","required":["release","deployment"]}"#,
+    },
     CommandSpec {
         name: "deploy envs",
         summary: "A project's deployment environments (dev, stg, prod): approval rule and window, freeze windows, automatic rollback and deployment, and their targets with the pinned host key fingerprint (project readers).",

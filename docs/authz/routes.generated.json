@@ -1143,6 +1143,51 @@
     "word": "fixed"
   },
   {
+    "action": "DeployRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/ai-asset-releases",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AiAssetReleaseCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/ai-asset-releases",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/ai-asset-releases/{version}",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/ai-asset-releases/{version}/deployments",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/ai-asset-rollbacks",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/ai-assets",

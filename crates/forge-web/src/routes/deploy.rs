@@ -319,7 +319,7 @@ fn environment_body(e: StoredEnvironment, targets: Vec<TargetBody>) -> Environme
     }
 }
 
-fn deployment_body(d: StoredDeployment) -> DeploymentBody {
+pub(crate) fn deployment_body(d: StoredDeployment) -> DeploymentBody {
     DeploymentBody {
         id: d.id,
         environment: d.tier.as_str().to_owned(),

@@ -42,6 +42,32 @@ impl DeployTier {
     pub fn is_prod(self) -> bool {
         self == Self::Prod
     }
+
+    /// Plan 17 §1.9 (P17-7): the `pfs-ai-bundle` stage this tier is for a
+    /// project whose `ai_assets.enabled` is on — dev the shadow, stg the
+    /// canary (one plant), prod every plant.
+    pub fn bundle_stage(self) -> &'static str {
+        match self {
+            Self::Dev => "pfs-ai-shadow",
+            Self::Stg => "pfs-ai-canary",
+            Self::Prod => "pfs-ai-prod",
+        }
+    }
+
+    /// A tier by its tier name or its bundle stage name.
+    pub fn parse_stage(raw: &str) -> Option<Self> {
+        Self::parse(raw).or_else(|| Self::ALL.into_iter().find(|t| t.bundle_stage() == raw))
+    }
+
+    /// The stage a release must have succeeded on before this one (shadow
+    /// → canary → prod; `None` for the shadow).
+    pub fn bundle_stage_before(self) -> Option<Self> {
+        match self {
+            Self::Dev => None,
+            Self::Stg => Some(Self::Dev),
+            Self::Prod => Some(Self::Stg),
+        }
+    }
 }
 
 /// A deployment's state (`deployments.status`).
@@ -456,6 +482,18 @@ pub enum DeployChange {
         /// The LLM's failure (`FG-LLM-…`) when there is no advice.
         error_code: Option<String>,
     },
+    /// `ai_asset_release.created` (plan 17 P17-7): a person made a signed
+    /// `pfs-ai-bundle` release of the project from a tag. Ids, the
+    /// version, the commit, the digest and the key only.
+    BundleReleased {
+        project: ProjectId,
+        release: i64,
+        version: String,
+        sha: String,
+        digest: String,
+        key_id: String,
+        files: i32,
+    },
     /// The worker side (the system): `deployment.started` (`running`),
     /// `.succeeded`, `.failed`, `.rolled_back`, `.rollback_failed`,
     /// `.blocked`, `.abandoned` (a `failed` the sweep wrote).
@@ -481,6 +519,7 @@ impl DeployChange {
             Self::Approved { .. } => "deployment.approved",
             Self::ApproversSet { .. } => "deploy_environment.approvers_set",
             Self::ApprovalSummarized { .. } => "deployment.approval_summarized",
+            Self::BundleReleased { .. } => "ai_asset_release.created",
             Self::Progress {
                 abandoned: true, ..
             } => "deployment.abandoned",
@@ -506,6 +545,7 @@ impl DeployChange {
             | Self::Approved { project, .. }
             | Self::ApproversSet { project, .. }
             | Self::ApprovalSummarized { project, .. }
+            | Self::BundleReleased { project, .. }
             | Self::Progress { project, .. } => *project,
         }
     }
@@ -520,6 +560,7 @@ impl DeployChange {
             | Self::Requested { .. }
             | Self::Approved { .. }
             | Self::ApproversSet { .. }
+            | Self::BundleReleased { .. }
             | Self::Progress { .. } => None,
         }
     }
@@ -632,6 +673,24 @@ impl DeployChange {
                 "advice_id": advice,
                 "llm_request_id": llm_request,
                 "error_code": error_code,
+            }),
+            Self::BundleReleased {
+                project,
+                release,
+                version,
+                sha,
+                digest,
+                key_id,
+                files,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "release_id": release,
+                "kind": "pfs-ai-bundle",
+                "version": version,
+                "sha": sha,
+                "digest": digest,
+                "key_id": key_id,
+                "files": files,
             }),
             Self::Progress {
                 project,

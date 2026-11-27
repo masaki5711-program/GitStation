@@ -1501,7 +1501,7 @@ fn runner_routes(registry: Registry<AppState>) -> Registry<AppState> {
 /// requests and approvals.
 fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
     use routes::deploy as d;
-    registry
+    ai_asset_release_routes(registry)
         .route_with(
             Verb::Get,
             d::ENVIRONMENTS,
@@ -1590,6 +1590,61 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
             d::put_approvers,
         )
         .responds::<d::ApproversBody>(Verb::Put, d::ENVIRONMENT_APPROVERS)
+}
+
+/// Plan 17 P17-7 (ADR-0031 Amendment P17-7): signed `pfs-ai-bundle`
+/// releases, their stage deployments and the rollback.
+fn ai_asset_release_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::ai_asset_releases as r;
+    registry
+        .route_with(
+            Verb::Get,
+            r::RELEASES,
+            Action::DeployRead,
+            "A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest (project readers)",
+            r::OF_PROJECT,
+            r::list,
+        )
+        .responds::<r::ReleaseList>(Verb::Get, r::RELEASES)
+        .route_with_body(
+            Verb::Post,
+            r::RELEASES,
+            Action::AiAssetReleaseCreate,
+            "Make a signed pfs-ai-bundle release from a tag ({\"tag\": \"assets/v2026.48.1\"}): the commit the tag names now is pinned (a moved tag has no effect), it must be on a protected branch with a green forge/ai-eval bench, its skills/playbooks/agents/tools/models/bench files are linted and listed with their SHA-256 in a manifest signed with the agent signing key; 201; 422 FG-AIASSET-0008 (ai_assets disabled, tag, already released, bench, lint); audited (people only; Maintainer, a session or an api token)",
+            r::MAX_BODY,
+            r::OF_PROJECT,
+            r::create,
+        )
+        .responds_created::<r::ReleaseBody>(Verb::Post, r::RELEASES)
+        .route_with(
+            Verb::Get,
+            r::RELEASE,
+            Action::DeployRead,
+            "One pfs-ai-bundle release with its signed manifest (files and SHA-256, models, bench), digest, key id and signature: what the PFS loader verifies; 404 FG-REPO-0005 without it (project readers)",
+            r::OF_PROJECT,
+            r::one,
+        )
+        .responds::<r::ReleaseBody>(Verb::Get, r::RELEASE)
+        .route_with_body(
+            Verb::Post,
+            r::RELEASE_DEPLOYMENTS,
+            Action::DeployCreate,
+            "Request a release on a stage ({\"environment\": \"pfs-ai-shadow\" | \"pfs-ai-canary\" | \"pfs-ai-prod\"}, the dev / stg / prod environments): 201 pending_approval (every stage needs a person's approval in a session); 409 FG-AIASSET-0009 out of stage order (shadow, canary, prod), without the release or on an environment that needs no approval; 422 FG-DEPLOY-0011 off the protected branches (Developer)",
+            r::MAX_BODY,
+            r::OF_PROJECT,
+            r::request_deployment,
+        )
+        .responds_created::<routes::deploy::DeploymentBody>(Verb::Post, r::RELEASE_DEPLOYMENTS)
+        .route_with_body(
+            Verb::Post,
+            r::ROLLBACKS,
+            Action::DeployCreate,
+            "Roll a stage back ({\"environment\"}): 201 a deployment of the release last approved before the running one (older by release order, succeeded there with an approval), waiting for a person's approval; 409 FG-AIASSET-0009 no_rollback_target (Developer)",
+            r::MAX_BODY,
+            r::OF_PROJECT,
+            r::rollback,
+        )
+        .responds_created::<r::RollbackBody>(Verb::Post, r::ROLLBACKS)
 }
 
 /// A project's CI pipelines (M4 C2, plan 14 §4.2): read (metadata only),

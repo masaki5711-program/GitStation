@@ -120,14 +120,18 @@ const ALLOWED: &[(&str, &[&str])] = &[
     // M4 C11 (plan 14, ADR-0031, contract 9): deployments over SSH —
     // written through forge-db, decided in forge-auth; forge-git reads
     // what may be deployed (a protected branch holds it); never another
-    // feature crate.
+    // feature crate. Plan 17 P17-7: the pure forge-agent (the
+    // pfs-ai-bundle manifest, digest and signature) and forge-doc (the AI
+    // asset lint of what a release ships).
     (
         "forge-deploy",
         &[
+            "forge-agent",
             "forge-auth",
             "forge-git",
             "forge-db",
             "forge-core",
+            "forge-doc",
             "forge-errors",
         ],
     ),

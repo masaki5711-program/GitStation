@@ -24,6 +24,7 @@
 //! Every finding is a [`Problem`]: a registered `FG-AGENT-*` code, a stable
 //! `reason` and an optional subject (a path, a host, a kid).
 
+pub mod bundle;
 mod compile;
 mod digest;
 pub mod import;

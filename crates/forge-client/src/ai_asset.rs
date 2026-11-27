@@ -15,6 +15,12 @@
 //! `gstn ai-asset status --project <id>` reads a project's
 //! `ai_assets.enabled` (`GET …/ai-assets`, `read_api`).
 //!
+//! Plan 17 P17-7: `gstn ai-asset release --project <id> --tag
+//! assets/v<yyyy>.<ww>.<n>` makes a signed `pfs-ai-bundle` release (`api`,
+//! a Maintainer); `releases` lists them (or `--version` shows one with its
+//! manifest); `release-deploy` and `rollback` request a stage deployment,
+//! which a person approves in the browser.
+//!
 //! Exit codes: 1 with `FG-AIASSET-0001` when the assets have a problem;
 //! `FG-CLI-*` when they cannot be read.
 
@@ -65,6 +71,92 @@ pub fn ai_asset(cli: &Cli, cmd: &AiAssetCommand, env: EnvFn<'_>, io: &mut Io<'_>
             );
             emit(io, cli, out, &human)
         }
+        AiAssetCommand::Release { project, tag } => {
+            let c = crate::hosting::client(cli, env, io)?;
+            let path = format!("/api/v1/projects/{project}/ai-asset-releases");
+            let out = crate::hosting::call(
+                &c,
+                crate::http::Method::Post,
+                &path,
+                &[],
+                Some(&json!({ "tag": tag })),
+            )?;
+            let human = format!("Released {}", release_line(&out));
+            emit(io, cli, out, &human)
+        }
+        AiAssetCommand::Releases { project, version } => {
+            let c = crate::hosting::client(cli, env, io)?;
+            let base = format!("/api/v1/projects/{project}/ai-asset-releases");
+            if let Some(v) = version {
+                check_version(v)?;
+                let out = crate::hosting::call(
+                    &c,
+                    crate::http::Method::Get,
+                    &format!("{base}/{v}"),
+                    &[],
+                    None,
+                )?;
+                let human = release_line(&out);
+                return emit(io, cli, out, &human);
+            }
+            let out = crate::hosting::call(&c, crate::http::Method::Get, &base, &[], None)?;
+            let lines: Vec<String> = out
+                .get("releases")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().map(release_line).collect())
+                .unwrap_or_default();
+            let human = if lines.is_empty() {
+                "No release.".to_owned()
+            } else {
+                lines.join("\n")
+            };
+            emit(io, cli, out, &human)
+        }
+        AiAssetCommand::ReleaseDeploy {
+            project,
+            version,
+            environment,
+        } => {
+            check_version(version)?;
+            let c = crate::hosting::client(cli, env, io)?;
+            let path =
+                format!("/api/v1/projects/{project}/ai-asset-releases/{version}/deployments");
+            let out = crate::hosting::call(
+                &c,
+                crate::http::Method::Post,
+                &path,
+                &[],
+                Some(&json!({ "environment": environment })),
+            )?;
+            let human = format!(
+                "Requested {version} on {environment}: {} (a person approves it in the browser)",
+                crate::error::sanitize(out.get("status").and_then(Value::as_str).unwrap_or("?"))
+            );
+            emit(io, cli, out, &human)
+        }
+        AiAssetCommand::Rollback {
+            project,
+            environment,
+        } => {
+            let c = crate::hosting::client(cli, env, io)?;
+            let path = format!("/api/v1/projects/{project}/ai-asset-rollbacks");
+            let out = crate::hosting::call(
+                &c,
+                crate::http::Method::Post,
+                &path,
+                &[],
+                Some(&json!({ "environment": environment })),
+            )?;
+            let to = out
+                .pointer("/release/version")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let human = format!(
+                "Requested the rollback of {environment} to {}: a person approves it in the browser",
+                crate::error::sanitize(to)
+            );
+            emit(io, cli, out, &human)
+        }
         AiAssetCommand::Lint { dir } => {
             let root = match dir {
                 Some(d) => d.clone(), // clone: the walk owns its root
@@ -83,6 +175,35 @@ pub fn ai_asset(cli: &Cli, cmd: &AiAssetCommand, env: EnvFn<'_>, io: &mut Io<'_>
             report(cli, io, files.len(), &problems)
         }
     }
+}
+
+/// A release version as the API names it (`v<yyyy>.<ww>.<n>`), checked
+/// before it reaches a path.
+fn check_version(v: &str) -> Result<()> {
+    let digits = v.strip_prefix('v').filter(|rest| {
+        v.len() <= 16
+            && rest.split('.').count() == 3
+            && rest
+                .split('.')
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    });
+    match digits {
+        Some(_) => Ok(()),
+        None => Err(cli_input("release_version_invalid")),
+    }
+}
+
+fn release_line(r: &Value) -> String {
+    let s = |k: &str| crate::error::sanitize(r.get(k).and_then(Value::as_str).unwrap_or("?"));
+    format!(
+        "{} {} commit {} {} key {} ({} files)",
+        s("version"),
+        s("tag"),
+        s("commit_sha"),
+        s("digest"),
+        s("key_id"),
+        r.get("files").and_then(Value::as_i64).unwrap_or(0)
+    )
 }
 
 /// One file read: its path from the root and its bytes.

@@ -584,6 +584,16 @@ actions! {
     /// session only, Maintainer and above; audited. Read with `GET
     /// …/ai-assets` (`ProjectRead`).
     AiAssetsSettingManage,
+    /// `POST /api/v1/projects/{id}/ai-asset-releases` (plan 17 P17-7,
+    /// ADR-0031 Amendment P17-7): make a signed `pfs-ai-bundle` release
+    /// from a tag `assets/v<yyyy>.<ww>.<n>` of a project whose
+    /// `ai_assets.enabled` is on. People only (never an agent, a bot —
+    /// `pfs-ai-bot` included —, a service account or the auto-merge
+    /// principal), Maintainer and above; `api` (a person's token too:
+    /// `gstn ai-asset release`). Releasing changes no environment: every
+    /// stage still needs a person's `DeployApprove` in a session. Read with
+    /// `DeployRead`; deployed and rolled back with `DeployCreate`.
+    AiAssetReleaseCreate,
     /// `GET /api/v1/projects/{id}/ci/variables`, `PUT|DELETE
     /// …/ci/variables/{name}` (M4 C6, plan 14 §4.2): list a project's CI
     /// variables (names and flags, never a value), set or delete one. A
@@ -947,6 +957,8 @@ impl Action {
                 // M4 C9: auto-merge's mode and emergency stops are a person's.
                 | Action::AutoMergeSettingsManage
                 | Action::AiAssetsSettingManage
+                // Plan 17 P17-7: a release is a person's.
+                | Action::AiAssetReleaseCreate
                 | Action::OrgBindingManage
                 | Action::AutoMergeStopToggle
                 | Action::AutoMergeInstanceStopToggle
@@ -1156,6 +1168,7 @@ impl Action {
             | Action::DeployApproversManage
             | Action::DeployTargetManage
             | Action::DeployCreate
+            | Action::AiAssetReleaseCreate
             | Action::PipelineScheduleManage
             | Action::PipelinePlayProtected
             | Action::AiAdviceFeedback
@@ -1330,6 +1343,7 @@ impl Action {
             // M4 C9: nor is auto-merge.
             | Action::AutoMergeSettingsManage
                 | Action::AiAssetsSettingManage
+                | Action::AiAssetReleaseCreate
                 | Action::OrgBindingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
@@ -1524,6 +1538,7 @@ impl Action {
             // M4 C9: nor auto-merge.
             | Action::AutoMergeSettingsManage
                 | Action::AiAssetsSettingManage
+                | Action::AiAssetReleaseCreate
                 | Action::OrgBindingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle

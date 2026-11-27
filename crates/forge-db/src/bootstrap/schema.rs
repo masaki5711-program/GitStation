@@ -79,6 +79,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.llm_advice_guard()",
     "forge.llm_requests_guard()",
     "forge.llm_advice_feedback_guard()",
+    // ── Plan 17 P17-7: a pfs-ai-bundle release never changes (20270115100000) ──
+    "forge.ai_bundle_releases_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -125,6 +127,12 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "agent_part_files",
         "agent_part_files_append_only",
         "CREATE TRIGGER agent_part_files_append_only BEFORE INSERT OR DELETE OR UPDATE ON forge.agent_part_files FOR EACH ROW EXECUTE FUNCTION forge.agent_part_files_guard()",
+    ),
+    // ── Plan 17 P17-7: a pfs-ai-bundle release never changes (20270115100000) ──
+    (
+        "ai_bundle_releases",
+        "ai_bundle_releases_forward",
+        "CREATE TRIGGER ai_bundle_releases_forward BEFORE DELETE OR UPDATE ON forge.ai_bundle_releases FOR EACH ROW EXECUTE FUNCTION forge.ai_bundle_releases_guard()",
     ),
     // ── M4 C11: a deployment only moves forward (20261214100000) ──
     (
@@ -1213,8 +1221,36 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         // ── Plan 19 §8.2: reruns and the gateway's pause (20270114100000) ──
         ("forge.llm_review_reruns", operational()),
         ("forge.llm_gateway", operational()),
+        // ── Plan 17 P17-7: pfs-ai-bundle releases (20270115100000) ──
+        (
+            "forge.ai_bundle_releases",
+            [
+                plain(&["forge_app:SELECT"]),
+                columns("forge_app", "INSERT", AI_BUNDLE_RELEASE_APP_INSERT),
+                ro("ai_bundle_releases")?,
+            ]
+            .concat(),
+        ),
     ])
 }
+
+/// The columns forge_app may insert into forge.ai_bundle_releases (plan 17
+/// P17-7: not id or created_at, which the table sets).
+const AI_BUNDLE_RELEASE_APP_INSERT: &[&str] = &[
+    "project_id",
+    "kind",
+    "version",
+    "tag",
+    "tag_object",
+    "commit_sha",
+    "manifest",
+    "digest",
+    "key_id",
+    "signature",
+    "bench_check_run_id",
+    "files",
+    "created_by",
+];
 
 /// The columns forge_app may update in forge.ci_runners (M4 C3).
 const CI_RUNNERS_APP_UPDATE: &[&str] = &[
@@ -1481,6 +1517,8 @@ const LATER_TABLES: &[&str] = &[
     // ── Plan 19 §8.2: reruns and the gateway's pause (20270114100000) ──
     "llm_review_reruns",
     "llm_gateway",
+    // ── Plan 17 P17-7: pfs-ai-bundle releases (20270115100000) ──
+    "ai_bundle_releases",
 ];
 
 /// Every table the first migration creates.

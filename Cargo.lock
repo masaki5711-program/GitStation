@@ -1244,15 +1244,18 @@ dependencies = [
 name = "forge-deploy"
 version = "0.1.0"
 dependencies = [
+ "forge-agent",
  "forge-auth",
  "forge-core",
  "forge-db",
+ "forge-doc",
  "forge-errors",
  "forge-git",
  "serde_json",
  "sqlx",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]
