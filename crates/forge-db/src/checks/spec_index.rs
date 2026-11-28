@@ -122,30 +122,56 @@ pub fn spec_index_payload(payload: &serde_json::Value) -> Result<SpecIndexReques
 /// Amendment 2026-11-17: auto-merge waits for `forge/doc-lint` on the head
 /// and asks for the run itself — a head from before the subscriber, a job
 /// that died). Nothing is added while a job of the same head is queued or
-/// running (whatever its key), and the key `spec_index:<p>:<iid>:<head>`
-/// (no state: asked for by hand) dedups again while one is held. `true`:
-/// a job was added.
+/// running (whatever its key), nor while a `merge_request.prepare` job of
+/// the merge request is (load test 2026-11-28: auto-merge saw "no
+/// doc-lint run yet" before the prepare job ran and asked again — 13 % of
+/// all jobs a second evaluation of the same head; the prepare job reads
+/// the merge request's current head and writes `forge/doc-lint` itself, a
+/// failed spec step is handed over to this job's key, and a dead one is
+/// answered `error` by the prepare sweep, after which this asks). The key
+/// `spec_index:<p>:<iid>:<head>` (no state: asked for by hand) dedups
+/// again while one is held. `true`: a job was added.
 pub async fn request_again(
     db: &Db,
     request: &SpecIndexRequest,
     origin: &RequestId,
 ) -> Result<bool, ForgeError> {
     const QUERY: &str = "checks.spec_index_request_again";
-    let pending: bool = db
+    let (index_pending, prepare_pending): (bool, bool) = db
         .within(QUERY, async {
-            sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM forge.jobs WHERE kind = $1                  AND state IN ('queued', 'running')                  AND payload->>'project_id' = $2 AND payload->>'iid' = $3                  AND payload->>'head_sha' = $4)",
+            sqlx::query_as(
+                "SELECT EXISTS (SELECT 1 FROM forge.jobs WHERE kind = $1 \
+                 AND state IN ('queued', 'running') \
+                 AND payload->>'project_id' = $2 AND payload->>'iid' = $3 \
+                 AND payload->>'head_sha' = $4), \
+                 EXISTS (SELECT 1 FROM forge.merge_requests m JOIN forge.jobs j \
+                 ON j.kind = $5 AND j.payload->>'merge_request_id' = m.id::text \
+                 AND j.state IN ('queued', 'running') \
+                 WHERE m.project_id = $6 AND m.iid = $7)",
             )
             .bind(SPEC_INDEX_JOB)
             .bind(request.project.get().to_string())
             .bind(request.iid.to_string())
             .bind(request.head.as_str())
+            .bind(crate::review::PREPARE_JOB)
+            .bind(request.project.get())
+            .bind(request.iid)
             .fetch_one(db.pool().executor())
             .await
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    if pending {
+    if index_pending || prepare_pending {
+        tracing::debug!(
+            target: "forge_db",
+            event = "forge.spec_index.request_again_pending",
+            request_id = %origin,
+            project_id = request.project.get(),
+            iid = request.iid,
+            head_sha = request.head.as_str(),
+            pending = if index_pending { "spec_index" } else { "prepare" },
+            "not asked again: a job that answers the head is queued or running"
+        );
         return Ok(false);
     }
     let job = spec_index_job(request, None, origin.clone(), None)?; // clone: the job owns its origin

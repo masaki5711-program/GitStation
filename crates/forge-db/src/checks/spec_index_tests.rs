@@ -9,8 +9,8 @@ use forge_core::{
 use forge_errors::ErrorCode;
 
 use super::spec_index::{
-    hand_over, spec_index_job, spec_index_payload, SpecIndexRequest, SpecIndexRequests,
-    SPEC_INDEX_JOB, SPEC_INDEX_SUBSCRIBER,
+    hand_over, request_again, spec_index_job, spec_index_payload, SpecIndexRequest,
+    SpecIndexRequests, SPEC_INDEX_JOB, SPEC_INDEX_SUBSCRIBER,
 };
 use crate::change::{Actor, ChangeContext};
 use crate::integrations::{self, NewIntegration};
@@ -414,5 +414,78 @@ async fn link_changes_coalesce_while_queued_and_a_new_link_state_is_a_new_key() 
         "{}",
         found[1].0
     );
+    t.drop_now().await;
+}
+
+/// Load test 2026-11-28: auto-merge asked for `forge/doc-lint` again
+/// (`request_again`) on a head whose `merge_request.prepare` job had not
+/// run yet — the prepare job writes doc-lint itself, so every such ask
+/// was a second evaluation of the same head. While a prepare job of the
+/// merge request is queued or running nothing is asked; once it is
+/// finished one job is, and only one per head.
+#[tokio::test]
+async fn request_again_waits_for_a_pending_prepare_and_asks_once_per_head() {
+    let (t, alice, p) = world().await;
+    let user = ChangeContext::new(
+        Actor::User(alice),
+        RequestId::parse("req-open").expect("id"),
+    );
+    let mr = open_mr_decided(&t.db, &user, p, alice, &new_mr("feature"), |_| Ok(()))
+        .await
+        .map(|(stored, ())| stored)
+        .expect("open");
+    let prepares: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM forge.jobs WHERE kind = $1 AND state = 'queued'")
+            .bind(crate::review::PREPARE_JOB)
+            .fetch_one(&mut t.superuser().await)
+            .await
+            .expect("prepares");
+    assert_eq!(prepares, 1, "opening queues the prepare job");
+    let request = SpecIndexRequest {
+        project: p,
+        iid: mr.iid,
+        head: sha('a'),
+    };
+    let rid = RequestId::parse("req-auto-merge").expect("id");
+    for _ in 0..3 {
+        assert!(
+            !request_again(&t.db, &request, &rid).await.expect("ask"),
+            "the queued prepare job answers doc-lint itself"
+        );
+    }
+    assert!(jobs(&t).await.is_empty(), "{:?}", jobs(&t).await);
+    // Running (claimed by a worker) counts as pending too.
+    let kind = crate::jobs::JobKind::parse(crate::review::PREPARE_JOB).expect("kind");
+    let worker = crate::jobs::WorkerId::generate();
+    let prepare = crate::jobs::claim(&t.db, &worker, std::slice::from_ref(&kind))
+        .await
+        .expect("claim")
+        .expect("the prepare job");
+    assert!(!request_again(&t.db, &request, &rid).await.expect("ask"));
+    assert!(jobs(&t).await.is_empty());
+    // The prepare job is over (and doc-lint is still missing or `error` on
+    // the head): one ask, once.
+    let _done = crate::jobs::complete(&t.db, &prepare)
+        .await
+        .expect("complete");
+    assert!(request_again(&t.db, &request, &rid).await.expect("ask"));
+    for _ in 0..3 {
+        assert!(!request_again(&t.db, &request, &rid).await.expect("again"));
+    }
+    assert_eq!(jobs(&t).await.len(), 1, "one request per head");
+    // A pending prepare job of another merge request does not hold this one.
+    let other = ChangeContext::new(
+        Actor::User(alice),
+        RequestId::parse("req-open-other").expect("id"),
+    );
+    let _other = open_mr_decided(&t.db, &other, p, alice, &new_mr("other"), |_| Ok(()))
+        .await
+        .expect("open other");
+    let next = SpecIndexRequest {
+        head: sha('b'),
+        ..request
+    };
+    assert!(request_again(&t.db, &next, &rid).await.expect("ask"));
+    assert_eq!(jobs(&t).await.len(), 2);
     t.drop_now().await;
 }
