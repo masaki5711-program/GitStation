@@ -2236,6 +2236,21 @@ impl Server {
         })
     }
 
+    /// Wait until `repo`'s allowance is open again. A push that applied no
+    /// ref releases its claim in the push task after the answer has ended
+    /// (and after the check run directory is gone), so the client can see
+    /// the push refused before the release has committed.
+    fn wait_import_open(&self, repo: forge_core::RepoId) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !self.import_open(repo) {
+            assert!(
+                Instant::now() < deadline,
+                "the refused push's claim was not released within 20 s"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     fn audit_rows(&self, action: &str) -> Vec<serde_json::Value> {
         let t = self.t.as_ref().expect("db");
         self.rt.block_on(async {
@@ -2325,8 +2340,9 @@ fn a_key_in_the_tip_is_refused_even_under_the_import_allowance() {
     let text = refused(&out, ErrorCode::PushSecretDetected);
     assert!(text.contains("id_ed25519"), "{text}");
     s.wait_no_check_runs();
-    // A refused push does not use the allowance up.
-    assert!(s.import_open(repo));
+    // A refused push does not use the allowance up (its claim is given back
+    // after the answer, so wait for it).
+    s.wait_import_open(repo);
     assert!(s.audit_rows("repository.history_imported").is_empty());
 }
 
