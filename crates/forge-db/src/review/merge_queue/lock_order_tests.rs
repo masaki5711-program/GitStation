@@ -19,7 +19,9 @@ use forge_core::{MergeMethod, ObjectId, RequestId};
 use super::*;
 use crate::change::{Actor, ChangeContext};
 use crate::projects::{self, CreatedProject, NewProject};
-use crate::review::merge_results::{record_merge_result, MergeRequestPipeline};
+use crate::review::merge_results::{
+    record_merge_result, replace_merge_result, MergeRequestPipeline,
+};
 use crate::review::merges::{enqueue_mr_decided, CredentialRef, NewEntry};
 use crate::review::{open_mr_decided, NewMergeRequest, StoredMergeRequest};
 use crate::test_support::*;
@@ -202,5 +204,171 @@ async fn a_merge_result_recorded_while_a_review_command_holds_the_project_does_n
         matches!(recorded, Ok(Some(_))),
         "the result is recorded after the command commits: {recorded:?}"
     );
+    w.t.drop_now().await;
+}
+
+/// `replace_merge_result` (the version job, the result's commit pruned)
+/// against a review command: the same order as the record.
+#[tokio::test]
+async fn a_merge_result_replaced_while_a_review_command_holds_the_project_does_not_deadlock() {
+    let w = world().await;
+    let origin = RequestId::parse("req-lo-result").expect("id");
+    let first = record_merge_result(
+        &w.t.db,
+        &origin,
+        w.mr.id,
+        (&oid('a'), &oid('b')),
+        &oid('c'),
+        MergeRequestPipeline::NoDefinition,
+    )
+    .await
+    .expect("record");
+    assert!(first.is_some());
+    let mut held = hold_project(&w).await;
+    let db = w.t.db.clone();
+    let mr = w.mr.id;
+    let replaced = tokio::spawn(async move {
+        replace_merge_result(
+            &db,
+            &RequestId::parse("req-lo-replace").expect("id"),
+            mr,
+            (&oid('a'), &oid('b')),
+            (&oid('c'), &oid('d')),
+        )
+        .await
+    });
+    w.t.until_waiting("forge.").await;
+    let locked = held
+        .fetch_text(&format!(
+            "SELECT id::text FROM forge.merge_requests WHERE id = {} FOR UPDATE",
+            mr.get()
+        ))
+        .await;
+    assert_eq!(locked, mr.get().to_string());
+    held.commit().await;
+    let replaced = tokio::time::timeout(Duration::from_secs(30), replaced)
+        .await
+        .expect("the replace finishes")
+        .expect("joined");
+    assert!(
+        matches!(&replaced, Ok(Some(r)) if r.result == oid('d')),
+        "the result is replaced after the command commits: {replaced:?}"
+    );
+    w.t.drop_now().await;
+}
+
+/// The merge request read before the project's lock, removed while the
+/// writer waited for it (a purge): `Ok(None)` (gone), not the insert's
+/// foreign-key error.
+async fn remove_mr_while_waiting(w: &World, mut held: HeldChange) {
+    let mr = w.mr.id.get();
+    w.t.until_waiting("forge.").await;
+    for table in [
+        "merge_result_refs",
+        "merge_request_mergeability",
+        "merge_request_versions",
+    ] {
+        let _n = held
+            .fetch_text(&format!(
+                "WITH d AS (DELETE FROM forge.{table} WHERE merge_request_id = {mr} RETURNING 1) \
+                 SELECT count(*)::text FROM d"
+            ))
+            .await;
+    }
+    let removed = held
+        .fetch_text(&format!(
+            "WITH d AS (DELETE FROM forge.merge_requests WHERE id = {mr} RETURNING id) \
+             SELECT count(*)::text FROM d"
+        ))
+        .await;
+    assert_eq!(removed, "1");
+    held.commit().await;
+}
+
+#[tokio::test]
+async fn a_merge_result_of_a_merge_request_removed_meanwhile_is_none() {
+    let w = world().await;
+    let held = hold_project(&w).await;
+    let db = w.t.db.clone();
+    let mr = w.mr.id;
+    let recorded = tokio::spawn(async move {
+        record_merge_result(
+            &db,
+            &RequestId::parse("req-lo-result").expect("id"),
+            mr,
+            (&oid('a'), &oid('b')),
+            &oid('c'),
+            MergeRequestPipeline::NoDefinition,
+        )
+        .await
+    });
+    remove_mr_while_waiting(&w, held).await;
+    let recorded = tokio::time::timeout(Duration::from_secs(30), recorded)
+        .await
+        .expect("the record finishes")
+        .expect("joined");
+    assert!(matches!(recorded, Ok(None)), "{recorded:?}");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_merge_result_replaced_on_a_merge_request_removed_meanwhile_is_none() {
+    let w = world().await;
+    let first = record_merge_result(
+        &w.t.db,
+        &RequestId::parse("req-lo-result").expect("id"),
+        w.mr.id,
+        (&oid('a'), &oid('b')),
+        &oid('c'),
+        MergeRequestPipeline::NoDefinition,
+    )
+    .await
+    .expect("record");
+    assert!(first.is_some());
+    let held = hold_project(&w).await;
+    let db = w.t.db.clone();
+    let mr = w.mr.id;
+    let replaced = tokio::spawn(async move {
+        replace_merge_result(
+            &db,
+            &RequestId::parse("req-lo-replace").expect("id"),
+            mr,
+            (&oid('a'), &oid('b')),
+            (&oid('c'), &oid('d')),
+        )
+        .await
+    });
+    remove_mr_while_waiting(&w, held).await;
+    let replaced = tokio::time::timeout(Duration::from_secs(30), replaced)
+        .await
+        .expect("the replace finishes")
+        .expect("joined");
+    assert!(matches!(replaced, Ok(None)), "{replaced:?}");
+    w.t.drop_now().await;
+}
+
+/// A batch for a project that is gone (purged with its queue) writes
+/// nothing: `Ok(None)`, not the queue lookup's error.
+#[tokio::test]
+async fn a_batch_for_a_project_that_is_gone_is_none() {
+    let w = world().await;
+    let batch = NewBatch {
+        queue: i64::MAX,
+        project: forge_core::ProjectId::new(i64::MAX),
+        base: oid('b'),
+        train: oid('c'),
+        members: vec![BatchMember {
+            entry: i64::MAX,
+            train_sha: oid('c'),
+            isolate: None,
+        }],
+        request_id: RequestId::parse("req-lo-gone").expect("id"),
+        deadline: Duration::from_secs(600),
+        pipeline: None,
+        parent: None,
+        max_depth: 1,
+    };
+    let built = create_batch(&w.t.db, &batch).await;
+    assert!(matches!(built, Ok(None)), "{built:?}");
     w.t.drop_now().await;
 }
