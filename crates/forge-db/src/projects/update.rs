@@ -101,6 +101,28 @@ pub(crate) async fn lock_shared(
     lock_with(tx, project, "FOR SHARE OF p").await
 }
 
+/// Take the project row's `FOR KEY SHARE` on `c` first — before any row a
+/// review command locks after the project (a merge request, a merge
+/// queue). A writer that inserts a row referencing the project takes this
+/// lock through the foreign key anyway, which waits for a review command's
+/// `FOR UPDATE` ([`lock`]); taken later than another of that command's
+/// rows it deadlocks with it (a-burst 2026-11-28, `merge_queue.create_batch`
+/// and `review.merge_result_record`: `FG-DB-0002 reason=deadlock`,
+/// `FG-REVIEW-0028` from the auto-merge). `false`: no such project.
+pub(crate) async fn key_share_first(
+    c: &mut sqlx::PgConnection,
+    project: ProjectId,
+    query: &'static str,
+) -> Result<bool, ForgeError> {
+    let found: Option<i32> =
+        sqlx::query_scalar("SELECT 1 FROM forge.projects WHERE id = $1 FOR KEY SHARE")
+            .bind(project.get())
+            .fetch_optional(c)
+            .await
+            .map_err(|e| query_error(query, e))?;
+    Ok(found.is_some())
+}
+
 async fn lock_with(
     tx: &mut ChangeTx,
     project: ProjectId,

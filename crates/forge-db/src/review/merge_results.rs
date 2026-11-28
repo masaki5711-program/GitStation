@@ -214,6 +214,11 @@ pub async fn record_merge_result(
         let Some((project, source)) = subject else {
             return Ok(None);
         };
+        // The project before the merge request (the review commands'
+        // order): the rows below reference both, a deadlock otherwise.
+        if !crate::projects::key_share_first(&mut tx, ProjectId::new(project), QUERY).await? {
+            return Ok(None);
+        }
         let git_ref = stored_ref(mr, &source)?;
         let inserted: Option<String> = sqlx::query_scalar(
             "INSERT INTO forge.merge_result_refs \
@@ -336,6 +341,11 @@ pub async fn replace_merge_result(
         let Some((project, source)) = subject else {
             return Ok(None);
         };
+        // The project before the merge request (the review commands'
+        // order): the rows below reference both, a deadlock otherwise.
+        if !crate::projects::key_share_first(&mut tx, ProjectId::new(project), QUERY).await? {
+            return Ok(None);
+        }
         let moved: Option<i64> = sqlx::query_scalar(
             "UPDATE forge.merge_result_refs SET result_sha = $5 \
              WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha = $3 \

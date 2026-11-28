@@ -949,6 +949,10 @@ pub async fn create_batch(db: &Db, new: &NewBatch) -> Result<Option<i64>, ForgeE
             .begin()
             .await
             .map_err(|e| query_error(QUERY, e))?;
+        // The project before the queue (the order of the review commands:
+        // the batch's row references the project, a deadlock otherwise). A
+        // project that is gone fails the batch's insert below on its key.
+        let _project_found = crate::projects::key_share_first(&mut tx, new.project, QUERY).await?;
         let _locked: i64 =
             sqlx::query_scalar("SELECT id FROM forge.merge_queues WHERE id = $1 FOR UPDATE")
                 .bind(new.queue)
@@ -1479,3 +1483,7 @@ mod limit_tests;
 #[cfg(test)]
 #[path = "speculation_tests.rs"]
 mod speculation_tests;
+
+#[cfg(test)]
+#[path = "lock_order_tests.rs"]
+mod lock_order_tests;

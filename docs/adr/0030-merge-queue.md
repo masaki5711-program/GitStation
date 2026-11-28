@@ -164,3 +164,17 @@
 `merge_queue.speculation_depth`（既定 1）が 2 以上のとき、キューは先頭の列車の上に作った投機の列車を最大 8 本まで同時に試す
 （`merge_queue_batches_one_live` は `merge_queue_batches_live_depth` に置き換えた）。既定の 1 では、この ADR の「生きたバッチは 1 つ」の
 まま。決めたことと既知の限界は ADR-0037 の「追記（2026-11-28、計画 18 S9 の実装）」。
+
+## Amendment（2026-11-28、マージの負荷試験 a-burst M5）— ロックの順: プロジェクトの行を先に
+
+- **起きたこと**: 深さ 1 の a-burst で、自動マージの投入（`enqueue_mr_decided`: プロジェクトの行 `FOR UPDATE` → MR → キューの行）と
+  列車の組み立て（`create_batch`: キューの行 `FOR UPDATE` → `merge_queue_batches` の挿入。外部キーでプロジェクトの行の `FOR KEY SHARE`
+  を取り、投入の `FOR UPDATE` を待つ）が deadlock になり、`FG-DB-0002 reason=deadlock`（`merge_queue.queue`）が `FG-REVIEW-0028`
+  （alert）として ERROR で 2 回出た。worker の `review.merge_result_record`（`merge_result_refs` の挿入: 外部キーで MR → プロジェクトの順に
+  `FOR KEY SHARE`）も、レビューの命令（プロジェクト → MR の `FOR UPDATE`）と同じ形で 5 回 deadlock になっていた。どちらも再試行で回復したが、
+  設計した経路ではなく**こちらのロックの順の誤り**。
+- **決めたこと**: プロジェクトを参照する行を書く処理は、レビューの命令が後で取る行（MR、キュー）より**先に**プロジェクトの行の
+  `FOR KEY SHARE` を取る（`projects::key_share_first`）。`create_batch`、`record_merge_result`、`replace_merge_result` に入れた。
+  試験: `forge-db` の `lock_order_tests`（2 つの取引を決まった順に並べ、直す前は 40P01 で落ちる）。
+- **変えないこと**: `FG-REVIEW-0028` のログの重さ（error、alert）。このロックの順の原因は直したので、再試行で消える deadlock を
+  「想定どおり」として下げる理由はない。
