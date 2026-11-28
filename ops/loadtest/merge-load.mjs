@@ -102,6 +102,8 @@ function flag(name) {
 const GROUP = opt('group', 'loadtest');
 const WORK = process.env.GS_LT_WORK ?? path.join(L.OUT, 'work');
 const PG = process.env.GS_LT_PG_CONTAINER ?? 'gs-m3-test-gs-test-pg-1';
+// GS_LT_PG_USER: the superuser inside the container (the dev cluster's is forge_dev, ops/dev/compose.yml)
+const PG_USER = process.env.GS_LT_PG_USER ?? 'postgres';
 // GS_LT_PSQL_DIRECT=1: `psql` of this host with the libpq environment
 // (PGHOST, PGPORT, PGUSER, PGPASSFILE) instead of `docker exec` (a Linux host)
 const PSQL_DIRECT = flag('GS_LT_PSQL_DIRECT');
@@ -138,7 +140,7 @@ async function sql(q) {
       timeout: 60000, maxBuffer: 64 << 20,
       env: { ...process.env, PGOPTIONS: `${process.env.PGOPTIONS ?? ''} ${READ_ONLY}`.trim() },
     })
-    : await pexec('docker', ['exec', '-e', `PGOPTIONS=${READ_ONLY}`, PG, 'psql', '-X', '-U', 'postgres', '-d', PG_DB, ...query], {
+    : await pexec('docker', ['exec', '-e', `PGOPTIONS=${READ_ONLY}`, PG, 'psql', '-X', '-U', PG_USER, '-d', PG_DB, ...query], {
       timeout: 60000, maxBuffer: 64 << 20,
     });
   return r.stdout.trim() ? r.stdout.trim().split('\n').map((l) => l.split('\t')) : [];
