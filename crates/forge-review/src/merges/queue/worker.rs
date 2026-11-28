@@ -29,8 +29,8 @@
 //! - **landing** (a worker stopped mid-landing): settled by asking git.
 //!
 //! Plan 18 S9 (ADR-0037 (d) 4) — speculative trains: with
-//! `merge_queue.speculation_depth` D > 1, a step whose front batch (depth
-//! 1) waits for its train's pipeline builds one more batch behind the
+//! `merge_queue.speculation_depth` D > 1, a step whose front batch (at
+//! depth one) waits for its train's pipeline builds one more batch behind the
 //! deepest live one, on that batch's train (`parent_batch_id`, one deeper)
 //! — up to D live batches, tested at once. Only the front is decided: it
 //! lands only when the target is its base, and the next one becomes the
@@ -484,14 +484,7 @@ impl MergeQueue {
                 continue;
             }
             let outcome = self
-                .abandon(
-                    behind,
-                    BatchState::Testing,
-                    "entry_left",
-                    gone,
-                    None,
-                    repo,
-                )
+                .abandon(behind, BatchState::Testing, "entry_left", gone, None, repo)
                 .await?;
             dropped = Some((outcome, behind.id));
             break;
