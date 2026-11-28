@@ -484,3 +484,51 @@ async fn merge_queue_train_refs_are_listed_and_deleted_at_their_commit() {
         .expect("list");
     assert_eq!(left.iter().map(|r| r.queue_id).collect::<Vec<_>>(), [12]);
 }
+
+/// Plan 18 S10: many named refs in one `for-each-ref`: exactly the names
+/// asked for (a ref below a name is not one of them), a missing name is
+/// absent, and no names starts no git.
+#[tokio::test]
+async fn named_refs_are_read_in_one_call_and_only_by_their_exact_names() {
+    let f = fixture().await;
+    let a = commit(&f.path, "a", None);
+    let b = commit(&f.path, "b", Some(a.as_str()));
+    plumb(&f.path, &["update-ref", "refs/heads/one", a.as_str()], None);
+    plumb(&f.path, &["update-ref", "refs/heads/two", b.as_str()], None);
+    plumb(
+        &f.path,
+        &["update-ref", "refs/heads/dir/below", b.as_str()],
+        None,
+    );
+    // `refs/heads/dir` is no ref (only a ref below it): not answered.
+    let asked = [
+        name("refs/heads/one"),
+        name("refs/heads/two"),
+        name("refs/heads/gone"),
+        name("refs/heads/dir"),
+    ];
+    let (refs, spawned) = crate::counting_spawns(async {
+        let refs = f
+            .git
+            .read_named_refs(&f.root, f.id, &asked, T)
+            .await
+            .expect("read");
+        (refs, crate::scoped_git_spawns())
+    })
+    .await;
+    assert_eq!(spawned, 1, "one for-each-ref");
+    assert_eq!(refs.len(), 2, "{refs:?}");
+    assert_eq!(refs.get(&name("refs/heads/one")), Some(&a));
+    assert_eq!(refs.get(&name("refs/heads/two")), Some(&b));
+    let none = crate::counting_spawns(async {
+        let refs = f
+            .git
+            .read_named_refs(&f.root, f.id, &[], T)
+            .await
+            .expect("read");
+        (refs, crate::scoped_git_spawns())
+    })
+    .await;
+    assert!(none.0.is_empty());
+    assert_eq!(none.1, 0, "no names: no git");
+}

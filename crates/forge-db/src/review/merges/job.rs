@@ -367,152 +367,231 @@ pub async fn finish_merge(
 ) -> Result<MergeFinished, ForgeError> {
     const ACTION: &str = "merge_request.merged";
     push.check()?;
-    let merge_id = attempt.id;
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let outcome = async {
-        lock_access(&mut tx, attempt.project_id).await?;
-        let mr = attempt.merge_request;
-        let current: Row = tx
-            .step(|c| async move {
-                sqlx::query_as(&format!(
-                    "SELECT {COLUMNS} FROM forge.merge_requests WHERE id = $1 FOR UPDATE"
-                ))
-                .bind(mr.get())
-                .fetch_optional(c)
-                .await
-                .map_err(|e| query_error("review.merge_finish_mr", e))
-            })
-            .await?
-            .ok_or_else(absent)?;
-        let current = current.parse()?;
-        let locked = tx
-            .step(|c| async move { attempt_on(c, merge_id).await })
-            .await?
-            .ok_or_else(|| missing_attempt(merge_id))?;
-        match locked.state {
-            MergeState::Executing => {}
-            MergeState::Applied => return Ok(Settle::Discard(MergeFinished::AlreadyApplied)),
-            other @ (MergeState::Queued
-            | MergeState::Prepared
-            | MergeState::Superseded
-            | MergeState::Failed) => {
-                return Ok(Settle::Discard(MergeFinished::NotExecuting(other)))
+    let one = ToFinish {
+        ctx,
+        attempt,
+        push,
+        range_pushers,
+        landed,
+    };
+    let outcome = finish_step(&mut tx, &one).await.map(|step| match step {
+        Finished::Record(record, finished) => Settle::Commit(record, finished),
+        Finished::Derived(finished) => Settle::CommitDerived(finished),
+        Finished::Nothing(finished) => Settle::Discard(finished),
+    });
+    tx.settle(ACTION, outcome).await
+}
+
+/// One merge to record with [`finish_merges`]: [`finish_merge`]'s inputs.
+#[derive(Debug, Clone, Copy)]
+pub struct ToFinish<'a> {
+    /// The requester's context (the record's actor and request id).
+    pub ctx: &'a ChangeContext,
+    pub attempt: &'a StoredMerge,
+    pub push: &'a PushRecord,
+    pub range_pushers: Option<&'a [forge_core::UserId]>,
+    pub landed: Option<&'a LandedPaths>,
+}
+
+/// Plan 18 S10: tx2 of every merge of a merge-queue batch in ONE
+/// transaction — each exactly as [`finish_merge`] records it alone (its
+/// state writes, its audit rows and events with ITS requester's context,
+/// deduplicated by its merge id), in the order given (the train's), then
+/// one COMMIT. `batch` is the transaction's own context (the batch's
+/// system context: its rollback log). One outcome per merge, in order; an
+/// error (a push record that does not check, the database) writes nothing
+/// of any of them.
+pub async fn finish_merges(
+    db: &Db,
+    batch: &ChangeContext,
+    merges: &[ToFinish<'_>],
+) -> Result<Vec<MergeFinished>, ForgeError> {
+    const ACTION: &str = "merge_request.merged";
+    for one in merges {
+        one.push.check()?;
+    }
+    let mut tx = ChangeTx::begin_for_batch(db, batch, merges.len()).await?;
+    let mut records = Vec::new();
+    let mut outcomes = Vec::with_capacity(merges.len());
+    for one in merges {
+        let step = match finish_step(&mut tx, one).await {
+            Ok(step) => step,
+            Err(e) => {
+                tx.rollback(ACTION).await;
+                return Err(e.with_context("merge_id", one.attempt.id));
             }
-        }
-        if current.state != MergeRequestState::Open {
-            tx.step(|c| async move {
-                sqlx::query(
-                    "UPDATE forge.merge_request_merges SET state = 'failed', \
-                     reason = 'merge_request_not_open', error_code = $2, \
-                     finished_at = now(), updated_at = now() \
-                     WHERE id = $1 AND state = 'executing'",
-                )
-                .bind(merge_id)
-                .bind(ErrorCode::MergeExecutionFailed.id())
-                .execute(c)
-                .await
-                .map_err(|e| query_error("review.merge_not_open", e))
-            })
-            .await?;
-            return Ok(Settle::CommitDerived(MergeFinished::MergeRequestNotOpen(
-                current.state,
-            )));
-        }
-        let (Some(expected_old), Some(new_sha)) =
-            (locked.expected_old.clone(), locked.new_sha.clone())
-        else {
-            return Err(ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "merge_finish_unprepared")
-                .with_context("merge_id", merge_id));
         };
+        match step {
+            Finished::Record(record, finished) => {
+                records.push((one.ctx.clone(), record)); // clone: the record is written with it
+                outcomes.push(finished);
+            }
+            Finished::Derived(finished) | Finished::Nothing(finished) => outcomes.push(finished),
+        }
+    }
+    tx.settle(ACTION, Ok(Settle::CommitEach(records, outcomes)))
+        .await
+}
+
+/// How one merge's tx2 ends ([`finish_step`]).
+enum Finished {
+    /// Its record is written (the merge request `merged`).
+    Record(ChangeRecord, MergeFinished),
+    /// Derived writes only (the attempt `failed`).
+    Derived(MergeFinished),
+    /// Nothing written.
+    Nothing(MergeFinished),
+}
+
+/// tx2 of one merge on `tx` ([`finish_merge`]'s docs): nothing is
+/// committed here.
+async fn finish_step(tx: &mut ChangeTx, one: &ToFinish<'_>) -> Result<Finished, ForgeError> {
+    let ToFinish {
+        ctx,
+        attempt,
+        push,
+        range_pushers,
+        landed,
+    } = *one;
+    let merge_id = attempt.id;
+    lock_access(tx, attempt.project_id).await?;
+    let mr = attempt.merge_request;
+    let current: Row = tx
+        .step(|c| async move {
+            sqlx::query_as(&format!(
+                "SELECT {COLUMNS} FROM forge.merge_requests WHERE id = $1 FOR UPDATE"
+            ))
+            .bind(mr.get())
+            .fetch_optional(c)
+            .await
+            .map_err(|e| query_error("review.merge_finish_mr", e))
+        })
+        .await?
+        .ok_or_else(absent)?;
+    let current = current.parse()?;
+    let locked = tx
+        .step(|c| async move { attempt_on(c, merge_id).await })
+        .await?
+        .ok_or_else(|| missing_attempt(merge_id))?;
+    match locked.state {
+        MergeState::Executing => {}
+        MergeState::Applied => return Ok(Finished::Nothing(MergeFinished::AlreadyApplied)),
+        other @ (MergeState::Queued
+        | MergeState::Prepared
+        | MergeState::Superseded
+        | MergeState::Failed) => return Ok(Finished::Nothing(MergeFinished::NotExecuting(other))),
+    }
+    if current.state != MergeRequestState::Open {
         tx.step(|c| async move {
             sqlx::query(
-                "UPDATE forge.merge_request_merges SET state = 'applied', finished_at = now(), \
-                 updated_at = now() WHERE id = $1 AND state = 'executing'",
+                "UPDATE forge.merge_request_merges SET state = 'failed', \
+                 reason = 'merge_request_not_open', error_code = $2, \
+                 finished_at = now(), updated_at = now() \
+                 WHERE id = $1 AND state = 'executing'",
             )
             .bind(merge_id)
+            .bind(ErrorCode::MergeExecutionFailed.id())
             .execute(c)
             .await
-            .map_err(|e| query_error("review.merge_applied", e))
+            .map_err(|e| query_error("review.merge_not_open", e))
         })
         .await?;
-        let row: Row = tx
-            .step(|c| async move {
-                sqlx::query_as(&format!(
-                    "UPDATE forge.merge_requests SET state = 'merged', revision = revision + 1, \
-                     updated_at = now() WHERE id = $1 RETURNING {COLUMNS}"
-                ))
-                .bind(mr.get())
-                .fetch_one(c)
+        return Ok(Finished::Derived(MergeFinished::MergeRequestNotOpen(
+            current.state,
+        )));
+    }
+    let (Some(expected_old), Some(new_sha)) = (locked.expected_old.clone(), locked.new_sha.clone())
+    else {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "merge_finish_unprepared")
+            .with_context("merge_id", merge_id));
+    };
+    tx.step(|c| async move {
+        sqlx::query(
+            "UPDATE forge.merge_request_merges SET state = 'applied', finished_at = now(), \
+             updated_at = now() WHERE id = $1 AND state = 'executing'",
+        )
+        .bind(merge_id)
+        .execute(c)
+        .await
+        .map_err(|e| query_error("review.merge_applied", e))
+    })
+    .await?;
+    let row: Row = tx
+        .step(|c| async move {
+            sqlx::query_as(&format!(
+                "UPDATE forge.merge_requests SET state = 'merged', revision = revision + 1, \
+                 updated_at = now() WHERE id = $1 RETURNING {COLUMNS}"
+            ))
+            .bind(mr.get())
+            .fetch_one(c)
+            .await
+            .map_err(|e| query_error("review.merge_mr_merged", e))
+        })
+        .await?;
+    let stored = row.parse()?;
+    let change = MergeRequestChange::Merged {
+        merge_request: mr,
+        iid: stored.iid,
+        merge_id,
+        method: locked.method,
+        target_branch: locked.target_branch.clone(), // clone: the change owns its name
+        target_sha: expected_old,
+        merged_sha: new_sha.clone(), // clone: the push commits row below needs it too
+        head_sha: locked.head_sha.clone(), // clone: the change owns its id
+        merged_by: locked.requested_by,
+    };
+    // M3 R5 round 4 / review round 5 (ADR-0024 §8.3): a merge or squash
+    // commit is a commit this "push" introduced — by the requester and by
+    // every pusher of the merged range (a squash must not launder them);
+    // unknown pushers: no row at all (a later range holding it has
+    // unknown committers).
+    if let (true, Some(range_pushers)) = (
+        locked.method != forge_core::MergeMethod::FastForward,
+        range_pushers,
+    ) {
+        let mut users: Vec<forge_core::UserId> = range_pushers.to_vec();
+        users.push(locked.requested_by);
+        users.sort_unstable();
+        users.dedup();
+        let (project, repo) = (attempt.project_id, push.repository_id);
+        let request_id = ctx.request_id.as_str().to_owned();
+        let merged = std::slice::from_ref(&new_sha);
+        for user in users {
+            let request_id = request_id.as_str();
+            tx.step(|c| async move {
+                crate::repositories::insert_push_commits(
+                    c,
+                    (project, repo),
+                    request_id,
+                    user,
+                    merged,
+                )
                 .await
-                .map_err(|e| query_error("review.merge_mr_merged", e))
             })
             .await?;
-        let stored = row.parse()?;
-        let change = MergeRequestChange::Merged {
-            merge_request: mr,
-            iid: stored.iid,
-            merge_id,
-            method: locked.method,
-            target_branch: locked.target_branch.clone(), // clone: the change owns its name
-            target_sha: expected_old,
-            merged_sha: new_sha.clone(), // clone: the push commits row below needs it too
-            head_sha: locked.head_sha.clone(), // clone: the change owns its id
-            merged_by: locked.requested_by,
-        };
-        // M3 R5 round 4 / review round 5 (ADR-0024 §8.3): a merge or squash
-        // commit is a commit this "push" introduced — by the requester and by
-        // every pusher of the merged range (a squash must not launder them);
-        // unknown pushers: no row at all (a later range holding it has
-        // unknown committers).
-        if let (true, Some(range_pushers)) = (
-            locked.method != forge_core::MergeMethod::FastForward,
-            range_pushers,
-        ) {
-            let mut users: Vec<forge_core::UserId> = range_pushers.to_vec();
-            users.push(locked.requested_by);
-            users.sort_unstable();
-            users.dedup();
-            let (project, repo) = (attempt.project_id, push.repository_id);
-            let request_id = ctx.request_id.as_str().to_owned();
-            let merged = std::slice::from_ref(&new_sha);
-            for user in users {
-                let request_id = request_id.as_str();
-                tx.step(|c| async move {
-                    crate::repositories::insert_push_commits(
-                        c,
-                        (project, repo),
-                        request_id,
-                        user,
-                        merged,
-                    )
-                    .await
-                })
-                .await?;
-            }
         }
-        let pushed = AuditDetails::RepositoryPushed {
-            project_id: attempt.project_id,
-            repository_id: push.repository_id,
-            updates: push.sorted_updates(),
-            replayed_from: None,
-            landed: landed.cloned(),
-        };
-        let record = merge_record(
-            attempt.project_id,
-            change,
-            merged_key("merge_request_merged", merge_id)?,
-            pushed,
-            merged_key("merge_pushed", merge_id)?,
-            push.repository_id.get(),
-        )?;
-        Ok(Settle::Commit(
-            record,
-            MergeFinished::Recorded(Box::new(stored)),
-        ))
     }
-    .await;
-    tx.settle(ACTION, outcome).await
+    let pushed = AuditDetails::RepositoryPushed {
+        project_id: attempt.project_id,
+        repository_id: push.repository_id,
+        updates: push.sorted_updates(),
+        replayed_from: None,
+        landed: landed.cloned(),
+    };
+    let record = merge_record(
+        attempt.project_id,
+        change,
+        merged_key("merge_request_merged", merge_id)?,
+        pushed,
+        merged_key("merge_pushed", merge_id)?,
+        push.repository_id.get(),
+    )?;
+    Ok(Finished::Record(
+        record,
+        MergeFinished::Recorded(Box::new(stored)),
+    ))
 }
 
 /// The source branch a merge deleted (ADR-0024 §4.2 step 10).

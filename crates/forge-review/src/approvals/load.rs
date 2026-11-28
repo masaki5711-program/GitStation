@@ -64,7 +64,8 @@ impl ReviewGit {
     /// The git facts of merge request `mr` at `head` into the target tip
     /// `target_tip` (`None`: the target branch is missing), every call
     /// within `budget`. Only the database is an error; every git failure
-    /// or an exhausted budget is an unknown fact (module docs).
+    /// or an exhausted budget is an unknown fact (module docs). Plan 18
+    /// S10: [`ReviewGit::reads`] then [`ReviewGit::facts_from`].
     pub(crate) async fn facts(
         &self,
         db: &Db,
@@ -88,6 +89,23 @@ impl ReviewGit {
                 targets: SelectorTargets::default(),
             });
         };
+        let reads = self.reads(db, asker, mr, head, tip, budget).await?;
+        facts_from(db, asker, mr, reads, budget).await
+    }
+
+    /// Plan 18 S10: the git half of [`ReviewGit::facts`] — every git call
+    /// of the evaluation, a function of (`head`, `tip`) only (objects do
+    /// not change), so a merge-queue build can read them before the
+    /// landing, and the landing use them when its shas are the same.
+    pub(crate) async fn reads(
+        &self,
+        db: &Db,
+        asker: Asker<'_>,
+        mr: &StoredMergeRequest,
+        head: &ObjectId,
+        tip: &ObjectId,
+        budget: &mut Budget,
+    ) -> Result<GitReads, ForgeError> {
         // Load test 2026-11-19: the merge result the mergeability check
         // wrote for exactly (head, tip) is the trial merge's tree as a
         // commit (`refs/merge-requests/<iid>/merge`): its paths against the
@@ -96,16 +114,14 @@ impl ReviewGit {
         let changed = self
             .changed(asker, mr, (head, tip), stored.as_ref(), budget)
             .await;
-        let committers = self.committers(db, asker, mr, head, tip, budget).await?;
-        let codeowners = self
-            .codeowners(db, asker, mr, tip, &changed, budget)
-            .await?;
-        let targets = selector_targets(db, mr).await?;
-        Ok(GitFacts {
-            committers,
+        let range = self.range(asker, mr, head, tip, budget).await;
+        let codeowners = self.codeowners_read(asker, tip, budget).await;
+        Ok(GitReads {
+            head: head.clone(), // clone: the reads name their shas
+            tip: tip.clone(),   // clone: as above
             changed,
+            range,
             codeowners,
-            targets,
         })
     }
 
@@ -212,20 +228,20 @@ impl ReviewGit {
         }
     }
 
-    async fn committers(
+    /// The range's commits (newest first), or why they are unknown.
+    async fn range(
         &self,
-        db: &Db,
         asker: Asker<'_>,
         mr: &StoredMergeRequest,
         head: &ObjectId,
         tip: &ObjectId,
         budget: &mut Budget,
-    ) -> Result<Committers, ForgeError> {
+    ) -> RangeRead {
         let Ok(timeout) = budget.next() else {
             spent(asker, mr, "range_commits", "budget");
-            return Ok(Committers::Unknown("timeout"));
+            return RangeRead::Unknown("timeout");
         };
-        let range = match self
+        match self
             .git
             .range_commits(
                 &self.storage,
@@ -237,115 +253,233 @@ impl ReviewGit {
             )
             .await
         {
-            Ok(Some(range)) => range,
-            Ok(None) => return Ok(Committers::Unknown("range_too_long")),
+            Ok(Some(range)) => RangeRead::Commits(range.commits),
+            Ok(None) => RangeRead::Unknown("range_too_long"),
             Err(e) => {
                 warn_unread(asker, mr, "range_commits", &e);
-                return Ok(Committers::Unknown(git_reason(&e)));
+                RangeRead::Unknown(git_reason(&e))
             }
-        };
-        // The pushers of the range's commits, recorded at receive time
-        // (M3 R5 round 4), bounded by the budget's time.
-        let read = review::range_pushers(db, asker.project, asker.repo, &range.commits);
-        let pushers = match tokio::time::timeout(budget.left(), read).await {
-            Ok(pushers) => pushers?,
-            Err(_) => {
-                spent(asker, mr, "range_pushers", "deadline");
-                return Ok(Committers::Unknown("timeout"));
-            }
-        };
-        Ok(committers::committers_of(&range.commits, &pushers))
+        }
     }
 
-    /// The target tip's CODEOWNERS, resolved and matched against the
-    /// changed paths (in a blocking task within [`MATCH_BUDGET`]). One warn
-    /// `forge.review.codeowners_invalid` (FG-REVIEW-0014) when it cannot be
-    /// used — also for a git failure (its code rides along).
-    async fn codeowners(
+    /// The target tip's CODEOWNERS file as git answers it (read and
+    /// parsed; out of budget: unread).
+    async fn codeowners_read(
         &self,
-        db: &Db,
         asker: Asker<'_>,
-        mr: &StoredMergeRequest,
         tip: &ObjectId,
-        changed: &ChangedPathsFact,
         budget: &mut Budget,
-    ) -> Result<CodeownersFact, ForgeError> {
-        let mut git_error: Option<ForgeError> = None;
-        let mut join_error: Option<String> = None;
-        let (path, parsed) = match budget.next() {
-            // Out of budget: unread (the one warn below says so).
-            Err(_) => ("", Err(CodeownersError::file("read_failed"))),
-            Ok(timeout) => match self
-                .git
-                .codeowners_file(
-                    &self.storage,
-                    asker.repo,
-                    tip,
-                    codeowners::MAX_BYTES,
-                    timeout,
-                )
-                .await
-            {
-                Ok(CodeownersFile::Absent) => return Ok(CodeownersFact::Absent),
-                Ok(CodeownersFile::Found { path, bytes }) => (path, codeowners::parse(&bytes)),
-                Ok(CodeownersFile::TooLarge { path }) => {
-                    (path, Err(CodeownersError::file("too_large")))
-                }
-                Ok(CodeownersFile::NotAFile { path }) => {
-                    (path, Err(CodeownersError::file("not_a_file")))
-                }
-                Err(e) => {
-                    git_error = Some(e);
-                    ("", Err(CodeownersError::file("read_failed")))
-                }
-            },
+    ) -> CodeownersRead {
+        let Ok(timeout) = budget.next() else {
+            // Out of budget: unread (the one warn of `codeowners_from`).
+            return CodeownersRead::Unread {
+                path: "",
+                parsed: Err(CodeownersError::file("read_failed")),
+                git_error: None,
+                transient: true,
+            };
         };
-        let resolved = match parsed {
-            Ok(file) => resolve(db, file).await?,
-            Err(e) => Err(e),
+        let (path, parsed, git_error) = match self
+            .git
+            .codeowners_file(
+                &self.storage,
+                asker.repo,
+                tip,
+                codeowners::MAX_BYTES,
+                timeout,
+            )
+            .await
+        {
+            Ok(CodeownersFile::Absent) => return CodeownersRead::Absent,
+            Ok(CodeownersFile::Found { path, bytes }) => (path, codeowners::parse(&bytes), None),
+            Ok(CodeownersFile::TooLarge { path }) => {
+                (path, Err(CodeownersError::file("too_large")), None)
+            }
+            Ok(CodeownersFile::NotAFile { path }) => {
+                (path, Err(CodeownersError::file("not_a_file")), None)
+            }
+            Err(e) => ("", Err(CodeownersError::file("read_failed")), Some(e)),
         };
-        let fact = match resolved {
-            Ok((file, owners)) => {
-                let paths = match changed {
-                    ChangedPathsFact::Known(paths) => paths.clone(), // clone: moved to the blocking task
-                    ChangedPathsFact::Conflict | ChangedPathsFact::Unknown(_) => Vec::new(),
-                };
-                match matched(file.clone(), paths, budget.deadline()).await {
-                    // clone: the task owns its copy
-                    Ok(matched) => CodeownersFact::Valid {
-                        path,
-                        file,
-                        owners,
-                        matched,
-                    },
-                    Err((reason, join)) => {
-                        join_error = join;
-                        CodeownersFact::Invalid(CodeownersError::file(reason))
-                    }
+        let transient = git_error.is_some();
+        CodeownersRead::Unread {
+            path,
+            parsed,
+            git_error,
+            transient,
+        }
+    }
+}
+
+/// The git reads of one approval evaluation (plan 18 S10,
+/// [`ReviewGit::reads`]): what git answered for (`head`, `tip`).
+#[derive(Debug)]
+pub(crate) struct GitReads {
+    pub(crate) head: ObjectId,
+    pub(crate) tip: ObjectId,
+    changed: ChangedPathsFact,
+    range: RangeRead,
+    codeowners: CodeownersRead,
+}
+
+impl GitReads {
+    /// Whether every answer is git's own about these objects: none is a
+    /// timeout, a spent budget or a failed git (those may answer otherwise
+    /// when asked again, so such reads are never kept for later).
+    pub(crate) fn settled(&self) -> bool {
+        let transient = |reason: &str| matches!(reason, "timeout" | "git_failed");
+        let changed = !matches!(&self.changed, ChangedPathsFact::Unknown(r) if transient(r));
+        let range = !matches!(&self.range, RangeRead::Unknown(r) if transient(r));
+        let codeowners = !matches!(
+            &self.codeowners,
+            CodeownersRead::Unread {
+                transient: true,
+                ..
+            }
+        );
+        changed && range && codeowners
+    }
+}
+
+/// The range's commits as git answered.
+#[derive(Debug)]
+enum RangeRead {
+    Commits(Vec<ObjectId>),
+    Unknown(&'static str),
+}
+
+/// The CODEOWNERS file as git answered.
+#[derive(Debug)]
+enum CodeownersRead {
+    Absent,
+    /// Read (or not: `parsed` says why), not yet resolved.
+    Unread {
+        path: &'static str,
+        parsed: Result<Codeowners, CodeownersError>,
+        git_error: Option<ForgeError>,
+        /// Out of budget or a git failure.
+        transient: bool,
+    },
+}
+
+/// Plan 18 S10: the database half of [`ReviewGit::facts`] on `reads` (the
+/// pushers of the range, the CODEOWNERS owners and their match, the
+/// selectors' units) - no git process.
+pub(crate) async fn facts_from(
+    db: &Db,
+    asker: Asker<'_>,
+    mr: &StoredMergeRequest,
+    reads: GitReads,
+    budget: &Budget,
+) -> Result<GitFacts, ForgeError> {
+    let GitReads {
+        tip,
+        changed,
+        range,
+        codeowners,
+        ..
+    } = reads;
+    let committers = committers_from(db, asker, mr, range, budget).await?;
+    let codeowners = codeowners_from(db, asker, mr, (&tip, &changed), codeowners, budget).await?;
+    let targets = selector_targets(db, mr).await?;
+    Ok(GitFacts {
+        committers,
+        changed,
+        codeowners,
+        targets,
+    })
+}
+
+/// The committers of the range: its commits' pushers, recorded at receive
+/// time (M3 R5 round 4), bounded by the budget's time.
+async fn committers_from(
+    db: &Db,
+    asker: Asker<'_>,
+    mr: &StoredMergeRequest,
+    range: RangeRead,
+    budget: &Budget,
+) -> Result<Committers, ForgeError> {
+    let commits = match range {
+        RangeRead::Commits(commits) => commits,
+        RangeRead::Unknown(reason) => return Ok(Committers::Unknown(reason)),
+    };
+    let read = review::range_pushers(db, asker.project, asker.repo, &commits);
+    let pushers = match tokio::time::timeout(budget.left(), read).await {
+        Ok(pushers) => pushers?,
+        Err(_) => {
+            spent(asker, mr, "range_pushers", "deadline");
+            return Ok(Committers::Unknown("timeout"));
+        }
+    };
+    Ok(committers::committers_of(&commits, &pushers))
+}
+
+/// The target tip's CODEOWNERS, resolved and matched against the changed
+/// paths (in a blocking task within [`MATCH_BUDGET`]). One warn
+/// `forge.review.codeowners_invalid` (FG-REVIEW-0014) when it cannot be
+/// used, also for a git failure (its code rides along).
+async fn codeowners_from(
+    db: &Db,
+    asker: Asker<'_>,
+    mr: &StoredMergeRequest,
+    (tip, changed): (&ObjectId, &ChangedPathsFact),
+    read: CodeownersRead,
+    budget: &Budget,
+) -> Result<CodeownersFact, ForgeError> {
+    let (path, parsed, git_error) = match read {
+        CodeownersRead::Absent => return Ok(CodeownersFact::Absent),
+        CodeownersRead::Unread {
+            path,
+            parsed,
+            git_error,
+            ..
+        } => (path, parsed, git_error),
+    };
+    let mut join_error: Option<String> = None;
+    let resolved = match parsed {
+        Ok(file) => resolve(db, file).await?,
+        Err(e) => Err(e),
+    };
+    let fact = match resolved {
+        Ok((file, owners)) => {
+            let paths = match changed {
+                ChangedPathsFact::Known(paths) => paths.clone(), // clone: moved to the blocking task
+                ChangedPathsFact::Conflict | ChangedPathsFact::Unknown(_) => Vec::new(),
+            };
+            match matched(file.clone(), paths, budget.deadline()).await {
+                // clone: the task owns its copy
+                Ok(matched) => CodeownersFact::Valid {
+                    path,
+                    file,
+                    owners,
+                    matched,
+                },
+                Err((reason, join)) => {
+                    join_error = join;
+                    CodeownersFact::Invalid(CodeownersError::file(reason))
                 }
             }
-            Err(e) => CodeownersFact::Invalid(e),
-        };
-        if let CodeownersFact::Invalid(e) = &fact {
-            tracing::warn!(
-                target: "forge_review",
-                event = "forge.review.codeowners_invalid",
-                error_code = ErrorCode::CodeownersInvalid.id(),
-                git_error_code = git_error.as_ref().map(|g| g.code().id()),
-                git_error = git_error.as_ref().map(|g| g.to_string()),
-                join_error = join_error.as_deref(),
-                request_id = %asker.request_id,
-                merge_request_id = mr.id.get(),
-                project_id = asker.project.get(),
-                target_sha = tip.as_str(),
-                path,
-                line = e.line,
-                reason = e.reason,
-                "the target branch's CODEOWNERS cannot be used; the merge is blocked"
-            );
         }
-        Ok(fact)
+        Err(e) => CodeownersFact::Invalid(e),
+    };
+    if let CodeownersFact::Invalid(e) = &fact {
+        tracing::warn!(
+            target: "forge_review",
+            event = "forge.review.codeowners_invalid",
+            error_code = ErrorCode::CodeownersInvalid.id(),
+            git_error_code = git_error.as_ref().map(|g| g.code().id()),
+            git_error = git_error.as_ref().map(|g| g.to_string()),
+            join_error = join_error.as_deref(),
+            request_id = %asker.request_id,
+            merge_request_id = mr.id.get(),
+            project_id = asker.project.get(),
+            target_sha = tip.as_str(),
+            path,
+            line = e.line,
+            reason = e.reason,
+            "the target branch's CODEOWNERS cannot be used; the merge is blocked"
+        );
     }
+    Ok(fact)
 }
 
 /// The units the project's approval rules' selectors name for `mr`'s

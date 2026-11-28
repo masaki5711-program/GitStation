@@ -403,6 +403,7 @@ pub async fn create_decided<P>(
             Settle::Commit(record, created) => Settle::Commit(record, (created, decided)),
             Settle::Discard(created) => Settle::Discard((created, decided)),
             Settle::CommitDerived(created) => Settle::CommitDerived((created, decided)),
+            Settle::CommitEach(records, created) => Settle::CommitEach(records, (created, decided)),
         })
     }
     .await;

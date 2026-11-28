@@ -242,6 +242,24 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
 
 起動のログ `forge.serve.merge_queue_started` に `speculation_depth`。`forge.merge_queue.batch_built` に `depth` と `parent_batch_id`。
 
+## 着地の区間（計画 18 S10。ADR-0037 の S10 の追記）
+
+着地（マージのロックの下）は、バッチを 1 件ずつではなくまとめて扱う。キーは無く、戻し方も無い（挙動の意味は同じ）。
+
+- **source の先端は `for-each-ref` 1 回**、**承認の git の事実はバッチを作ったときに先に読む**（同じ worker の、同じ head と土台の
+  ときだけ使う）。先に読んだものが無いとき（再起動、別の worker が作った、読みが時間切れだった）はロックの下で読み、
+  `forge.merge_queue.approval_facts_read`（info、`entry_id`）を出す。たまに出るのは正常。毎回出て `land_ms` が大きいなら、
+  キューの貸し出しが worker の間を移っていないか（`forge.merge_queue.lease_lost`）を見る。
+- **決定はバッチで 1 つのトランザクション**。1 件が断られると（`source_moved`、`credential_revoked` など）何も書かれない:
+  そのバッチのメンバーの試み（`forge.merge_request_merges`）は 1 行も残らない（以前は前のメンバーの試みが `superseded`、
+  `reason=queue_rebuild` で残った）。バッチは今までどおり `abandoned`、`reason=entry_refused`、断られた MR だけが外れ、残りは
+  順に `queued` へ戻って作り直される。
+- **記録もバッチで 1 つのトランザクション**。監査の行とイベントは MR ごとに今までと同じ（依頼した人の actor・request id、列車の順）。
+  このトランザクションが失敗すると、どの MR もまだ `merged` ではないまま、バッチは `landing` に残る（target は動いている）。
+  上の Diagnose 5 のとおり、回復が git を見て全部を記録する。
+- 測る: `forge.merge_queue.batch_landed` の `land_ms`（ロックの下の時間）と `git_spawns`（ロックの下の git の起動。メンバー数を N として
+  およそ 4 + 3N 以下）。`lock_wait_ms` が `land_ms` より大きい状態が続くなら、着地が逐次の詰まりになっている。
+
 ## Mitigate（変更は人の承認のあと）
 
 - **通知に頼らずに動かす**（`FG-DB-0024` が続く、LISTEN の接続が直らない）: サーバーの設定を `merge_queue.safety_poll_ms = 2000`、
