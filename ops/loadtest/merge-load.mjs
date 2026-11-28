@@ -57,7 +57,7 @@ function usage(message) {
   process.exit(2);
 }
 // the numeric options of each scenario with their minimum (all are integers)
-const MR_OPTS = { n: 1, gap: 0, timeout: 1, 'retry-busy': 0 };
+const MR_OPTS = { n: 1, gap: 0, timeout: 1, 'retry-busy': 0, 'retry-unchecked': 0 };
 const NUMERIC = {
   a: { ...MR_OPTS, burst: 1, 'person-from': 0 },
   'a-burst': { ...MR_OPTS, 'person-from': 0 },
@@ -65,7 +65,7 @@ const NUMERIC = {
   b: MR_OPTS,
   c: { ...MR_OPTS, burst: 1 },
   d: { n: 1 },
-  e: { count: 1, rate: 1, burst: 0, 'burst-every': 1, duration: 0, docs: 1, 'sample-every': 1, 'repo-size-every': 1, timeout: 1, 'retry-busy': 0 },
+  e: { count: 1, rate: 1, burst: 0, 'burst-every': 1, duration: 0, docs: 1, 'sample-every': 1, 'repo-size-every': 1, timeout: 1, 'retry-busy': 0, 'retry-unchecked': 0 },
   'spawn-bench': { n: 1, docs: 2 },
   sample: {},
 };
@@ -284,21 +284,39 @@ async function makeBranches(p, branches /* [{name, files:{path:content|null}}] *
 }
 // --retry-busy N: a client that retries a 503 FG-GIT-0004 (git busy) up to N times, 1 s apart
 const RETRY_BUSY = Object.hasOwn(NUMERIC[scenario], 'retry-busy') ? num('retry-busy', 0) : 0;
+// --retry-unchecked N (default 5): a client that retries a 503 FG-DOC-0009
+// (the one-revision check did not finish: nothing was created, safe to repeat)
+// up to N times with backoff 1, 2, 4, 8, 16 s (capped, plus up to 250 ms jitter
+// so a burst does not come back at once). Counted apart from busy retries.
+const RETRY_UNCHECKED = Object.hasOwn(NUMERIC[scenario], 'retry-unchecked') ? num('retry-unchecked', 5) : 0;
+const uncheckedBackoffMs = (k) => Math.min(1000 * 2 ** k, 16000) + Math.floor(Math.random() * 250);
 // --gap S: seconds between two waves of MRs
 const GAP_S = Object.hasOwn(NUMERIC[scenario], 'gap') ? num('gap', 30) : 30;
 async function createMr(p, b) {
   const t = Date.now();
   let r;
   let busyRetries = 0;
+  let uncheckedRetries = 0;
+  const uncheckedRequestIds = [];
   for (;;) {
     r = await L.api('POST', `/api/v1/projects/${p.id}/merge-requests`, {
       title: b.title ?? b.name, description: 'synthetic load test', source_branch: b.name, target_branch: 'main', draft: false,
     });
-    if (r.status !== 503 || r.body?.error_code !== 'FG-GIT-0004' || busyRetries >= RETRY_BUSY) break;
-    busyRetries++;
-    await L.sleep(1000);
+    if (r.status !== 503) break;
+    if (r.body?.error_code === 'FG-GIT-0004' && busyRetries < RETRY_BUSY) {
+      busyRetries++;
+      await L.sleep(1000);
+    } else if (r.body?.error_code === 'FG-DOC-0009' && uncheckedRetries < RETRY_UNCHECKED) {
+      // the request id finds the refusal's `reason` (budget / git / lock_busy / …) in forge's log
+      uncheckedRequestIds.push(r.requestId);
+      await L.sleep(uncheckedBackoffMs(uncheckedRetries));
+      uncheckedRetries++;
+    } else {
+      break;
+    }
   }
   const rec = { branch: b.name, t_create: iso(t), create_ms: Math.round(r.ms), create_status: r.status, busy_retries: busyRetries,
+    unchecked_retries: uncheckedRetries, unchecked_request_ids: uncheckedRequestIds,
     iid: r.body?.iid ?? null, create_error: r.status === 201 ? null : r.body?.error_code ?? r.body?.error ?? r.status,
     create_request_id: r.requestId };
   return rec;
@@ -432,6 +450,15 @@ function summarize(recs, facts) {
     batches: { count: facts.batches.length, by_size_state: batchSizes, duration: batchDurations(facts.batches) },
     entries: { count: facts.entries.length, by_state: facts.entries.reduce((a, e) => ((a[e.state] = (a[e.state] ?? 0) + 1), a), {}) },
     error_codes: codes,
+    // 503 FG-DOC-0009 on create (the one-revision check out of time), apart
+    // from the final create errors above: how often a create had to be retried
+    doc_revision_unchecked: {
+      retries: recs.reduce((a, r) => a + (r.unchecked_retries ?? 0), 0),
+      mrs_retried: recs.filter((r) => r.unchecked_retries > 0).length,
+      created_after_retry: recs.filter((r) => r.unchecked_retries > 0 && r.create_status === 201).length,
+      gave_up: recs.filter((r) => r.create_error === 'FG-DOC-0009').length,
+      max_per_mr: Math.max(0, ...recs.map((r) => r.unchecked_retries ?? 0)),
+    },
   };
 }
 async function burstCreate(p, branches, burst, { enqueueByPerson }) {

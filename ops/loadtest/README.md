@@ -65,6 +65,8 @@
 
 作成の 503（`FG-GIT-0004`）が残っている間（計画 18 S3 の前）は、再試行なしの `a`・`a-burst` は 4 になる。数字は結果に入っているので測定としては読めるが、合格ではない。
 
+作成の 503 `FG-DOC-0009`（文書の改訂の確認が時間内に終わらなかった。何も作られていないので繰り返してよい）は、MR を作るシナリオすべてで `--retry-unchecked N`（既定 5）回まで、1・2・4・8・16 秒（上限 16 秒、0〜250 ms のゆらぎ付き）おいて作り直す。`--retry-unchecked 0` で再試行しない。回数は busy の再試行とは別に数え、各 MR の行に `unchecked_retries` と断られた要求の `unchecked_request_ids`（forge のログで `reason` を引く）、結果の `summary.doc_revision_unchecked` に `retries`（合計）・`mrs_retried`・`created_after_retry`・`gave_up`（上限まで断られた数。`create:FG-DOC-0009` として `error_codes` にも入る）・`max_per_mr` を書く。`gave_up` が 0 でなければ、同じリポジトリでいつも `reason=budget` になっていないかを `FG-DOC-0009` の調べ方で確かめる。
+
 `run-all.sh` の終了コード: 0 = 全部信じてよい。2 = 引数・環境変数の誤り（ロックを取る前）。3 = `STOP`。4 = 全部最後まで動いたが、4 を返したシナリオがある（**4 のシナリオの後も次のシナリオへ進む**。プロジェクトが別で、結果は書かれているため）。129 / 130 / 143 = シグナル（HUP / INT / TERM）。それ以外 = 失敗したシナリオの終了コード（そこで止める）。
 シグナルを受けたら、動いているシナリオとサンプラーを止めてから終わる（次のシナリオへは進まない）。ロックは、この実行が取り、かつ中身がこの実行の印のままのときだけ外す（他人のロックや、置き換えられたロックは残す）。
 サンプラーが 30 回続けて採れないとき（約 5 分。DB が答えない等）は、空きメモリの下限を見張れないので `STOP` を書いて終わる。サンプラーが `STOP` を書かずに消えたときも、`run-all.sh` は次の段で止まる（終了コード 1）。
@@ -72,7 +74,7 @@
 ### 引数と環境変数の検査
 
 - `--tag`（`run-all.sh` の `TAG`）と `sample` の `--file` は `^[A-Za-z0-9._-]+$` だけ。ファイル・ディレクトリ・プロジェクトの名前になるため、`/` や `..` を含む値は断る。`spawn-bench` が使い捨てのディレクトリを消す前には、消す先が `GS_LT_WORK` の中にあることも確かめる。
-- 数の引数（`--n`・`--burst`・`--gap`・`--person-from`・`--timeout`・`--retry-busy`・`e` の全部・`spawn-bench` の `--docs`）は整数で、下限がある（`--timeout abc` や `--n 0` は断る）。シナリオに無い `--名前` も断る。
+- 数の引数（`--n`・`--burst`・`--gap`・`--person-from`・`--timeout`・`--retry-busy`・`--retry-unchecked`・`e` の全部・`spawn-bench` の `--docs`）は整数で、下限がある（`--timeout abc` や `--n 0` は断る）。シナリオに無い `--名前` も断る。
 - `GS_LT_MIN_FREE_GB` は 0 以上の数、`GS_LT_PSQL_DIRECT` と `GS_LT_DOC_LINT_MISSING_FATAL` は `0` か `1`。
 - `GS_LT_CONCURRENCY`（既定 32、1〜1024 の整数）: 一斉作成（`a` の波・`a-burst`・`a-xref`）で同時に開く API 呼び出しの数。負荷試験の道具は 1 台の端末なので、forge の `server.max_connections_per_peer`（既定 64）を超えた接続は、要求を読む前に断られる（503 `FG-WEB-0008`、または接続が閉じられて `TypeError`）。200 人が 200 台から出す一斉作成は 200 の端末なので、この上限には当たらない。キューから見れば、32 本ずつでも一斉に届く。上限を確かめたいときだけ、`GS_LT_CONCURRENCY` を 64 より大きくする。
 - DB の読み取りは既定で `docker exec <GS_LT_PG_CONTAINER> psql -U <GS_LT_PG_USER> -d <GS_LT_PG_DB>`（既定 `gs-m3-test-gs-test-pg-1`・`postgres`・`forge`）。開発の DB（`ops/dev/compose.yml`）で測るときは `GS_LT_PG_CONTAINER=forge-dev-postgres-1 GS_LT_PG_USER=forge_dev`（記録: `docs/handoff/2026-11-28-merge-load-after-s10.md`）。
