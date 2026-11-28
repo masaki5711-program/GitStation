@@ -540,6 +540,8 @@ pub async fn put_target_decided(
 // ---------------------------------------------------------------- deployments
 
 mod approvers;
+// Plan 17 P17-7: pfs-ai-bundle releases.
+pub mod ai_bundle;
 mod deployments;
 mod pending;
 mod summary;
@@ -550,8 +552,8 @@ pub use approvers::{
     ApproversInput, DeploymentApproval, EnvironmentApprovers,
 };
 pub use deployments::{
-    approve_decided, auto_request, get_deployment, list_deployments, request_decided, CommitInput,
-    DeployApprovalInput, StoredDeployment, MAX_LIST,
+    approve_decided, auto_request, get_deployment, list_deployments, request_decided,
+    request_release_decided, CommitInput, DeployApprovalInput, StoredDeployment, MAX_LIST,
 };
 pub use pending::{pending_approvals, PendingDeployment, MAX_PENDING};
 pub use summary::{

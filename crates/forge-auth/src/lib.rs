@@ -84,6 +84,8 @@ mod matrix_rows_autofix;
 mod matrix_rows_portal;
 // Plan 17 P17-3: ai_assets.enabled.
 mod matrix_rows_ai_assets;
+// Plan 17 P17-7: pfs-ai-bundle releases.
+mod matrix_rows_ai_release;
 // Plan 17 P17-5: the improvement-draft token (`pfs-ai-bot`).
 mod matrix_rows_pfs_ai_bot;
 // M5 L5-4 (plan 19 §8.2): the local LLM's actions.

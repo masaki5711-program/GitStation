@@ -1725,6 +1725,13 @@ pub(crate) fn decide(
             people_only()?;
             need(Role::Maintainer, p.role)
         }
+        // Plan 17 P17-7: a pfs-ai-bundle release, a Maintainer's (people
+        // only; a person's `api` token too — no stage changes without a
+        // person's approval in a session).
+        (Action::AiAssetReleaseCreate, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
 
         // --- autofix (M4 C14, ADR-0017 Amendment C14) ---
         // The project's switch: Maintainer and above, people only.
@@ -1999,6 +2006,7 @@ pub(crate) fn decide(
             | Action::AutoMergeFullAutoManage
             | Action::AutofixSettingsManage
             | Action::AiAssetsSettingManage
+            | Action::AiAssetReleaseCreate
             | Action::OrgBindingManage
             | Action::CiVariableManage
             | Action::DeployRead

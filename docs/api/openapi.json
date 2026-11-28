@@ -9819,6 +9819,20 @@
         ],
         "type": "object"
       },
+      "NewRelease": {
+        "additionalProperties": false,
+        "description": "`POST …/ai-asset-releases`.",
+        "properties": {
+          "tag": {
+            "description": "`assets/v<yyyy>.<ww>.<n>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "type": "object"
+      },
       "NewRepositoryBinding": {
         "additionalProperties": false,
         "description": "`POST /api/v1/integrations/{id}/bindings`.",
@@ -12411,6 +12425,113 @@
         ],
         "type": "object"
       },
+      "ReleaseBody": {
+        "additionalProperties": false,
+        "description": "A release.",
+        "properties": {
+          "bench_check_run_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "commit_sha": {
+            "description": "The commit the tag named when the release was made.",
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "digest": {
+            "description": "`sha256:<hex>` of the manifest.",
+            "type": "string"
+          },
+          "files": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`pfs-ai-bundle`.",
+            "type": "string"
+          },
+          "manifest": {
+            "description": "The signed manifest (one release only; `null` in lists).",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "signature": {
+            "description": "Base64 Ed25519 in the `forge-pfs-ai-bundle-signature-v1` domain.",
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "tag_object": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "version",
+          "tag",
+          "commit_sha",
+          "tag_object",
+          "digest",
+          "key_id",
+          "signature",
+          "files",
+          "bench_check_run_id",
+          "created_by",
+          "created_at",
+          "manifest"
+        ],
+        "type": "object"
+      },
+      "ReleaseEnvironment": {
+        "additionalProperties": false,
+        "description": "`POST …/{version}/deployments`, `POST …/ai-asset-rollbacks`.",
+        "properties": {
+          "environment": {
+            "description": "`pfs-ai-shadow` (dev), `pfs-ai-canary` (stg) or `pfs-ai-prod` (prod).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment"
+        ],
+        "type": "object"
+      },
+      "ReleaseList": {
+        "additionalProperties": false,
+        "description": "`GET …/ai-asset-releases`.",
+        "properties": {
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "releases"
+        ],
+        "type": "object"
+      },
       "ReleaseTombstone": {
         "additionalProperties": false,
         "description": "`POST /api/v1/namespaces/tombstones/release`.",
@@ -12844,6 +12965,23 @@
           "owner"
         ],
         "type": "string"
+      },
+      "RollbackBody": {
+        "additionalProperties": false,
+        "description": "A rollback: the release gone back to and its deployment.",
+        "properties": {
+          "deployment": {
+            "$ref": "#/components/schemas/DeploymentBody"
+          },
+          "release": {
+            "$ref": "#/components/schemas/ReleaseBody"
+          }
+        },
+        "required": [
+          "release",
+          "deployment"
+        ],
+        "type": "object"
       },
       "RotatedWebhookSecret": {
         "additionalProperties": false,
@@ -21520,6 +21658,258 @@
         },
         "summary": "Whether the agent configuration at the default branch's tip has an update: each locked part's version (and whether it is revoked) and the version the update picks (the newest stable version that is not revoked, never down; a revoked one without a replacement is dropped), with the update's Dry-Run; available=false with reason no_lock or up_to_date otherwise (a Developer, an agent's token included)",
         "x-forge-action": "AgentBuilderDryRun"
+      }
+    },
+    "/api/v1/projects/{id}/ai-asset-releases": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_ai_asset_releases",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest (project readers)",
+        "x-forge-action": "DeployRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_ai_asset_releases",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRelease"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Make a signed pfs-ai-bundle release from a tag ({\"tag\": \"assets/v2026.48.1\"}): the commit the tag names now is pinned (a moved tag has no effect), it must be on a protected branch with a green forge/ai-eval bench, its skills/playbooks/agents/tools/models/bench files are linted and listed with their SHA-256 in a manifest signed with the agent signing key; 201; 422 FG-AIASSET-0008 (ai_assets disabled, tag, already released, bench, lint); audited (people only; Maintainer, a session or an api token)",
+        "x-forge-action": "AiAssetReleaseCreate",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/ai-asset-releases/{version}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_ai_asset_releases_version",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One pfs-ai-bundle release with its signed manifest (files and SHA-256, models, bench), digest, key id and signature: what the PFS loader verifies; 404 FG-REPO-0005 without it (project readers)",
+        "x-forge-action": "DeployRead"
+      }
+    },
+    "/api/v1/projects/{id}/ai-asset-releases/{version}/deployments": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_ai_asset_releases_version_deployments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseEnvironment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Request a release on a stage ({\"environment\": \"pfs-ai-shadow\" | \"pfs-ai-canary\" | \"pfs-ai-prod\"}, the dev / stg / prod environments): 201 pending_approval (every stage needs a person's approval in a session); 409 FG-AIASSET-0009 out of stage order (shadow, canary, prod), without the release or on an environment that needs no approval; 422 FG-DEPLOY-0011 off the protected branches (Developer)",
+        "x-forge-action": "DeployCreate",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/ai-asset-rollbacks": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_ai_asset_rollbacks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseEnvironment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RollbackBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Roll a stage back ({\"environment\"}): 201 a deployment of the release last approved before the running one (older by release order, succeeded there with an approval), waiting for a person's approval; 409 FG-AIASSET-0009 no_rollback_target (Developer)",
+        "x-forge-action": "DeployCreate",
+        "x-forge-max-body-bytes": 1024
       }
     },
     "/api/v1/projects/{id}/ai-assets": {

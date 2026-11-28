@@ -352,14 +352,26 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 db.clone(), // clone: the pool handle is shared
             ))
             // M4 C11: deployments (the routes; the worker runs them).
-            .with_deploy(forge_deploy::Deploy::new(
-                db.clone(), // clone: the pool handle is shared
-                Arc::new(forge_deploy::GitCommits::new(
-                    db.clone(),                // clone: as above
-                    smart_http.browse.clone(), // clone: shares the ref cache
-                )),
-                crate::worker::deploy::target_policy(cfg),
-            ))
+            .with_deploy(
+                forge_deploy::Deploy::new(
+                    db.clone(), // clone: the pool handle is shared
+                    Arc::new(forge_deploy::GitCommits::new(
+                        db.clone(),                // clone: as above
+                        smart_http.browse.clone(), // clone: shares the ref cache
+                    )),
+                    crate::worker::deploy::target_policy(cfg),
+                )
+                // Plan 17 P17-7: pfs-ai-bundle releases read the tag and the
+                // bundle files through the same browse API and sign with
+                // `agent.signing_keys_file` at the release step only.
+                .with_bundles(
+                    Arc::new(forge_deploy::GitBundles::new(
+                        db.clone(),                // clone: the pool handle is shared
+                        smart_http.browse.clone(), // clone: shares the ref cache
+                    )),
+                    cfg.agent.signing_keys_file.clone(), // clone: the service owns its path
+                ),
+            )
             // Plan 16 A5: the agent marketplace reads the parts repository
             // through the same browse API (limits, caches) and signs with
             // `agent.signing_keys_file` at publication only.

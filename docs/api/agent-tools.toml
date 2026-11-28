@@ -1032,6 +1032,22 @@ reason = "Local only: lints the AI assets in the working tree (plan 17 P17-3)."
 gstn = "ai-asset status"
 reason = "A read tool for an agent waits for the asset releases (plan 17 P17-7); gstn and the settings screen show it meanwhile."
 
+[[excluded]]
+gstn = "ai-asset release"
+reason = "A pfs-ai-bundle release is a person's: people_only (plan 17 P17-7, ADR-0031 Amendment P17-7)."
+
+[[deferred]]
+gstn = "ai-asset releases"
+reason = "Reading the releases (plan 17 P17-7); an agent read tool comes with the PFS loader (PFS-5). gstn shows them meanwhile."
+
+[[deferred]]
+gstn = "ai-asset release-deploy"
+reason = "Requesting a release on a stage (plan 17 P17-7); every stage waits for a person's approval, but an agent tool for it is not decided yet."
+
+[[deferred]]
+gstn = "ai-asset rollback"
+reason = "Requesting a rollback (plan 17 P17-7); it waits for a person's approval, but an agent tool for it is not decided yet."
+
 [[not_api]]
 gstn = "edge release verify"
 reason = "Local only: verifies a signed edge release file (and its blobs) with local edge keys (plan 21 E1)."

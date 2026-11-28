@@ -1058,6 +1058,32 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/ai-assets",
         Coverage::Command("ai-asset status"),
     ),
+    // Plan 17 P17-7: pfs-ai-bundle releases.
+    (
+        "GET",
+        "/api/v1/projects/{id}/ai-asset-releases",
+        Coverage::Command("ai-asset releases"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/ai-asset-releases",
+        Coverage::Command("ai-asset release"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/ai-asset-releases/{version}",
+        Coverage::Command("ai-asset releases"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/ai-asset-releases/{version}/deployments",
+        Coverage::Command("ai-asset release-deploy"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/ai-asset-rollbacks",
+        Coverage::Command("ai-asset rollback"),
+    ),
     (
         "PUT",
         "/api/v1/projects/{id}/ai-assets",

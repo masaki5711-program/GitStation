@@ -103,6 +103,8 @@ pub mod job_fetch;
 pub mod ci_variables;
 // M4 C11: deployments.
 pub mod deploy;
+// Plan 17 P17-7: pfs-ai-bundle releases.
+pub mod ai_asset_releases;
 // Plan 19 L5-7b: a stored incident diagnosis.
 pub mod diagnoses;
 // M4 C12: a project's pipeline schedules.

@@ -67,6 +67,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // Plan 17 P17-7: pfs-ai-bundle releases, audited on the project.
+            AuditedTable {
+                name: "ai_bundle_releases".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
             // ADR-0038 §3.5 (step C): delegations, audited on the delegator.
             AuditedTable {
                 name: "approval_delegations".into(),

@@ -12,6 +12,12 @@ publish.workspace = true
 # runs no SQL of its own (`forge_db::deploy`) and never depends on another
 # feature crate.
 [dependencies]
+# Plan 17 P17-7: the pfs-ai-bundle manifest, digest and Ed25519 signature
+# (pure; the same agent signing key and encoding as plan 16 A1) and the AI
+# asset lint of what a release ships (pure forge-doc).
+forge-agent.workspace = true
+forge-doc.workspace = true
+toml.workspace = true
 forge-auth.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true

@@ -2710,6 +2710,42 @@ pub enum AiAssetCommand {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
     },
+    /// Make a signed pfs-ai-bundle release from a tag assets/vYYYY.WW.N
+    /// (plan 17 P17-7): the commit the tag names now, with a green
+    /// forge/ai-eval bench, its files listed with their SHA-256 and signed.
+    Release {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// `assets/v<yyyy>.<ww>.<n>`.
+        #[arg(long, value_parser = parse_text, value_name = "TAG")]
+        tag: String,
+    },
+    /// The project's releases, newest first; with --version one release
+    /// with its signed manifest.
+    Releases {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_text, value_name = "VERSION")]
+        version: Option<String>,
+    },
+    /// Request a release on a stage (pfs-ai-shadow, pfs-ai-canary,
+    /// pfs-ai-prod): it waits for a person's approval in the browser.
+    ReleaseDeploy {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_text, value_name = "VERSION")]
+        version: String,
+        #[arg(long, value_parser = ["pfs-ai-shadow", "pfs-ai-canary", "pfs-ai-prod"], value_name = "STAGE")]
+        environment: String,
+    },
+    /// Request the release last approved before the running one on a
+    /// stage: it waits for a person's approval in the browser.
+    Rollback {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = ["pfs-ai-shadow", "pfs-ai-canary", "pfs-ai-prod"], value_name = "STAGE")]
+        environment: String,
+    },
 }
 
 /// `gstn ci variable` (M4 C6): a project's CI secrets on the server.

@@ -364,11 +364,42 @@ fn not_allowed(reason: &'static str) -> ForgeError {
 /// now), `FG-DEPLOY-0011 reason=no_succeeded_pipeline` (prod without a
 /// succeeded push pipeline of the SHA), `FG-WEB-0006 reason=no_targets`,
 /// the database's.
+///
+/// Plan 17 P17-7: a project whose `ai_assets.enabled` is on deploys only
+/// its releases (`FG-AIASSET-0009 reason=release_required`; use
+/// [`request_release_decided`]).
 pub async fn request_decided(
+    db: &Db,
+    ctx: &ChangeContext,
+    key: (ProjectId, DeployTier, &str),
+    commit: Option<&CommitInput>,
+    decide: impl FnOnce(&ProjectUpdateFacts) -> Result<(), ForgeError>,
+) -> Result<StoredDeployment, ForgeError> {
+    request_with(db, ctx, key, commit, false, decide).await
+}
+
+/// [`request_decided`] of a `pfs-ai-bundle` release at `sha` (plan 17
+/// P17-7): also, in the same transaction, the release exists, the
+/// environment requires an approval and the stage before succeeded with
+/// it (`FG-AIASSET-0009`: `release_not_found`, `approval_required`,
+/// `stage_skipped`). Allowed whatever `ai_assets.enabled` says now
+/// (turning it off stops new releases, not the existing ones).
+pub async fn request_release_decided(
+    db: &Db,
+    ctx: &ChangeContext,
+    key: (ProjectId, DeployTier, &str),
+    commit: Option<&CommitInput>,
+    decide: impl FnOnce(&ProjectUpdateFacts) -> Result<(), ForgeError>,
+) -> Result<StoredDeployment, ForgeError> {
+    request_with(db, ctx, key, commit, true, decide).await
+}
+
+async fn request_with(
     db: &Db,
     ctx: &ChangeContext,
     (project, tier, sha): (ProjectId, DeployTier, &str),
     commit: Option<&CommitInput>,
+    release: bool,
     decide: impl FnOnce(&ProjectUpdateFacts) -> Result<(), ForgeError>,
 ) -> Result<StoredDeployment, ForgeError> {
     const QUERY: &str = "deploy.request";
@@ -391,6 +422,21 @@ pub async fn request_decided(
         }
         if !has_targets {
             return Err(invalid("environment", "no_targets"));
+        }
+        if release {
+            super::ai_bundle::check_release_request(
+                &mut tx,
+                project,
+                tier,
+                sha,
+                requires_approval || tier.is_prod(),
+                QUERY,
+            )
+            .await?;
+        } else if super::ai_bundle::releases_only(&mut tx, project, QUERY).await? {
+            return Err(super::ai_bundle::deploy_refused("release_required")
+                .with_context("project_id", project.get())
+                .with_context("environment", tier.as_str()));
         }
         if tier.is_prod() {
             let passed: bool = tx
@@ -469,6 +515,8 @@ pub async fn auto_request(
                    ORDER BY p.id DESC LIMIT 1) p ON true \
                  WHERE e.auto_deploy_ref IS NOT NULL AND e.tier <> 'prod' \
                    AND NOT (e.freeze_windows @> now()) \
+                   AND NOT EXISTS (SELECT 1 FROM forge.project_ai_assets a \
+                     WHERE a.project_id = e.project_id AND a.enabled) \
                    AND EXISTS (SELECT 1 FROM forge.deploy_targets t \
                      WHERE t.environment_id = e.id AND t.enabled) \
                    AND NOT EXISTS (SELECT 1 FROM forge.deployments d \
