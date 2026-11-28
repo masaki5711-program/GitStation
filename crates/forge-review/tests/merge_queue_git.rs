@@ -341,6 +341,17 @@ impl World {
         )
         .await
         .expect("check");
+        // This world has no worker: the steps above are the prepare job's
+        // work, so its queued row is answered as the worker would answer
+        // it (auto-merge does not ask for doc-lint while one is pending).
+        self.t
+            .exec_superuser(&format!(
+                "UPDATE forge.jobs SET state = 'succeeded', finished_at = now() \
+                 WHERE kind = 'merge_request.prepare' AND state = 'queued' \
+                 AND payload->>'merge_request_id' = '{}'",
+                mr.get()
+            ))
+            .await;
         self.browser.invalidate(self.repo);
     }
 
