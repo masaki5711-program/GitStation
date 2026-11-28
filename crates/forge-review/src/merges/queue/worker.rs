@@ -28,6 +28,22 @@
 //!   of one removes its entry, `FG-CI-0023`); green lands unless paused.
 //! - **landing** (a worker stopped mid-landing): settled by asking git.
 //!
+//! Plan 18 S9 (ADR-0037 (d) 4) — speculative trains: with
+//! `merge_queue.speculation_depth` D > 1, a step whose front batch (at
+//! depth one) waits for its train's pipeline builds one more batch behind the
+//! deepest live one, on that batch's train (`parent_batch_id`, one deeper)
+//! — up to D live batches, tested at once. Only the front is decided: it
+//! lands only when the target is its base, and the next one becomes the
+//! front, its base now the target. A batch that ends without landing (red,
+//! abandoned, reaped, a landing that did not happen) ends every batch
+//! behind it (`reason=predecessor_failed`, their entries back in order); a
+//! bisection applies to the first red batch only. A speculative build
+//! never removes an entry for its train step (a conflict or a fast-forward
+//! that is not possible on a train that may still fail): the batch stops
+//! before it, and the entry is tried again on the target. The one train
+//! ref points at the deepest live train (the others are its ancestors).
+//! D = 1 (the default) never builds behind a live batch: ADR-0030's queue.
+//!
 //! M4 close: before a green batch that holds an auto-merge entry lands,
 //! `forge/risk`'s rules judge the merge result — the diff from the batch's
 //! base to each step of the train (the combined tree the target will
@@ -70,8 +86,8 @@ pub const MERGE_RESULT_MAX_FAILURES: u32 = 3;
 /// settings are read again (the toggle race's test).
 pub type AfterFence = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 use forge_core::merge_queue::{
-    batch_bound, bisected_limit, BatchState, EntryState, Isolation, DEFAULT_CI_BATCH,
-    DEFAULT_DOC_BATCH, MAX_REAPS,
+    batch_bound, bisected_limit, builds_behind, BatchState, EntryState, Isolation,
+    DEFAULT_CI_BATCH, DEFAULT_DOC_BATCH, DEFAULT_SPECULATION, MAX_REAPS,
 };
 use forge_core::train_lint::TrainDocLint;
 use forge_core::{
@@ -81,7 +97,8 @@ use forge_core::{
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::pipelines::{create_job, PipelineRequest, PipelineStatus, Source};
 use forge_db::review::merge_queue::{
-    self as db, BatchEnd, BatchMember, Claimed, NewBatch, StoredBatch, StoredEntry, TrainPipeline,
+    self as db, BatchEnd, BatchMember, Claimed, EndedChain, NewBatch, StoredBatch, StoredEntry,
+    TrainPipeline, PREDECESSOR_FAILED,
 };
 use forge_db::review::merges::{self, MergeLock, QueueStep, StoredMerge};
 use forge_errors::{ErrorCode, ForgeError};
@@ -137,6 +154,9 @@ pub struct QueueLimits {
     /// The most entries of a batch with a pipeline (plan 18 S7,
     /// `merge_queue.ci_batch_max`).
     pub ci_batch_max: usize,
+    /// The most live batches of one queue (plan 18 S9,
+    /// `merge_queue.speculation_depth`; 1: ADR-0030's one live batch).
+    pub speculation_depth: usize,
 }
 
 impl Default for QueueLimits {
@@ -150,6 +170,7 @@ impl Default for QueueLimits {
             train_lint_budget: Duration::from_secs(10),
             doc_batch_max: DEFAULT_DOC_BATCH,
             ci_batch_max: DEFAULT_CI_BATCH,
+            speculation_depth: DEFAULT_SPECULATION,
         }
     }
 }
@@ -398,18 +419,98 @@ impl MergeQueue {
             outcome,
             batch_id,
         };
-        let Some(batch) = db::live_batch(&self.merger.db, queue.id).await? else {
+        let live = db::live_batches(&self.merger.db, queue.id).await?;
+        let Some(batch) = live.first() else {
             if queue.paused {
                 return Ok(report("paused", None));
             }
-            return self.build(claimed).await;
+            return self.build(claimed, None).await;
         };
         let outcome = match batch.state {
-            BatchState::Testing => self.poll(claimed, &batch).await?,
-            BatchState::Landing => self.recover(claimed, &batch).await?,
+            BatchState::Testing => self.poll(claimed, batch).await?,
+            BatchState::Landing => self.recover(claimed, batch).await?,
             BatchState::Landed | BatchState::Failed | BatchState::Abandoned => "idle",
         };
+        // Plan 18 S9: behind a front that waits, the batches behind it are
+        // looked at (one whose entry left is dropped, even when the chain
+        // is full) and the next train is built. Depth 1: never.
+        if outcome == "waiting" && self.limits.speculation_depth > 1 {
+            if let Some(spec) = self.speculate(claimed, batch).await? {
+                return Ok(spec);
+            }
+        }
         Ok(report(outcome, Some(batch.id)))
+    }
+
+    /// Plan 18 S9 (module docs): the live batches behind the waiting
+    /// `front` lose the first whose entry left — taken out, closed, a new
+    /// head (it and those behind it are dropped) — then one more batch is
+    /// built on the deepest live train. A refused first entry stops the
+    /// build each look (one train step per look) until the front lands or
+    /// ends: it is never removed for a step on a speculative train.
+    /// `None`: nothing changed (nothing to build) — the front's outcome
+    /// stands.
+    async fn speculate(
+        &self,
+        claimed: &Claimed,
+        front: &StoredBatch,
+    ) -> Result<Option<TickReport>, ForgeError> {
+        let queue = &claimed.queue;
+        let report = |outcome, batch_id| TickReport {
+            queue_id: queue.id,
+            outcome,
+            batch_id,
+        };
+        let live = db::live_batches(&self.merger.db, queue.id).await?;
+        let mut dropped = None;
+        for behind in live.iter().skip(1) {
+            let entries = db::batch_entries(&self.merger.db, behind.id).await?;
+            let repo = match entries.first() {
+                Some(entry) => self.repo_of(entry).await?,
+                None => None,
+            };
+            let testing: Vec<StoredEntry> = entries
+                .into_iter()
+                .filter(|e| e.state == EntryState::Testing)
+                .collect();
+            // As the front's poll: an entry taken out, or whose merge
+            // request was closed or got a new head (those leave the queue).
+            let gone = if testing.len() == behind.size {
+                self.left_the_queue(&testing).await?
+            } else {
+                Vec::new()
+            };
+            if testing.len() == behind.size && gone.is_empty() {
+                continue;
+            }
+            let outcome = self
+                .abandon(behind, BatchState::Testing, "entry_left", gone, None, repo)
+                .await?;
+            dropped = Some((outcome, behind.id));
+            break;
+        }
+        let live = db::live_batches(&self.merger.db, queue.id).await?;
+        let deepest = match live.last() {
+            Some(deepest) if deepest.state == BatchState::Testing => deepest,
+            // The front is no longer waiting, or it landed meanwhile.
+            _ => return Ok(dropped.map(|(o, id)| report(o, Some(id)))),
+        };
+        if live.first().map(|b| b.id) != Some(front.id)
+            || !builds_behind(
+                live.len(),
+                self.limits.speculation_depth,
+                true,
+                queue.paused,
+            )
+        {
+            return Ok(dropped.map(|(o, id)| report(o, Some(id))));
+        }
+        let built = self.build(claimed, Some(deepest)).await?;
+        Ok(match (built.outcome, dropped) {
+            ("idle", Some((o, id))) => Some(report(o, Some(id))),
+            ("idle", None) => None,
+            _ => Some(built),
+        })
     }
 
     /// The repository of the queue's project (through an entry's merge
@@ -457,7 +558,15 @@ impl MergeQueue {
 
     // ── building a batch ──
 
-    async fn build(&self, claimed: &Claimed) -> Result<TickReport, ForgeError> {
+    /// Build a batch on the target's tip (`on` is `None`: the queue has no
+    /// live batch), or — plan 18 S9 — on the train of `on`, the deepest
+    /// live batch (one deeper; no same-tick verdict: only the front is
+    /// decided).
+    async fn build(
+        &self,
+        claimed: &Claimed,
+        on: Option<&StoredBatch>,
+    ) -> Result<TickReport, ForgeError> {
         let (started, spawns_before) = (Instant::now(), forge_git::scoped_git_spawns());
         let queue = &claimed.queue;
         let report = |outcome, batch_id| TickReport {
@@ -472,12 +581,24 @@ impl MergeQueue {
         let Some(repo) = self.repo_of(first).await? else {
             return Ok(report("idle", None));
         };
-        let Some(base) = self.read_tip(repo, &queue.target_branch).await? else {
-            for entry in &queued {
-                self.drop_queued(entry, "target_missing", ErrorCode::MergeQueueEntryRefused)
-                    .await?;
+        let base = match on {
+            // Plan 18 S9: on the deepest live train (the target's tip is the
+            // front's to check).
+            Some(parent) => parent.train_sha.clone(), // clone: the train grows from it
+            None => {
+                let Some(tip) = self.read_tip(repo, &queue.target_branch).await? else {
+                    for entry in &queued {
+                        self.drop_queued(
+                            entry,
+                            "target_missing",
+                            ErrorCode::MergeQueueEntryRefused,
+                        )
+                        .await?;
+                    }
+                    return Ok(report("removed", None));
+                };
+                tip
             }
-            return Ok(report("removed", None));
         };
         // Plan 18 S7: a base without a CI definition may start a document
         // batch (checked again at the train's tip below). A read that fails
@@ -566,6 +687,9 @@ impl MergeQueue {
                     prev = commit.clone(); // clone: the next step's parent
                     members.push((entry.clone(), commit, isolate)); // clone: the batch owns its view
                 }
+                // Plan 18 S9: a speculative train may still fail — the entry
+                // is not removed for a step on it; the batch stops before it.
+                Err(StepRefused::Remove(..)) if on.is_some() => break,
                 Err(StepRefused::Remove(reason, code)) => {
                     refused.push((members.len(), entry, reason, code));
                     continue;
@@ -654,6 +778,8 @@ impl MergeQueue {
             request_id: request_id.clone(), // clone: the log line below
             deadline: self.limits.test_timeout,
             pipeline: definition.then_some(pipeline),
+            parent: on.map(|b| b.id),
+            max_depth: self.limits.speculation_depth,
         };
         let Some(batch) = db::create_batch(&self.merger.db, &new).await? else {
             return Ok(report("raced", None));
@@ -674,11 +800,14 @@ impl MergeQueue {
             isolate = members.first().and_then(|(_, _, i)| i.map(Isolation::as_str)),
             pipeline_job = definition,
             batch_bound = limit,
+            // Plan 18 S9: one deeper than its parent (1: on the target).
+            depth = on.map_or(1, |b| b.depth + 1),
+            parent_batch_id = on.map(|b| b.id),
             // From the queued entries' read to the batch's row.
             build_ms = millis(started.elapsed()),
             git_spawns = forge_git::scoped_git_spawns().saturating_sub(spawns_before),
         );
-        if definition {
+        if definition || on.is_some() {
             return Ok(report("built", Some(batch)));
         }
         // Plan 18 S7 (ADR-0037 (b) 6): no pipeline to wait for — the
@@ -940,24 +1069,7 @@ impl MergeQueue {
                 )
                 .await;
         };
-        let mut gone = Vec::new();
-        for entry in &testing {
-            let target =
-                forge_db::review::refresh_target(&self.merger.db, entry.merge_request).await?;
-            let why = match target.as_ref().map(|t| &t.merge_request) {
-                None => Some(("merge_request_gone", ErrorCode::NotFound)),
-                Some(mr) if mr.state != MergeRequestState::Open => {
-                    Some(("not_open", ErrorCode::MergeQueueEntryRefused))
-                }
-                Some(mr) if mr.head_sha.as_deref() != Some(entry.head_sha.as_str()) => {
-                    Some(("head_changed", ErrorCode::HeadChanged))
-                }
-                Some(_) => None,
-            };
-            if let Some((reason, code)) = why {
-                gone.push((entry.id, reason.to_owned(), code));
-            }
-        }
+        let gone = self.left_the_queue(&testing).await?;
         if !gone.is_empty() {
             return self
                 .abandon(
@@ -1051,6 +1163,34 @@ impl MergeQueue {
                 self.land(claimed, batch, &testing, repo, run, lint).await
             }
         }
+    }
+
+    /// The entries of `testing` whose merge request no longer holds them
+    /// (gone, not open, a new head), with the reason and code they leave
+    /// with.
+    async fn left_the_queue(
+        &self,
+        testing: &[StoredEntry],
+    ) -> Result<Vec<(i64, String, ErrorCode)>, ForgeError> {
+        let mut gone = Vec::new();
+        for entry in testing {
+            let target =
+                forge_db::review::refresh_target(&self.merger.db, entry.merge_request).await?;
+            let why = match target.as_ref().map(|t| &t.merge_request) {
+                None => Some(("merge_request_gone", ErrorCode::NotFound)),
+                Some(mr) if mr.state != MergeRequestState::Open => {
+                    Some(("not_open", ErrorCode::MergeQueueEntryRefused))
+                }
+                Some(mr) if mr.head_sha.as_deref() != Some(entry.head_sha.as_str()) => {
+                    Some(("head_changed", ErrorCode::HeadChanged))
+                }
+                Some(_) => None,
+            };
+            if let Some((reason, code)) = why {
+                gone.push((entry.id, reason.to_owned(), code));
+            }
+        }
+        Ok(gone)
     }
 
     /// `forge/risk`'s rules on every step of the train (module docs), in
@@ -1267,10 +1407,9 @@ impl MergeQueue {
                     reaped: false,
                     batch_limit: Some(limit),
                 };
-                if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+                if !self.end_chain(batch, &end, Some(repo)).await? {
                     return Ok("raced");
                 }
-                self.retire_train(repo, batch).await;
                 tracing::info!(
                     target: "forge_review",
                     event = "forge.merge_queue.batch_abandoned",
@@ -1310,7 +1449,7 @@ impl MergeQueue {
             reaped: false,
             batch_limit: None,
         };
-        if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+        if !self.end_chain(batch, &end, repo).await? {
             return Ok("raced");
         }
         {
@@ -1342,19 +1481,127 @@ impl MergeQueue {
                 queue_id = batch.queue_id,
                 batch_id = batch.id,
                 reason,
+                depth = batch.depth,
                 train_sha = batch.train_sha.as_str(),
             );
         }
-        if let Some(repo) = repo {
-            self.retire_train(repo, batch).await;
-        }
         Ok("abandoned")
+    }
+
+    /// End `batch` as `end` says and, with it, every live batch behind it
+    /// (plan 18 S9, [`db::end_batch_chain`]): each dropped one is logged
+    /// once (`forge.merge_queue.batch_abandoned
+    /// reason=predecessor_failed`), and with `repo` the train ref follows
+    /// the chain (deleted when nothing is live, else moved back to the
+    /// deepest live train). `false`: another worker moved the batch.
+    pub(super) async fn end_chain(
+        &self,
+        batch: &StoredBatch,
+        end: &BatchEnd,
+        repo: Option<RepoId>,
+    ) -> Result<bool, ForgeError> {
+        let Some(ended) = db::end_batch_chain(&self.merger.db, batch.id, end).await? else {
+            return Ok(false);
+        };
+        for gone in &ended.dropped {
+            tracing::info!(
+                target: "forge_review",
+                event = "forge.merge_queue.batch_abandoned",
+                request_id = %gone.request_id,
+                queue_id = batch.queue_id,
+                batch_id = gone.id,
+                reason = PREDECESSOR_FAILED,
+                depth = gone.depth,
+                predecessor_batch_id = batch.id,
+                predecessor_reason = end.reason,
+                train_sha = gone.train_sha.as_str(),
+            );
+        }
+        if let Some(repo) = repo {
+            self.retire_chain(repo, batch, &ended).await;
+        }
+        Ok(true)
+    }
+
+    /// The train ref after `batch` (and the batches behind it) ended: it
+    /// was at the deepest of them; deleted there when the queue has no
+    /// live batch (ADR-0030: [`Self::retire_train`]), else moved back to
+    /// the deepest live train (plan 18 S9). A failure is logged with its
+    /// code: the next build moves the ref, the maintenance sweep deletes a
+    /// stale one.
+    async fn retire_chain(&self, repo: RepoId, batch: &StoredBatch, ended: &EndedChain) {
+        let at = ended
+            .dropped
+            .last()
+            .map_or(&batch.train_sha, |d| &d.train_sha);
+        let Some(live) = &ended.deepest_live else {
+            return self.retire_train_at(repo, batch, at).await;
+        };
+        if live == at {
+            return;
+        }
+        let name = match forge_git::hidden_refs::merge_queue_train_ref(batch.queue_id) {
+            Ok(name) => name,
+            Err(e) => {
+                telemetry::log_failure(&e, &batch.request_id);
+                return;
+            }
+        };
+        // Review MEDIUM: the ref may be at a train no batch owns (a build
+        // that raced after moving it), so it is read rather than assumed;
+        // the update is still a compare-and-swap on what was read.
+        let moved = match self.read_tip(repo, &name).await {
+            Ok(Some(now)) if &now == live => Ok(()),
+            Ok(now) => {
+                let change = match now {
+                    Some(old) => RefChange::Update {
+                        name,
+                        new: live.clone(), // clone: the change owns its ids
+                        old,
+                    },
+                    None => RefChange::Create {
+                        name,
+                        new: live.clone(), // clone: as above
+                    },
+                };
+                self.merger
+                    .git
+                    .update_refs(
+                        &self.merger.storage,
+                        repo,
+                        &[change],
+                        self.merger.timeouts.update_ref,
+                    )
+                    .await
+                    .map(|_| ())
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = moved {
+            tracing::warn!(
+                target: "forge_review",
+                event = "forge.merge_queue.train_ref_kept",
+                error_code = e.code().id(),
+                request_id = %batch.request_id,
+                queue_id = batch.queue_id,
+                batch_id = batch.id,
+                train_sha = at.as_str(),
+                "the train ref was not moved back to the deepest live train \
+                 (the next build moves it)"
+            );
+        }
     }
 
     /// Delete `refs/merge-queue/<queue_id>/train` if it still points at
     /// `batch`'s train (a batch that ended; review MEDIUM). A failure is
     /// logged with its code: the maintenance sweep deletes it later.
     async fn retire_train(&self, repo: RepoId, batch: &StoredBatch) {
+        self.retire_train_at(repo, batch, &batch.train_sha).await;
+    }
+
+    /// [`Self::retire_train`] at `at` (plan 18 S9: the deepest train of
+    /// the chain that ended with `batch`).
+    async fn retire_train_at(&self, repo: RepoId, batch: &StoredBatch, at: &ObjectId) {
         let name = match forge_git::hidden_refs::merge_queue_train_ref(batch.queue_id) {
             Ok(name) => name,
             Err(e) => {
@@ -1365,7 +1612,7 @@ impl MergeQueue {
         let gone = [forge_git::MergeQueueRef {
             queue_id: batch.queue_id,
             name,
-            at: batch.train_sha.clone(), // clone: the deletion owns its id
+            at: at.clone(), // clone: the deletion owns its id
         }];
         let deleted = self
             .merger
@@ -1387,7 +1634,7 @@ impl MergeQueue {
                 request_id = %batch.request_id,
                 queue_id = batch.queue_id,
                 batch_id = batch.id,
-                train_sha = batch.train_sha.as_str(),
+                train_sha = at.as_str(),
                 "the train ref was not deleted (the maintenance sweep deletes a stale one)"
             );
         }
@@ -1426,10 +1673,9 @@ impl MergeQueue {
             reaped: false,
             batch_limit: (!alone).then_some(limit),
         };
-        if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+        if !self.end_chain(batch, &end, Some(repo)).await? {
             return Ok("raced");
         }
-        self.retire_train(repo, batch).await;
         if alone {
             for entry in testing {
                 log_removed(
@@ -1474,10 +1720,9 @@ impl MergeQueue {
             reaped: true,
             batch_limit: None,
         };
-        if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+        if !self.end_chain(batch, &end, Some(repo)).await? {
             return Ok("raced");
         }
-        self.retire_train(repo, batch).await;
         let entries: Vec<String> = testing.iter().map(|e| e.id.to_string()).collect();
         telemetry::log_failure(
             &ForgeError::new(ErrorCode::MergeQueueStalled)
@@ -1944,7 +2189,8 @@ impl MergeQueue {
                 new_sha = report.new_sha.as_ref().map(ObjectId::as_str),
             );
         }
-        if !db::batch_landed(&self.merger.db, batch.id).await? {
+        let left = db::batch_landed_chain(&self.merger.db, batch.id).await?;
+        if left.is_none() {
             telemetry::log_failure(
                 &ForgeError::new(ErrorCode::Internal)
                     .with_context("reason", "merge_queue_batch_not_landing")
@@ -1952,7 +2198,11 @@ impl MergeQueue {
                 &batch.request_id,
             );
         }
-        self.retire_train(repo, batch).await;
+        // Plan 18 S9: a train behind this one (now the front) keeps the
+        // ref — it points at the deepest train, this one its ancestor.
+        if left.unwrap_or(0) == 0 {
+            self.retire_train(repo, batch).await;
+        }
         tracing::info!(
             target: "forge_review",
             event = "forge.merge_queue.batch_landed",

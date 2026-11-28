@@ -70,14 +70,15 @@ impl QueueTasks {
     }
 }
 
-/// The queue's limits with `merge_queue.*`'s safety nets and batch
-/// bounds (plan 18 S7).
+/// The queue's limits with `merge_queue.*`'s safety nets, batch bounds
+/// (plan 18 S7) and speculation depth (plan 18 S9).
 fn limits_of(base: QueueLimits, cfg: &MergeQueueConfig) -> QueueLimits {
     QueueLimits {
         idle: cfg.safety_poll(),
         poll: cfg.waiting_safety_poll(),
         doc_batch_max: usize::try_from(cfg.doc_batch_max).unwrap_or(base.doc_batch_max),
         ci_batch_max: usize::try_from(cfg.ci_batch_max).unwrap_or(base.ci_batch_max),
+        speculation_depth: usize::try_from(cfg.speculation_depth).unwrap_or(base.speculation_depth),
         ..base
     }
 }
@@ -100,6 +101,7 @@ pub(crate) fn spawn(queue: MergeQueue, cfg: &MergeQueueConfig) -> QueueTasks {
         workers,
         doc_batch_max = limits.doc_batch_max,
         ci_batch_max = limits.ci_batch_max,
+        speculation_depth = limits.speculation_depth,
         safety_poll_ms = limits.idle.as_millis(),
         waiting_safety_poll_ms = limits.poll.as_millis(),
         "forge.serve.merge_queue_started"

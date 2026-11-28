@@ -46,6 +46,9 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
    - `reason=entry_refused`: 着地の判定で 1 件が断られた（承認が取り消された、セッションが取り消された、権限が変わった等。
      `forge.merge_queue.entry_removed` の `error_code` と `context`）。その MR だけが外れ、残りで作り直す。
    - `reason=landing_interrupted`: worker が着地の途中で止まり、次の worker が target を見て作り直した（target は動いていない）。
+   - `reason=predecessor_failed`（計画 18 S9、`merge_queue.speculation_depth` が 2 以上のときだけ）: 前の列車が赤・捨てられた・
+     期限切れになったので、その上に作った列車も捨てた。行の `depth` と `predecessor_batch_id` / `predecessor_reason` が前の列車と
+     その理由。MR は順に列へ戻り、作り直す。何もしなくてよい（下の「投機の列車」）。
    - `batch` の `reason=doc_lint_failed`（`state=failed`、`FG-CI-0032`）/ `reason=doc_lint_repo_config_invalid`（`state=failed`、
      `FG-REPO-0024`）/ `reason=doc_lint_unavailable`（`state=abandoned`、`FG-DOC-0002`）: 下の「列車の doc-lint」。
 3. 試し中のバッチのパイプライン:
@@ -55,7 +58,7 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
    （FG-CI-0005、Runbook `ci-runner`）。
 4. 表を読む:
    `SELECT id, project_id, target_branch, paused, batch_limit, lease_owner, lease_until, next_run_at FROM forge.merge_queues ORDER BY id;`
-   `SELECT id, queue_id, state, base_sha, train_sha, size, reason, error_code, deadline_at FROM forge.merge_queue_batches ORDER BY id DESC LIMIT 20;`
+   `SELECT id, queue_id, state, depth, parent_batch_id, base_sha, train_sha, size, reason, error_code, deadline_at FROM forge.merge_queue_batches ORDER BY id DESC LIMIT 20;`
    `SELECT id, merge_request_id, state, position, isolate, batch_id, merge_id, reaps, reason, error_code FROM forge.merge_queue_entries WHERE queue_id = <q> ORDER BY position;`
    `lease_until` が過去のまま `next_run_at` も過去なら、worker が動いていない（`forge serve` が止まっている、または
    `forge.serve.merge_queue_started` のあと `merge_queue_tick` の失敗が続いている）。
@@ -204,6 +207,41 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
 起動のログ `forge.serve.merge_queue_started` に `doc_batch_max` と `ci_batch_max`。同じ手番での着地そのものに切り替えは無い
 （パイプラインが無いときの判定を次の手番まで待たせても、答えは同じで遅いだけ）。
 
+## 投機の列車（計画 18 S9。`merge_queue.speculation_depth`、既定 1）
+
+既定の 1 では、キューの生きたバッチは今までどおり 1 つ（ADR-0030）。2 以上（最大 8）にすると、前の列車（深さ 1 = 先頭）が
+パイプラインを待っている間に、その列車の先端の上に次のバッチを作り、同時に試す（`depth` が 1 つ深い、`parent_batch_id` が前の
+バッチ）。
+
+- **着地は順にだけ**: 判定するのは先頭だけ。先頭は target が自分の土台（`base_sha`）のときにだけ着地し、着地すると後ろの
+  バッチが 1 つずつ前へ進む（`depth` が 1 減る）。後ろのバッチのパイプラインが先に緑でも、先頭が着地するまで待つ
+  （`gstn queue list` の「試し中のバッチ」は先頭。後ろのバッチのエントリーも `testing`）。
+- **前が着地しなければ後ろも捨てる**: 先頭が赤（二分は先頭にだけ）・捨てられた（`target_moved`、`entry_left`、`landing_interrupted` など）・
+  期限切れのとき、後ろの生きたバッチは同じトランザクションで `abandoned`、`reason=predecessor_failed`（`forge.merge_queue.batch_abandoned`
+  に `depth`、`predecessor_batch_id`、`predecessor_reason`）。エントリーは順に `queued` へ戻り、数え（reap）も外れもしない。
+  後ろのバッチの MR が外された・新しい版が push されたときは、そのバッチ（`entry_left`）とその後ろが捨てられ、先頭は続く。
+- **投機の組み立ては MR を外さない**: まだ赤になりうる列車の上での衝突や fast-forward できないことは、外す理由にしない。バッチは
+  その MR の前で止まり、MR は列に残って target の上で試される（深さ 1 と同じ答え）。
+- **隠した ref**: `refs/merge-queue/<queue_id>/train` は 1 本のまま、いちばん深い生きた列車を指す（浅い列車はその祖先なので
+  消えない）。先頭が着地して後ろが残る間は消さない。途中で切れたら、残ったいちばん深い列車に戻す（失敗は
+  `forge.merge_queue.train_ref_kept`、次の組み立てか保守の掃除が直す）。
+- **着地の途中で止まった**（`state = 'landing'` は先頭だけ）: 上の Diagnose 5 のとおり git を見て決める。target が先頭の列車なら
+  先頭を記録し、後ろのバッチはそのまま残って先頭になる。target が土台のままなら先頭を作り直し、後ろは `predecessor_failed`。
+- 文書のキュー（`.forge-ci.yml` が無い）は作った手番で着地するので、深さを上げても後ろにバッチを作ることはない。
+- 生きたバッチの数を見る:
+  `SELECT queue_id, count(*), max(depth) FROM forge.merge_queue_batches WHERE state IN ('testing', 'landing') GROUP BY queue_id;`
+  `max(depth)` は `merge_queue.speculation_depth` を超えない（スキーマは (queue, depth) ごとに 1 つ、`merge_queue_batches_live_depth`）。
+
+**上げる前に**: 深さ D の列車は同時に D 本のパイプラインを走らせる。ランナーが D 本を並行できないと、後ろの列車は待つだけで速くならず、
+赤の列車ごとに後ろの D−1 本の CI が無駄になる。テスト用ランナーの並行数（計画 18 §5 決定 2）はまだ測っていないので、**既定は 1 のまま**。
+上げるのは、ランナーの並行数を確かめたプロジェクトの環境だけ。
+
+| キー | 既定 | 範囲 | 戻し方 |
+|---|---|---|---|
+| `merge_queue.speculation_depth`（`FORGE_MERGE_QUEUE_SPECULATION_DEPTH`） | 1 | 1〜8 | `1` で ADR-0030 の生きたバッチ 1 つ |
+
+起動のログ `forge.serve.merge_queue_started` に `speculation_depth`。`forge.merge_queue.batch_built` に `depth` と `parent_batch_id`。
+
 ## Mitigate（変更は人の承認のあと）
 
 - **通知に頼らずに動かす**（`FG-DB-0024` が続く、LISTEN の接続が直らない）: サーバーの設定を `merge_queue.safety_poll_ms = 2000`、
@@ -245,6 +283,13 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
   が続く、など）: サーバーの設定を `merge_queue.doc_batch_max = 4`（`FORGE_MERGE_QUEUE_DOC_BATCH_MAX=4`）にして `forge serve` を再起動する。
   **人の承認が要る**（ロールバック: 設定を戻して再起動。列の MR は失われない）。`forge serve` のメモリが足りないときは
   `merge_queue.doc_index_bytes` を下げる（`0` で索引を使わない）。
+- **投機をやめる**（`predecessor_failed` が続いて CI が無駄になる、ランナーが足りない）: サーバーの設定を
+  `merge_queue.speculation_depth = 1`（`FORGE_MERGE_QUEUE_SPECULATION_DEPTH=1`）にして `forge serve` を再起動する。**人の承認が要る**
+  （ロールバック: 設定を戻して再起動。列の MR は失われない）。すでに生きている後ろのバッチは、先頭の着地で前へ進むか
+  `predecessor_failed` で終わる（新しく後ろには作らない）。
+- **S9 の前のビルドに戻す**（ロールバック。**人の承認が要る**）: 先に上の手順で深さを 1 にし、生きたバッチが各キュー 1 つになるのを待つ
+  （上の「生きたバッチの数を見る」の `count` がすべて 1 以下）。マイグレーション `20270115100000` は戻さない（列を足し、生きたバッチの
+  一意性を (queue, depth) ごとにしただけ。S9 の前のビルドは `depth` と `parent_batch_id` を読まず、深さ 1 だけを書く）。
 - 詰まったバッチを手で捨てる SQL の操作はしない（エントリーと試行の状態がずれる）。止めて（pause）原因を直すのが先。
 
 ## Verify
@@ -259,4 +304,4 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
 - ADR-0030（マージキュー）、ADR-0037（列車の doc-lint）、ADR-0024（マージの実行、照合）、Runbook `merge-execution`、`ci-pipelines`、`ci-runner`、
   `checks-reporting`（`forge/doc-lint` のチェック）、`config-invalid`（`merge_queue.train_lint_budget_ms`、
   `merge_queue.safety_poll_ms` / `waiting_safety_poll_ms` / `workers`。リポジトリの `.forge/repo.yml` は
-  ここ）、`job-queue-backlog`（`FG-DB-0024` の読み方）、`auto-merge`（`merge_queue_doc_lint_*` / `merge_queue_repo_config_invalid` の止まり方）。負荷試験: `ops/loadtest/README.md` の `a-xref`。
+  ここ。`merge_queue.speculation_depth` も同じ `FG-SYS-0002`）、`job-queue-backlog`（`FG-DB-0024` の読み方）、`auto-merge`（`merge_queue_doc_lint_*` / `merge_queue_repo_config_invalid` の止まり方）。負荷試験: `ops/loadtest/README.md` の `a-xref`。

@@ -158,3 +158,9 @@
   `a_doc_lint_still_missing_past_the_limit_stops_with_its_reason` ほか、forge-review（実際の行）
   `a_failed_doc_lint_stops_auto_merge_on_a_project_without_required_checks`・`a_doc_lint_that_never_arrives_stops_with_doc_lint_missing`・
   `an_errored_doc_lint_is_asked_again_then_stops_with_doc_lint_error`。
+
+## Amendment（2026-11-28、計画 18 S9）— 生きたバッチは (キュー, 深さ) ごとに 1 つ
+
+`merge_queue.speculation_depth`（既定 1）が 2 以上のとき、キューは先頭の列車の上に作った投機の列車を最大 8 本まで同時に試す
+（`merge_queue_batches_one_live` は `merge_queue_batches_live_depth` に置き換えた）。既定の 1 では、この ADR の「生きたバッチは 1 つ」の
+まま。決めたことと既知の限界は ADR-0037 の「追記（2026-11-28、計画 18 S9 の実装）」。

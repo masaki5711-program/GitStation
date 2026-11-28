@@ -50,6 +50,26 @@ pub fn batch_bound(stored: usize, in_process: bool, doc_max: usize, ci_max: usiz
     lowered.min(kind).clamp(1, MAX_BATCH)
 }
 
+/// The most live batches one queue may hold at once (plan 18 S9,
+/// `merge_queue.speculation_depth`'s upper bound): the schema's CHECK
+/// `merge_queue_batches_depth` (`depth BETWEEN 1 AND 8`, migration
+/// `merge_queue_speculation`) holds the same number: change both together.
+pub const MAX_SPECULATION: usize = 8;
+
+/// `merge_queue.speculation_depth`'s default: one live batch per queue,
+/// ADR-0030's queue (plan 18 S9). Higher only where the runners can test
+/// that many trains at once (plan 18 §5 decision 2 is still open).
+pub const DEFAULT_SPECULATION: usize = 1;
+
+/// Whether a queue with `live` live batches builds one more behind them
+/// (plan 18 S9): only while its front waits for its train's pipeline
+/// (`front_waiting`), the queue is not paused, and fewer than `depth`
+/// (clamped to `1..=`[`MAX_SPECULATION`]) are live. Depth 1 never builds
+/// behind a live batch.
+pub fn builds_behind(live: usize, depth: usize, front_waiting: bool, paused: bool) -> bool {
+    front_waiting && !paused && live >= 1 && live < depth.clamp(1, MAX_SPECULATION)
+}
+
 /// An entry reaped this many times (its batch passed the deadline) is
 /// removed (`FG-CI-0024`, ADR-0030 §14). The table's CHECK
 /// `merge_queue_entries_reaps` (`reaps BETWEEN 0 AND 3`, migration
@@ -133,7 +153,8 @@ words! {
 }
 
 impl BatchState {
-    /// `testing` or `landing`: at most one per queue.
+    /// `testing` or `landing`: at most one per (queue, depth) — plan 18
+    /// S9; one per queue at `merge_queue.speculation_depth = 1`.
     pub fn is_live(self) -> bool {
         matches!(self, Self::Testing | Self::Landing)
     }
@@ -306,6 +327,24 @@ mod tests {
         // Never 0, never past the schema.
         assert_eq!(batch_bound(0, true, 0, 0), 1);
         assert_eq!(batch_bound(FULL_MARK, true, 500, 4), MAX_BATCH);
+    }
+
+    #[test]
+    fn only_a_waiting_front_has_trains_built_behind_it() {
+        // Depth 1 (the default): never a second live batch.
+        assert_eq!(DEFAULT_SPECULATION, 1);
+        assert!(!builds_behind(1, DEFAULT_SPECULATION, true, false));
+        // Depth 3: up to three, behind a waiting, unpaused front.
+        assert!(builds_behind(1, 3, true, false));
+        assert!(builds_behind(2, 3, true, false));
+        assert!(!builds_behind(3, 3, true, false));
+        assert!(!builds_behind(1, 3, false, false), "a front being decided");
+        assert!(!builds_behind(1, 3, true, true), "paused");
+        assert!(!builds_behind(0, 3, true, false), "no front: a plain build");
+        // Never past the schema.
+        assert!(builds_behind(7, 50, true, false));
+        assert!(!builds_behind(MAX_SPECULATION, 50, true, false));
+        assert!(!builds_behind(1, 0, true, false));
     }
 
     #[test]

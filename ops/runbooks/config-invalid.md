@@ -79,6 +79,8 @@
        どちらも 1〜64）/ `merge_queue.doc_index_bytes`（列車の lint の文書の索引の大きさ。`0` か 1048576〜1073741824）。
        `FORGE_MERGE_QUEUE_DOC_BATCH_MAX` / `FORGE_MERGE_QUEUE_CI_BATCH_MAX` / `FORGE_MERGE_QUEUE_DOC_INDEX_BYTES` か `[merge_queue]`。
        既定は 32 / 4 / 67108864。
+     - `config_key=merge_queue.speculation_depth`（計画 18 S9。キューの生きたバッチの数、1〜8）: `below_min`（0）、`above_max`（9 以上）、
+       `invalid`。`FORGE_MERGE_QUEUE_SPECULATION_DEPTH` か `[merge_queue]`。既定は 1（ADR-0030 の 1 つ。Runbook `merge-queue` の「投機の列車」）。
      - `config_key=merge_queue.safety_poll_ms` / `merge_queue.waiting_safety_poll_ms` / `merge_queue.workers`（計画 18 S3。マージキューの
        手番の待ちと数。Runbook `merge-queue` の「起床と安全網」）: `below_min`、`above_max`、`invalid`（整数でない）。
        `safety_poll_ms` は 100〜300000（未設定なら 30000）、`waiting_safety_poll_ms` は 100〜600000（未設定なら 60000）、`workers` は

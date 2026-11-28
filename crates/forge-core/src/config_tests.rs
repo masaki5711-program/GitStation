@@ -2334,6 +2334,43 @@ doc_index_bytes = 1048576
     }
 }
 
+/// Plan 18 S9 (ADR-0037 (d) 4): `merge_queue.speculation_depth` is 1 by
+/// default (one live batch: ADR-0030), 1..=8 (the schema's CHECK
+/// `merge_queue_batches_depth`), from the environment or the file.
+#[test]
+fn merge_queue_speculation_depth_has_a_default_and_a_range() {
+    use super::MergeQueueConfig;
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.merge_queue.speculation_depth, 1);
+    assert_eq!(
+        usize::try_from(MergeQueueConfig::MAX_SPECULATION_DEPTH).expect("fits"),
+        crate::merge_queue::MAX_SPECULATION
+    );
+    let deep =
+        load(None, &env(&[("FORGE_MERGE_QUEUE_SPECULATION_DEPTH", "8")])).expect("the deepest");
+    assert_eq!(deep.merge_queue.speculation_depth, 8);
+    let from_file = file(
+        "[merge_queue]
+speculation_depth = 3
+",
+    );
+    let cfg = load(Some(from_file.path()), &env(&[])).expect("file");
+    assert_eq!(cfg.merge_queue.speculation_depth, 3);
+    for (value, reason) in [("0", "below_min"), ("9", "above_max")] {
+        let err = load(
+            None,
+            &env(&[("FORGE_MERGE_QUEUE_SPECULATION_DEPTH", value)]),
+        )
+        .expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("merge_queue.speculation_depth") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}
+
 /// `jobs.safety_poll_ms` (plan 18 S2, ADR-0037 (a)): default 10000,
 /// 100..=60000 (FG-SYS-0002 naming the key). 1000 is the poll period
 /// before plan 18 — the way back.

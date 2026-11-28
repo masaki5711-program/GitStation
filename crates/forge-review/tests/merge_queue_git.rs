@@ -19,6 +19,8 @@ mod queue_train_lint;
 mod queue_wake;
 // Plan 18 S7 (ADR-0037 (b)): the document fast path.
 mod queue_doc_fast;
+// Plan 18 S9 (ADR-0037 (d) 4): speculative trains.
+mod queue_speculation;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

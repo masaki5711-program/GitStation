@@ -42,7 +42,7 @@ use forge_core::train_lint::{
     REASON_BUDGET, REASON_READ_FAILED, REPO_CONFIG_INVALID_REASON, UNAVAILABLE_REASON,
 };
 use forge_core::{ObjectId, RepoId};
-use forge_db::review::merge_queue::{self as db, BatchEnd, StoredBatch, StoredEntry};
+use forge_db::review::merge_queue::{BatchEnd, StoredBatch, StoredEntry};
 use forge_errors::{ErrorCode, ForgeError};
 
 use super::MergeQueue;
@@ -219,11 +219,10 @@ impl MergeQueue {
             reaped: false,
             batch_limit: None,
         };
-        if !db::end_batch(&self.merger.db, asked.batch.id, &end).await? {
+        if !self.end_chain(asked.batch, &end, Some(asked.repo)).await? {
             asked.raced(red.reason);
             return Ok("raced");
         }
-        self.retire_train(asked.repo, asked.batch).await;
         let listed = train_lint::listed(red.problems);
         for (entry, step) in leaving {
             red.log(asked, entry, *step, &listed);
@@ -273,11 +272,10 @@ impl MergeQueue {
         let bound = context_of(&error, "bound");
         // Written by `ask` as a number; anything else is not logged.
         let budget_ms = context_of(&error, "budget_ms").and_then(|ms| ms.parse::<u64>().ok());
-        if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+        if !self.end_chain(batch, &end, Some(asked.repo)).await? {
             asked.raced(lint_reason.unwrap_or(UNAVAILABLE_REASON));
             return Ok("raced");
         }
-        self.retire_train(asked.repo, batch).await;
         let said = Unavailable {
             error: &error,
             lint_reason,

@@ -18,6 +18,7 @@ use std::time::Duration;
 use forge_core::ids::{MergeRequestId, ProjectId, UserId};
 use forge_core::merge_queue::{
     stored_lowered, BatchState, EntryState, Isolation, MergeQueueChange, FULL_MARK, MAX_BATCH,
+    MAX_SPECULATION,
 };
 use forge_core::{MergeMethod, ObjectId, RefName, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
@@ -230,6 +231,12 @@ pub struct StoredBatch {
     /// `now() > deadline_at` when it was read.
     pub past_deadline: bool,
     pub created_at: String,
+    /// Its place in the queue's live chain (plan 18 S9): 1 = the front,
+    /// k + 1 = built on batch k's train. A landing moves the batches behind
+    /// it one place forward; a finished batch keeps the place it ended at.
+    pub depth: usize,
+    /// The batch whose train it was built on (`None`: built on the target).
+    pub parent_batch_id: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -247,6 +254,8 @@ struct BatchRow {
     deadline_at: String,
     past_deadline: bool,
     created_at: String,
+    depth: i32,
+    parent_batch_id: Option<i64>,
 }
 
 fn batch_columns() -> String {
@@ -254,7 +263,7 @@ fn batch_columns() -> String {
         "id, queue_id, project_id, state, base_sha, train_sha, size, request_id, reason, \
          error_code, to_char(deadline_at AT TIME ZONE 'UTC', {TS}) AS deadline_at, \
          now() > deadline_at AS past_deadline, \
-         to_char(created_at AT TIME ZONE 'UTC', {TS}) AS created_at"
+         to_char(created_at AT TIME ZONE 'UTC', {TS}) AS created_at, depth, parent_batch_id"
     )
 }
 
@@ -278,6 +287,11 @@ impl BatchRow {
             deadline_at: self.deadline_at,
             past_deadline: self.past_deadline,
             created_at: self.created_at,
+            depth: usize::try_from(self.depth)
+                .ok()
+                .filter(|d| (1..=MAX_SPECULATION).contains(d))
+                .ok_or_else(|| unreadable("stored_batch_depth_invalid", id))?,
+            parent_batch_id: self.parent_batch_id,
         })
     }
 }
@@ -477,8 +491,10 @@ pub async fn set_paused_decided<P>(
 
 // ── reads (read pool) ──
 
-/// A queue with its live entries in order, its live batch and its most
-/// recent finished entries (newest first, at most `recent`).
+/// A queue with its live entries in order, its front live batch (plan 18
+/// S9: the one at depth 1; the entries of the batches behind it are
+/// `testing` too) and its most recent finished entries (newest first, at
+/// most `recent`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueView {
     /// `None`: nothing was ever queued for the target (and it was never
@@ -540,7 +556,7 @@ pub async fn queue_view(
         .map_err(|e| read_query_error(QUERY, e))?;
         let batch: Option<BatchRow> = sqlx::query_as(&format!(
             "SELECT {} FROM forge.merge_queue_batches WHERE queue_id = $1 \
-             AND state IN ('testing', 'landing')",
+             AND state IN ('testing', 'landing') ORDER BY depth LIMIT 1",
             batch_columns()
         ))
         .bind(queue.id)
@@ -765,23 +781,29 @@ pub async fn queue_now(db: &Db, queue: i64) -> Result<Option<StoredQueue>, Forge
     row.map(QueueRow::parse).transpose()
 }
 
-/// The live batch of `queue` (write pool).
+/// The front live batch of `queue` (depth 1; the only one at
+/// `merge_queue.speculation_depth = 1`), write pool.
 pub async fn live_batch(db: &Db, queue: i64) -> Result<Option<StoredBatch>, ForgeError> {
-    const QUERY: &str = "merge_queue.live_batch";
-    let row: Option<BatchRow> = db
+    Ok(live_batches(db, queue).await?.into_iter().next())
+}
+
+/// Every live batch of `queue`, front first (plan 18 S9; write pool).
+pub async fn live_batches(db: &Db, queue: i64) -> Result<Vec<StoredBatch>, ForgeError> {
+    const QUERY: &str = "merge_queue.live_batches";
+    let rows: Vec<BatchRow> = db
         .within(QUERY, async {
             sqlx::query_as(&format!(
                 "SELECT {} FROM forge.merge_queue_batches WHERE queue_id = $1 \
-                 AND state IN ('testing', 'landing')",
+                 AND state IN ('testing', 'landing') ORDER BY depth",
                 batch_columns()
             ))
             .bind(queue)
-            .fetch_optional(db.write_pool())
+            .fetch_all(db.write_pool())
             .await
             .map_err(|e| query_error(QUERY, e))
         })
         .await?;
-    row.map(BatchRow::parse).transpose()
+    rows.into_iter().map(BatchRow::parse).collect()
 }
 
 /// Batch `id` (write pool; tests and diagnosis).
@@ -898,12 +920,22 @@ pub struct NewBatch {
     /// `None` for a train without `.forge-ci.yml` (no pipeline: the verdict
     /// reads [`TrainPipeline::None`] at once).
     pub pipeline: Option<NewJob>,
+    /// Plan 18 S9: the live batch whose train `base` is (`None`: `base` is
+    /// the target's tip and the queue has no live batch).
+    pub parent: Option<i64>,
+    /// The most live batches the queue may hold
+    /// (`merge_queue.speculation_depth`).
+    pub max_depth: usize,
 }
 
 /// Write `new` (state `testing`), move its entries to `testing` and
-/// enqueue the train's pipeline, in one transaction. `None`: the queue has
-/// a live batch already, or a member is no longer `queued` (dequeued
-/// meanwhile) — nothing written, the worker builds again.
+/// enqueue the train's pipeline, in one transaction. Without a parent the
+/// queue must have no live batch (depth 1, ADR-0030); with one (plan 18
+/// S9) the parent must be the queue's deepest live batch, its train must
+/// be `new.base`, and fewer than `new.max_depth` batches may be live — the
+/// new batch is one deeper. `None`: that does not hold any more, or a
+/// member is no longer `queued` (dequeued meanwhile) — nothing written,
+/// the worker builds again.
 pub async fn create_batch(db: &Db, new: &NewBatch) -> Result<Option<i64>, ForgeError> {
     const QUERY: &str = "merge_queue.create_batch";
     if new.members.is_empty() || new.members.len() > MAX_BATCH {
@@ -936,13 +968,35 @@ pub async fn create_batch(db: &Db, new: &NewBatch) -> Result<Option<i64>, ForgeE
         if usize::try_from(queued).ok() != Some(ids.len()) {
             return Ok(None);
         }
+        // Plan 18 S9: the chain under the queue's lock (the row above).
+        let live: Vec<(i64, i32, String)> = sqlx::query_as(
+            "SELECT id, depth, train_sha FROM forge.merge_queue_batches \
+             WHERE queue_id = $1 AND state IN ('testing', 'landing') ORDER BY depth",
+        )
+        .bind(new.queue)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let fits = match (new.parent, live.last()) {
+            (None, None) => true,
+            (Some(parent), Some((deepest, _, train))) => {
+                *deepest == parent
+                    && train == new.base.as_str()
+                    && live.len() < new.max_depth.min(MAX_SPECULATION)
+            }
+            (None, Some(_)) | (Some(_), None) => false,
+        };
+        if !fits {
+            return Ok(None);
+        }
+        let depth = live.last().map_or(1, |(_, d, _)| d + 1);
         let size = i32::try_from(new.members.len()).unwrap_or(i32::MAX);
         let inserted: Option<i64> = sqlx::query_scalar(
             "INSERT INTO forge.merge_queue_batches (queue_id, project_id, state, base_sha, \
-             train_sha, size, request_id, deadline_at) \
-             SELECT $1, $2, 'testing', $3, $4, $5, $6, now() + make_interval(secs => $7) \
+             train_sha, size, request_id, deadline_at, depth, parent_batch_id) \
+             SELECT $1, $2, 'testing', $3, $4, $5, $6, now() + make_interval(secs => $7), $8, $9 \
              WHERE NOT EXISTS (SELECT 1 FROM forge.merge_queue_batches \
-               WHERE queue_id = $1 AND state IN ('testing', 'landing')) \
+               WHERE queue_id = $1 AND state IN ('testing', 'landing') AND depth >= $8) \
              RETURNING id",
         )
         .bind(new.queue)
@@ -952,6 +1006,8 @@ pub async fn create_batch(db: &Db, new: &NewBatch) -> Result<Option<i64>, ForgeE
         .bind(size)
         .bind(new.request_id.as_str())
         .bind(new.deadline.as_secs_f64())
+        .bind(depth)
+        .bind(new.parent)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| query_error(QUERY, e))?;
@@ -1061,11 +1117,49 @@ pub struct BatchEnd {
     pub batch_limit: Option<usize>,
 }
 
+/// A live batch behind an ended one, dropped with it (plan 18 S9,
+/// `reason = predecessor_failed`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedBatch {
+    pub id: i64,
+    pub depth: usize,
+    pub train_sha: ObjectId,
+    pub request_id: RequestId,
+}
+
+/// What [`end_batch_chain`] ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndedChain {
+    /// The live batches that were behind the ended one, front first.
+    pub dropped: Vec<DroppedBatch>,
+    /// The train of the deepest batch still live after the end (the one
+    /// before the ended batch; `None`: the queue has no live batch now).
+    pub deepest_live: Option<ObjectId>,
+}
+
+/// The reason a batch behind an ended one is abandoned with (plan 18 S9).
+pub const PREDECESSOR_FAILED: &str = "predecessor_failed";
+
+/// [`end_batch_chain`] when only whether it ended matters (`false`: the
+/// batch was not in `end.from` any more).
+pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, ForgeError> {
+    Ok(end_batch_chain(db, batch, end).await?.is_some())
+}
+
 /// End live batch `batch` as `end` says, from `end.from` only: its other
 /// `testing` entries go back to `queued` in their order (their merge
-/// attempt, if any, is the caller's to end first). `false`: the batch was
-/// not in `end.from` any more (another worker moved it).
-pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, ForgeError> {
+/// attempt, if any, is the caller's to end first). Every `testing` batch
+/// of the queue behind it (a greater depth: built on its train, plan 18
+/// S9) is `abandoned` with [`PREDECESSOR_FAILED`] in the same
+/// transaction, its entries back to `queued` too (no reap, no removal). A
+/// batch behind the front is never `landing` (only the front lands).
+/// `None`: the batch was not in `end.from` any more (another worker moved
+/// it).
+pub async fn end_batch_chain(
+    db: &Db,
+    batch: i64,
+    end: &BatchEnd,
+) -> Result<Option<EndedChain>, ForgeError> {
     const QUERY: &str = "merge_queue.end_batch";
     if !matches!(end.state, BatchState::Failed | BatchState::Abandoned) || !end.from.is_live() {
         return Err(ForgeError::new(ErrorCode::Internal)
@@ -1078,10 +1172,10 @@ pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, Forg
             .begin()
             .await
             .map_err(|e| query_error(QUERY, e))?;
-        let queue: Option<i64> = sqlx::query_scalar(
+        let ended: Option<(i64, i32)> = sqlx::query_as(
             "UPDATE forge.merge_queue_batches SET state = $2, reason = $3, error_code = $4, \
              finished_at = now(), updated_at = now() \
-             WHERE id = $1 AND state = $5 RETURNING queue_id",
+             WHERE id = $1 AND state = $5 RETURNING queue_id, depth",
         )
         .bind(batch)
         .bind(end.state.as_str())
@@ -1091,9 +1185,53 @@ pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, Forg
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| query_error(QUERY, e))?;
-        let Some(queue) = queue else {
-            return Ok(false);
+        let Some((queue, depth)) = ended else {
+            return Ok(None);
         };
+        // Review HIGH (plan 18 S9): the queue's row, after the batch's own
+        // row (the order of `dequeue_mr_decided`: batch, then queue) and
+        // before the chain is read — `create_batch` reads the chain under
+        // it, so a child built on this batch is either committed and seen
+        // below, or built after this commit and refused.
+        sqlx::query_scalar::<_, i64>("SELECT id FROM forge.merge_queues WHERE id = $1 FOR UPDATE")
+            .bind(queue)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        // Plan 18 S9: the trains built on this one go with it.
+        let behind: Vec<(i64, i32, String, String)> = sqlx::query_as(
+            "UPDATE forge.merge_queue_batches SET state = 'abandoned', reason = $3, \
+             error_code = NULL, finished_at = now(), updated_at = now() \
+             WHERE queue_id = $1 AND depth > $2 AND state = 'testing' \
+             RETURNING id, depth, train_sha, request_id",
+        )
+        .bind(queue)
+        .bind(depth)
+        .bind(PREDECESSOR_FAILED)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let dropped_ids: Vec<i64> = behind.iter().map(|(id, _, _, _)| *id).collect();
+        if !dropped_ids.is_empty() {
+            sqlx::query(
+                "UPDATE forge.merge_queue_entries SET state = 'queued', batch_id = NULL, \
+                 train_sha = NULL, merge_id = NULL, updated_at = now() \
+                 WHERE batch_id = ANY($1) AND state = 'testing'",
+            )
+            .bind(&dropped_ids)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        }
+        let deepest_live: Option<String> = sqlx::query_scalar(
+            "SELECT train_sha FROM forge.merge_queue_batches \
+             WHERE queue_id = $1 AND state IN ('testing', 'landing') \
+             ORDER BY depth DESC LIMIT 1",
+        )
+        .bind(queue)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
         for (entry, reason, code) in &end.removed {
             sqlx::query(
                 "UPDATE forge.merge_queue_entries SET state = 'removed', reason = $2, \
@@ -1140,19 +1278,35 @@ pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, Forg
                 .map_err(|e| query_error(QUERY, e))?;
         }
         tx.commit().await.map_err(|e| query_error(QUERY, e))?;
-        Ok(true)
+        let mut dropped = Vec::with_capacity(behind.len());
+        for (id, depth, train, request) in behind {
+            dropped.push(DroppedBatch {
+                id,
+                depth: usize::try_from(depth)
+                    .map_err(|_| unreadable("stored_batch_depth_invalid", id))?,
+                train_sha: oid(&train, id)?,
+                request_id: RequestId::parse(&request)
+                    .ok_or_else(|| unreadable("stored_batch_request_id_invalid", id))?,
+            });
+        }
+        let deepest_live = deepest_live.map(|t| oid(&t, batch)).transpose()?;
+        Ok(Some(EndedChain {
+            dropped,
+            deepest_live,
+        }))
     })
     .await
 }
 
 /// `testing → landing` (the landing starts under the merge lock). `false`:
-/// it was not `testing`.
+/// it was not `testing`, or (plan 18 S9) it is not the front — only the
+/// batch at depth 1 lands.
 pub async fn begin_landing(db: &Db, batch: i64) -> Result<bool, ForgeError> {
     const QUERY: &str = "merge_queue.begin_landing";
     db.within(QUERY, async {
         let done = sqlx::query(
             "UPDATE forge.merge_queue_batches SET state = 'landing', updated_at = now() \
-             WHERE id = $1 AND state = 'testing'",
+             WHERE id = $1 AND state = 'testing' AND depth = 1",
         )
         .bind(batch)
         .execute(db.write_pool())
@@ -1180,9 +1334,20 @@ pub async fn entry_merged(db: &Db, entry: i64) -> Result<bool, ForgeError> {
     .await
 }
 
+/// [`batch_landed_chain`] when only whether it landed matters.
+pub async fn batch_landed(db: &Db, batch: i64) -> Result<bool, ForgeError> {
+    Ok(batch_landed_chain(db, batch).await?.is_some())
+}
+
 /// `landing → landed`, and the queue's bound back to [`FULL_MARK`] ("not
 /// lowered", plan 18 S7: readable by a binary before S7 after a rollback).
-pub async fn batch_landed(db: &Db, batch: i64) -> Result<bool, ForgeError> {
+/// Plan 18 S9: the live batches behind it move one place forward (the
+/// next becomes the front), one row at a time from the front so the
+/// per-depth unique index never sees two at one place; each one's
+/// deadline starts again at its promotion (the time it waited behind is
+/// not the test's). `Some(n)`: landed, `n` live batches are left; `None`:
+/// it was not `landing`.
+pub async fn batch_landed_chain(db: &Db, batch: i64) -> Result<Option<usize>, ForgeError> {
     const QUERY: &str = "merge_queue.batch_landed";
     db.within(QUERY, async {
         let mut tx = db
@@ -1199,8 +1364,39 @@ pub async fn batch_landed(db: &Db, batch: i64) -> Result<bool, ForgeError> {
         .await
         .map_err(|e| query_error(QUERY, e))?;
         let Some(queue) = queue else {
-            return Ok(false);
+            return Ok(None);
         };
+        // Review HIGH (plan 18 S9): the queue's row, after the batch's own
+        // row (the order of `dequeue_mr_decided`: batch, then queue) and
+        // before the chain is read — `create_batch` reads the chain under
+        // it, so a child built on this batch is either committed and seen
+        // below, or built after this commit and refused.
+        sqlx::query_scalar::<_, i64>("SELECT id FROM forge.merge_queues WHERE id = $1 FOR UPDATE")
+            .bind(queue)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        let behind: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM forge.merge_queue_batches \
+             WHERE queue_id = $1 AND state IN ('testing', 'landing') ORDER BY depth",
+        )
+        .bind(queue)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let left = behind.len();
+        for id in behind {
+            sqlx::query(
+                "UPDATE forge.merge_queue_batches SET depth = depth - 1, \
+                 deadline_at = CASE WHEN depth = 2 \
+                   THEN now() + (deadline_at - created_at) ELSE deadline_at END, \
+                 updated_at = now() WHERE id = $1 AND depth > 1",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        }
         sqlx::query("UPDATE forge.merge_queues SET batch_limit = $2 WHERE id = $1")
             .bind(queue)
             .bind(i32::try_from(FULL_MARK).unwrap_or(4))
@@ -1208,7 +1404,7 @@ pub async fn batch_landed(db: &Db, batch: i64) -> Result<bool, ForgeError> {
             .await
             .map_err(|e| query_error(QUERY, e))?;
         tx.commit().await.map_err(|e| query_error(QUERY, e))?;
-        Ok(true)
+        Ok(Some(left))
     })
     .await
 }
@@ -1279,3 +1475,7 @@ pub async fn queues_with_live_batch(db: &Db, queues: &[i64]) -> Result<Vec<i64>,
 #[cfg(test)]
 #[path = "limit_tests.rs"]
 mod limit_tests;
+
+#[cfg(test)]
+#[path = "speculation_tests.rs"]
+mod speculation_tests;
