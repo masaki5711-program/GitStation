@@ -54,6 +54,16 @@ const defaults: Record<string, Handler> = {
   // settings' deploy approvers and the MR panel's "who can approve" (none).
   [`GET ${DELEGATION_PATH}`]: () => json(200, { mine: null, to_me: [] }),
   'GET /api/v1/projects/7/deploy/approvers': () => json(200, { environments: [] }),
+  // Plan 17 P17-7b: the deployments screen asks whether AI assets are on
+  // (off unless a test says so: no link to the releases screen).
+  'GET /api/v1/projects/7/ai-assets': () =>
+    json(200, {
+      project_id: 7,
+      enabled: false,
+      changed_by: null,
+      changed_at: null,
+      viewer: { can_change: false },
+    }),
   // The access-token page's gstn downloads (none unless a test gives some).
   'GET /api/v1/clients': () => json(200, { items: [] }),
   'GET /api/v1/projects/7/merge-requests/3/approvals': () =>

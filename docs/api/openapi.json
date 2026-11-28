@@ -12459,6 +12459,13 @@
           "key_id": {
             "type": "string"
           },
+          "key_revoked": {
+            "description": "Signed by a key revoked since (lists only; `null` elsewhere).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "kind": {
             "description": "`pfs-ai-bundle`.",
             "type": "string"
@@ -12470,9 +12477,26 @@
               "null"
             ]
           },
+          "next_stage": {
+            "description": "The stage a request of it would be accepted on now (lists only;\n`null`: withdrawn, a revoked key, one under way, or done).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "signature": {
             "description": "Base64 Ed25519 in the `forge-pfs-ai-bundle-signature-v1` domain.",
             "type": "string"
+          },
+          "stages": {
+            "description": "Shadow, canary, prod (lists only; `null` elsewhere).",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseStageBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "tag": {
             "type": "string"
@@ -12482,6 +12506,17 @@
           },
           "version": {
             "type": "string"
+          },
+          "withdrawal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WithdrawalBody",
+                "description": "P17-7b: its withdrawal (`null`: not withdrawn)."
+              }
+            ]
           }
         },
         "required": [
@@ -12498,7 +12533,11 @@
           "bench_check_run_id",
           "created_by",
           "created_at",
-          "manifest"
+          "manifest",
+          "withdrawal",
+          "key_revoked",
+          "stages",
+          "next_stage"
         ],
         "type": "object"
       },
@@ -12525,10 +12564,60 @@
               "$ref": "#/components/schemas/ReleaseBody"
             },
             "type": "array"
+          },
+          "stages": {
+            "description": "Shadow, canary, prod.",
+            "items": {
+              "$ref": "#/components/schemas/StageBody"
+            },
+            "type": "array"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/ReleasesViewerBody"
           }
         },
         "required": [
-          "releases"
+          "releases",
+          "stages",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "ReleaseStageBody": {
+        "additionalProperties": false,
+        "description": "A release's state on one stage (lists only).",
+        "properties": {
+          "approved_success": {
+            "description": "A deployment of it succeeded there with a person's approval.",
+            "type": "boolean"
+          },
+          "deployment_id": {
+            "description": "Its newest deployment there (`null`: never requested there).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "environment": {
+            "description": "`pfs-ai-shadow`, `pfs-ai-canary` or `pfs-ai-prod`.",
+            "type": "string"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "description": "`dev`, `stg` or `prod`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "tier",
+          "approved_success"
         ],
         "type": "object"
       },
@@ -12586,6 +12675,30 @@
           "name",
           "value",
           "masked"
+        ],
+        "type": "object"
+      },
+      "ReleasesViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller may press on the releases screen.",
+        "properties": {
+          "can_release": {
+            "description": "`AiAssetReleaseCreate`.",
+            "type": "boolean"
+          },
+          "can_request": {
+            "description": "`DeployCreate`: a stage request and a rollback.",
+            "type": "boolean"
+          },
+          "can_withdraw": {
+            "description": "`AiAssetReleaseWithdraw`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_release",
+          "can_request",
+          "can_withdraw"
         ],
         "type": "object"
       },
@@ -14604,6 +14717,38 @@
         ],
         "type": "object"
       },
+      "StageBody": {
+        "additionalProperties": false,
+        "description": "One stage of the project (lists only).",
+        "properties": {
+          "environment": {
+            "description": "`pfs-ai-shadow`, `pfs-ai-canary` or `pfs-ai-prod`.",
+            "type": "string"
+          },
+          "rollback_version": {
+            "description": "The release a rollback would request (`null`: none to go back to).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "running_version": {
+            "description": "The release of its last succeeded deployment (`null`: none, or no\nrelease).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "tier"
+        ],
+        "type": "object"
+      },
       "StartDiscussion": {
         "additionalProperties": false,
         "description": "`POST …/discussions`.",
@@ -16583,6 +16728,46 @@
         "required": [
           "project_id",
           "wiki_project_id"
+        ],
+        "type": "object"
+      },
+      "WithdrawRelease": {
+        "additionalProperties": false,
+        "description": "`POST …/{version}/withdrawal`.",
+        "properties": {
+          "reason": {
+            "description": "Why the release is bad: 1 to 500 characters, one line.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WithdrawalBody": {
+        "additionalProperties": false,
+        "description": "A release's withdrawal (P17-7b): for good.",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "withdrawn_at": {
+            "type": "string"
+          },
+          "withdrawn_by": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "reason",
+          "withdrawn_by",
+          "withdrawn_at"
         ],
         "type": "object"
       },
@@ -21697,7 +21882,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest (project readers)",
+        "summary": "A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest; each with its withdrawal, a revoked key, its state on shadow / canary / prod and the stage a request would be accepted on now; per stage the running release and the rollback target; and what the caller may press (project readers)",
         "x-forge-action": "DeployRead"
       },
       "post": {
@@ -21858,6 +22043,66 @@
         "summary": "Request a release on a stage ({\"environment\": \"pfs-ai-shadow\" | \"pfs-ai-canary\" | \"pfs-ai-prod\"}, the dev / stg / prod environments): 201 pending_approval (every stage needs a person's approval in a session); 409 FG-AIASSET-0009 out of stage order (shadow, canary, prod), without the release or on an environment that needs no approval; 422 FG-DEPLOY-0011 off the protected branches (Developer)",
         "x-forge-action": "DeployCreate",
         "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/ai-asset-releases/{version}/withdrawal": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_ai_asset_releases_version_withdrawal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawRelease"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Mark a bad pfs-ai-bundle release withdrawn, for good, with a reason ({\"reason\"}: 1 to 500 characters, one line): it is never requested on a stage, approved, run or gone back to again (a fixed bundle is a new release); 201; 409 FG-AIASSET-0010 (no such release, withdrawn already, the reason); audited (people only; Maintainer, a session or an api token)",
+        "x-forge-action": "AiAssetReleaseWithdraw",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/projects/{id}/ai-asset-rollbacks": {

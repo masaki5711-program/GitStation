@@ -42,7 +42,10 @@ pub mod summary;
 pub mod transport;
 
 pub use approvers::{ApproverFact, ApproversSpec, GateFacts};
-pub use bundle::{BundleSource, GitBundles, StoredRelease, TagFacts, TreeFile};
+pub use bundle::{
+    BundleSource, GitBundles, ReleaseOverview, ReleaseRow, ReleaseStage, StageRow, StoredRelease,
+    StoredWithdrawal, TagFacts, TreeFile,
+};
 pub use forge_db::deploy::{DeploymentApproval, EnvironmentApprovers};
 pub use forge_db::review::ApproverNames;
 

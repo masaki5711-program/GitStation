@@ -93,6 +93,8 @@ guarded_functions = [
     "llm_advice_feedback_guard",
     # Plan 17 P17-7: a pfs-ai-bundle release never changes, never goes.
     "ai_bundle_releases_guard",
+    # Plan 17 P17-7b: a release's withdrawal never changes, is never undone.
+    "ai_bundle_withdrawals_guard",
 ]
 
 [tables.events]
@@ -1165,6 +1167,19 @@ ro_columns = ["*"]
 # project in the same transaction; never changed or deleted (the guard), no
 # foreign key to the project (they outlive its purge, as agent parts do) ──
 [tables.ai_bundle_releases]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+# ── Plan 17 P17-7b (20270115120000, ADR-0031 Amendment P17-7b): a bad
+# release marked withdrawn — inserted with `ai_asset_release.withdrawn` on
+# the project in the same transaction; one per release, never changed or
+# deleted (the guard: a withdrawal is never undone) ──
+[tables.ai_bundle_withdrawals]
 guarded = false
 kind = "audited"
 ro_columns = ["*"]

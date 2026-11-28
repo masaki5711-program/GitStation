@@ -155,6 +155,8 @@ export const pipelineUrl = (project: string, id: number, job?: number) =>
 
 /** A project's deployments (plan 19 L5-6). */
 export const deploymentsUrl = (project: string) => `${base(project)}/-/deployments`;
+/** A project's signed AI asset releases (plan 17 P17-7b). */
+export const aiReleasesUrl = (project: string) => `${base(project)}/-/deployments/releases`;
 /** One deployment: its approval facts, the AI summary and the approval. */
 export const deploymentUrl = (project: string, id: number) =>
   `${base(project)}/-/deployments/${String(id)}`;

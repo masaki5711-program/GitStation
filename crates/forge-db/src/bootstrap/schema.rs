@@ -81,6 +81,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.llm_advice_feedback_guard()",
     // ── Plan 17 P17-7: a pfs-ai-bundle release never changes (20270115110000) ──
     "forge.ai_bundle_releases_guard()",
+    // ── Plan 17 P17-7b: a withdrawal is never undone (20270115120000) ──
+    "forge.ai_bundle_withdrawals_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -133,6 +135,12 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "ai_bundle_releases",
         "ai_bundle_releases_forward",
         "CREATE TRIGGER ai_bundle_releases_forward BEFORE DELETE OR UPDATE ON forge.ai_bundle_releases FOR EACH ROW EXECUTE FUNCTION forge.ai_bundle_releases_guard()",
+    ),
+    // ── Plan 17 P17-7b: a withdrawal is never undone (20270115120000) ──
+    (
+        "ai_bundle_withdrawals",
+        "ai_bundle_withdrawals_forward",
+        "CREATE TRIGGER ai_bundle_withdrawals_forward BEFORE DELETE OR UPDATE ON forge.ai_bundle_withdrawals FOR EACH ROW EXECUTE FUNCTION forge.ai_bundle_withdrawals_guard()",
     ),
     // ── M4 C11: a deployment only moves forward (20261214100000) ──
     (
@@ -1231,6 +1239,16 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── Plan 17 P17-7b: release withdrawals (20270115120000) ──
+        (
+            "forge.ai_bundle_withdrawals",
+            [
+                plain(&["forge_app:SELECT"]),
+                columns("forge_app", "INSERT", AI_BUNDLE_WITHDRAWAL_APP_INSERT),
+                ro("ai_bundle_withdrawals")?,
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -1251,6 +1269,11 @@ const AI_BUNDLE_RELEASE_APP_INSERT: &[&str] = &[
     "files",
     "created_by",
 ];
+
+/// The columns forge_app may insert into forge.ai_bundle_withdrawals (plan
+/// 17 P17-7b: not id or withdrawn_at, which the table sets).
+const AI_BUNDLE_WITHDRAWAL_APP_INSERT: &[&str] =
+    &["release_id", "project_id", "reason", "withdrawn_by"];
 
 /// The columns forge_app may update in forge.ci_runners (M4 C3).
 const CI_RUNNERS_APP_UPDATE: &[&str] = &[
@@ -1519,6 +1542,8 @@ const LATER_TABLES: &[&str] = &[
     "llm_gateway",
     // ── Plan 17 P17-7: pfs-ai-bundle releases (20270115110000) ──
     "ai_bundle_releases",
+    // ── Plan 17 P17-7b: release withdrawals (20270115120000) ──
+    "ai_bundle_withdrawals",
 ];
 
 /// Every table the first migration creates.

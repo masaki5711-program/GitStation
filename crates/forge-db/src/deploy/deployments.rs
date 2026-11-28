@@ -692,6 +692,12 @@ pub async fn approve_decided(
                 .with_context("deployment_id", id)
                 .with_context("reason", "approval_window_passed"));
         }
+        // Plan 17 P17-7b: a withdrawn release is never approved.
+        if super::ai_bundle::withdrawn_at(&mut tx, project, &current.sha, QUERY).await? {
+            return Err(super::ai_bundle::deploy_refused("release_withdrawn")
+                .with_context("deployment_id", id)
+                .with_context("environment", current.tier.bundle_stage()));
+        }
         let conflict = |reason: &'static str| {
             ForgeError::new(ErrorCode::DeploymentStateConflict)
                 .with_context("deployment_id", id)

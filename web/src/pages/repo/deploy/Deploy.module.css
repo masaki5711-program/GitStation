@@ -285,3 +285,120 @@
 .badgeNeutral::before {
   content: "\21BA";
 }
+
+/* The AI asset releases screen (plan 17 P17-7b): the three stages side by
+   side (one under the other on a narrow screen), then one card per release. */
+.stages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--gs-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stage {
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-top: var(--gs-accent-border-width) solid var(--gs-color-accent-strong);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.stage p {
+  margin: 0;
+}
+
+.stageName {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+  color: var(--gs-color-heading);
+}
+
+.release {
+  padding: var(--gs-space-4) 0;
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.releaseTitle {
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  align-items: baseline;
+  margin: 0 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-lg);
+  font-variant-numeric: tabular-nums;
+  color: var(--gs-color-heading);
+}
+
+/* "Withdrawn" in words, never a colour or a strike-through alone. */
+.withdrawnMark {
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-danger-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.withdrawal {
+  margin: 0 0 var(--gs-space-3);
+  overflow-wrap: anywhere;
+}
+
+.releaseStages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2) var(--gs-space-4);
+  margin: var(--gs-space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stageWord {
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.notYet {
+  color: var(--gs-color-text-muted);
+}
+
+/* A release's one line (plan 08): plain bold text; a left accent only when
+   it waits or is blocked, so a long list is not a column of boxes. */
+.line {
+  margin: 0 0 var(--gs-space-3);
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.lineWaiting {
+  composes: line;
+  padding-left: var(--gs-space-3);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-attention);
+}
+
+.lineBlocked {
+  composes: line;
+  padding-left: var(--gs-space-3);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-danger-border);
+  color: var(--gs-color-danger-text);
+}
+
+.lineDone {
+  composes: line;
+  color: var(--gs-color-text-muted);
+}
+
+.release .facts dd {
+  overflow-wrap: anywhere;
+}
+
+/* A request's result: takes no room until it says something. */
+.result {
+  margin: 0;
+}
+
+.result:not(:empty) {
+  margin-top: var(--gs-space-2);
+}

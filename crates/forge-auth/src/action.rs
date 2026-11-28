@@ -594,6 +594,13 @@ actions! {
     /// stage still needs a person's `DeployApprove` in a session. Read with
     /// `DeployRead`; deployed and rolled back with `DeployCreate`.
     AiAssetReleaseCreate,
+    /// `POST /api/v1/projects/{id}/ai-asset-releases/{version}/withdrawal`
+    /// (plan 17 P17-7 follow-up, ADR-0031 Amendment P17-7b): mark a bad
+    /// release withdrawn, with a reason, for good — it is never requested on
+    /// a stage, approved, run or gone back to again. The same callers as
+    /// `AiAssetReleaseCreate`: people only, Maintainer and above, a session
+    /// or a person's `api` token (`gstn ai-asset release-withdraw`).
+    AiAssetReleaseWithdraw,
     /// `GET /api/v1/projects/{id}/ci/variables`, `PUT|DELETE
     /// …/ci/variables/{name}` (M4 C6, plan 14 §4.2): list a project's CI
     /// variables (names and flags, never a value), set or delete one. A
@@ -959,6 +966,7 @@ impl Action {
                 | Action::AiAssetsSettingManage
                 // Plan 17 P17-7: a release is a person's.
                 | Action::AiAssetReleaseCreate
+                | Action::AiAssetReleaseWithdraw
                 | Action::OrgBindingManage
                 | Action::AutoMergeStopToggle
                 | Action::AutoMergeInstanceStopToggle
@@ -1169,6 +1177,7 @@ impl Action {
             | Action::DeployTargetManage
             | Action::DeployCreate
             | Action::AiAssetReleaseCreate
+            | Action::AiAssetReleaseWithdraw
             | Action::PipelineScheduleManage
             | Action::PipelinePlayProtected
             | Action::AiAdviceFeedback
@@ -1344,6 +1353,7 @@ impl Action {
             | Action::AutoMergeSettingsManage
                 | Action::AiAssetsSettingManage
                 | Action::AiAssetReleaseCreate
+                | Action::AiAssetReleaseWithdraw
                 | Action::OrgBindingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
@@ -1539,6 +1549,7 @@ impl Action {
             | Action::AutoMergeSettingsManage
                 | Action::AiAssetsSettingManage
                 | Action::AiAssetReleaseCreate
+                | Action::AiAssetReleaseWithdraw
                 | Action::OrgBindingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle

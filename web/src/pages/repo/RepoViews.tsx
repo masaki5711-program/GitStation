@@ -49,6 +49,7 @@ import {
   PipelineScreen,
   PipelinesScreen,
   ProjectSettings,
+  ReleasesScreen,
   SchedulesScreen,
   WebhooksScreen,
   WikiScreen,
@@ -93,9 +94,11 @@ export function RepoViews({
   if (word === 'pipelines' && tail.length > 0 && !schedules && (tail.length > 1 || pipelineId === null)) {
     return <NotFound />;
   }
-  // `/-/deployments[/{id}]`: the same rule for a deployment id.
+  // `/-/deployments[/{id}|/releases]`: the same rule for a deployment id;
+  // `releases` is the AI asset releases screen (plan 17 P17-7b).
+  const releases = word === 'deployments' && tail.length === 1 && tail[0] === 'releases';
   const deploymentId = word === 'deployments' && tail.length === 1 ? parseId(tail[0]) : null;
-  if (word === 'deployments' && tail.length > 0 && (tail.length > 1 || deploymentId === null)) {
+  if (word === 'deployments' && tail.length > 0 && !releases && (tail.length > 1 || deploymentId === null)) {
     return <NotFound />;
   }
   if (info.isPending) return <Loading />;
@@ -193,8 +196,9 @@ export function RepoViews({
       );
       break;
     case 'deployments':
-      screen =
-        deploymentId === null ? (
+      screen = releases ? (
+        <ReleasesScreen projectId={projectId} project={project} />
+      ) : deploymentId === null ? (
           <DeploymentsScreen projectId={projectId} project={project} />
         ) : (
           <DeploymentScreen key={deploymentId} projectId={projectId} project={project} id={deploymentId} />

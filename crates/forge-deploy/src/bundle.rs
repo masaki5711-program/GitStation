@@ -696,6 +696,12 @@ impl Deploy {
     }
 }
 
+// Plan 17 P17-7b: the withdrawal and the releases screen's overview.
+#[path = "bundle_board.rs"]
+mod board;
+pub use board::{next_stage, ReleaseOverview, ReleaseRow, StageRow, STAGES};
+pub use forge_db::deploy::ai_bundle::{ReleaseStage, StoredWithdrawal};
+
 #[cfg(test)]
 #[path = "bundle_tests.rs"]
 mod tests;

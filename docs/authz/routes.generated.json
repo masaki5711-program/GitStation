@@ -1179,6 +1179,15 @@
     "word": "fixed"
   },
   {
+    "action": "AiAssetReleaseWithdraw",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/ai-asset-releases/{version}/withdrawal",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "DeployCreate",
     "method": "POST",
     "path": "/api/v1/projects/{id}/ai-asset-rollbacks",

@@ -1,15 +1,17 @@
 // A project's deployments, newest first (`/-/deployments`, at most 100):
 // environment, status in words, the commit, when. One waiting for an
 // approval links to its approval screen like any other. Read again while
-// one of them still moves.
+// one of them still moves. A project whose AI assets are on links to its
+// releases screen (plan 17 P17-7b).
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
+import { useAiAssets } from '../../../api/aiAssets';
 import { DEPLOY_LIST_MAX, useDeployments, type Deployment } from '../../../api/deployments';
 import { Loading } from '../../../components/Loading';
 import { environmentLabel } from '../../../features/deployApproval';
 import { formatDateTime, formatRelative } from '../../../features/labels';
-import { commitUrl, deploymentUrl, pipelinesUrl } from '../../../features/repoUrls';
+import { aiReleasesUrl, commitUrl, deploymentUrl, pipelinesUrl } from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { PageHeader } from '../../../ui/PageHeader';
 import { RepoError } from '../common';
@@ -19,11 +21,20 @@ import styles from './Deploy.module.css';
 export function DeploymentsScreen({ projectId, project }: { projectId: number; project: string }) {
   const { t } = useTranslation();
   const list = useDeployments(projectId);
+  const assets = useAiAssets(projectId);
   const title = t('deploy.title');
   useDocumentTitle(title);
   return (
     <>
-      <PageHeader title={title} subtitle={t('deploy.subtitle')} />
+      <PageHeader title={title} subtitle={t('deploy.subtitle')}>
+        {assets.data?.enabled === true && (
+          <p>
+            <Link to={aiReleasesUrl(project)} data-testid="ai-releases-link">
+              {t('deploy.releasesLink')}
+            </Link>
+          </p>
+        )}
+      </PageHeader>
       {list.isPending && <Loading />}
       {list.isError && (
         <RepoError

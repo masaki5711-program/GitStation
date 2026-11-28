@@ -87,6 +87,7 @@ export const PipelinesScreen = screen(() => loaders.pipelines().then((m) => m.Pi
 export const PipelineScreen = screen(() => loaders.pipeline().then((m) => m.PipelineScreen));
 export const DeploymentsScreen = screen(() => loaders.deployments().then((m) => m.DeploymentsScreen));
 export const DeploymentScreen = screen(() => loaders.deployment().then((m) => m.DeploymentScreen));
+export const ReleasesScreen = screen(() => loaders.aiReleases().then((m) => m.ReleasesScreen));
 export const MergeQueueScreen = screen(() => loaders.mergeQueue().then((m) => m.MergeQueueScreen));
 export const SchedulesScreen = screen(() => loaders.schedules().then((m) => m.SchedulesScreen));
 export const EditorScreen = screen(() => loaders.editor().then((m) => m.EditorScreen));

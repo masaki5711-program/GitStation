@@ -37,13 +37,20 @@
    別の approver が承認する（runbook `deploy` の Mitigate 5。要求者は承認できない）。承認されていない版・動いたタグへは戻さない。
 3. **戻しも失敗（FG-DEPLOY-0006）**: runbook `deploy` の Mitigate 6。PFS の AI ノードの束はローダーの手順（PFS の `iotpf-ai-service` の runbook
    「ローダーの失敗」）で確かな版を再登録する。レジストリの行を手で書かない・消さない。
-4. **フィードバック**: 戻しの原因を改善要求にし、外れを再現するケース（`reproduction`）を足す MR を作る。「回帰の漏れ」ならベンチのケースを足す
+4. **悪いと分かった版の取り下げ**（P17-7b、Maintainer の人）: 画面 `/<project>/-/deployments/releases` の「取り下げる」、または
+   `gstn ai-asset release-withdraw --project <id> --version v… --reason "<1 行の理由>"`。取り下げた版は **どの段にも要求・承認・実行されず、
+   手の戻し・worker の自動の戻しの先にもならない**（待っている要求は承認で FG-AIASSET-0009 `release_withdrawn`、承認済みで並んでいる
+   ものは worker が `blocked`）。取り下げは元に戻せない: 直した束は新しい tag の新しいリリースにする。断られたら FG-AIASSET-0010
+   （版がない・取り下げ済み・理由）。
+5. **フィードバック**: 戻しの原因を改善要求にし、外れを再現するケース（`reproduction`）を足す MR を作る。「回帰の漏れ」ならベンチのケースを足す
    （評価役の見逃しを eval にするのと同じ規則）。
 
 ## Verify
 
 - PFS の版ごとの指標（劣化の率・スキーマ不合格・critical の p95）が、戻した束の通常の値に戻った。
 - `forge.deployments` の戻しの行が `succeeded`、または自動の戻しの記録が PFS に残っている。
+- 取り下げたなら: `SELECT r.version, w.reason, w.withdrawn_at FROM forge.ai_bundle_withdrawals w JOIN forge.ai_bundle_releases r ON r.id = w.release_id WHERE r.project_id = <id>;`
+  に行があり、監査の行 `ai_asset_release.withdrawn` が 1 つある。
 - 戻しの原因の改善要求と、ケースを足す MR がある。
 
 ## 関連

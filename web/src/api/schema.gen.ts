@@ -1606,7 +1606,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest (project readers) */
+        /** A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest; each with its withdrawal, a revoked key, its state on shadow / canary / prod and the stage a request would be accepted on now; per stage the running release and the rollback target; and what the caller may press (project readers) */
         get: operations["get_api_v1_projects_id_ai_asset_releases"];
         put?: never;
         /** Make a signed pfs-ai-bundle release from a tag ({"tag": "assets/v2026.48.1"}): the commit the tag names now is pinned (a moved tag has no effect), it must be on a protected branch with a green forge/ai-eval bench, its skills/playbooks/agents/tools/models/bench files are linted and listed with their SHA-256 in a manifest signed with the agent signing key; 201; 422 FG-AIASSET-0008 (ai_assets disabled, tag, already released, bench, lint); audited (people only; Maintainer, a session or an api token) */
@@ -1645,6 +1645,23 @@ export interface paths {
         put?: never;
         /** Request a release on a stage ({"environment": "pfs-ai-shadow" | "pfs-ai-canary" | "pfs-ai-prod"}, the dev / stg / prod environments): 201 pending_approval (every stage needs a person's approval in a session); 409 FG-AIASSET-0009 out of stage order (shadow, canary, prod), without the release or on an environment that needs no approval; 422 FG-DEPLOY-0011 off the protected branches (Developer) */
         post: operations["post_api_v1_projects_id_ai_asset_releases_version_deployments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/ai-asset-releases/{version}/withdrawal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a bad pfs-ai-bundle release withdrawn, for good, with a reason ({"reason"}: 1 to 500 characters, one line): it is never requested on a stage, approved, run or gone back to again (a fixed bundle is a new release); 201; 409 FG-AIASSET-0010 (no such release, withdrawn already, the reason); audited (people only; Maintainer, a session or an api token) */
+        post: operations["post_api_v1_projects_id_ai_asset_releases_version_withdrawal"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8903,15 +8920,25 @@ export interface components {
             /** Format: int64 */
             id: number;
             key_id: string;
+            /** @description Signed by a key revoked since (lists only; `null` elsewhere). */
+            key_revoked: boolean | null;
             /** @description `pfs-ai-bundle`. */
             kind: string;
             /** @description The signed manifest (one release only; `null` in lists). */
             manifest: Record<string, never> | null;
+            /**
+             * @description The stage a request of it would be accepted on now (lists only;
+             *     `null`: withdrawn, a revoked key, one under way, or done).
+             */
+            next_stage: string | null;
             /** @description Base64 Ed25519 in the `forge-pfs-ai-bundle-signature-v1` domain. */
             signature: string;
+            /** @description Shadow, canary, prod (lists only; `null` elsewhere). */
+            stages: components["schemas"]["ReleaseStageBody"][] | null;
             tag: string;
             tag_object: string;
             version: string;
+            withdrawal: null | components["schemas"]["WithdrawalBody"];
         };
         /** @description `POST …/{version}/deployments`, `POST …/ai-asset-rollbacks`. */
         ReleaseEnvironment: {
@@ -8921,6 +8948,24 @@ export interface components {
         /** @description `GET …/ai-asset-releases`. */
         ReleaseList: {
             releases: components["schemas"]["ReleaseBody"][];
+            /** @description Shadow, canary, prod. */
+            stages: components["schemas"]["StageBody"][];
+            viewer: components["schemas"]["ReleasesViewerBody"];
+        };
+        /** @description A release's state on one stage (lists only). */
+        ReleaseStageBody: {
+            /** @description A deployment of it succeeded there with a person's approval. */
+            approved_success: boolean;
+            /**
+             * Format: int64
+             * @description Its newest deployment there (`null`: never requested there).
+             */
+            deployment_id?: number | null;
+            /** @description `pfs-ai-shadow`, `pfs-ai-canary` or `pfs-ai-prod`. */
+            environment: string;
+            status?: string | null;
+            /** @description `dev`, `stg` or `prod`. */
+            tier: string;
         };
         /** @description `POST /api/v1/namespaces/tombstones/release`. */
         ReleaseTombstone: {
@@ -8942,6 +8987,15 @@ export interface components {
             name: string;
             /** @description The value (one line, at most 4096 bytes). */
             value: string;
+        };
+        /** @description What the caller may press on the releases screen. */
+        ReleasesViewerBody: {
+            /** @description `AiAssetReleaseCreate`. */
+            can_release: boolean;
+            /** @description `DeployCreate`: a stage request and a rollback. */
+            can_request: boolean;
+            /** @description `AiAssetReleaseWithdraw`. */
+            can_withdraw: boolean;
         };
         /** @description `POST /api/v1/users/{id}/rename`. */
         RenameUser: {
@@ -9663,6 +9717,19 @@ export interface components {
              *     connection.
              */
             host_key_fingerprints: string[];
+        };
+        /** @description One stage of the project (lists only). */
+        StageBody: {
+            /** @description `pfs-ai-shadow`, `pfs-ai-canary` or `pfs-ai-prod`. */
+            environment: string;
+            /** @description The release a rollback would request (`null`: none to go back to). */
+            rollback_version?: string | null;
+            /**
+             * @description The release of its last succeeded deployment (`null`: none, or no
+             *     release).
+             */
+            running_version?: string | null;
+            tier: string;
         };
         /** @description `POST …/discussions`. */
         StartDiscussion: {
@@ -10436,6 +10503,19 @@ export interface components {
             project_id: number;
             /** Format: int64 */
             wiki_project_id: number;
+        };
+        /** @description `POST …/{version}/withdrawal`. */
+        WithdrawRelease: {
+            /** @description Why the release is bad: 1 to 500 characters, one line. */
+            reason: string;
+        };
+        /** @description A release's withdrawal (P17-7b): for good. */
+        WithdrawalBody: {
+            reason: string;
+            version: string;
+            withdrawn_at: string;
+            /** Format: int64 */
+            withdrawn_by: number;
         };
         /** @description A work item as kanflow names it (02 §5.7's `work_items` entry). */
         WorkItemBody: {
@@ -14191,6 +14271,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_ai_asset_releases_version_withdrawal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WithdrawRelease"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WithdrawalBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

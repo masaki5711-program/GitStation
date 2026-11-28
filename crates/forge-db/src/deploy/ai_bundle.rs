@@ -1,7 +1,8 @@
 //! `pfs-ai-bundle` releases (plan 17 P17-7, ADR-0031 Amendment P17-7):
 //! the signed release rows, their creation (audited, decided again on the
 //! locked project), and the facts the release deployments need — the
-//! stage before, the rollback target.
+//! stage before, the rollback target. P17-7b: the withdrawal of a bad
+//! release and the releases screen's board (`ai_bundle_withdrawals.rs`).
 
 use forge_core::deploy::{DeployChange, DeployTier};
 use forge_core::{ProjectId, UserId};
@@ -106,10 +107,16 @@ pub(crate) fn key_not_revoked_sql(r: &str) -> String {
     )
 }
 
+/// The SQL condition "release `r` may still be deployed or gone back to":
+/// its key is not revoked and it was not withdrawn (P17-7b).
+pub(crate) fn release_usable_sql(r: &str) -> String {
+    format!("{} AND {}", key_not_revoked_sql(r), not_withdrawn_sql(r))
+}
+
 /// The SQL condition "deployment `d` (the deployments alias) succeeded
 /// with a person's approval and is of a release of its project **older**
 /// than the release at `sha` (an SQL expression), signed by a key that is
-/// not revoked" — the only rollback targets of a release (review P17-7:
+/// not revoked and that was not withdrawn (P17-7b)" — the only rollback targets of a release (review P17-7:
 /// never forward to the release just left, never an unapproved SHA).
 pub(crate) fn approved_older_release_sql(d: &str, sha: &str) -> String {
     format!(
@@ -118,7 +125,7 @@ pub(crate) fn approved_older_release_sql(d: &str, sha: &str) -> String {
              AND ar.id < (SELECT cr.id FROM forge.ai_bundle_releases cr \
                WHERE cr.project_id = {d}.project_id AND cr.commit_sha = {sha}) \
              AND {})",
-        key_not_revoked_sql("ar")
+        release_usable_sql("ar")
     )
 }
 
@@ -217,7 +224,8 @@ pub enum RollbackTarget {
 /// approved before"): `current` is the release of the environment's last
 /// succeeded deployment; the target is the newest release **older than
 /// it** (by release order) that succeeded on this environment with a
-/// person's approval and whose signing key is not revoked. Going back
+/// person's approval, whose signing key is not revoked and that was not
+/// withdrawn (P17-7b). Going back
 /// twice goes further back, never forward to the release just left.
 pub async fn rollback_target(
     db: &Db,
@@ -255,7 +263,7 @@ pub async fn rollback_target(
                      AND d.approved_by IS NOT NULL) \
                  ORDER BY r.id DESC LIMIT 1",
                 columns("r"),
-                key_not_revoked_sql("r")
+                release_usable_sql("r")
             ))
             .bind(project.get())
             .bind(tier.as_str())
@@ -441,6 +449,9 @@ pub(crate) async fn check_release_request(
     if revoked {
         return Err(deploy_refused("signing_key_revoked"));
     }
+    if withdrawn_at(tx, project, sha, query).await? {
+        return Err(deploy_refused("release_withdrawn"));
+    }
     if !requires_approval {
         return Err(deploy_refused("approval_required").with_context("environment", tier.as_str()));
     }
@@ -470,6 +481,15 @@ pub(crate) async fn check_release_request(
     }
     Ok(())
 }
+
+// Plan 17 P17-7b: withdrawals and the releases screen's board.
+#[path = "ai_bundle_withdrawals.rs"]
+mod withdrawals;
+pub(crate) use withdrawals::{not_withdrawn_sql, withdrawn_at};
+pub use withdrawals::{
+    release_board, withdraw_bundle_decided, withdraw_reason_valid, withdrawal, withdrawals,
+    ReleaseBoard, ReleaseStage, StoredWithdrawal, MAX_WITHDRAW_REASON,
+};
 
 #[cfg(test)]
 #[path = "ai_bundle_tests.rs"]

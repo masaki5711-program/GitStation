@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 61] = [
+const GROUPS: [[Row; 2]; 62] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -137,6 +137,7 @@ const GROUPS: [[Row; 2]; 61] = [
     both!(A::AiAssetsSettingManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::PrivateProject),
     // Plan 17 P17-7: a pfs-ai-bundle release is a Maintainer's (a person's).
     both!(A::AiAssetReleaseCreate, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    both!(A::AiAssetReleaseWithdraw, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // ADR-0038 §5: org bindings are the Owner's, a person's in a session.
     both!(A::OrgBindingManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::PrivateProject),
     // M4 C6: CI secrets are a Maintainer's (a person's).

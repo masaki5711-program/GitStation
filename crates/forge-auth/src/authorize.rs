@@ -1727,8 +1727,9 @@ pub(crate) fn decide(
         }
         // Plan 17 P17-7: a pfs-ai-bundle release, a Maintainer's (people
         // only; a person's `api` token too — no stage changes without a
-        // person's approval in a session).
-        (Action::AiAssetReleaseCreate, Resource::Project(p)) => {
+        // person's approval in a session). Its withdrawal (P17-7b) is the
+        // same callers'.
+        (Action::AiAssetReleaseCreate | Action::AiAssetReleaseWithdraw, Resource::Project(p)) => {
             people_only()?;
             need(Role::Maintainer, p.role)
         }
@@ -2007,6 +2008,7 @@ pub(crate) fn decide(
             | Action::AutofixSettingsManage
             | Action::AiAssetsSettingManage
             | Action::AiAssetReleaseCreate
+            | Action::AiAssetReleaseWithdraw
             | Action::OrgBindingManage
             | Action::CiVariableManage
             | Action::DeployRead

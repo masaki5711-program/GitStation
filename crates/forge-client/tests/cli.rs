@@ -981,6 +981,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "ai-asset releases",
             "ai-asset release-deploy",
             "ai-asset rollback",
+            "ai-asset release-withdraw",
             "deploy envs",
             "deploy env-set",
             "deploy target-set",
