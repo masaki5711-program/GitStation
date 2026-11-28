@@ -21,6 +21,10 @@ use crate::{query_error, Db};
 
 /// A change never takes longer than this, start to COMMIT.
 const CHANGE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Plan 18 S10: what each member adds to a batched change's bound.
+const BATCH_MEMBER_TIMEOUT: Duration = Duration::from_secs(1);
+/// The most a batched change may take (well inside the merge lock's hold).
+const BATCH_TIMEOUT_MAX: Duration = Duration::from_secs(90);
 /// Bound for COMMIT (on a half-dead link it would never answer).
 const COMMIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Bound for an explicit ROLLBACK (dropping the transaction rolls back too).
@@ -37,6 +41,21 @@ pub(crate) struct ChangeTx {
 impl ChangeTx {
     pub(crate) async fn begin(db: &Db, ctx: &ChangeContext) -> Result<Self, ForgeError> {
         Self::begin_within(db, ctx, CHANGE_TIMEOUT).await
+    }
+
+    /// Plan 18 S10: a change that makes `members` changes at once (a
+    /// merge-queue batch's decisions or records): [`CHANGE_TIMEOUT`] plus
+    /// [`BATCH_MEMBER_TIMEOUT`] per member, at most [`BATCH_TIMEOUT_MAX`].
+    pub(crate) async fn begin_for_batch(
+        db: &Db,
+        ctx: &ChangeContext,
+        members: usize,
+    ) -> Result<Self, ForgeError> {
+        let members = u32::try_from(members).unwrap_or(u32::MAX);
+        let timeout = CHANGE_TIMEOUT
+            .saturating_add(BATCH_MEMBER_TIMEOUT.saturating_mul(members))
+            .min(BATCH_TIMEOUT_MAX);
+        Self::begin_within(db, ctx, timeout).await
     }
 
     pub(crate) async fn begin_within(
@@ -109,7 +128,21 @@ impl ChangeTx {
     /// Write the audit row and the events, then commit. A `dedup_key` that
     /// is already recorded rolls everything back ([`Committed::Deduped`]).
     pub(crate) async fn commit(self, record: ChangeRecord) -> Result<Committed, ForgeError> {
-        let action = record.audit.action;
+        let ctx = self.ctx.clone(); // clone: the record is written with the change's own context
+        self.commit_each(vec![(ctx, record)]).await
+    }
+
+    /// Plan 18 S10: the records of several changes made in this one
+    /// transaction (a merge-queue batch's merges), each written with ITS
+    /// context — actor, credential, request id — in the order given, then
+    /// one COMMIT. Each record is fitted and validated as [`Self::commit`]
+    /// does its one. A `dedup_key` already recorded rolls everything back
+    /// ([`Committed::Deduped`]); the event ids are every record's, in order.
+    pub(crate) async fn commit_each(
+        self,
+        records: Vec<(ChangeContext, ChangeRecord)>,
+    ) -> Result<Committed, ForgeError> {
+        let action = records.first().map_or("change", |(_, r)| r.audit.action);
         let Self {
             mut tx,
             ctx,
@@ -117,40 +150,32 @@ impl ChangeTx {
             timeout,
             commit_timeout,
         } = self;
-        let record = fitted(record);
-        validate(&ctx, &record)?;
-        let written = bounded(deadline, timeout, async {
-            // Each JSON value is serialized once: measured, then inserted.
-            let payloads: Vec<String> = record
-                .events
-                .iter()
-                .map(|e| e.payload.to_string())
-                .collect();
-            let details: Vec<String> = record.audit_rows().map(|a| a.details.to_string()).collect();
-            let (details_bytes, payload_bytes) = stored_sizes(&mut tx, &details, &payloads).await?;
-            let record = fit_sizes(record, &details_bytes, &payload_bytes)?;
-            // The details may have been replaced by a marker (≤ 8 KiB either way).
-            for audit in record.audit_rows() {
-                insert_audit(&mut tx, &ctx, audit, &audit.details.to_string()).await?;
-            }
-            let mut ids = Vec::with_capacity(record.events.len());
-            for (event, payload) in record.events.iter().zip(&payloads) {
-                match insert_event(&mut tx, &ctx, event, payload).await? {
-                    Some(id) => ids.push(id),
-                    None => return Ok(None),
-                }
-            }
-            Ok(Some(ids))
-        })
-        .await
-        .map_err(|e| e.with_context("action", action))?;
-        let Some(event_ids) = written else {
-            // Nothing of this change may stay. Dropping the transaction rolls
-            // back too, so the change is still Deduped; a slow or failed
-            // ROLLBACK points at a sick connection and is logged as such.
-            explicit_rollback(tx, &ctx, action).await;
-            return Ok(Committed::Deduped);
-        };
+        let mut fitted_records = Vec::with_capacity(records.len());
+        for (record_ctx, record) in records {
+            let record_ctx = sanitized(&record_ctx);
+            let record = fitted(record);
+            validate(&record_ctx, &record)?;
+            fitted_records.push((record_ctx, record));
+        }
+        let mut event_ids = Vec::new();
+        for (record_ctx, record) in fitted_records {
+            let record_action = record.audit.action;
+            let written = bounded(
+                deadline,
+                timeout,
+                write_record(&mut tx, &record_ctx, record),
+            )
+            .await
+            .map_err(|e| e.with_context("action", record_action))?;
+            let Some(ids) = written else {
+                // Nothing of this change may stay. Dropping the transaction
+                // rolls back too, so the change is still Deduped; a slow or
+                // failed ROLLBACK points at a sick connection and is logged.
+                explicit_rollback(tx, &ctx, record_action).await;
+                return Ok(Committed::Deduped);
+            };
+            event_ids.extend(ids);
+        }
         match tokio::time::timeout(commit_timeout, tx.commit()).await {
             Ok(Ok(())) => Ok(Committed::Recorded { event_ids }),
             Ok(Err(e)) => Err(query_error("change.commit", e).with_context("action", action)),
@@ -161,6 +186,36 @@ impl ChangeTx {
                 .with_context("action", action)),
         }
     }
+}
+
+/// One record's audit rows and events on `tx` with `ctx` (`None`: an
+/// event's `dedup_key` is already recorded).
+async fn write_record(
+    tx: &mut Transaction<'static, Postgres>,
+    ctx: &ChangeContext,
+    record: ChangeRecord,
+) -> Result<Option<Vec<uuid::Uuid>>, ForgeError> {
+    // Each JSON value is serialized once: measured, then inserted.
+    let payloads: Vec<String> = record
+        .events
+        .iter()
+        .map(|e| e.payload.to_string())
+        .collect();
+    let details: Vec<String> = record.audit_rows().map(|a| a.details.to_string()).collect();
+    let (details_bytes, payload_bytes) = stored_sizes(tx, &details, &payloads).await?;
+    let record = fit_sizes(record, &details_bytes, &payload_bytes)?;
+    // The details may have been replaced by a marker (≤ 8 KiB either way).
+    for audit in record.audit_rows() {
+        insert_audit(tx, ctx, audit, &audit.details.to_string()).await?;
+    }
+    let mut ids = Vec::with_capacity(record.events.len());
+    for (event, payload) in record.events.iter().zip(&payloads) {
+        match insert_event(tx, ctx, event, payload).await? {
+            Some(id) => ids.push(id),
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(ids))
 }
 
 impl ChangeTx {
@@ -221,6 +276,11 @@ pub(crate) enum Settle<T> {
     /// transaction still needs its audit row: its deferred trigger refuses
     /// the COMMIT (`FG-DB-0001`), so this can never hide an audited change.
     CommitDerived(T),
+    /// Plan 18 S10: write several changes' records, each with its own
+    /// context, and commit ([`ChangeTx::commit_each`]); none at all commits
+    /// like [`Settle::CommitDerived`]. A deduplicated event is an error
+    /// (`unexpected_dedup`), as for [`Settle::Commit`].
+    CommitEach(Vec<(ChangeContext, ChangeRecord)>, T),
 }
 
 impl ChangeTx {
@@ -253,6 +313,16 @@ impl ChangeTx {
             }
             Ok(Settle::CommitDerived(value)) => {
                 self.commit_derived(action).await?;
+                Ok(value)
+            }
+            Ok(Settle::CommitEach(records, value)) => {
+                match records.first().map(|(_, r)| r.audit.action) {
+                    None => self.commit_derived(action).await?,
+                    Some(recorded) => self
+                        .commit_each(records)
+                        .await?
+                        .require_recorded(recorded)?,
+                }
                 Ok(value)
             }
             Err(e) => {

@@ -57,7 +57,7 @@
 //! The landing holds the repository's merge lock (the normal merges' too)
 //! from the first decision to the record; every git call is bounded.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -110,6 +110,7 @@ use forge_git::RefChange;
 use super::super::execute::{is_refusal, Subject};
 use super::super::{account_commit_identity, Merger};
 use super::{decide_queued, train_run, Asked, TrainRuns};
+use crate::approvals::GitReads;
 
 // Plan 18 S1 (ADR-0037 (b)): the document lint of a train before it lands.
 mod train_lint;
@@ -122,6 +123,11 @@ pub use turn::{QueueTurn, Roused};
 /// still holds the merge lock of): at most this, whatever the waiting
 /// period is.
 const RETRY: Duration = Duration::from_secs(10);
+
+/// Plan 18 S10: the most built batches whose approval git reads a worker
+/// keeps for their landing (a queue has at most `speculation_depth` live
+/// batches; more than this many queues landing at once read again).
+const READ_AHEAD_BATCHES: usize = 64;
 
 /// The bounds of the queue's worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +246,11 @@ pub struct MergeQueue {
     /// Consecutive failed merge result judgements per batch (this worker's;
     /// a worker that takes the queue over counts again from zero).
     failures: Arc<Mutex<HashMap<i64, u32>>>,
+    /// Plan 18 S10: the approval git reads of each built batch's members
+    /// (batch → entry → reads at the member's head into the batch's base),
+    /// read at the build so the landing needs no git for them. This
+    /// worker's own: a landing that finds none reads them under the lock.
+    ahead: Arc<Mutex<BTreeMap<i64, HashMap<i64, GitReads>>>>,
     /// Tests only: stop a landing right after the target moved, as a
     /// worker that died there would (the recovery's test).
     crash_after_cas: bool,
@@ -294,6 +305,7 @@ impl MergeQueue {
             risk,
             train_lint: None,
             failures: Arc::new(Mutex::new(HashMap::new())),
+            ahead: Arc::new(Mutex::new(BTreeMap::new())),
             crash_after_cas: false,
             after_fence: None,
         }
@@ -342,6 +354,29 @@ impl MergeQueue {
             Err(poisoned) => poisoned.into_inner(),
         };
         map.remove(&batch);
+    }
+
+    /// Plan 18 S10: keep `reads` for `batch`'s landing (the oldest batches
+    /// beyond [`READ_AHEAD_BATCHES`] are forgotten: a batch that ended
+    /// without landing never takes its reads).
+    fn keep_read_ahead(&self, batch: i64, reads: HashMap<i64, GitReads>) {
+        let mut map = match self.ahead.lock() {
+            Ok(map) => map,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.insert(batch, reads);
+        while map.len() > READ_AHEAD_BATCHES {
+            map.pop_first();
+        }
+    }
+
+    /// The reads kept for `batch` (empty: none).
+    fn take_read_ahead(&self, batch: i64) -> HashMap<i64, GitReads> {
+        let mut map = match self.ahead.lock() {
+            Ok(map) => map,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.remove(&batch).unwrap_or_default()
     }
 
     /// Tests only: every landing stops right after its compare-and-swap
@@ -618,6 +653,8 @@ impl MergeQueue {
         // on: removed only when that prefix stays in the batch (a document
         // batch cut back to the CI bound below keeps the others queued).
         let mut refused: Vec<(usize, &StoredEntry, &'static str, ErrorCode)> = Vec::new();
+        // Plan 18 S10: each member's merge request, for its approval reads.
+        let mut read_on: HashMap<i64, forge_db::review::StoredMergeRequest> = HashMap::new();
         for entry in &queued {
             if members.len() >= limit {
                 break;
@@ -686,6 +723,7 @@ impl MergeQueue {
                 Ok(commit) => {
                     prev = commit.clone(); // clone: the next step's parent
                     members.push((entry.clone(), commit, isolate)); // clone: the batch owns its view
+                    read_on.insert(entry.id, mr.clone()); // clone: the read-ahead's view
                 }
                 // Plan 18 S9: a speculative train may still fail — the entry
                 // is not removed for a step on it; the batch stops before it.
@@ -784,6 +822,9 @@ impl MergeQueue {
         let Some(batch) = db::create_batch(&self.merger.db, &new).await? else {
             return Ok(report("raced", None));
         };
+        let entries: Vec<&StoredEntry> = members.iter().map(|(e, _, _)| e).collect();
+        self.read_ahead(batch, repo, &base, &entries, &read_on, &request_id)
+            .await;
         let ids: Vec<String> = members.iter().map(|(e, _, _)| e.id.to_string()).collect();
         tracing::info!(
             target: "forge_review",
@@ -833,6 +874,65 @@ impl MergeQueue {
                 Ok(report("retry", Some(batch)))
             }
         }
+    }
+
+    /// Plan 18 S10 (ADR-0037 (d) 5): the approval git reads of every
+    /// member of the new `batch` — at the member's head into the batch's
+    /// `base`, the pair its landing decides on — read now, outside the
+    /// merge lock, within one [`crate::approvals::REQUEST_BUDGET`]. Only
+    /// settled reads are kept (a timeout or a failed git is read again
+    /// under the lock); a database failure is logged and nothing is kept
+    /// for that member. The landing uses them only for the same shas.
+    async fn read_ahead(
+        &self,
+        batch: i64,
+        repo: RepoId,
+        base: &ObjectId,
+        members: &[&StoredEntry],
+        mrs: &HashMap<i64, forge_db::review::StoredMergeRequest>,
+        request_id: &RequestId,
+    ) {
+        let review_git = crate::approvals::ReviewGit::new(
+            self.merger.git.clone(),     // clone: Arc handles
+            self.merger.storage.clone(), // clone: the root path
+        );
+        let deadline = Instant::now() + crate::approvals::REQUEST_BUDGET.0;
+        let mut kept = HashMap::with_capacity(members.len());
+        for entry in members {
+            let Some(mr) = mrs.get(&entry.id) else {
+                continue;
+            };
+            let asker = crate::approvals::Asker {
+                request_id,
+                project: entry.project_id,
+                repo,
+            };
+            let mut budget = crate::approvals::Budget::until(deadline, crate::approvals::JOB_CALLS);
+            match review_git
+                .reads(
+                    &self.merger.db,
+                    asker,
+                    mr,
+                    &entry.head_sha,
+                    base,
+                    &mut budget,
+                )
+                .await
+            {
+                Ok(reads) if reads.settled() => {
+                    kept.insert(entry.id, reads);
+                }
+                // Logged where git failed (`warn_unread`); read again.
+                Ok(_) => {}
+                Err(e) => telemetry::log_failure(
+                    &e.with_context("operation", "merge_queue_read_ahead")
+                        .with_context("queue_batch_id", batch)
+                        .with_context("entry_id", entry.id),
+                    request_id,
+                ),
+            }
+        }
+        self.keep_read_ahead(batch, kept);
     }
 
     /// Whether the train's commit has a root entry `.forge-ci.yml` (any
@@ -1809,7 +1909,7 @@ impl MergeQueue {
         }
         let ctx = ChangeContext::new(Actor::System, batch.request_id.clone()); // clone: the context owns it
         let mut prev = batch.base_sha.clone(); // clone: the chain of the train
-        let mut decided: Vec<(StoredEntry, StoredMerge, Subject)> = Vec::new();
+        let mut steps: Vec<(StoredEntry, QueueStep)> = Vec::with_capacity(testing.len());
         for entry in testing {
             let Some(train_sha) = entry.train_sha.clone() else {
                 return Err(ForgeError::new(ErrorCode::Internal)
@@ -1820,82 +1920,12 @@ impl MergeQueue {
                 expected_old: prev.clone(), // clone: the step owns its ids
                 new_sha: train_sha.clone(), // clone: as above
             };
-            let one = self
-                .decide_entry(lock, &ctx, (entry, &step), (batch, target), repo, run)
-                .await;
-            match one {
-                Ok((attempt, subject)) => {
-                    decided.push((entry.clone(), attempt, subject)); // clone: the record needs it
-                    prev = train_sha;
-                }
-                Err(refusal) => {
-                    self.end_attempts(&decided, "queue_rebuild").await;
-                    // M4 C9: an emergency stop turned on while the batch
-                    // tested holds the auto-merge entries (back in the
-                    // queue, paused); a mode that no longer acts removes it.
-                    match super::auto_merge_paused(&refusal) {
-                        Some("auto_merge_stopped") => {
-                            return self
-                                .abandon(
-                                    batch,
-                                    BatchState::Landing,
-                                    "auto_merge_stopped",
-                                    Vec::new(),
-                                    None,
-                                    Some(repo),
-                                )
-                                .await;
-                        }
-                        Some(reason) => {
-                            let removed = vec![(
-                                entry.id,
-                                reason.to_owned(),
-                                ErrorCode::MergeQueueEntryRefused,
-                            )];
-                            return self
-                                .abandon(
-                                    batch,
-                                    BatchState::Landing,
-                                    "entry_refused",
-                                    removed,
-                                    None,
-                                    Some(repo),
-                                )
-                                .await;
-                        }
-                        None => {}
-                    }
-                    if is_refusal(&refusal) {
-                        let removed = vec![(entry.id, reason_of(&refusal), refusal.code())];
-                        let detail = refusal_context(&refusal);
-                        return self
-                            .abandon(
-                                batch,
-                                BatchState::Landing,
-                                "entry_refused",
-                                removed,
-                                Some((entry, detail)),
-                                Some(repo),
-                            )
-                            .await;
-                    }
-                    self.abandon(
-                        batch,
-                        BatchState::Landing,
-                        "landing_failed",
-                        Vec::new(),
-                        None,
-                        Some(repo),
-                    )
-                    .await?;
-                    return Err(refusal);
-                }
-            }
+            steps.push((entry.clone(), step)); // clone: the decision owns its view
+            prev = train_sha;
         }
         // Review MEDIUM (git): the steps decided must chain to the tested
         // train exactly, or the target would move to something else.
         if prev != batch.train_sha {
-            self.end_attempts(&decided, "queue_rebuild").await;
             self.abandon(
                 batch,
                 BatchState::Landing,
@@ -1911,6 +1941,16 @@ impl MergeQueue {
                 .with_context("chained", prev.as_str().to_owned())
                 .with_context("train_sha", batch.train_sha.as_str().to_owned()));
         }
+        let decided = match self
+            .decide_all(lock, &ctx, &steps, (batch, target), repo, run)
+            .await
+        {
+            Ok(decided) => decided,
+            Err((member, refusal)) => {
+                let entry = member.and_then(|i| testing.get(i));
+                return self.refused_landing(batch, repo, entry, refusal).await;
+            }
+        };
         // The fence: every attempt `executing` before the ref moves.
         for (_, attempt, _) in &decided {
             if !merges::fence_merge(&self.merger.db, attempt.id).await? {
@@ -2033,78 +2073,231 @@ impl MergeQueue {
         Ok("landed")
     }
 
-    /// One entry's landing decision and its `prepared` attempt.
-    async fn decide_entry(
+    /// Plan 18 S10 (ADR-0037 (d) 5): every member's landing decision and
+    /// its `prepared` attempt. Under the merge lock: the merge requests
+    /// (database), every source tip in ONE `for-each-ref`, the approval
+    /// git facts the build read for the same (head, base) — read here only
+    /// when it has none — and every decision in ONE transaction, each
+    /// still `authorize()` for its own requester (`decide_queued`). `Err`:
+    /// the member it is about (`None`: the batch's own read or
+    /// transaction) and why; nothing was written.
+    async fn decide_all(
         &self,
         lock: &MergeLock,
         ctx: &ChangeContext,
-        (entry, step): (&StoredEntry, &QueueStep),
+        steps: &[(StoredEntry, QueueStep)],
         (batch, queue_target): (&StoredBatch, &RefName),
         repo: RepoId,
         run: Option<CheckRun>,
-    ) -> Result<(StoredMerge, Subject), ForgeError> {
-        let Some(target) =
-            forge_db::review::refresh_target(&self.merger.db, entry.merge_request).await?
-        else {
-            return Err(ForgeError::new(ErrorCode::NotFound)
-                .with_context("resource", "merge_request")
-                .with_context("reason", "merge_request_gone"));
-        };
-        let mr = target.merge_request;
-        let read = self.merger.bounded(self.merger.timeouts.read, lock)?;
-        let source = self
+    ) -> Result<Vec<(StoredEntry, StoredMerge, Subject)>, (Option<usize>, ForgeError)> {
+        let mut read_ahead = self.take_read_ahead(batch.id);
+        let mut mrs = Vec::with_capacity(steps.len());
+        for (i, (entry, _)) in steps.iter().enumerate() {
+            let target = forge_db::review::refresh_target(&self.merger.db, entry.merge_request)
+                .await
+                .map_err(|e| (Some(i), e))?;
+            let Some(target) = target else {
+                return Err((
+                    Some(i),
+                    ForgeError::new(ErrorCode::NotFound)
+                        .with_context("resource", "merge_request")
+                        .with_context("reason", "merge_request_gone"),
+                ));
+            };
+            mrs.push(target.merge_request);
+        }
+        let names: Vec<RefName> = mrs.iter().map(|mr| mr.source_branch.clone()).collect(); // clone: the read owns its names
+        let read = self
+            .merger
+            .bounded(self.merger.timeouts.read, lock)
+            .map_err(|e| (None, e))?;
+        let tips = self
             .merger
             .git
-            .read_ref(&self.merger.storage, repo, &mr.source_branch, read)
-            .await?;
+            .read_named_refs(&self.merger.storage, repo, &names, read)
+            .await
+            .map_err(|e| (None, e))?;
         let review_git = crate::approvals::ReviewGit::new(
             self.merger.git.clone(),     // clone: Arc handles
             self.merger.storage.clone(), // clone: the root path
         );
-        let asker = crate::approvals::Asker {
-            request_id: &batch.request_id,
-            project: entry.project_id,
-            repo,
-        };
-        let approvals = review_git
-            .facts(
-                &self.merger.db,
-                asker,
-                &mr,
-                &entry.head_sha,
-                Some(&batch.base_sha),
-                &mut crate::approvals::Budget::until(
-                    std::time::Instant::now() + self.merger.bounded(lock.left(), lock)?,
-                    crate::approvals::JOB_CALLS,
-                ),
+        let mut facts = Vec::with_capacity(steps.len());
+        for (i, ((entry, _), mr)) in steps.iter().zip(&mrs).enumerate() {
+            let asker = crate::approvals::Asker {
+                request_id: &batch.request_id,
+                project: entry.project_id,
+                repo,
+            };
+            let left = self
+                .merger
+                .bounded(lock.left(), lock)
+                .map_err(|e| (None, e))?;
+            let mut budget = crate::approvals::Budget::until(
+                std::time::Instant::now() + left,
+                crate::approvals::JOB_CALLS,
+            );
+            // The reads hold for exactly the pair they were read for; the
+            // source tip read above is checked against the head by the
+            // decision (`source_moved`), the target against the base before.
+            let ahead = read_ahead
+                .remove(&entry.id)
+                .filter(|r| r.head == entry.head_sha && r.tip == batch.base_sha);
+            let approvals = match ahead {
+                Some(reads) => {
+                    crate::approvals::facts_from(&self.merger.db, asker, mr, reads, &budget).await
+                }
+                None => {
+                    tracing::info!(
+                        target: "forge_review",
+                        event = "forge.merge_queue.approval_facts_read",
+                        request_id = %batch.request_id,
+                        queue_id = batch.queue_id,
+                        batch_id = batch.id,
+                        entry_id = entry.id,
+                        "the approval git facts are read under the merge lock (none from the build)"
+                    );
+                    review_git
+                        .facts(
+                            &self.merger.db,
+                            asker,
+                            mr,
+                            &entry.head_sha,
+                            Some(&batch.base_sha),
+                            &mut budget,
+                        )
+                        .await
+                }
+            }
+            .map_err(|e| (Some(i), e))?;
+            facts.push(Some(approvals));
+        }
+        let decided = merges::queue_merge_mrs_decided(&self.merger.db, ctx, steps, |i, gate| {
+            let (Some((entry, _)), Some(mr), Some(approvals)) = (
+                steps.get(i),
+                mrs.get(i),
+                facts.get_mut(i).and_then(Option::take),
+            ) else {
+                return Err(ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "merge_queue_member_facts_missing")
+                    .with_context("member", i));
+            };
+            // Review MEDIUM (authz): the source tip and the approval facts
+            // were read for the merge request as read before this
+            // transaction; the one locked now must be that one.
+            if let Some(stored) = &gate.facts.merge_request {
+                if stored.source_branch != mr.source_branch || stored.author != mr.author {
+                    return Err(super::super::request::head_changed(
+                        "source_moved",
+                        mr.source_branch.as_str(),
+                        stored.source_branch.as_str(),
+                    ));
+                }
+            }
+            let asked = Asked {
+                requested_by: entry.enqueued_by,
+                head: &entry.head_sha,
+                method: entry.method,
+                target: queue_target,
+                source_tip: tips.get(&mr.source_branch),
+                target_tip: Some(&batch.base_sha),
+                approvals,
+            };
+            let runs = TrainRuns {
+                inner: &gate.check_runs,
+                train: run,
+            };
+            let ff = (entry.method == MergeMethod::FastForward).then_some(true);
+            decide_queued(
+                gate,
+                &asked,
+                Some(super::super::evaluate::Mergeable::Clean),
+                ff,
+                &runs,
             )
-            .await?;
-        let ff = (entry.method == MergeMethod::FastForward).then_some(true);
-        let (attempt, ()) =
-            merges::queue_merge_mr_decided(&self.merger.db, ctx, entry, step, |gate| {
-                let asked = Asked {
-                    requested_by: entry.enqueued_by,
-                    head: &entry.head_sha,
-                    method: entry.method,
-                    target: queue_target,
-                    source_tip: source.as_ref(),
-                    target_tip: Some(&batch.base_sha),
-                    approvals,
-                };
-                let runs = TrainRuns {
-                    inner: &gate.check_runs,
-                    train: run,
-                };
-                decide_queued(
-                    gate,
-                    &asked,
-                    Some(super::super::evaluate::Mergeable::Clean),
-                    ff,
-                    &runs,
-                )
+        })
+        .await
+        .map_err(|r| (r.member, r.error))?;
+        Ok(steps
+            .iter()
+            .zip(mrs)
+            .zip(decided)
+            .map(|(((entry, _), mr), (attempt, ()))| {
+                (entry.clone(), attempt, Subject { mr, repo }) // clone: the record needs it
             })
-            .await?;
-        Ok((attempt, Subject { mr, repo }))
+            .collect())
+    }
+
+    /// A batched decision that did not pass (nothing was written): as a
+    /// landing of one member at a time ended at its refusal — the batch
+    /// abandoned, the refused member removed (with its reason and code)
+    /// and the others back in order; an auto-merge stop holds them; a
+    /// failure (not a refusal) is `landing_failed` and returned.
+    async fn refused_landing(
+        &self,
+        batch: &StoredBatch,
+        repo: RepoId,
+        entry: Option<&StoredEntry>,
+        refusal: ForgeError,
+    ) -> Result<&'static str, ForgeError> {
+        // M4 C9: an emergency stop turned on while the batch tested holds
+        // the auto-merge entries (back in the queue, paused); a mode that
+        // no longer acts removes it.
+        match (super::auto_merge_paused(&refusal), entry) {
+            (Some("auto_merge_stopped"), _) => {
+                return self
+                    .abandon(
+                        batch,
+                        BatchState::Landing,
+                        "auto_merge_stopped",
+                        Vec::new(),
+                        None,
+                        Some(repo),
+                    )
+                    .await;
+            }
+            (Some(reason), Some(entry)) => {
+                let removed = vec![(
+                    entry.id,
+                    reason.to_owned(),
+                    ErrorCode::MergeQueueEntryRefused,
+                )];
+                return self
+                    .abandon(
+                        batch,
+                        BatchState::Landing,
+                        "entry_refused",
+                        removed,
+                        None,
+                        Some(repo),
+                    )
+                    .await;
+            }
+            (Some(_) | None, _) => {}
+        }
+        if let (true, Some(entry)) = (is_refusal(&refusal), entry) {
+            let removed = vec![(entry.id, reason_of(&refusal), refusal.code())];
+            let detail = refusal_context(&refusal);
+            return self
+                .abandon(
+                    batch,
+                    BatchState::Landing,
+                    "entry_refused",
+                    removed,
+                    Some((entry, detail)),
+                    Some(repo),
+                )
+                .await;
+        }
+        self.abandon(
+            batch,
+            BatchState::Landing,
+            "landing_failed",
+            Vec::new(),
+            None,
+            Some(repo),
+        )
+        .await?;
+        Err(refusal)
     }
 
     /// End the attempts a failed landing wrote (never moved the ref).
@@ -2154,15 +2347,45 @@ impl MergeQueue {
             }
             None => None,
         };
-        for (entry, attempt, subject) in decided {
-            let executing = StoredMerge {
+        // Plan 18 S10: every merge's record in ONE transaction (each the
+        // record it writes alone, with its requester's context, in train
+        // order); then each entry `merged`.
+        let executing: Vec<StoredMerge> = decided
+            .iter()
+            .map(|(_, attempt, _)| StoredMerge {
                 state: MergeState::Executing,
                 ..attempt.clone() // clone: the executing view of the same attempt
+            })
+            .collect();
+        let merges: Vec<(&StoredMerge, &Subject)> = executing
+            .iter()
+            .zip(decided.iter().map(|(_, _, subject)| subject))
+            .collect();
+        let ctx = ChangeContext::new(Actor::System, batch.request_id.clone()); // clone: the context owns it
+        let reports = self
+            .merger
+            .record_many(lock, &merges, &ctx, landed.as_ref())
+            .await;
+        let mut failed: Option<ForgeError> = None;
+        for ((entry, attempt, _), report) in decided.iter().zip(reports) {
+            let report = match report {
+                Ok(report) => report,
+                Err(e) => {
+                    // The first is the step's error; the others are logged
+                    // with their code (the batch stays `landing` for its
+                    // recovery, which records what is left).
+                    match failed {
+                        None => failed = Some(e),
+                        Some(_) => telemetry::log_failure(
+                            &e.with_context("operation", "merge_queue_record")
+                                .with_context("entry_id", entry.id)
+                                .with_context("queue_batch_id", batch.id),
+                            &batch.request_id,
+                        ),
+                    }
+                    continue;
+                }
             };
-            let report = self
-                .merger
-                .record_with(lock, &executing, subject, &[], landed.as_ref())
-                .await?;
             if !db::entry_merged(&self.merger.db, entry.id).await? {
                 // Review MEDIUM: the merge is recorded (the merge request is
                 // merged) but the entry was not `testing` with its attempt —
@@ -2188,6 +2411,9 @@ impl MergeQueue {
                 outcome = report.outcome,
                 new_sha = report.new_sha.as_ref().map(ObjectId::as_str),
             );
+        }
+        if let Some(e) = failed {
+            return Err(e);
         }
         let left = db::batch_landed_chain(&self.merger.db, batch.id).await?;
         if left.is_none() {

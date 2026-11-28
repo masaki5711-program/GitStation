@@ -17,7 +17,8 @@ use forge_core::{
 };
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::review::merges::{
-    self, finish_merge, GateOutcome, GateStep, MergeFinished, MergeGate, MergeLock, StoredMerge,
+    self, finish_merge, finish_merges, GateOutcome, GateStep, MergeFinished, MergeGate, MergeLock,
+    StoredMerge, ToFinish,
 };
 use forge_db::review::{self, StoredMergeRequest};
 use forge_errors::{ErrorCode, ForgeError};
@@ -1061,6 +1062,105 @@ impl Merger {
         scopes: &[String],
         landed: Option<&LandedPaths>,
     ) -> Result<MergeReport, ForgeError> {
+        let (push, pushers) = self.record_inputs(lock, attempt, subject).await?;
+        let scopes = (!scopes.is_empty()).then_some(scopes);
+        let ctx = requester_ctx(attempt, scopes);
+        let finished =
+            finish_merge(&self.db, &ctx, attempt, &push, pushers.as_deref(), landed).await;
+        reported(finished, attempt, subject)
+    }
+
+    /// Plan 18 S10: [`Merger::record_with`] for every merge of a batch, in
+    /// order, with ONE transaction for all their records (forge-db
+    /// `finish_merges`: each record is the one a merge alone writes, with
+    /// its requester's context). The git reads of each record (its commit
+    /// list, the pushers of its range) come first, outside the transaction.
+    /// One report per merge, in order; a failure of the transaction is
+    /// every merge's `FG-REVIEW-0009 record_failed`.
+    pub(super) async fn record_many(
+        &self,
+        lock: &MergeLock,
+        merges: &[(&StoredMerge, &Subject)],
+        batch: &ChangeContext,
+        landed: Option<&LandedPaths>,
+    ) -> Vec<Result<MergeReport, ForgeError>> {
+        let mut inputs = Vec::with_capacity(merges.len());
+        for (index, (attempt, subject)) in merges.iter().enumerate() {
+            match self.record_inputs(lock, attempt, subject).await {
+                Ok((push, pushers)) => inputs.push((requester_ctx(attempt, None), push, pushers)),
+                Err(e) => {
+                    // Nothing is recorded: the batch is left for its
+                    // recovery, which records what git shows. The cause is
+                    // this merge's report; the others say they wait for it.
+                    let mut cause = Some(e);
+                    return merges
+                        .iter()
+                        .enumerate()
+                        .map(
+                            |(i, (other, _))| match if i == index { cause.take() } else { None } {
+                                Some(e) => Err(e),
+                                None => Err(ForgeError::new(ErrorCode::Internal)
+                                    .with_context("reason", "merge_batch_not_recorded")
+                                    .with_context("merge_id", other.id)),
+                            },
+                        )
+                        .collect();
+                }
+            }
+        }
+        let each: Vec<ToFinish<'_>> = merges
+            .iter()
+            .zip(&inputs)
+            .map(|((attempt, _), (ctx, push, pushers))| ToFinish {
+                ctx,
+                attempt,
+                push,
+                range_pushers: pushers.as_deref(),
+                landed,
+            })
+            .collect();
+        match finish_merges(&self.db, batch, &each).await {
+            Ok(finished) => merges
+                .iter()
+                .zip(finished)
+                .map(|((attempt, subject), f)| reported(Ok(f), attempt, subject))
+                .collect(),
+            Err(e) => {
+                // Review MEDIUM (database): one member must not keep the
+                // others unrecorded (the target has moved already). The
+                // batch's failure is logged once; then each merge is
+                // recorded alone, as before S10, and fails only itself.
+                forge_core::telemetry::log_failure(
+                    &e.with_context("operation", "merge_queue_record_batch")
+                        .with_context("size", merges.len()),
+                    &batch.request_id,
+                );
+                let mut out = Vec::with_capacity(merges.len());
+                for (one, (attempt, subject)) in each.iter().zip(merges) {
+                    let finished = finish_merge(
+                        &self.db,
+                        one.ctx,
+                        one.attempt,
+                        one.push,
+                        one.range_pushers,
+                        one.landed,
+                    )
+                    .await;
+                    out.push(reported(finished, attempt, subject));
+                }
+                out
+            }
+        }
+    }
+
+    /// A merge record's git half (the `merge_applied` line, the target's
+    /// update as a push record, the pushers of the merged range).
+    async fn record_inputs(
+        &self,
+        lock: &MergeLock,
+        attempt: &StoredMerge,
+        subject: &Subject,
+    ) -> Result<(PushRecord, Option<Vec<forge_core::UserId>>), ForgeError> {
         let (Some(old), Some(new)) = (&attempt.expected_old, &attempt.new_sha) else {
             return Err(not_prepared(attempt));
         };
@@ -1080,37 +1180,7 @@ impl Merger {
         );
         let push = self.push_record(lock, attempt, subject, old, new).await;
         let pushers = self.merge_commit_pushers(lock, attempt, subject, old).await;
-        let scopes = (!scopes.is_empty()).then_some(scopes);
-        let ctx = requester_ctx(attempt, scopes);
-        match finish_merge(&self.db, &ctx, attempt, &push, pushers.as_deref(), landed).await {
-            Ok(MergeFinished::Recorded(_)) => Ok(MergeReport {
-                outcome: "applied",
-                state: MergeState::Applied,
-                new_sha: Some(new.clone()), // clone: the report owns it
-                error_code: None,
-            }),
-            Ok(MergeFinished::AlreadyApplied) => Ok(MergeReport {
-                outcome: "already_applied",
-                state: MergeState::Applied,
-                new_sha: Some(new.clone()), // clone: as above
-                error_code: None,
-            }),
-            Ok(MergeFinished::NotExecuting(state)) => {
-                Err(execution_failed("record_failed", attempt, subject.repo)
-                    .with_context("state", state.as_str()))
-            }
-            // The attempt is `failed` now (forge-db, same transaction): the
-            // alert reaches a person (runbook merge-execution).
-            Ok(MergeFinished::MergeRequestNotOpen(state)) => {
-                Err(
-                    execution_failed("merge_request_not_open", attempt, subject.repo)
-                        .with_context("merge_request_state", state.as_str()),
-                )
-            }
-            Err(e) => Err(execution_failed("record_failed", attempt, subject.repo)
-                .with_context("cause_code", e.code().id())
-                .with_source(e)),
-        }
+        Ok((push, pushers))
     }
 
     /// The target's update as a push record (the new commits listed like a
@@ -1198,6 +1268,45 @@ impl Merger {
                 total_commits_partial: partial,
             }],
         }
+    }
+}
+
+/// What a merge's record came to, as its report (FG-REVIEW-0009 for
+/// every way it was not recorded).
+fn reported(
+    finished: Result<MergeFinished, ForgeError>,
+    attempt: &StoredMerge,
+    subject: &Subject,
+) -> Result<MergeReport, ForgeError> {
+    let new = attempt.new_sha.clone(); // clone: the report owns it
+    match finished {
+        Ok(MergeFinished::Recorded(_)) => Ok(MergeReport {
+            outcome: "applied",
+            state: MergeState::Applied,
+            new_sha: new,
+            error_code: None,
+        }),
+        Ok(MergeFinished::AlreadyApplied) => Ok(MergeReport {
+            outcome: "already_applied",
+            state: MergeState::Applied,
+            new_sha: new,
+            error_code: None,
+        }),
+        Ok(MergeFinished::NotExecuting(state)) => {
+            Err(execution_failed("record_failed", attempt, subject.repo)
+                .with_context("state", state.as_str()))
+        }
+        // The attempt is `failed` now (forge-db, same transaction): the
+        // alert reaches a person (runbook merge-execution).
+        Ok(MergeFinished::MergeRequestNotOpen(state)) => {
+            Err(
+                execution_failed("merge_request_not_open", attempt, subject.repo)
+                    .with_context("merge_request_state", state.as_str()),
+            )
+        }
+        Err(e) => Err(execution_failed("record_failed", attempt, subject.repo)
+            .with_context("cause_code", e.code().id())
+            .with_source(e)),
     }
 }
 

@@ -21,6 +21,8 @@ mod queue_wake;
 mod queue_doc_fast;
 // Plan 18 S9 (ADR-0037 (d) 4): speculative trains.
 mod queue_speculation;
+// Plan 18 S10 (ADR-0037 (d) 5): the landing without a process per member.
+mod queue_batched;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

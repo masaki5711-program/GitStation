@@ -249,120 +249,180 @@ pub async fn queue_merge_mr_decided<P>(
     step: &QueueStep,
     decide: impl FnOnce(&MergeGate) -> Result<P, ForgeError>,
 ) -> Result<(StoredMerge, P), ForgeError> {
-    const ACTION: &str = "merge_queue.land_step";
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let outcome = async {
-        let facts = facts(&mut tx, entry.project_id, Some(entry.iid), entry.enqueued_by).await?;
-        let mr = facts.merge_request.as_ref().ok_or_else(absent)?.clone(); // clone: the gate keeps the facts
-        let live = tx.step(|c| async move { live_on(c, mr.id).await }).await?;
-        let mut gate = gate(&mut tx, facts, entry.enqueued_by, entry.credential, live).await?;
-        if let (CredentialRef::Session(id), CredentialState::Session { usable: false }) =
-            (entry.credential, &gate.credential.credential)
-        {
-            // ADR-0030 §6.2: "merge when ready" outlives a session's idle or
-            // absolute expiry; a revoked session (logout, an administrator's
-            // revocation) still stops it.
-            let user = entry.enqueued_by;
-            let alive: Option<bool> = tx
-                .step(|c| async move {
-                    sqlx::query_scalar(
-                        "SELECT revoked_at IS NULL FROM forge.web_sessions \
-                         WHERE id = $1 AND user_id = $2",
-                    )
-                    .bind(id)
-                    .bind(user.get())
-                    .fetch_optional(c)
-                    .await
-                    .map_err(|e| query_error("merge_queue.session", e))
-                })
-                .await?;
-            gate.credential.credential = match alive {
-                Some(usable) => CredentialState::Session { usable },
-                None => CredentialState::Missing,
-            };
-        }
-        let decided = decide(&gate)?;
-        if let Some(live) = &gate.live {
-            return Err(in_progress(mr.id, Some(live.id), ACTION)
-                .with_context("state", live.state.as_str()));
-        }
-        let entry_id = entry.id;
-        let state: Option<(String, Option<i64>)> = tx
-            .step(|c| async move {
-                sqlx::query_as(
-                    "SELECT state, merge_id FROM forge.merge_queue_entries WHERE id = $1 FOR UPDATE",
-                )
-                .bind(entry_id)
-                .fetch_optional(c)
-                .await
-                .map_err(|e| query_error("merge_queue.land_entry", e))
-            })
-            .await?;
-        match state {
-            Some((s, None)) if s == EntryState::Testing.as_str() => {}
-            other => {
-                return Err(refused("not_testing", mr.id)
-                    .with_context("entry_id", entry_id)
-                    .with_context("state", other.map_or_else(|| "gone".to_owned(), |(s, _)| s)))
+    let outcome = decide_step(&mut tx, ctx, entry, step, decide)
+        .await
+        .map(Settle::CommitDerived);
+    tx.settle(LAND_STEP, outcome).await
+}
+
+/// A member of a batched decision ([`queue_merge_mrs_decided`]) that was
+/// refused or failed: nothing of the batch was written.
+#[derive(Debug)]
+pub struct BatchRefusal {
+    /// The member (its index in the steps) the error is about; `None`: the
+    /// transaction itself (its start or its COMMIT).
+    pub member: Option<usize>,
+    pub error: ForgeError,
+}
+
+/// Plan 18 S10: every step of a landing decided in ONE transaction — each
+/// member exactly as [`queue_merge_mr_decided`] decides it (its own facts,
+/// gate and `decide(index, gate)`, its attempt written `prepared`), in
+/// the order given. The first refusal or failure rolls everything back and
+/// names its member; `Ok` holds one attempt per step, in order.
+pub async fn queue_merge_mrs_decided<P>(
+    db: &Db,
+    ctx: &ChangeContext,
+    steps: &[(StoredEntry, QueueStep)],
+    mut decide: impl FnMut(usize, &MergeGate) -> Result<P, ForgeError>,
+) -> Result<Vec<(StoredMerge, P)>, BatchRefusal> {
+    let whole = |error| BatchRefusal {
+        member: None,
+        error,
+    };
+    let mut tx = ChangeTx::begin_for_batch(db, ctx, steps.len())
+        .await
+        .map_err(whole)?;
+    let mut decided = Vec::with_capacity(steps.len());
+    for (index, (entry, step)) in steps.iter().enumerate() {
+        match decide_step(&mut tx, ctx, entry, step, |gate| decide(index, gate)).await {
+            Ok(one) => decided.push(one),
+            Err(error) => {
+                tx.rollback(LAND_STEP).await;
+                return Err(BatchRefusal {
+                    member: Some(index),
+                    error,
+                });
             }
         }
-        let (entry, step) = (entry.clone(), step.clone()); // clone: moved into the step
-        let request_id = ctx.request_id.as_str().to_owned();
-        let row: MergeRow = tx
+    }
+    tx.settle(LAND_STEP, Ok(Settle::CommitDerived(decided)))
+        .await
+        .map_err(whole)
+}
+
+/// The action name of a landing step's change (its logs).
+const LAND_STEP: &str = "merge_queue.land_step";
+
+/// One step decided on `tx` (the module docs): nothing is committed here.
+async fn decide_step<P>(
+    tx: &mut ChangeTx,
+    ctx: &ChangeContext,
+    entry: &StoredEntry,
+    step: &QueueStep,
+    decide: impl FnOnce(&MergeGate) -> Result<P, ForgeError>,
+) -> Result<(StoredMerge, P), ForgeError> {
+    const ACTION: &str = LAND_STEP;
+    let facts = facts(tx, entry.project_id, Some(entry.iid), entry.enqueued_by).await?;
+    let mr = facts.merge_request.as_ref().ok_or_else(absent)?.clone(); // clone: the gate keeps the facts
+    let live = tx.step(|c| async move { live_on(c, mr.id).await }).await?;
+    let mut gate = gate(tx, facts, entry.enqueued_by, entry.credential, live).await?;
+    if let (CredentialRef::Session(id), CredentialState::Session { usable: false }) =
+        (entry.credential, &gate.credential.credential)
+    {
+        // ADR-0030 §6.2: "merge when ready" outlives a session's idle or
+        // absolute expiry; a revoked session (logout, an administrator's
+        // revocation) still stops it.
+        let user = entry.enqueued_by;
+        let alive: Option<bool> = tx
             .step(|c| async move {
-                // The guard's one entry is `queued` (20261110100100): the
-                // attempt is inserted so and moved to `prepared` with the
-                // train's commits in the same transaction.
-                let id: i64 = sqlx::query_scalar(
-                    "INSERT INTO forge.merge_request_merges (merge_request_id, project_id,                      method, state, requested_by, credential_kind, credential_id, request_id,                      head_sha, target_branch, message, delete_source_branch) VALUES ($1, $2,                      $3, 'queued', $4, $5, $6, $7, $8, $9, $10, false) RETURNING id",
+                sqlx::query_scalar(
+                    "SELECT revoked_at IS NULL FROM forge.web_sessions \
+                     WHERE id = $1 AND user_id = $2",
                 )
-                .bind(entry.merge_request.get())
-                .bind(entry.project_id.get())
-                .bind(entry.method.as_str())
-                .bind(entry.enqueued_by.get())
-                .bind(entry.credential.kind())
-                .bind(entry.credential.id())
-                .bind(request_id)
-                .bind(entry.head_sha.as_str())
-                .bind(mr.target_branch.as_str())
-                .bind(&entry.message)
-                .fetch_one(&mut *c)
-                .await
-                .map_err(|e| {
-                    let unique = e
-                        .as_database_error()
-                        .and_then(|d| d.constraint())
-                        .is_some_and(|c| c == "merge_request_merges_one_live");
-                    if unique {
-                        in_progress(entry.merge_request, None, ACTION)
-                    } else {
-                        query_error("merge_queue.land_attempt", e)
-                    }
-                })?;
-                let row: MergeRow = sqlx::query_as(&format!(
-                    "UPDATE forge.merge_request_merges SET state = 'prepared',                      expected_old = $2, new_sha = $3, updated_at = now()                      WHERE id = $1 AND state = 'queued' RETURNING {}",
-                    columns()
-                ))
                 .bind(id)
-                .bind(step.expected_old.as_str())
-                .bind(step.new_sha.as_str())
-                .fetch_one(&mut *c)
+                .bind(user.get())
+                .fetch_optional(c)
                 .await
-                .map_err(|e| query_error("merge_queue.land_prepare", e))?;
-                sqlx::query(
-                    "UPDATE forge.merge_queue_entries SET merge_id = $2, updated_at = now() \
-                     WHERE id = $1",
-                )
-                .bind(entry.id)
-                .bind(row.id)
-                .execute(c)
-                .await
-                .map_err(|e| query_error("merge_queue.land_merge_id", e))?;
-                Ok(row)
+                .map_err(|e| query_error("merge_queue.session", e))
             })
             .await?;
-        Ok(Settle::CommitDerived((row.parse()?, decided)))
+        gate.credential.credential = match alive {
+            Some(usable) => CredentialState::Session { usable },
+            None => CredentialState::Missing,
+        };
     }
-    .await;
-    tx.settle(ACTION, outcome).await
+    let decided = decide(&gate)?;
+    if let Some(live) = &gate.live {
+        return Err(
+            in_progress(mr.id, Some(live.id), ACTION).with_context("state", live.state.as_str())
+        );
+    }
+    let entry_id = entry.id;
+    let state: Option<(String, Option<i64>)> = tx
+        .step(|c| async move {
+            sqlx::query_as(
+                "SELECT state, merge_id FROM forge.merge_queue_entries WHERE id = $1 FOR UPDATE",
+            )
+            .bind(entry_id)
+            .fetch_optional(c)
+            .await
+            .map_err(|e| query_error("merge_queue.land_entry", e))
+        })
+        .await?;
+    match state {
+        Some((s, None)) if s == EntryState::Testing.as_str() => {}
+        other => {
+            return Err(refused("not_testing", mr.id)
+                .with_context("entry_id", entry_id)
+                .with_context("state", other.map_or_else(|| "gone".to_owned(), |(s, _)| s)))
+        }
+    }
+    let (entry, step) = (entry.clone(), step.clone()); // clone: moved into the step
+    let request_id = ctx.request_id.as_str().to_owned();
+    let row: MergeRow = tx
+        .step(|c| async move {
+            // The guard's one entry is `queued` (20261110100100): the
+            // attempt is inserted so and moved to `prepared` with the
+            // train's commits in the same transaction.
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO forge.merge_request_merges (merge_request_id, project_id,                      method, state, requested_by, credential_kind, credential_id, request_id,                      head_sha, target_branch, message, delete_source_branch) VALUES ($1, $2,                      $3, 'queued', $4, $5, $6, $7, $8, $9, $10, false) RETURNING id",
+            )
+            .bind(entry.merge_request.get())
+            .bind(entry.project_id.get())
+            .bind(entry.method.as_str())
+            .bind(entry.enqueued_by.get())
+            .bind(entry.credential.kind())
+            .bind(entry.credential.id())
+            .bind(request_id)
+            .bind(entry.head_sha.as_str())
+            .bind(mr.target_branch.as_str())
+            .bind(&entry.message)
+            .fetch_one(&mut *c)
+            .await
+            .map_err(|e| {
+                let unique = e
+                    .as_database_error()
+                    .and_then(|d| d.constraint())
+                    .is_some_and(|c| c == "merge_request_merges_one_live");
+                if unique {
+                    in_progress(entry.merge_request, None, ACTION)
+                } else {
+                    query_error("merge_queue.land_attempt", e)
+                }
+            })?;
+            let row: MergeRow = sqlx::query_as(&format!(
+                "UPDATE forge.merge_request_merges SET state = 'prepared',                      expected_old = $2, new_sha = $3, updated_at = now()                      WHERE id = $1 AND state = 'queued' RETURNING {}",
+                columns()
+            ))
+            .bind(id)
+            .bind(step.expected_old.as_str())
+            .bind(step.new_sha.as_str())
+            .fetch_one(&mut *c)
+            .await
+            .map_err(|e| query_error("merge_queue.land_prepare", e))?;
+            sqlx::query(
+                "UPDATE forge.merge_queue_entries SET merge_id = $2, updated_at = now() \
+                 WHERE id = $1",
+            )
+            .bind(entry.id)
+            .bind(row.id)
+            .execute(c)
+            .await
+            .map_err(|e| query_error("merge_queue.land_merge_id", e))?;
+            Ok(row)
+        })
+        .await?;
+    Ok((row.parse()?, decided))
 }

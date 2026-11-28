@@ -139,6 +139,44 @@ impl Git {
         Ok(refs)
     }
 
+    /// The objects `names` point to, read by ONE `for-each-ref` (plan 18
+    /// S10: every source tip of a merge-queue batch under the merge lock).
+    /// A name that does not exist is absent from the map; refs below a
+    /// name (`for-each-ref` matches a pattern as a path prefix) are left
+    /// out. No names: git does not run.
+    pub async fn read_named_refs(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        names: &[RefName],
+        timeout: Duration,
+    ) -> Result<BTreeMap<RefName, ObjectId>, ForgeError> {
+        if names.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let repo = storage.existing(id)?;
+        let mut cmd = self
+            .command("for-each-ref")
+            .arg("--format=%(objectname) %(refname)");
+        for name in names {
+            cmd = cmd.revision(name);
+        }
+        let out = cmd.repo(&repo).timeout(timeout).output().await?;
+        let text = String::from_utf8(out.stdout).map_err(|_| unexpected("for-each-ref"))?;
+        let mut refs = BTreeMap::new();
+        for line in text.lines().filter(|l| !l.is_empty()) {
+            let (oid, name) = line
+                .split_once(' ')
+                .ok_or_else(|| unexpected("for-each-ref"))?;
+            let oid = ObjectId::parse(oid).map_err(|_| unexpected("for-each-ref"))?;
+            let name = RefName::parse(name).map_err(|_| unexpected("for-each-ref"))?;
+            if names.contains(&name) {
+                refs.insert(name, oid);
+            }
+        }
+        Ok(refs)
+    }
+
     /// The object `name` points to, `None` when the ref does not exist.
     pub async fn read_ref(
         &self,

@@ -1216,3 +1216,75 @@ spec のジョブは小段が失敗したときだけ）。
    先頭になるまでの待ちについては解消。`forge doctor` が後ろのバッチを期限で数えることは残る）。
 8. 残したもの（rust MEDIUM）: 投機の組み立てで先頭の MR が断られると、先頭が決まるまで、見るたびに列車の 1 段（merge-tree 1 回）を
    繰り返す。見回りの周期（既定 60 s、または起床）ごとに 1 回で上限があるので、覚えておく仕組みは入れていない。
+
+## 追記（2026-11-28、計画 18 S10 の実装）— (d) 5 起動のない着地の区間: 作ったもの、決めたこと、既知の限界
+
+上の Decision の文は変えない。新しいエラーコード・キー・マイグレーションは無い。MR ごとの監査の行とイベントは、中身も順も変えない。
+
+### 作ったもの
+
+1. **source の先端は 1 回で**: マージのロックの下で、バッチの全メンバーの source ブランチを `for-each-ref` 1 回で読む
+   （forge-git `Git::read_named_refs`。名前と完全に一致する ref だけを返し、名前の下の ref は除く。名前が無ければ git を起動しない。
+   タイムアウトはロックの残りで切る）。今までのメンバーごとの `read_ref` はやめた。
+2. **承認の git の事実は組み立てで先に読む**: forge-review の `ReviewGit::facts` を、git の半分 `reads`（変更パス・範囲の
+   コミット・CODEOWNERS のファイル。(head, tip) の sha だけの関数）と DB の半分 `facts_from`（範囲の push した人、CODEOWNERS の
+   持ち主の解決と照合、セレクタの単位）に分けた。`facts` は今までどおり両方を順に呼ぶ（他の呼び出し元は変わらない）。キューの
+   worker は、バッチを作った直後（ロックの外、`REQUEST_BUDGET` の 20 s 以内）に、各メンバーの head と**バッチの土台**の組で
+   `reads` を読み、worker のメモリに置く（バッチ → エントリー。最大 64 バッチ、古いものから忘れる）。
+3. **ロックの下で sha の一致で確かめる**: 着地は、置いた読みを、head = エントリーの head かつ tip = バッチの土台のときだけ使う。
+   target の先端 = 土台はロックの下で先に確かめ、source の先端 = head は 1 の読みで決定が確かめる（`check_head`、違えば
+   `FG-REVIEW-0008 reason=source_moved` でそのメンバーが外れる）。DB の半分は毎回ロックの下で読む（承認・持ち主・単位は組み立ての
+   後に変わりうるため）。置いた読みが無い（別の worker が作った、再起動した、読みが時間切れか git の失敗だった）ときは、今までどおり
+   ロックの下で読み、`forge.merge_queue.approval_facts_read`（info）を出す。
+4. **決定は 1 つのトランザクション**: forge-db `queue_merge_mrs_decided`。各メンバーを `queue_merge_mr_decided` と同じ手順
+   （自分の事実とゲート、`decide`、`prepared` の試みの書き込み）で、列車の順に、1 つの `ChangeTx` の中で決める。`decide` は
+   メンバーごとに今までどおり `decide_queued`（依頼した人の principal を作り直して `authorize()`、自動マージは `prove_auto`）。
+   最初の断り・失敗で全部を戻し、そのメンバーの番号を返す（`BatchRefusal`）。
+5. **記録は 1 つのトランザクション**: forge-db `finish_merges`。各マージを `finish_merge` と同じ手順（`executing → applied`、
+   MR を `merged`、push_commits の行、`merge_request.merged` と `repository.pushed` の監査の行とイベント、マージ id での重複排除）で、
+   列車の順に 1 つの `ChangeTx` の中で書き、COMMIT は 1 回。監査の行とイベントは**それぞれの依頼した人の文脈**（actor、credential、
+   request id）で書く — `ChangeTx::commit_each`（記録ごとに文脈を持つ。重複が 1 つでもあれば全部を戻す）と `Settle::CommitEach`。
+   各記録の git の読み（コミットの一覧、範囲の push した人）はトランザクションの前にメンバーごとに読む（今までどおり）。
+6. 試験（forge-review、実 git + 開発 DB、`tests/queue_batched/`）: `a_batched_landing_writes_the_same_audit_rows_and_events_as_per_member`
+   （golden: メンバーごとに列車の順で `merge_request.merged` → `repository.pushed` の行、依頼した人の actor・credential・request id、
+   `target_sha` / `merged_sha` の鎖、イベントの重複排除のキー。ロックの下の git の起動がメンバー数 × 3 + 4 以下）、
+   `a_source_moved_after_build_is_refused_under_the_lock`（組み立ての後に git でだけ source が動く → ロックの下で `source_moved`、
+   何も書かれず、残りが次のバッチで着地）、`one_refusal_in_a_batched_decision_rebuilds_without_it`（3 件の真ん中の依頼の
+   セッションを失効 → `credential_revoked` で外れ、前のメンバーの試みも残らない、2 件で作り直して着地）。forge-git
+   `named_refs_are_read_in_one_call_and_only_by_their_exact_names`。既存のマージキューの試験と S9 の投機の試験は**変えずに**通す。
+
+### 決めたこと（利用者の常設の指示「推奨で進めて」による）
+
+- **先に読むのは git の半分だけ**。DB の半分まで組み立てで読むと、組み立てから着地までの間（CI では分単位）の承認の取り消し・
+  持ち主の無効化・規則の変更を見落とす。git の答えは sha が同じなら変わらないので、sha の一致だけで再検証できる。
+- **置き場所は worker のメモリ**。新しい表もキーも要らない（計画: マイグレーションなし）。置いた読みが無ければ今までの読み方に
+  戻るだけで、正しさは変わらない（遅くなるだけで、ログに出る）。時間切れや git の失敗を含む読みは置かない（もう一度読めば答えが
+  変わりうる）。
+- **断りは何も残さない**。1 つのトランザクションなので、前のメンバーの `prepared` の試みも書かれない（今までは書いてから
+  `superseded`、`queue_rebuild` にしていた）。バッチは今までどおり `entry_refused` で捨て、断られたメンバーを外し、残りを順に戻す。
+- **列車の鎖の確かめ（`train_mismatch`）は決定の前に**。決定と同じ材料（エントリーの `train_sha`）だけで分かるので、書く前に止める。
+- **記録の失敗**: 1 つのトランザクションなので、失敗すれば全部が記録されない（target はもう動いている）。バッチは `landing` のまま
+  残り、今までどおり回復（`recover`）が git を見て全部を記録する。MR が開いていないなど、1 件だけの答えは今までどおりその 1 件の
+  エラーで、他のメンバーは記録して `merged` にする（最初のエラーを返し、他は `telemetry::log_failure`）。
+
+### 既知の限界
+
+- ロックの下に残る git の起動: target の先端 1、source の先端 1、compare-and-swap 1、着地したパス 1、メンバーごとに記録のコミットの
+  一覧（`cat-file` + `rev-list`）と範囲の push した人（`rev-list`、merge commit / squash のときだけ）。記録の 2〜3 回はコミットの一覧が
+  他の ref に依存する（push と同じ「新しいコミット」の意味）ので、組み立てでは先に読めない。計画の「起動のない区間」はこの分だけ
+  届いていない。
+- 置いた読みは worker ごと。キューの貸し出しが別の worker に移ると、その着地はロックの下で読む（ログ
+  `forge.merge_queue.approval_facts_read`）。
+- 文書のキューで組み立てを着地と並べる（深さ 2）ことはしていない（S9 の決めたことのとおり、貸し出しが 1 つなので手番が並ばない）。
+
+### レビュー対応（2026-11-28、database・authz-matrix のレビュー。CRITICAL・HIGH は無し）
+
+1. **（db MEDIUM）バッチのトランザクションの期限**: 決定と記録のバッチは `ChangeTx::begin_for_batch` で始める。期限は 30 s +
+   メンバーごとに 1 s、最大 90 s（マージのロックの保持 180 s の内側）。
+2. **（db MEDIUM）1 件の悪い記録が全員を止める**: `finish_merges` のトランザクションが失敗したら、その失敗を 1 回ログに出し
+   （`operation=merge_queue_record_batch`）、各マージを S10 の前と同じに 1 件ずつ `finish_merge` で記録する。悪い 1 件だけが
+   自分のエラーになり、他は記録されて `merged` になる（回復も同じ道を通る）。
+3. **（authz MEDIUM）事実を読んだ MR と、ロックした MR が同じであること**: 決定の中で、ゲートが読んだ MR の `source_branch` と
+   `author` が、source の先端と承認の事実を読んだときの MR と違えば、そのメンバーを `FG-REVIEW-0008 reason=source_moved` で断る。
+4. 残したもの: source ブランチが無いとき `check_head` が先端を確かめないこと（S10 の前からの挙動、authz LOW）、重複排除の
+   エラーがどのメンバーかを言わないこと（db LOW）、降格・自動マージの停止・置いた読みの sha の不一致の個別の試験（authz LOW）。

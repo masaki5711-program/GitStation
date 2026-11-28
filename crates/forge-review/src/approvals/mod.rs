@@ -39,6 +39,9 @@ pub mod committers;
 mod delegation;
 pub mod evaluate;
 mod load;
+// Plan 18 S10: the git reads apart from the database half (the merge queue
+// reads them at build time and uses them under the merge lock).
+pub(crate) use load::{facts_from, GitReads};
 
 pub use codeowners::{Codeowners, CodeownersError, Owner};
 pub use commands::{
