@@ -631,3 +631,24 @@ A8・A9・A11 の「残すこと」のうち、doctor・更新の帯・AI の理
 - 手で書いた lock の索引（doctor と取り消しの対象に入れるため。A9 のまま）。
 - 画面からの世代の移行（`adapter` を選んで `POST …/update`）。
 - カタログが変わっただけのときの聞き直しと、部品の説明文を LLM の入力に足すこと（A11 のまま）。
+
+## Amendment（2026-11-28、A13 `feat/ui-ai-draft-and-revocation-notice`: 取り消しの更新を Maintainer 全員に知らせる）
+
+A9 の「残すこと」の「取り消しの更新を、プロジェクトの Maintainer 全員にも知らせること」を入れた。利用者は不在で「推奨を選ぶ」と
+言っているので、次のとおり決めた。
+
+1. **新しい種類 `mr_agent_revoked`**（既存の `mr_agent_update` は使い回さない: その文は「あなたの名前で開きました」で、
+   作成者でない人には誤り。また Maintainer が作成者向けの知らせとは別に止められるように）。メールとアプリ内、ja / en / id。
+   文は「取り消された版はマージされるまで使われ続けます。作成者ではない Maintainer として承認してください」（次の一手）。
+2. **誰に**: イベント `merge_request.agent_update_opened` の `origin` が `revocation` のときだけ、作成者（`mr_agent_update`）に
+   加えて、プロジェクトの **Maintainer と Owner 全員**（`forge_db::notify::project_maintainers`: プロジェクトの member と
+   名前空間の鎖の上のグループの member のうち `maintainer` / `owner` の行、個人の名前空間の持ち主を候補にし、役割の読み込みと
+   同じ fold（`roles::project_roles_on`）で今の役割が Maintainer 以上の人だけ。無効のアカウントは役割を持たない。組織の束縛は
+   Developer までなので足さない。候補は 200 人まで）。人が頼んだ更新（`origin` `update`）は作成者だけのまま。
+3. **重複なし**: 作成者は作成者の種類で 1 回だけ（Maintainer でも `mr_agent_revoked` は出さない）。表の一意の鍵
+   （イベント・人）も 2 つ目を断る。可視性・メールの可否・止めた種類は既存の `decide` / `decide_in_app` がそのまま決める
+   （見えない人・ボット・サービスアカウントには出ない）。`origin` が読めないイベントは購読者の失敗（黙らない）。
+4. テスト: `a_revocation_update_tells_the_author_and_every_maintainer_once`（forge-notify、実 DB: Owner と Maintainer に
+   `mr_agent_revoked`、作成者に `mr_agent_update`、Reporter には無し、作成者が Maintainer なら 1 回）、
+   `exactly_the_planned_events_notify`（種類はどれもイベントか、その Maintainer の種類から届く）。追記のマイグレーション
+   `20270116100000` が通知の 4 つの CHECK を広げる（P17-10b の `mr_ai_draft` と一緒）。

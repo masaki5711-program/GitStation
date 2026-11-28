@@ -741,6 +741,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/ai-review",
         Coverage::Command("mr ai-review"),
     ),
+    // Plan 17 P17-10: the AI asset draft on the merge request screen.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/ai-draft",
+        Coverage::NotForCli("the merge request screen's notice of the AI asset draft (a person decides whether to apply it); an agent reads the ai-draft/<id> branch and its commit with the repository commands"),
+    ),
     // M5 L5-6: a person's verdict on a finding (the merge request screen).
     (
         "POST",

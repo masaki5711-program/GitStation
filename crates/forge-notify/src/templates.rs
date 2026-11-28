@@ -86,6 +86,18 @@ fn headline(kind: NotificationKind, lang: Lang) -> &'static str {
         }
         (Lang::En, NotificationKind::MergeRequestAgentUpdate) => "updates the agent configuration",
         (Lang::Id, NotificationKind::MergeRequestAgentUpdate) => "memperbarui konfigurasi agen",
+        (Lang::Ja, NotificationKind::MergeRequestAgentRevoked) => {
+            "で取り消された部品の更新が承認を待っています"
+        }
+        (Lang::En, NotificationKind::MergeRequestAgentRevoked) => {
+            "replaces a revoked agent part and waits for approval"
+        }
+        (Lang::Id, NotificationKind::MergeRequestAgentRevoked) => {
+            "mengganti bagian agen yang dicabut dan menunggu persetujuan"
+        }
+        (Lang::Ja, NotificationKind::MergeRequestAiDraft) => "に AI の下書き（提案）があります",
+        (Lang::En, NotificationKind::MergeRequestAiDraft) => "has an AI draft (suggestion)",
+        (Lang::Id, NotificationKind::MergeRequestAiDraft) => "memiliki draf AI (saran)",
     }
 }
 
@@ -197,6 +209,40 @@ fn sentence(kind: NotificationKind, lang: Lang, actor: Option<&str>, title: &str
                 "Merge request \"{title}\" yang memperbarui konfigurasi agen dibuka atas nama Anda (versi yang lebih baru, atau bagian yang dicabut diganti). Periksa perubahan dan `forge/agent-lock`; Maintainer yang bukan pembuatnya menyetujuinya sebelum di-merge."
             )
         }
+        // ADR-0032 A13: told to the project's Maintainers and Owners (no
+        // actor: the revocation's job opened it for its author).
+        (Lang::Ja, NotificationKind::MergeRequestAgentRevoked, _) => {
+            format!(
+                "このプロジェクトのエージェントの設定が使う部品の版が取り消されたため、更新のマージリクエスト「{title}」を開きました。取り消された版はマージされるまで使われ続けます。差分と `forge/agent-lock` を確かめ、作成者ではない Maintainer として承認してください。"
+            )
+        }
+        (Lang::En, NotificationKind::MergeRequestAgentRevoked, _) => {
+            format!(
+                "A part version this project's agent configuration uses was revoked, so the update merge request \"{title}\" was opened. The revoked version stays in use until it merges. Check the changes and `forge/agent-lock`, and approve it as a Maintainer who is not the author."
+            )
+        }
+        (Lang::Id, NotificationKind::MergeRequestAgentRevoked, _) => {
+            format!(
+                "Versi bagian yang digunakan konfigurasi agen proyek ini telah dicabut, sehingga merge request pembaruan \"{title}\" dibuka. Versi yang dicabut tetap digunakan sampai di-merge. Periksa perubahan dan `forge/agent-lock`, lalu setujui sebagai Maintainer yang bukan pembuatnya."
+            )
+        }
+        // Plan 17 P17-10: the local LLM proposed (no actor). No branch
+        // name in the mail: the merge request's page links it.
+        (Lang::Ja, NotificationKind::MergeRequestAiDraft, _) => {
+            format!(
+                "下書きの改善のマージリクエスト「{title}」に、ローカル LLM が AI 資産の修正の下書き（提案）を別のブランチに作りました。マージリクエストは変わっていません。マージリクエストの画面で下書きのブランチと変わるファイルを確かめ、使うかどうかはあなたが決めてください。"
+            )
+        }
+        (Lang::En, NotificationKind::MergeRequestAiDraft, _) => {
+            format!(
+                "The local LLM proposed a fix of an AI asset for your draft improvement merge request \"{title}\", as a draft (suggestion) on its own branch. The merge request is unchanged. See the draft branch and the files it changes on the merge request's page; whether to use it is your decision."
+            )
+        }
+        (Lang::Id, NotificationKind::MergeRequestAiDraft, _) => {
+            format!(
+                "LLM lokal mengusulkan perbaikan aset AI untuk draf merge request perbaikan Anda \"{title}\", sebagai draf (saran) di branch tersendiri. Merge request tidak berubah. Lihat branch draf dan file yang diubah di halaman merge request; Anda yang memutuskan apakah akan memakainya."
+            )
+        }
     }
 }
 
@@ -268,8 +314,11 @@ mod tests {
                     assert!(body.contains("gstn conflicts"), "where to look: {body}");
                 } else if *kind == NotificationKind::MergeRequestRevertDrafted
                     || *kind == NotificationKind::MergeRequestAgentUpdate
+                    || *kind == NotificationKind::MergeRequestAgentRevoked
+                    || *kind == NotificationKind::MergeRequestAiDraft
                 {
-                    // M4 C10 / plan 16 A9: the system acted, no person.
+                    // M4 C10 / plan 16 A9 / A13 / plan 17 P17-10: the
+                    // system acted, no person.
                     assert!(!body.contains("Bob"), "{lang:?} {kind:?}: {body}");
                 } else {
                     assert!(body.contains("Bob"), "{lang:?} {kind:?}: {body}");
@@ -283,6 +332,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Plan 17 P17-10: the draft mail says "suggestion" in the person's
+    /// language and never names the branch or a file (module docs).
+    #[test]
+    fn the_ai_draft_mail_says_suggestion_and_names_no_branch() {
+        for (lang, word) in [
+            (Lang::Ja, "提案"),
+            (Lang::En, "suggestion"),
+            (Lang::Id, "saran"),
+        ] {
+            let (subject, body) = render(&facts(NotificationKind::MergeRequestAiDraft, lang));
+            assert!(subject.contains(word), "{subject}");
+            assert!(body.contains(word), "{body}");
+            assert!(!body.contains("ai-draft/"), "{body}");
+        }
+        let (subject, _) = render(&facts(NotificationKind::MergeRequestAgentRevoked, Lang::Ja));
+        assert!(subject.contains("取り消された"), "{subject}");
     }
 
     #[test]

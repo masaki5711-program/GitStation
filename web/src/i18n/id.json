@@ -1217,7 +1217,9 @@
       "mr_commented": "Komentar pada merge request",
       "mr_conflict_predicted": "Kemungkinan konflik dengan merge request lain",
       "mr_revert_drafted": "Pipeline gagal setelah merge (draf pembatalan)",
-      "mr_agent_update": "Pembaruan konfigurasi agen dibuka"
+      "mr_agent_update": "Pembaruan konfigurasi agen dibuka",
+      "mr_agent_revoked": "Pembaruan proyek yang mengganti bagian yang dicabut menunggu persetujuan (Maintainer)",
+      "mr_ai_draft": "Draf AI (saran) dibuat"
     }
   },
   "inbox": {
@@ -1255,6 +1257,8 @@
       "conflictPredicted": "Merge request Anda kemungkinan berkonflik dengan merge request lain",
       "revertDrafted": "Pipeline gagal setelah ini di-merge. Periksa draf pembatalannya.",
       "agentUpdate": "Pembaruan konfigurasi agen dibuka atas nama Anda. Periksa perubahannya.",
+      "agentRevoked": "Merge request pembaruan yang mengganti bagian yang dicabut menunggu persetujuan Maintainer.",
+      "aiDraft": "LLM lokal membuat draf (saran) perbaikan aset AI di branch tersendiri. Anda yang memutuskan apakah akan memakainya.",
       "other": "Ada notifikasi baru tentang merge request Anda"
     }
   },
@@ -2542,5 +2546,23 @@
     "rerun": "Tinjau lagi",
     "rerunHint": "Meminta AI meninjau commit terbaru lagi (paling banyak 3 kali per jam untuk satu merge request).",
     "rerunPending": "Commit ini sudah menunggu tinjauannya."
+  },
+  "aiDraft": {
+    "title": "Draf AI",
+    "label": "Draf AI (saran)",
+    "none": "Belum ada draf AI. Saat LLM lokal mengusulkan perbaikan, draf muncul di sini.",
+    "noneDone": "Tidak ada draf AI yang dibuat untuk merge request ini.",
+    "unrecorded": "Branch draf ada, tetapi catatannya tidak dapat dibaca. Periksa isinya di halaman branch:",
+    "branch": "Branch draf",
+    "commit": "Commit",
+    "filesTitle": "File yang diubah ({{n}})",
+    "noFiles": "Tidak ada file yang diubah.",
+    "dropped": "{{n}} suntingan model dibuang oleh pemeriksaan (tidak ada di draf).",
+    "noDropped": "Tidak ada suntingan yang dibuang oleh pemeriksaan.",
+    "moved": "Branch draf telah diubah sejak itu (head sekarang: {{head}}). Commit di atas adalah draf AI.",
+    "deleted": "Branch draf telah dihapus. Tidak perlu melakukan apa pun. Selama merge request masih draf, draf baru dapat muncul nanti.",
+    "made": "Dibuat {{at}}",
+    "next": "Untuk memakainya, periksa perubahan branch draf, lalu bawa ke {{source}}.",
+    "suggestionOnly": "Hanya saran. Merge request tidak berubah (tidak disetujui, di-merge, atau ditandai siap)."
   }
 }

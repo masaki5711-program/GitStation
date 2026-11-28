@@ -322,6 +322,51 @@ pub async fn merge_request_author(
     Ok(author.map(UserId::new))
 }
 
+/// The most candidates [`project_maintainers`] folds (members with a
+/// Maintainer or Owner row, before the role loaders decide).
+pub const MAX_MAINTAINER_CANDIDATES: i64 = 200;
+
+/// The people who hold Maintainer or Owner on `project` now, lowest id
+/// first, read in the step's transaction (ADR-0032 Amendment A13): the
+/// candidates are the project's members and the members of its groups up
+/// the namespace chain holding `maintainer` or `owner`, and the owner of
+/// its personal namespace; each is then decided by the role loaders'
+/// own fold (`roles::project_roles_on`: an inactive account holds no
+/// role, a bot never owns a personal namespace). Org bindings never give
+/// more than Developer, so they add nobody. At most
+/// [`MAX_MAINTAINER_CANDIDATES`] candidates are read.
+pub async fn project_maintainers(
+    tx: &mut DerivedTx<'_>,
+    project: ProjectId,
+) -> Result<Vec<UserId>, ForgeError> {
+    const SQL: &str = concat!(
+        "WITH RECURSIVE ",
+        crate::roles::chain_cte!("kind = 'project' AND owner_id = $1"),
+        " SELECT DISTINCT x.u FROM ( \
+           SELECT m.user_id AS u FROM forge.project_members m \
+             WHERE m.project_id = $1 AND m.role IN ('maintainer', 'owner') \
+           UNION SELECT g.user_id FROM forge.group_members g \
+             JOIN chain c ON c.kind = 'group' AND g.group_id = c.owner_id \
+             WHERE g.role IN ('maintainer', 'owner') \
+           UNION SELECT c.owner_id FROM chain c WHERE c.kind = 'user' AND c.step = 2 \
+         ) x ORDER BY x.u LIMIT $2"
+    );
+    let ids: Vec<i64> = sqlx::query_scalar(SQL)
+        .bind(project.get())
+        .bind(MAX_MAINTAINER_CANDIDATES)
+        .bind(crate::roles::CAP)
+        .fetch_all(tx.conn())
+        .await
+        .map_err(|e| query_error("notify.project_maintainers", e))?;
+    let candidates: Vec<UserId> = ids.into_iter().map(UserId::new).collect();
+    let roles = crate::roles::project_roles_on(tx.conn(), project, &candidates).await?;
+    Ok(roles
+        .into_iter()
+        .filter(|(_, role)| role.is_some_and(|r| r >= forge_core::Role::Maintainer))
+        .map(|(user, _)| user)
+        .collect())
+}
+
 /// A notification as the send job sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredNotification {

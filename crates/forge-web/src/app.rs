@@ -3318,6 +3318,17 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::ai_review,
         )
         .responds::<mr::AiReviewBody>(Verb::Get, mr::AI_REVIEW)
+        // Plan 17 P17-10 (ADR-0039 Amendment P17-10b): the AI asset draft
+        // beside a draft improvement merge request, read like it.
+        .route_with(
+            Verb::Get,
+            mr::AI_DRAFT,
+            Action::MergeRequestRead,
+            "A merge request's AI asset draft (plan 17 P17-10), as a suggestion only (it never changes, approves or merges the merge request): whether it comes from improve/<id> (improvement), state none, proposed, or unrecorded (the draft branch exists without its record: its name), and the draft's branch ai-draft/<id>, its one commit over the merge request's head, the asset paths it changes (at most 3), the count of the model's edits the checks dropped, the advice it came from, the time, and the branch now — current, moved (pushed to since) or deleted. Code-made facts only, never the model's words (as the merge request)",
+            mr::AI_DRAFT_OF,
+            mr::ai_draft,
+        )
+        .responds::<mr::AiDraftBody>(Verb::Get, mr::AI_DRAFT)
         // M5 L5-6 (plan 19 §4, §8.2): a person's verdict on one finding.
         .route_with_body(
             Verb::Post,

@@ -728,3 +728,120 @@ async fn the_schema_refuses_unknown_kinds_and_a_read_before_creation() {
     }
     w.t.drop_now().await;
 }
+
+// ── ADR-0032 A13 / plan 17 P17-10 ─────────────────────────────────────
+
+impl World {
+    /// A system event of `event_type` about merge request `iid`.
+    async fn system_event(&self, event_type: &str, payload: serde_json::Value, n: u32) {
+        self.t
+            .exec_superuser(&format!(
+                "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+                 request_id) VALUES ('system', 'merge_request.probe', 'succeeded', \
+                 'merge_request', 'req-a13-{n}'); \
+                 INSERT INTO forge.events (event_id, event_type, schema_version, aggregate_type, \
+                 aggregate_id, project_id, actor_kind, request_id, payload) \
+                 VALUES (gen_random_uuid(), '{event_type}', 1, 'merge_request', 1, {}, \
+                 'system', 'req-a13-{n}', '{payload}'::jsonb)",
+                self.project().get()
+            ))
+            .await;
+    }
+
+    async fn agent_update(&self, iid: i64, origin: &str, n: u32) {
+        let payload = serde_json::json!({
+            "merge_request_id": 1, "iid": iid, "author_id": self.bob.get(),
+            "origin": origin, "lock_digest": format!("sha256:{}", "a".repeat(64)),
+            "revoked": (origin == "revocation").then_some("format-on-save@1.0.0"),
+        });
+        self.system_event("merge_request.agent_update_opened", payload, n)
+            .await;
+    }
+}
+
+/// ADR-0032 A9 残すこと (A13): an update merge request opened because of a
+/// revocation tells its author (`mr_agent_update`) and every Maintainer
+/// and Owner of the project (`mr_agent_revoked`), each person once; a
+/// Developer or Reporter is not told, nor anyone for a person's update.
+#[tokio::test]
+async fn a_revocation_update_tells_the_author_and_every_maintainer_once() {
+    let w = world().await;
+    let dave = users::create(
+        &w.t.db,
+        &system("req-dave"),
+        &NewUser::human("dave", "Dave", "dave@example.test"),
+    )
+    .await
+    .expect("dave")
+    .user_id;
+    w.add_member(w.bob, "developer").await;
+    w.add_member(w.carol, "maintainer").await;
+    w.add_member(dave, "reporter").await;
+    let iid = w
+        .open_mr(w.bob, "Update the agent", "agent-builder/abc")
+        .await;
+    // A person's update: the author only.
+    w.agent_update(iid, "update", 1).await;
+    w.drain().await;
+    assert_eq!(
+        w.items().await,
+        [(w.bob.get(), "mr_agent_update".to_owned(), false)]
+    );
+    // A revocation: the author, then alice (Owner by her namespace) and
+    // carol (Maintainer); dave (Reporter) is not told.
+    w.agent_update(iid, "revocation", 2).await;
+    w.drain().await;
+    let mut items = w.items().await;
+    items.drain(..1);
+    items.sort_unstable();
+    let mut want = vec![
+        (w.alice.get(), "mr_agent_revoked".to_owned(), false),
+        (w.bob.get(), "mr_agent_update".to_owned(), false),
+        (w.carol.get(), "mr_agent_revoked".to_owned(), false),
+    ];
+    want.sort_unstable();
+    assert_eq!(items, want);
+    // A Maintainer who is the author is told once, as the author.
+    let mine = w
+        .open_mr(w.carol, "Carol's update", "agent-builder/def")
+        .await;
+    w.agent_update(mine, "revocation", 3).await;
+    w.drain().await;
+    let carol_items: Vec<_> = w.items().await.into_iter().skip(4).collect();
+    let mut kinds: Vec<_> = carol_items
+        .iter()
+        .map(|(u, k, _)| (*u, k.clone()))
+        .collect();
+    kinds.sort_unstable();
+    assert_eq!(
+        kinds,
+        [
+            (w.alice.get(), "mr_agent_revoked".to_owned()),
+            (w.carol.get(), "mr_agent_update".to_owned()),
+        ]
+    );
+    w.t.drop_now().await;
+}
+
+/// Plan 17 P17-10: the AI draft tells the improvement merge request's
+/// author (kind `mr_ai_draft`), nobody else.
+#[tokio::test]
+async fn an_ai_draft_tells_the_improvement_author() {
+    let w = world().await;
+    w.add_member(w.bob, "developer").await;
+    w.add_member(w.carol, "maintainer").await;
+    let iid = w.open_mr(w.bob, "Improve SPC", "improve/ir-1").await;
+    let payload = serde_json::json!({
+        "merge_request_id": 1, "iid": iid, "branch": "refs/heads/ai-draft/ir-1",
+        "commit_sha": "b".repeat(40), "parent_sha": "a".repeat(40),
+        "files": ["skills/a.md"], "dropped_edits": 0, "advice_id": 1, "llm_request_id": 1,
+    });
+    w.system_event("merge_request.ai_draft_proposed", payload, 1)
+        .await;
+    w.drain().await;
+    assert_eq!(
+        w.items().await,
+        [(w.bob.get(), "mr_ai_draft".to_owned(), false)]
+    );
+    w.t.drop_now().await;
+}

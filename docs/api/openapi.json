@@ -549,6 +549,120 @@
         ],
         "type": "object"
       },
+      "AiDraftBody": {
+        "additionalProperties": false,
+        "description": "`GET …/merge-requests/{iid}/ai-draft`.",
+        "properties": {
+          "branch": {
+            "description": "For `unrecorded`: the draft branch's short name (`null` otherwise).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "draft": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiDraftDetailBody",
+                "description": "The draft (`null` for `none`)."
+              }
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "improvement": {
+            "description": "The merge request comes from `improve/<id>` (only those get a\ndraft).",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "\"AI の下書き（提案） / AI draft (suggestion)\".",
+            "type": "string"
+          },
+          "state": {
+            "description": "`none` (no draft was proposed), `proposed`, or `unrecorded` (the\ndraft branch exists but no proposal is recorded: see `branch`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "label",
+          "improvement",
+          "state",
+          "branch",
+          "draft"
+        ],
+        "type": "object"
+      },
+      "AiDraftDetailBody": {
+        "additionalProperties": false,
+        "description": "The proposed draft.",
+        "properties": {
+          "advice_id": {
+            "description": "The advice the draft came from.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "branch": {
+            "description": "The branch's short name (`ai-draft/<id>`).",
+            "type": "string"
+          },
+          "branch_head": {
+            "description": "The branch's head now (`null`: deleted).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch_state": {
+            "description": "`current` (the branch is at the draft commit), `moved` (someone\npushed to it since) or `deleted` (the branch is gone).",
+            "type": "string"
+          },
+          "commit_sha": {
+            "description": "The draft commit (one commit over `parent_sha`).",
+            "type": "string"
+          },
+          "dropped_edits": {
+            "description": "The model's edits the output checks dropped (not in the commit).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "description": "The asset paths the draft changes (at most 3).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "parent_sha": {
+            "description": "The merge request's head the draft was made over.",
+            "type": "string"
+          },
+          "proposed_at": {
+            "description": "UTC.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch",
+          "commit_sha",
+          "parent_sha",
+          "files",
+          "dropped_edits",
+          "advice_id",
+          "proposed_at",
+          "branch_state",
+          "branch_head"
+        ],
+        "type": "object"
+      },
       "AiReviewAdviceBody": {
         "additionalProperties": false,
         "description": "The newest advice.",
@@ -24916,6 +25030,55 @@
         },
         "summary": "What the act-as confirmation screen shows: the merge request, its head and the target's tip, whether sha is the head, the receiving integration (a person's web session; the intent's action allowed for them)",
         "x-forge-action": "ActAsConfirmView"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/ai-draft": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_ai_draft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiDraftBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's AI asset draft (plan 17 P17-10), as a suggestion only (it never changes, approves or merges the merge request): whether it comes from improve/<id> (improvement), state none, proposed, or unrecorded (the draft branch exists without its record: its name), and the draft's branch ai-draft/<id>, its one commit over the merge request's head, the asset paths it changes (at most 3), the count of the model's edits the checks dropped, the advice it came from, the time, and the branch now — current, moved (pushed to since) or deleted. Code-made facts only, never the model's words (as the merge request)",
+        "x-forge-action": "MergeRequestRead"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/ai-review": {

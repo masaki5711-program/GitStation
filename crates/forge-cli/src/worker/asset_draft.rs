@@ -47,8 +47,8 @@ use forge_core::llm::asset_draft::{
 };
 use forge_core::llm::{Advice, Purpose, SubjectKind};
 use forge_core::{
-    telemetry, ObjectId, ProjectAccessLoader as _, PushRecord, PushUpdateKind, PushedCommits,
-    PushedRef, RefName, RepoId, RepositoryState, RequestId,
+    telemetry, MergeRequestChange, ObjectId, ProjectAccessLoader as _, PushRecord, PushUpdateKind,
+    PushedCommits, PushedRef, RefName, RepoId, RepositoryState, RequestId,
 };
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::llm::asset_draft::{asks, candidates, target_facts, Candidate, MAX_CANDIDATES};
@@ -530,6 +530,20 @@ async fn one(
         }
     };
     record_push(deps.db, repo, &draft_branch, &head, &commit, request_id).await;
+    // ADR-0039 P17-10b: the proposal's own record (the merge request
+    // screen's notice and the author's notification).
+    let change = MergeRequestChange::AiDraftProposed {
+        merge_request: c.merge_request,
+        iid: c.iid,
+        branch: draft_branch.clone(), // clone: the record owns its facts
+        commit: commit.clone(),       // clone: as above
+        parent: head.clone(),         // clone: as above
+        files: files.iter().map(|(p, _)| p.as_str().to_owned()).collect(),
+        dropped_edits: u32::try_from(advised.advice.dropped_edits).unwrap_or(u32::MAX),
+        advice_id: advised.advice_id,
+        llm_request_id: advised.llm_request_id,
+    };
+    record_proposal(deps.db, c, change, request_id).await;
     count.proposed += 1;
     tracing::info!(
         target: "forge_cli",
@@ -636,6 +650,31 @@ async fn record_push(
                 .with_context("repo_id", repo.get())
                 .with_context("ref", branch.as_str().to_owned())
                 .with_context("parent", head.as_str().to_owned()),
+            request_id,
+        );
+    }
+}
+
+/// The proposal's audit row and event (`merge_request.ai_draft_proposed`).
+/// The branch stands whatever happens here (it ends the asking), so a
+/// failure is logged once with its code: the draft is then on its branch
+/// without the screen's notice and the author's notification (ADR-0039
+/// Amendment P17-10b, accepted).
+async fn record_proposal(
+    db: &Db,
+    c: &Candidate,
+    change: MergeRequestChange,
+    request_id: &RequestId,
+) {
+    if let Err(e) =
+        forge_db::llm::asset_draft::record_proposed(db, &system_ctx(request_id), c.project, change)
+            .await
+    {
+        telemetry::log_failure(
+            &e.with_context("phase", "asset_draft_proposal_record")
+                .with_context("task", NAME)
+                .with_context("project_id", c.project.get())
+                .with_context("merge_request_id", c.merge_request.get()),
             request_id,
         );
     }

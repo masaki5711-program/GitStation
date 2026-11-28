@@ -633,6 +633,31 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                 .expect("agent update opened");
                 assert!(recorded);
             }
+            // Plan 17 P17-10: the worker's AI asset draft.
+            MergeRequestTransition::AiDraftPropose => {
+                let change = forge_core::MergeRequestChange::AiDraftProposed {
+                    merge_request: drafted.id,
+                    iid: drafted.iid,
+                    branch: branch("ai-draft/ir-1"),
+                    commit: forge_core::ObjectId::parse(&"d".repeat(40)).expect("oid"),
+                    parent: forge_core::ObjectId::parse(&"a".repeat(40)).expect("oid"),
+                    files: vec!["skills/a.md".to_owned()],
+                    dropped_edits: 0,
+                    advice_id: 1,
+                    llm_request_id: 1,
+                };
+                let recorded =
+                    crate::llm::asset_draft::record_proposed(&t.db, &system(&request), p, change)
+                        .await
+                        .expect("ai draft proposed");
+                assert!(recorded);
+                // ADR-0039 P17-10b: the screen reads the record back.
+                let read = crate::llm::asset_draft::latest_proposed(&t.db, p, drafted.id)
+                    .await
+                    .expect("read")
+                    .expect("recorded");
+                assert_eq!(read.files, ["skills/a.md"]);
+            }
             // M4 C14: the end of an autofix attempt (the worker's).
             MergeRequestTransition::AutofixFinish => {
                 t.exec_superuser(&format!(

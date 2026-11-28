@@ -52,6 +52,7 @@ use crate::body::param_invalid;
 use crate::registry::{Dispatched, QueryParam, WriteParts};
 use crate::routes::write::{bounded, json, no_store};
 
+mod ai_draft;
 mod ai_review;
 mod approvals;
 mod auto_merge;
@@ -71,6 +72,9 @@ mod status;
 mod versions;
 mod work_items;
 
+pub use ai_draft::{
+    ai_draft, ai_draft_body, AiDraftBody, AiDraftDetailBody, AI_DRAFT, AI_DRAFT_OF, AI_DRAFT_SUFFIX,
+};
 pub use ai_review::{
     ai_review, ai_review_body, ai_review_feedback, ai_review_rerun, AiAdviceVote, AiAdviceVoteBody,
     AiReviewAdviceBody, AiReviewBody, AiReviewCheckBody, AiReviewFindingBody,

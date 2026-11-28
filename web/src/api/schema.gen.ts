@@ -2381,6 +2381,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/ai-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A merge request's AI asset draft (plan 17 P17-10), as a suggestion only (it never changes, approves or merges the merge request): whether it comes from improve/<id> (improvement), state none, proposed, or unrecorded (the draft branch exists without its record: its name), and the draft's branch ai-draft/<id>, its one commit over the merge request's head, the asset paths it changes (at most 3), the count of the model's edits the checks dropped, the advice it came from, the time, and the branch now — current, moved (pushed to since) or deleted. Code-made facts only, never the model's words (as the merge request) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_ai_draft"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/ai-review": {
         parameters: {
             query?: never;
@@ -4402,6 +4419,56 @@ export interface components {
         /** @description What the caller could do now (a hint; the route decides again). */
         AiAssetsViewerBody: {
             can_change: boolean;
+        };
+        /** @description `GET …/merge-requests/{iid}/ai-draft`. */
+        AiDraftBody: {
+            /** @description For `unrecorded`: the draft branch's short name (`null` otherwise). */
+            branch: string | null;
+            draft: null | components["schemas"]["AiDraftDetailBody"];
+            /** Format: int64 */
+            iid: number;
+            /**
+             * @description The merge request comes from `improve/<id>` (only those get a
+             *     draft).
+             */
+            improvement: boolean;
+            /** @description "AI の下書き（提案） / AI draft (suggestion)". */
+            label: string;
+            /**
+             * @description `none` (no draft was proposed), `proposed`, or `unrecorded` (the
+             *     draft branch exists but no proposal is recorded: see `branch`).
+             */
+            state: string;
+        };
+        /** @description The proposed draft. */
+        AiDraftDetailBody: {
+            /**
+             * Format: int64
+             * @description The advice the draft came from.
+             */
+            advice_id: number;
+            /** @description The branch's short name (`ai-draft/<id>`). */
+            branch: string;
+            /** @description The branch's head now (`null`: deleted). */
+            branch_head: string | null;
+            /**
+             * @description `current` (the branch is at the draft commit), `moved` (someone
+             *     pushed to it since) or `deleted` (the branch is gone).
+             */
+            branch_state: string;
+            /** @description The draft commit (one commit over `parent_sha`). */
+            commit_sha: string;
+            /**
+             * Format: int64
+             * @description The model's edits the output checks dropped (not in the commit).
+             */
+            dropped_edits: number;
+            /** @description The asset paths the draft changes (at most 3). */
+            files: string[];
+            /** @description The merge request's head the draft was made over. */
+            parent_sha: string;
+            /** @description UTC. */
+            proposed_at: string;
         };
         /** @description The newest advice. */
         AiReviewAdviceBody: {
@@ -16159,6 +16226,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfirmationBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_ai_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiDraftBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

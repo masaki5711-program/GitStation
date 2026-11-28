@@ -675,3 +675,33 @@
   background: var(--gs-color-active-surface);
   font-weight: var(--gs-font-weight-bold);
 }
+
+/* The AI asset draft (plan 17 P17-10): the same frame as the advice, its
+ * facts as a two-column list (the label, then the value). */
+.aiDraftFacts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  margin: var(--gs-space-2) 0;
+}
+
+.aiDraftFacts dt {
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.aiDraftFacts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.aiDraftFiles {
+  margin: 0 0 var(--gs-space-2);
+  padding-left: var(--gs-space-6);
+}
+
+.aiDraftFiles code,
+.aiDraftFacts code {
+  font-family: var(--gs-font-mono);
+  overflow-wrap: anywhere;
+}

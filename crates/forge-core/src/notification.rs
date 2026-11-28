@@ -34,6 +34,17 @@ pub enum NotificationKind {
     /// opened a merge request for you that updates the project's agent
     /// configuration (a newer version, or a revoked one replaced).
     MergeRequestAgentUpdate,
+    /// `merge_request.agent_update_opened` with origin `revocation`, told
+    /// to every Maintainer and Owner of the project besides the author
+    /// (ADR-0032 Amendment A9 残すこと, A13): a part version the project's
+    /// lock uses was revoked and the update merge request waits for a
+    /// Maintainer's approval. Never reached by [`Self::from_event`] alone:
+    /// it is the [`Self::maintainers_kind`] of [`Self::MergeRequestAgentUpdate`].
+    MergeRequestAgentRevoked,
+    /// `merge_request.ai_draft_proposed` (plan 17 P17-10): the local LLM
+    /// proposed a fix of an AI asset on its own branch beside your draft
+    /// improvement merge request (a proposal; nothing was applied).
+    MergeRequestAiDraft,
 }
 
 impl NotificationKind {
@@ -44,6 +55,8 @@ impl NotificationKind {
         Self::MergeRequestConflictPredicted,
         Self::MergeRequestRevertDrafted,
         Self::MergeRequestAgentUpdate,
+        Self::MergeRequestAgentRevoked,
+        Self::MergeRequestAiDraft,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -54,11 +67,30 @@ impl NotificationKind {
             Self::MergeRequestConflictPredicted => "mr_conflict_predicted",
             Self::MergeRequestRevertDrafted => "mr_revert_drafted",
             Self::MergeRequestAgentUpdate => "mr_agent_update",
+            Self::MergeRequestAgentRevoked => "mr_agent_revoked",
+            Self::MergeRequestAiDraft => "mr_ai_draft",
         }
     }
 
     pub fn parse(raw: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|k| k.as_str() == raw)
+    }
+
+    /// The kind the project's Maintainers and Owners (besides the author)
+    /// are told as when the event of `self` says so (the update merge
+    /// request was opened because of a revocation: the subscriber reads the
+    /// payload's `origin`). `None`: only the author is told.
+    pub fn maintainers_kind(self) -> Option<Self> {
+        match self {
+            Self::MergeRequestAgentUpdate => Some(Self::MergeRequestAgentRevoked),
+            Self::MergeRequestApproved
+            | Self::MergeRequestMerged
+            | Self::MergeRequestCommented
+            | Self::MergeRequestConflictPredicted
+            | Self::MergeRequestRevertDrafted
+            | Self::MergeRequestAgentRevoked
+            | Self::MergeRequestAiDraft => None,
+        }
     }
 
     /// The kind an event of `event` is told as, `None` for an event nobody
@@ -71,6 +103,7 @@ impl NotificationKind {
             EventType::MergeRequestConflictPredicted => Some(Self::MergeRequestConflictPredicted),
             EventType::MergeRequestRevertDrafted => Some(Self::MergeRequestRevertDrafted),
             EventType::MergeRequestAgentUpdateOpened => Some(Self::MergeRequestAgentUpdate),
+            EventType::MergeRequestAiDraftProposed => Some(Self::MergeRequestAiDraft),
             EventType::ProjectCreated
             | EventType::RepositoryCreated
             | EventType::TokenCreated
@@ -223,6 +256,7 @@ mod tests {
             notifying,
             [
                 ("merge_request.agent_update_opened", "mr_agent_update"),
+                ("merge_request.ai_draft_proposed", "mr_ai_draft"),
                 ("merge_request.approved", "mr_approved"),
                 ("merge_request.commented", "mr_commented"),
                 ("merge_request.conflict_predicted", "mr_conflict_predicted"),
@@ -230,15 +264,24 @@ mod tests {
                 ("merge_request.revert_drafted", "mr_revert_drafted"),
             ]
         );
-        // Every kind is reached by some event.
+        // Every kind is reached by some event, directly or as the
+        // Maintainers' kind of one.
         for kind in NotificationKind::ALL {
             assert!(
-                EventType::ALL
-                    .iter()
-                    .any(|e| NotificationKind::from_event(*e) == Some(*kind)),
+                EventType::ALL.iter().any(|e| {
+                    let direct = NotificationKind::from_event(*e);
+                    direct == Some(*kind)
+                        || direct.and_then(NotificationKind::maintainers_kind) == Some(*kind)
+                }),
                 "{kind:?} has no event"
             );
         }
+        // ADR-0032 A9 残すこと: only the agent update tells Maintainers.
+        let fanned: Vec<_> = NotificationKind::ALL
+            .iter()
+            .filter_map(|k| k.maintainers_kind().map(|m| (k.as_str(), m.as_str())))
+            .collect();
+        assert_eq!(fanned, [("mr_agent_update", "mr_agent_revoked")]);
     }
 
     #[test]

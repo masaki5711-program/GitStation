@@ -8,7 +8,8 @@
 //! | `merge_request.merged` | the author | the person who merged is the author |
 //! | `merge_request.commented` | the author | the commenter is the author, or the event is a thread being resolved or reopened |
 //! | `merge_request.conflict_predicted` (M3 X6) | the author of the event's merge request (each side of the pair has its own event) | — (the scan is the system's) |
-//! | `merge_request.agent_update_opened` (plan 16 A9) | the update merge request's author (the person it was opened for) | — (the builder's job is the system's) |
+//! | `merge_request.agent_update_opened` (plan 16 A9) | the update merge request's author (the person it was opened for); with `origin` `revocation` also every Maintainer and Owner of the project (kind `mr_agent_revoked`, ADR-0032 Amendment A13), each person once | — (the builder's job is the system's) |
+//! | `merge_request.ai_draft_proposed` (plan 17 P17-10) | the improvement merge request's author | — (the worker's draft is the system's) |
 //!
 //! Every other event concerns nobody (decided in `NotificationKind::
 //! from_event`, which matches every event type). A "review requested"
@@ -150,7 +151,30 @@ fn actor_of(
         // Plan 16 A9: the agent builder's update job opened the merge
         // request for its author (actor system); the author is told.
         NotificationKind::MergeRequestAgentUpdate => Some(None),
+        // ADR-0032 A13: the Maintainers' notice of the same event.
+        NotificationKind::MergeRequestAgentRevoked => Some(None),
+        // Plan 17 P17-10: the worker's local LLM proposed a draft (actor
+        // system); the improvement merge request's author is told.
+        NotificationKind::MergeRequestAiDraft => Some(None),
     })
+}
+
+/// Whether the project's Maintainers are told of this event too (ADR-0032
+/// Amendment A13): only an agent update opened because of a revocation.
+fn tells_maintainers(event: &SourceEvent, kind: NotificationKind) -> Result<bool, ForgeError> {
+    if kind.maintainers_kind().is_none() {
+        return Ok(false);
+    }
+    let origin = event
+        .payload
+        .get("origin")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| bad_payload(event, "origin"))?;
+    match forge_core::AgentUpdateOrigin::parse(origin) {
+        Some(forge_core::AgentUpdateOrigin::Revocation) => Ok(true),
+        Some(forge_core::AgentUpdateOrigin::Update) => Ok(false),
+        None => Err(bad_payload(event, "origin")),
+    }
 }
 
 impl Notify {
@@ -178,18 +202,48 @@ impl Notify {
             );
             return Ok(());
         };
-        if actor == Some(author) {
+        if actor != Some(author) {
             // Nobody needs to be told about what they did themselves.
-            return Ok(());
+            self.tell(event, tx, author, kind, project, iid, actor)
+                .await?;
         }
+        if let (true, Some(maintainers_kind)) =
+            (tells_maintainers(event, kind)?, kind.maintainers_kind())
+        {
+            // ADR-0032 A13: every Maintainer and Owner besides the author
+            // (who was told above), each once; the table's (event, person)
+            // key would refuse a second row anyway.
+            for person in notify::project_maintainers(tx, project).await? {
+                if person == author || Some(person) == actor {
+                    continue;
+                }
+                self.tell(event, tx, person, maintainers_kind, project, iid, actor)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One recipient's mail row (unless paused) and in-app item.
+    #[allow(clippy::too_many_arguments)] // the facts of one notification
+    async fn tell(
+        &self,
+        event: &SourceEvent,
+        tx: &mut DerivedTx<'_>,
+        recipient: UserId,
+        kind: NotificationKind,
+        project: forge_core::ids::ProjectId,
+        iid: i64,
+        actor: Option<UserId>,
+    ) -> Result<(), ForgeError> {
         if !self.paused {
-            let initial = match decide(&self.db, author, kind, project, iid).await? {
+            let initial = match decide(&self.db, recipient, kind, project, iid).await? {
                 Decision::Send { .. } => Initial::Queue,
                 Decision::Skip(reason) => Initial::Skip(reason),
                 Decision::Suppress(reason) => Initial::Suppress(reason),
             };
             let new = NewNotification {
-                user: author,
+                user: recipient,
                 kind,
                 project,
                 iid,
@@ -199,9 +253,9 @@ impl Notify {
             notify::enqueue(tx, event, &new, &self.delivery).await?;
         }
         // M3 U4: the in-app item for the same recipient, mail on or off.
-        if decide_in_app(&self.db, author, kind, project, iid).await? {
+        if decide_in_app(&self.db, recipient, kind, project, iid).await? {
             let item = in_app::NewItem {
-                user: author,
+                user: recipient,
                 kind,
                 project,
                 iid,
