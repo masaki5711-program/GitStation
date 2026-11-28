@@ -133,3 +133,25 @@ async fn a_busy_revision_lock_fails_closed_and_idle_locks_are_dropped() {
         .collect();
     assert_eq!(projects, vec![ProjectId::new(2)]);
 }
+
+/// Review of the fail-closed rule (2026-11-28): a git failure a retry may
+/// not see again refuses the create retryably (FG-DOC-0009 `reason=git`);
+/// one that says the repository cannot be read stays permanent.
+#[test]
+fn transient_git_failures_are_the_ones_a_retry_may_not_see() {
+    for code in [
+        ErrorCode::GitTimeout,
+        ErrorCode::GitBusy,
+        ErrorCode::GitUnavailable,
+        ErrorCode::GitBatchFailed,
+    ] {
+        assert!(transient_git(&ForgeError::new(code)), "{code:?}");
+    }
+    for code in [
+        ErrorCode::GitProcessFailed,
+        ErrorCode::Internal,
+        ErrorCode::DbUnavailable,
+    ] {
+        assert!(!transient_git(&ForgeError::new(code)), "{code:?}");
+    }
+}

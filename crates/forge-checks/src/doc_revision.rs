@@ -288,11 +288,16 @@ pub fn unchecked(reason: &'static str, project: ProjectId) -> ForgeError {
 }
 
 /// A git failure a retry may not see again: a timeout, git busy, git that
-/// could not start.
+/// could not start, a long-lived `cat-file` process that died mid-answer
+/// (FG-GIT-0032: killed and never reused; the browse layer answers by the
+/// one-shot command, so it is listed in case one ever reaches here).
 fn transient_git(e: &ForgeError) -> bool {
     matches!(
         e.code(),
-        ErrorCode::GitTimeout | ErrorCode::GitBusy | ErrorCode::GitUnavailable
+        ErrorCode::GitTimeout
+            | ErrorCode::GitBusy
+            | ErrorCode::GitUnavailable
+            | ErrorCode::GitBatchFailed
     )
 }
 
