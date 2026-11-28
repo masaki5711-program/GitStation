@@ -934,8 +934,8 @@ pub struct NewBatch {
 /// S9) the parent must be the queue's deepest live batch, its train must
 /// be `new.base`, and fewer than `new.max_depth` batches may be live — the
 /// new batch is one deeper. `None`: that does not hold any more, or a
-/// member is no longer `queued` (dequeued meanwhile) — nothing written,
-/// the worker builds again.
+/// member is no longer `queued` (dequeued meanwhile), or the project is
+/// gone — nothing written, the worker builds again.
 pub async fn create_batch(db: &Db, new: &NewBatch) -> Result<Option<i64>, ForgeError> {
     const QUERY: &str = "merge_queue.create_batch";
     if new.members.is_empty() || new.members.len() > MAX_BATCH {
@@ -951,8 +951,11 @@ pub async fn create_batch(db: &Db, new: &NewBatch) -> Result<Option<i64>, ForgeE
             .map_err(|e| query_error(QUERY, e))?;
         // The project before the queue (the order of the review commands:
         // the batch's row references the project, a deadlock otherwise). A
-        // project that is gone fails the batch's insert below on its key.
-        let _project_found = crate::projects::key_share_first(&mut tx, new.project, QUERY).await?;
+        // project that is gone (purged with its queue) writes nothing: the
+        // worker's next build finds no queue to build for.
+        if !crate::projects::key_share_first(&mut tx, new.project, QUERY).await? {
+            return Ok(None);
+        }
         let _locked: i64 =
             sqlx::query_scalar("SELECT id FROM forge.merge_queues WHERE id = $1 FOR UPDATE")
                 .bind(new.queue)

@@ -186,6 +186,50 @@ pub async fn merge_results(db: &Db, mr: MergeRequestId) -> Result<Vec<MergeResul
         .collect()
 }
 
+/// Lock the subject of a merge result write in the review commands'
+/// order — the project (`FOR KEY SHARE`) before the merge request: the rows
+/// written reference both, a deadlock otherwise (a-burst 2026-11-28). The
+/// first read of the merge request (`project`, from before any lock) is
+/// checked again under its own `FOR KEY SHARE`: one removed or moved
+/// meanwhile (a purge while this waited for the project) is `None`, not
+/// the insert's foreign-key error. `Some`: its source branch, as locked.
+async fn lock_subject(
+    tx: &mut sqlx::PgConnection,
+    mr: MergeRequestId,
+    project: i64,
+    query: &'static str,
+) -> Result<Option<String>, ForgeError> {
+    if !crate::projects::key_share_first(&mut *tx, ProjectId::new(project), query).await? {
+        return Ok(None);
+    }
+    let locked: Option<(i64, String)> = sqlx::query_as(
+        "SELECT project_id, source_branch FROM forge.merge_requests WHERE id = $1 \
+         FOR KEY SHARE",
+    )
+    .bind(mr.get())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| query_error(query, e))?;
+    match locked {
+        Some((now, source)) if now == project => Ok(Some(source)),
+        Some((now, _)) => {
+            // Not a path forge has (a merge request never changes project):
+            // said, never dropped quietly.
+            tracing::warn!(
+                target: "forge_db",
+                event = "forge.review.merge_result_subject_moved",
+                query,
+                merge_request_id = mr.get(),
+                project_id = project,
+                now_project_id = now,
+                "the merge request is in another project than when it was read; the merge result is not stored"
+            );
+            Ok(None)
+        }
+        None => Ok(None),
+    }
+}
+
 /// Store `result` as the merge of `head` into `target` for `mr` and
 /// enqueue the merge request pipeline on it as `pipeline` says (module
 /// docs). `Ok(None)`: the merge request is gone (purged).
@@ -204,21 +248,18 @@ pub async fn record_merge_result(
             .begin()
             .await
             .map_err(|e| query_error(QUERY, e))?;
-        let subject: Option<(i64, String)> = sqlx::query_as(
-            "SELECT project_id, source_branch FROM forge.merge_requests WHERE id = $1",
-        )
-        .bind(mr.get())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| query_error(QUERY, e))?;
-        let Some((project, source)) = subject else {
+        let subject: Option<i64> =
+            sqlx::query_scalar("SELECT project_id FROM forge.merge_requests WHERE id = $1")
+                .bind(mr.get())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| query_error(QUERY, e))?;
+        let Some(project) = subject else {
             return Ok(None);
         };
-        // The project before the merge request (the review commands'
-        // order): the rows below reference both, a deadlock otherwise.
-        if !crate::projects::key_share_first(&mut tx, ProjectId::new(project), QUERY).await? {
+        let Some(source) = lock_subject(&mut tx, mr, project, QUERY).await? else {
             return Ok(None);
-        }
+        };
         let git_ref = stored_ref(mr, &source)?;
         let inserted: Option<String> = sqlx::query_scalar(
             "INSERT INTO forge.merge_result_refs \
@@ -331,21 +372,18 @@ pub async fn replace_merge_result(
             .begin()
             .await
             .map_err(|e| query_error(QUERY, e))?;
-        let subject: Option<(i64, String)> = sqlx::query_as(
-            "SELECT project_id, source_branch FROM forge.merge_requests WHERE id = $1",
-        )
-        .bind(mr.get())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| query_error(QUERY, e))?;
-        let Some((project, source)) = subject else {
+        let subject: Option<i64> =
+            sqlx::query_scalar("SELECT project_id FROM forge.merge_requests WHERE id = $1")
+                .bind(mr.get())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| query_error(QUERY, e))?;
+        let Some(project) = subject else {
             return Ok(None);
         };
-        // The project before the merge request (the review commands'
-        // order): the rows below reference both, a deadlock otherwise.
-        if !crate::projects::key_share_first(&mut tx, ProjectId::new(project), QUERY).await? {
+        let Some(source) = lock_subject(&mut tx, mr, project, QUERY).await? else {
             return Ok(None);
-        }
+        };
         let moved: Option<i64> = sqlx::query_scalar(
             "UPDATE forge.merge_result_refs SET result_sha = $5 \
              WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha = $3 \
