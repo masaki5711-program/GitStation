@@ -29,7 +29,7 @@
 //!
 //! **Deploying** ([`Deploy::request_release`], `DeployCreate`): an ordinary
 //! deployment of the release's commit, plus the release checks of
-//! `forge_db::deploy::request_release_decided` (the environment requires a
+//! `forge_db::deploy::request_bundle_decided` (the environment requires a
 //! person's approval; shadow → canary → prod). Approval is `DeployApprove`
 //! as for every deployment: people only, a web session, Maintainer or a
 //! named approver (ADR-0038 §3), never anyone behind the commit.
@@ -458,7 +458,7 @@ impl Deploy {
             files: i32::try_from(manifest.files.len()).map_err(|_| refused("too_many_files"))?,
         };
         let ctx = change_context(request, proof.principal(), user);
-        let stored = db::create_release_decided(
+        let stored = db::create_bundle_decided(
             &self.db,
             &ctx,
             project,
@@ -657,7 +657,7 @@ impl Deploy {
             committer_email: facts.committer_email,
         };
         let ctx = change_context(request, proof.principal(), user);
-        let stored = forge_db::deploy::request_release_decided(
+        let stored = forge_db::deploy::request_bundle_decided(
             &self.db,
             &ctx,
             (project, tier, sha.as_str()),

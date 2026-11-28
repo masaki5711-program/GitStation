@@ -11,7 +11,7 @@ use forge_errors::ErrorCode;
 use super::super::{put_environment_decided, put_target_decided, EnvironmentInput, TargetInput};
 use super::*;
 use crate::change::Actor;
-use crate::deploy::{request_decided, request_release_decided};
+use crate::deploy::{request_bundle_decided, request_decided};
 use crate::projects::{self, CreatedProject, NewProject};
 use crate::test_support::*;
 use crate::users::{self, NewUser};
@@ -142,7 +142,7 @@ impl World {
     }
 
     async fn release(&self, version: &str, commit: char) -> Result<StoredRelease, ForgeError> {
-        create_release_decided(
+        create_bundle_decided(
             &self.t.db,
             &ctx(Actor::User(self.alice), "req-release"),
             self.project(),
@@ -182,7 +182,7 @@ impl World {
         commit: char,
     ) -> Result<super::super::StoredDeployment, ForgeError> {
         let s = sha(commit);
-        request_release_decided(
+        request_bundle_decided(
             &self.t.db,
             &ctx(Actor::User(self.alice), "req-deploy"),
             (self.project(), tier, s.as_str()),

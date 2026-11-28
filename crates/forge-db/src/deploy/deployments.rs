@@ -367,7 +367,7 @@ fn not_allowed(reason: &'static str) -> ForgeError {
 ///
 /// Plan 17 P17-7: a project whose `ai_assets.enabled` is on deploys only
 /// its releases (`FG-AIASSET-0009 reason=release_required`; use
-/// [`request_release_decided`]).
+/// [`request_bundle_decided`]).
 pub async fn request_decided(
     db: &Db,
     ctx: &ChangeContext,
@@ -384,7 +384,7 @@ pub async fn request_decided(
 /// it (`FG-AIASSET-0009`: `release_not_found`, `approval_required`,
 /// `stage_skipped`). Allowed whatever `ai_assets.enabled` says now
 /// (turning it off stops new releases, not the existing ones).
-pub async fn request_release_decided(
+pub async fn request_bundle_decided(
     db: &Db,
     ctx: &ChangeContext,
     key: (ProjectId, DeployTier, &str),

@@ -284,7 +284,7 @@ pub async fn rollback_target(
 /// Errors (nothing written): `decide`'s, `verify`'s, `FG-AIASSET-0008
 /// reason=ai_assets_disabled` / `already_released` (the version or the
 /// commit), the database's.
-pub async fn create_release_decided(
+pub async fn create_bundle_decided(
     db: &Db,
     ctx: &ChangeContext,
     project: ProjectId,

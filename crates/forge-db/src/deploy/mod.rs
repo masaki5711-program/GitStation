@@ -552,8 +552,8 @@ pub use approvers::{
     ApproversInput, DeploymentApproval, EnvironmentApprovers,
 };
 pub use deployments::{
-    approve_decided, auto_request, get_deployment, list_deployments, request_decided,
-    request_release_decided, CommitInput, DeployApprovalInput, StoredDeployment, MAX_LIST,
+    approve_decided, auto_request, get_deployment, list_deployments, request_bundle_decided,
+    request_decided, CommitInput, DeployApprovalInput, StoredDeployment, MAX_LIST,
 };
 pub use pending::{pending_approvals, PendingDeployment, MAX_PENDING};
 pub use summary::{
