@@ -2,7 +2,9 @@
 //! `forge-deploy`):
 //!
 //! - `GET /api/v1/projects/{id}/ai-asset-releases` (`DeployRead`): the
-//!   newest releases (no manifest).
+//!   newest releases (no manifest) with their withdrawal and their state on
+//!   each stage, what runs on each stage and what a rollback would request,
+//!   and what the caller may press (the releases screen, P17-7b).
 //! - `POST …/ai-asset-releases` (`AiAssetReleaseCreate`: a person,
 //!   Maintainer and above, a session or an `api` token): `{"tag":
 //!   "assets/v2026.48.1"}` → `201` the signed release; `422 FG-AIASSET-0008`
@@ -18,14 +20,20 @@
 //!   `201` a deployment of the release last approved before the running
 //!   one, waiting for an approval; `409 FG-AIASSET-0009
 //!   no_rollback_target`.
+//! - `POST …/ai-asset-releases/{version}/withdrawal`
+//!   (`AiAssetReleaseWithdraw`, P17-7b): `{"reason"}` → `201` the
+//!   withdrawal; `409 FG-AIASSET-0010` (no such release, withdrawn
+//!   already, the reason).
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use forge_auth::ProjectCtx;
+use forge_auth::{Action, ProjectCtx, ResourceCtx};
 use forge_core::deploy::DeployTier;
 use forge_core::{parse_positive_id, ProjectId, UserId};
-use forge_deploy::{ChangeRequest, Deploy, StoredRelease};
+use forge_deploy::{
+    ChangeRequest, Deploy, ReleaseOverview, ReleaseRow, StageRow, StoredRelease, StoredWithdrawal,
+};
 use forge_errors::{ErrorCode, ForgeError};
 use serde::{Deserialize, Serialize};
 
@@ -45,8 +53,12 @@ pub const RELEASE_DEPLOYMENTS: &str =
     "/api/v1/projects/{id}/ai-asset-releases/{version}/deployments";
 /// `POST` a rollback.
 pub const ROLLBACKS: &str = "/api/v1/projects/{id}/ai-asset-rollbacks";
+/// `POST` a withdrawal (P17-7b).
+pub const WITHDRAWAL: &str = "/api/v1/projects/{id}/ai-asset-releases/{version}/withdrawal";
 /// The body cap.
 pub const MAX_BODY: usize = 1024;
+/// The withdrawal's body cap (a reason of 500 characters, 4 bytes each).
+pub const MAX_WITHDRAW_BODY: usize = 4096;
 
 /// `POST …/ai-asset-releases`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -62,6 +74,65 @@ pub struct NewRelease {
 pub struct ReleaseEnvironment {
     /// `pfs-ai-shadow` (dev), `pfs-ai-canary` (stg) or `pfs-ai-prod` (prod).
     pub environment: String,
+}
+
+/// `POST …/{version}/withdrawal`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WithdrawRelease {
+    /// Why the release is bad: 1 to 500 characters, one line.
+    pub reason: String,
+}
+
+/// A release's withdrawal (P17-7b): for good.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WithdrawalBody {
+    pub version: String,
+    pub reason: String,
+    pub withdrawn_by: i64,
+    pub withdrawn_at: String,
+}
+
+/// A release's state on one stage (lists only).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseStageBody {
+    /// `pfs-ai-shadow`, `pfs-ai-canary` or `pfs-ai-prod`.
+    pub environment: String,
+    /// `dev`, `stg` or `prod`.
+    pub tier: String,
+    /// Its newest deployment there (`null`: never requested there).
+    pub deployment_id: Option<i64>,
+    pub status: Option<String>,
+    /// A deployment of it succeeded there with a person's approval.
+    pub approved_success: bool,
+}
+
+/// One stage of the project (lists only).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StageBody {
+    /// `pfs-ai-shadow`, `pfs-ai-canary` or `pfs-ai-prod`.
+    pub environment: String,
+    pub tier: String,
+    /// The release of its last succeeded deployment (`null`: none, or no
+    /// release).
+    pub running_version: Option<String>,
+    /// The release a rollback would request (`null`: none to go back to).
+    pub rollback_version: Option<String>,
+}
+
+/// What the caller may press on the releases screen.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReleasesViewerBody {
+    /// `AiAssetReleaseCreate`.
+    pub can_release: bool,
+    /// `DeployCreate`: a stage request and a rollback.
+    pub can_request: bool,
+    /// `AiAssetReleaseWithdraw`.
+    pub can_withdraw: bool,
 }
 
 /// A release.
@@ -88,6 +159,19 @@ pub struct ReleaseBody {
     /// The signed manifest (one release only; `null` in lists).
     #[schema(value_type = Option<Object>, required = true)]
     pub manifest: Option<serde_json::Value>,
+    /// P17-7b: its withdrawal (`null`: not withdrawn).
+    #[schema(required = true)]
+    pub withdrawal: Option<WithdrawalBody>,
+    /// Signed by a key revoked since (lists only; `null` elsewhere).
+    #[schema(required = true)]
+    pub key_revoked: Option<bool>,
+    /// Shadow, canary, prod (lists only; `null` elsewhere).
+    #[schema(required = true)]
+    pub stages: Option<Vec<ReleaseStageBody>>,
+    /// The stage a request of it would be accepted on now (lists only;
+    /// `null`: withdrawn, a revoked key, one under way, or done).
+    #[schema(required = true)]
+    pub next_stage: Option<String>,
 }
 
 /// `GET …/ai-asset-releases`.
@@ -95,6 +179,9 @@ pub struct ReleaseBody {
 #[serde(deny_unknown_fields)]
 pub struct ReleaseList {
     pub releases: Vec<ReleaseBody>,
+    /// Shadow, canary, prod.
+    pub stages: Vec<StageBody>,
+    pub viewer: ReleasesViewerBody,
 }
 
 /// A rollback: the release gone back to and its deployment.
@@ -103,6 +190,55 @@ pub struct ReleaseList {
 pub struct RollbackBody {
     pub release: ReleaseBody,
     pub deployment: DeploymentBody,
+}
+
+fn withdrawal_body(w: StoredWithdrawal) -> WithdrawalBody {
+    WithdrawalBody {
+        version: w.version,
+        reason: w.reason,
+        withdrawn_by: w.withdrawn_by,
+        withdrawn_at: w.withdrawn_at,
+    }
+}
+
+fn row_body(row: ReleaseRow) -> ReleaseBody {
+    let mut body = release_body(row.release, false);
+    body.withdrawal = row.withdrawal.map(withdrawal_body);
+    body.key_revoked = Some(row.key_revoked);
+    body.next_stage = row.next_stage.map(|t| t.bundle_stage().to_owned());
+    body.stages = Some(
+        row.stages
+            .into_iter()
+            .map(|s| ReleaseStageBody {
+                environment: s.tier.bundle_stage().to_owned(),
+                tier: s.tier.as_str().to_owned(),
+                deployment_id: s.deployment_id,
+                status: s.status.map(|x| x.as_str().to_owned()),
+                approved_success: s.approved_success,
+            })
+            .collect(),
+    );
+    body
+}
+
+fn stage_body(s: StageRow) -> StageBody {
+    StageBody {
+        environment: s.tier.bundle_stage().to_owned(),
+        tier: s.tier.as_str().to_owned(),
+        running_version: s.running,
+        rollback_version: s.rollback_to,
+    }
+}
+
+fn viewer<B>(w: &WriteParts<ProjectCtx, B>) -> ReleasesViewerBody {
+    let may = |action: Action| {
+        forge_auth::authorize(w.proof.principal(), action, &w.proof.ctx().resource()).is_ok()
+    };
+    ReleasesViewerBody {
+        can_release: may(Action::AiAssetReleaseCreate),
+        can_request: may(Action::DeployCreate),
+        can_withdraw: may(Action::AiAssetReleaseWithdraw),
+    }
 }
 
 fn release_body(r: StoredRelease, with_manifest: bool) -> ReleaseBody {
@@ -121,6 +257,10 @@ fn release_body(r: StoredRelease, with_manifest: bool) -> ReleaseBody {
         created_by: r.created_by,
         created_at: r.created_at,
         manifest: with_manifest.then_some(r.manifest),
+        withdrawal: None,
+        key_revoked: None,
+        stages: None,
+        next_stage: None,
     }
 }
 
@@ -140,6 +280,7 @@ enum Shape {
     Releases,
     Release(String),
     Deployments(String),
+    Withdrawal(String),
     Rollbacks,
 }
 
@@ -173,6 +314,7 @@ fn path_of(raw_path: &str) -> Result<(ProjectId, Shape), ForgeError> {
         ["ai-asset-releases"] => Shape::Releases,
         ["ai-asset-releases", v] => Shape::Release(version(v)?),
         ["ai-asset-releases", v, "deployments"] => Shape::Deployments(version(v)?),
+        ["ai-asset-releases", v, "withdrawal"] => Shape::Withdrawal(version(v)?),
         ["ai-asset-rollbacks"] => Shape::Rollbacks,
         _ => return Err(param_invalid("path", "not_an_ai_asset_release_route")),
     };
@@ -241,6 +383,7 @@ macro_rules! body_loader {
 }
 body_loader!(NewRelease);
 body_loader!(ReleaseEnvironment);
+body_loader!(WithdrawRelease);
 
 fn change_request<B>(w: &WriteParts<ProjectCtx, B>) -> ChangeRequest {
     ChangeRequest {
@@ -264,17 +407,16 @@ fn respond(
 pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let w = request.into_write();
     let built = async {
-        let releases = bounded(
+        let ReleaseOverview { releases, stages } = bounded(
             &state,
             "ai_asset_releases",
-            deploy(&state)?.releases(&w.proof),
+            deploy(&state)?.release_overview(&w.proof),
         )
         .await?;
         json(ReleaseList {
-            releases: releases
-                .into_iter()
-                .map(|r| release_body(r, false))
-                .collect(),
+            releases: releases.into_iter().map(row_body).collect(),
+            stages: stages.into_iter().map(stage_body).collect(),
+            viewer: viewer(&w),
         })
     }
     .await;
@@ -300,7 +442,15 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
                 ForgeError::new(ErrorCode::NotFound).with_context("resource", "ai_asset_release")
             );
         };
-        json(release_body(r, true))
+        let withdrawn = bounded(
+            &state,
+            "ai_asset_release_withdrawal",
+            deploy(&state)?.release_withdrawal(&w.proof, &v),
+        )
+        .await?;
+        let mut body = release_body(r, true);
+        body.withdrawal = withdrawn.map(withdrawal_body);
+        json(body)
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
@@ -335,6 +485,26 @@ pub async fn request_deployment(
             .request_release(&change_request(&w), &w.proof, tier, &v)
             .await?;
         json(deployment_body(stored))
+    }
+    .await;
+    respond(&w.ctx, StatusCode::CREATED, built)
+}
+
+/// `POST …/ai-asset-releases/{version}/withdrawal` → `201` (P17-7b).
+pub async fn withdraw(
+    state: AppState,
+    request: Dispatched<ProjectCtx, WithdrawRelease>,
+) -> Response {
+    let path = request.raw_path().to_owned();
+    let w = request.into_write();
+    let built = async {
+        let (_, Shape::Withdrawal(v)) = path_of(&path)? else {
+            return Err(param_invalid("path", "not_a_release_withdrawal"));
+        };
+        let stored = deploy(&state)?
+            .withdraw_release(&change_request(&w), &w.proof, &v, &w.input.reason)
+            .await?;
+        json(withdrawal_body(stored))
     }
     .await;
     respond(&w.ctx, StatusCode::CREATED, built)

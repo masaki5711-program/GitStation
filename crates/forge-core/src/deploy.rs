@@ -494,6 +494,16 @@ pub enum DeployChange {
         key_id: String,
         files: i32,
     },
+    /// `ai_asset_release.withdrawn` (plan 17 P17-7b): a person marked a
+    /// release withdrawn, for good, with a reason (at most 500 characters,
+    /// one line).
+    BundleWithdrawn {
+        project: ProjectId,
+        release: i64,
+        version: String,
+        sha: String,
+        reason: String,
+    },
     /// The worker side (the system): `deployment.started` (`running`),
     /// `.succeeded`, `.failed`, `.rolled_back`, `.rollback_failed`,
     /// `.blocked`, `.abandoned` (a `failed` the sweep wrote).
@@ -520,6 +530,7 @@ impl DeployChange {
             Self::ApproversSet { .. } => "deploy_environment.approvers_set",
             Self::ApprovalSummarized { .. } => "deployment.approval_summarized",
             Self::BundleReleased { .. } => "ai_asset_release.created",
+            Self::BundleWithdrawn { .. } => "ai_asset_release.withdrawn",
             Self::Progress {
                 abandoned: true, ..
             } => "deployment.abandoned",
@@ -546,6 +557,7 @@ impl DeployChange {
             | Self::ApproversSet { project, .. }
             | Self::ApprovalSummarized { project, .. }
             | Self::BundleReleased { project, .. }
+            | Self::BundleWithdrawn { project, .. }
             | Self::Progress { project, .. } => *project,
         }
     }
@@ -561,6 +573,7 @@ impl DeployChange {
             | Self::Approved { .. }
             | Self::ApproversSet { .. }
             | Self::BundleReleased { .. }
+            | Self::BundleWithdrawn { .. }
             | Self::Progress { .. } => None,
         }
     }
@@ -691,6 +704,20 @@ impl DeployChange {
                 "digest": digest,
                 "key_id": key_id,
                 "files": files,
+            }),
+            Self::BundleWithdrawn {
+                project,
+                release,
+                version,
+                sha,
+                reason,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "release_id": release,
+                "kind": "pfs-ai-bundle",
+                "version": version,
+                "sha": sha,
+                "reason": reason,
             }),
             Self::Progress {
                 project,

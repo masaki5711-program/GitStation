@@ -1601,7 +1601,7 @@ fn ai_asset_release_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             r::RELEASES,
             Action::DeployRead,
-            "A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest (project readers)",
+            "A project's pfs-ai-bundle releases, newest first (at most 100): version, tag, the pinned commit, digest, key and signature, without the manifest; each with its withdrawal, a revoked key, its state on shadow / canary / prod and the stage a request would be accepted on now; per stage the running release and the rollback target; and what the caller may press (project readers)",
             r::OF_PROJECT,
             r::list,
         )
@@ -1645,6 +1645,16 @@ fn ai_asset_release_routes(registry: Registry<AppState>) -> Registry<AppState> {
             r::rollback,
         )
         .responds_created::<r::RollbackBody>(Verb::Post, r::ROLLBACKS)
+        .route_with_body(
+            Verb::Post,
+            r::WITHDRAWAL,
+            Action::AiAssetReleaseWithdraw,
+            "Mark a bad pfs-ai-bundle release withdrawn, for good, with a reason ({\"reason\"}: 1 to 500 characters, one line): it is never requested on a stage, approved, run or gone back to again (a fixed bundle is a new release); 201; 409 FG-AIASSET-0010 (no such release, withdrawn already, the reason); audited (people only; Maintainer, a session or an api token)",
+            r::MAX_WITHDRAW_BODY,
+            r::OF_PROJECT,
+            r::withdraw,
+        )
+        .responds_created::<r::WithdrawalBody>(Verb::Post, r::WITHDRAWAL)
 }
 
 /// A project's CI pipelines (M4 C2, plan 14 §4.2): read (metadata only),

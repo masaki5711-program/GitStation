@@ -2746,6 +2746,17 @@ pub enum AiAssetCommand {
         #[arg(long, value_parser = ["pfs-ai-shadow", "pfs-ai-canary", "pfs-ai-prod"], value_name = "STAGE")]
         environment: String,
     },
+    /// Mark a bad release withdrawn, for good, with a reason (plan 17
+    /// P17-7b): it is never deployed or rolled back to again.
+    ReleaseWithdraw {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_text, value_name = "VERSION")]
+        version: String,
+        /// Why it is bad: 1 to 500 characters, one line.
+        #[arg(long, value_parser = parse_text, value_name = "TEXT")]
+        reason: String,
+    },
 }
 
 /// `gstn ci variable` (M4 C6): a project's CI secrets on the server.

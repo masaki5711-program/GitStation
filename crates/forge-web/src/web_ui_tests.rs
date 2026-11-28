@@ -141,6 +141,8 @@ const SHELL_PATHS: &[&str] = &[
     // The deployment screens (plan 19 L5-6).
     "/acme/x/-/deployments",
     "/acme/x/-/deployments/12",
+    // The AI asset releases screen (plan 17 P17-7b).
+    "/acme/x/-/deployments/releases",
     // The webhook screens (M3 I2): a reload was a 404.
     "/acme/x/-/webhooks",
     "/acme/x/-/webhooks/3/deliveries",

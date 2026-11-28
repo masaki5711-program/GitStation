@@ -15,6 +15,7 @@ export const loaders = {
   pipeline: () => import('./repo/pipelines/PipelineScreen'),
   deployments: () => import('./repo/deploy/DeploymentsScreen'),
   deployment: () => import('./repo/deploy/DeploymentScreen'),
+  aiReleases: () => import('./repo/deploy/ReleasesScreen'),
   mergeQueue: () => import('./repo/mr/MergeQueueScreen'),
   schedules: () => import('./repo/pipelines/SchedulesScreen'),
   editor: () => import('./repo/editor/EditorScreen'),

@@ -1079,6 +1079,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/ai-asset-releases/{version}/deployments",
         Coverage::Command("ai-asset release-deploy"),
     ),
+    // Plan 17 P17-7b: the withdrawal of a bad release.
+    (
+        "POST",
+        "/api/v1/projects/{id}/ai-asset-releases/{version}/withdrawal",
+        Coverage::Command("ai-asset release-withdraw"),
+    ),
     (
         "POST",
         "/api/v1/projects/{id}/ai-asset-rollbacks",

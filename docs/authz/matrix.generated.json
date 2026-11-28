@@ -117,6 +117,7 @@
   { "action": "AutofixSettingsManage", "allow": 4, "deny": 22, "public": false, "git_operation": false },
   { "action": "AiAssetsSettingManage", "allow": 3, "deny": 26, "public": false, "git_operation": false },
   { "action": "AiAssetReleaseCreate", "allow": 5, "deny": 26, "public": false, "git_operation": false },
+  { "action": "AiAssetReleaseWithdraw", "allow": 4, "deny": 26, "public": false, "git_operation": false },
   { "action": "CiVariableManage", "allow": 6, "deny": 27, "public": false, "git_operation": false },
   { "action": "DeployRead", "allow": 6, "deny": 22, "public": false, "git_operation": false },
   { "action": "DeployEnvironmentManage", "allow": 4, "deny": 24, "public": false, "git_operation": false },

@@ -6,6 +6,10 @@
 //!   environment. An agent's token, a bot (`pfs-ai-bot`), a service
 //!   account (`matrix_rows_people.rs`), the auto-merge principal, a CI job
 //!   and an act-as credential (generated) are refused.
+//! - `AiAssetReleaseWithdraw` (P17-7b: a bad release marked withdrawn) is
+//!   the same callers': a person, Maintainer and above, a session or an
+//!   `api` token (`gstn ai-asset release-withdraw`); bots, agents' tokens,
+//!   Developers and Guests are refused.
 //! - Releases are read with `DeployRead` and deployed or rolled back with
 //!   `DeployCreate` (their rows: `matrix_rows_deploy.rs`); every stage is
 //!   approved with `DeployApprove` — people only, a web session — and the
@@ -17,8 +21,16 @@ use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Expect::Allow, Fixture as F, Row};
 
 const fn row(actor: W, fixture: F, expect: Expect) -> Row {
+    on(A::AiAssetReleaseCreate, actor, fixture, expect)
+}
+
+const fn withdraw(actor: W, fixture: F, expect: Expect) -> Row {
+    on(A::AiAssetReleaseWithdraw, actor, fixture, expect)
+}
+
+const fn on(action: A, actor: W, fixture: F, expect: Expect) -> Row {
     Row {
-        action: A::AiAssetReleaseCreate,
+        action,
         actor,
         fixture,
         expect,
@@ -51,6 +63,23 @@ pub(crate) const AI_RELEASE_ROWS: &[Row] = &[
     row(W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
     row(W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
     row(W::Maintainer, F::DeletedProject, deny(E::PendingDeletion)),
+    // P17-7b: the withdrawal of a bad release.
+    withdraw(W::Maintainer, F::PrivateProject, Allow),
+    withdraw(W::Owner, F::PrivateProject, Allow),
+    withdraw(W::Admin, F::PrivateProject, Allow),
+    withdraw(W::MaintainerTokenApi, F::PrivateProject, Allow),
+    withdraw(W::MaintainerTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
+    withdraw(W::Developer, F::PrivateProject, deny(E::Forbidden)),
+    withdraw(W::DevTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    withdraw(W::Reporter, F::PrivateProject, deny(E::Forbidden)),
+    withdraw(W::Guest, F::PrivateProject, deny(E::Forbidden)),
+    withdraw(W::AgentMaintainerTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    withdraw(W::AgentOwnerTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    withdraw(W::BotAdminSession, F::PrivateProject, deny(E::Forbidden)),
+    withdraw(W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    withdraw(W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+    withdraw(W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
+    withdraw(W::Maintainer, F::DeletedProject, deny(E::PendingDeletion)),
 ];
 
 #[cfg(test)]
@@ -102,6 +131,36 @@ mod tests {
             &PROD.resource(W::Maintainer),
         )
         .expect("a person approves");
+    }
+
+    #[test]
+    fn withdraw_denied_for_bot_agent_guest_and_service_account() {
+        for actor in [
+            W::BotAdminSession,
+            W::BotMaintainerTokenApi,
+            W::AgentMaintainerTokenApi,
+            W::AgentOwnerTokenApi,
+            W::ServiceAccountAdminSession,
+            W::ServiceAccountMaintainerTokenApi,
+            W::AutoMerge,
+            W::Guest,
+        ] {
+            assert!(
+                crate::authorize(
+                    &actor.principal(),
+                    A::AiAssetReleaseWithdraw,
+                    &F::PrivateProject.resource(actor)
+                )
+                .is_err(),
+                "{actor:?}"
+            );
+        }
+        crate::authorize(
+            &W::Maintainer.principal(),
+            A::AiAssetReleaseWithdraw,
+            &F::PrivateProject.resource(W::Maintainer),
+        )
+        .expect("a Maintainer withdraws");
     }
 
     #[test]

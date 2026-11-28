@@ -462,3 +462,80 @@ async fn a_release_is_deployed_in_stage_order_and_rolled_back_to_the_last_approv
     assert_eq!(d.status, DeploymentStatus::PendingApproval);
     w.t.drop_now().await;
 }
+
+// ------------------------------------------------- P17-7b: withdrawals
+
+#[tokio::test]
+async fn a_withdrawn_release_is_marked_and_never_deployed_again() {
+    let w = world().await;
+    w.environments().await;
+    for (n, c) in [(1, 'a'), (2, 'b')] {
+        let tag = format!("assets/v2026.48.{n}");
+        w.source.tag_to(&tag, &sha(c));
+        w.source
+            .commit(&sha(c), &[("models/models.toml", &model())]);
+        w.bench(c, "success").await;
+        w.release(&tag).await.expect("released");
+    }
+    w.ran(DeployTier::Dev, 'a').await;
+    w.ran(DeployTier::Dev, 'b').await;
+    let read = w.proof(w.alice, Action::DeployRead).await;
+    let before = w.deploy.release_overview(&read).await.expect("overview");
+    assert_eq!(before.releases.len(), 2);
+    assert_eq!(before.releases[0].release.version, "v2026.48.2");
+    assert_eq!(before.releases[0].next_stage, Some(DeployTier::Stg));
+    let shadow = &before.stages[0];
+    assert_eq!(shadow.tier, DeployTier::Dev);
+    assert_eq!(shadow.running.as_deref(), Some("v2026.48.2"));
+    assert_eq!(shadow.rollback_to.as_deref(), Some("v2026.48.1"));
+
+    let p = w.proof(w.bob, Action::AiAssetReleaseWithdraw).await;
+    let e = w
+        .deploy
+        .withdraw_release(&request("req-w"), &p, "v2026.48.1", " ")
+        .await
+        .expect_err("no reason");
+    assert_eq!(e.code(), ErrorCode::BundleWithdrawRefused);
+    assert_eq!(reason(&e), "reason_invalid");
+    let stored = w
+        .deploy
+        .withdraw_release(&request("req-w"), &p, "v2026.48.1", "wrong playbook row")
+        .await
+        .expect("withdrawn");
+    assert_eq!(stored.withdrawn_by, w.bob.get());
+    let e = w
+        .deploy
+        .withdraw_release(&request("req-w"), &p, "v2026.48.1", "again")
+        .await
+        .expect_err("twice");
+    assert_eq!(reason(&e), "already_withdrawn");
+
+    let after = w.deploy.release_overview(&read).await.expect("overview");
+    let old = &after.releases[1];
+    assert_eq!(
+        old.withdrawal.as_ref().map(|w| w.reason.as_str()),
+        Some("wrong playbook row")
+    );
+    assert_eq!(
+        old.next_stage, None,
+        "a withdrawn release is offered nowhere"
+    );
+    assert_eq!(
+        after.stages[0].rollback_to, None,
+        "nothing older to go back to"
+    );
+    let create = w.proof(w.alice, Action::DeployCreate).await;
+    let e = w
+        .deploy
+        .rollback_release(&request("req-r"), &create, DeployTier::Dev)
+        .await
+        .expect_err("the only older release is withdrawn");
+    assert_eq!(reason(&e), "no_rollback_target");
+    let e = w
+        .deploy
+        .request_release(&request("req-d"), &create, DeployTier::Stg, "v2026.48.1")
+        .await
+        .expect_err("withdrawn");
+    assert_eq!(e.code(), ErrorCode::BundleDeployRefused);
+    w.t.drop_now().await;
+}

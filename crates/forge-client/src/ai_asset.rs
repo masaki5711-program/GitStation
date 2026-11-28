@@ -21,6 +21,10 @@
 //! manifest); `release-deploy` and `rollback` request a stage deployment,
 //! which a person approves in the browser.
 //!
+//! Plan 17 P17-7b: `gstn ai-asset release-withdraw --project <id> --version
+//! v… --reason "…"` marks a bad release withdrawn for good (`api`, a
+//! Maintainer).
+//!
 //! Exit codes: 1 with `FG-AIASSET-0001` when the assets have a problem;
 //! `FG-CLI-*` when they cannot be read.
 
@@ -154,6 +158,27 @@ pub fn ai_asset(cli: &Cli, cmd: &AiAssetCommand, env: EnvFn<'_>, io: &mut Io<'_>
             let human = format!(
                 "Requested the rollback of {environment} to {}: a person approves it in the browser",
                 crate::error::sanitize(to)
+            );
+            emit(io, cli, out, &human)
+        }
+        AiAssetCommand::ReleaseWithdraw {
+            project,
+            version,
+            reason,
+        } => {
+            check_version(version)?;
+            let c = crate::hosting::client(cli, env, io)?;
+            let path = format!("/api/v1/projects/{project}/ai-asset-releases/{version}/withdrawal");
+            let out = crate::hosting::call(
+                &c,
+                crate::http::Method::Post,
+                &path,
+                &[],
+                Some(&json!({ "reason": reason })),
+            )?;
+            let human = format!(
+                "Withdrew {version}: it is never deployed or rolled back to again ({})",
+                crate::error::sanitize(out.get("reason").and_then(Value::as_str).unwrap_or("?"))
             );
             emit(io, cli, out, &human)
         }

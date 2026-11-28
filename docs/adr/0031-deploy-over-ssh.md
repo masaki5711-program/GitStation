@@ -135,4 +135,68 @@
   PFS-5（ローダー）の形が決まったら v2 のマニフェストで足す。
 - `clippy.toml` の `disallowed-methods` に `forge_agent::bundle::sign_bundle` を足す変更は、エージェントモデルの設定の保護のフックが止めたため
   入れていない（人が足す。`read_signing_seed` の禁止は効いており、forge-deploy の 1 か所だけが `#[allow]` で呼ぶ）。
-- 段の画面（リリースの一覧・承認の画面に版とマニフェストの要約）は無い（承認は既存のデプロイの承認の画面で行う）。
+- 段の画面（リリースの一覧・承認の画面に版とマニフェストの要約）は無い（承認は既存のデプロイの承認の画面で行う）。→ リリースの一覧と段の画面・取り下げは
+  Amendment P17-7b で入れた。
+
+## Amendment 2026-11-28（計画 17 P17-7b `feat/ui-ai-bundle-releases`: リリースの取り下げ・リリースの画面）
+
+P17-7 の残すことのうち、取り下げの印と段の画面を入れた。利用者は不在で「推奨を選ぶ」と言っているので、次のとおり決めた。
+
+1. **取り下げは別の表** `forge.ai_bundle_withdrawals`（追記のマイグレーション `20270115120000`、`audited`、資源はプロジェクト）。リリースの行は
+   変わらない（`ai_bundle_releases_guard`）ので、印は行を足して付ける。列は `release_id`（リリースへの外部キー。リリースは消えない）・
+   `project_id`・`reason`（1〜500 文字、空白だけでない、制御文字なし。CHECK とコードの両方）・`withdrawn_by`・`withdrawn_at`。
+   `UNIQUE (release_id)`: 1 リリースに 1 回。守り `ai_bundle_withdrawals_guard` が UPDATE と DELETE を断る: **取り下げは元に戻さない**
+   （直した束は新しい tag の新しいリリース。戻せる印にすると「誰がいつ戻したか」の規則と画面が要り、PFS-5 のローダーの信じ方も揺れる）。
+   forge_app には SELECT と 4 列の INSERT だけ。挿入は `ON CONFLICT (release_id) DO NOTHING`（同時の 2 回目も何も書かない）で、
+   監査の行 `ai_asset_release.withdrawn`（版・SHA・理由）と同じトランザクション。
+2. **取り下げた版は使わない**: 段への要求（`check_release_request`、FG-AIASSET-0009 `release_withdrawn`）、**承認**（`approve_decided` が
+   ロックの下で確かめる。取り下げの前に出ていた要求も承認できない）、**worker の実行**（`claim_next` が `blocked`、`error_code` は
+   FG-AIASSET-0009、`reason=release_withdrawn`。取り下げの前に承認済みで並んでいたもの）、**手の戻し**（`rollback_target`）と **worker の
+   自動の戻し**（`approved_older_release_sql`）の先。どちらも新しい条件 `release_usable_sql`（鍵が失効していない かつ 取り下げていない）。
+   待っている要求の行は自分では消さない（承認の期限で切れる。承認も実行も通らない）。
+3. **権限**: 新しい操作 `AiAssetReleaseWithdraw`。作成（`AiAssetReleaseCreate`）と同じ呼ぶ側: 人だけ、Maintainer 以上、セッションか人の
+   `api` トークン（`gstn ai-asset release-withdraw`）。ボット（`pfs-ai-bot`）・エージェントのトークン・サービスアカウント・自動マージの主体・
+   CI のジョブ・代理・Developer・Reporter・Guest は断る。権限の表に allow / deny の行（`matrix_rows_ai_release.rs`、`matrix_rows_people.rs`）と
+   テスト `withdraw_denied_for_bot_agent_guest_and_service_account`。悪い版を止めるのは急ぐことがあるので 2 人の目にはしない
+   （止める向きの操作で、何も入れない。監査とログ `forge.deploy.bundle_withdrawn` に `credential_id`）。
+4. **誤りのコード** FG-AIASSET-0010 `BundleWithdrawRefused`（info、409）: `release_not_found`・`already_withdrawn`・`reason_invalid`。
+   runbook `ai-asset-rollback` の Mitigate に取り下げの手順を足した。
+5. **ルート** `POST /api/v1/projects/{id}/ai-asset-releases/{version}/withdrawal {"reason"}` → `201`（本文の上限 4096 バイト: 500 文字 × 4 バイト）。
+   `GET …/ai-asset-releases` は画面の材料も返す（`DeployRead` のまま）: 各リリースに `withdrawal`・`key_revoked`・`stages`（影・カナリア・本番
+   それぞれの最新のデプロイの id と状態、承認つきで成功したか）・`next_stage`（いま要求が通る段。取り下げ・失効した鍵・その段で進行中・
+   本番まで済み なら `null`）、段ごとに `running_version` と `rollback_version`（`rollback_target` と同じ規則）、`viewer`（`can_release`・
+   `can_request` = `DeployCreate`・`can_withdraw`。`authorize()` で決める）。`GET …/{version}` は `withdrawal` を返す。一覧は以前どおり
+   平らな配列（gstn の `releases` の表示は変わらない）。`stages` などは一覧だけで、1 件・作成では `null`（`manifest` の逆）。
+6. **画面** `/<project>/-/deployments/releases`（新しい `RouteWord` を作らず、既存の `deployments` の下。SPA の殻のテストに 1 行）:
+   段ごとのカード（動いている版、戻す要求のボタン）と、リリースごとの版・tag・コミット・ベンチ（合格とチェックの実行の id。
+   緑でなければリリースは作られない）・鍵の id（失効なら文字で）・ファイル数、段ごとの状態（言葉と記号のバッジ、デプロイへのリンク）、
+   「なぜ止まっているか・次に何を押すか」の 1 行（計画 08）、取り下げは見出しの「取り下げ済み」と理由の文で示す（色だけにしない）。
+   ボタン（次の段への要求・戻し・取り下げ）は `viewer` が許し、かつサーバーが通す状態（`next_stage`・`rollback_version`・未取り下げ）の
+   ときだけ出し、どれも確かめの 1 手を挟む。取り下げは理由を必須にし、送る前に同じ規則で確かめる。**承認はこの画面に置かない**:
+   承認待ちの段は「デプロイ #N で承認する」で既存の承認の画面へ。デプロイの一覧は `ai_assets.enabled` のプロジェクトでだけ
+   この画面へのリンクを出す。ja / en / id、読み込み中・空・誤り（`user_message` と `request_id`）の状態。
+7. **マニフェストの「プレイブックの行」「元の MR と改善要求の一覧」（計画 §1.8）は今回も入れない**: 署名する文の形（v1）を変えることになり、
+   PFS-5（ローダー）の読み方と一緒に決める v2 の仕事で、安くない。プレイブックは引き続きファイルの SHA-256 で覆う。
+
+### P17-7b の独立レビュー（2026-11-28、deploy-safety-reviewer・design-reviewer）で変えた点
+
+- （deploy HIGH、直した）取り下げと worker の `claim_next` の競り合い: 取り下げはプロジェクトの共有のロックしか取らず、claim が
+  「取り下げていない」と読んだ直後に取り下げが確定すると、取り下げた版が走りえた。取り下げは **そのプロジェクトの環境の行を id の順に
+  `FOR UPDATE`**（claim が取るのと同じロック）してから書く。claim が先なら取り下げは待ってその結果を読み、取り下げが先なら claim は
+  確定した取り下げを読む（リリースの行は forge_app に UPDATE の権限がないのでロックできない）。
+- （deploy HIGH、直した）走っているデプロイの自動の戻し先（`previous_sha`）は開始のときに決まり、後の取り下げを見ない。走っている
+  デプロイの戻し先になっている版の取り下げは FG-AIASSET-0010 `rollback_target_running`（`environment` つき）で断り、終わってからやり直す
+  （数分。上のロックで開始との競り合いもない）。テスト `a_release_a_running_deployment_would_roll_back_to_waits_for_its_end`。
+- （deploy MEDIUM、直した）普通の SHA のデプロイの戻し先にも、取り下げた版の SHA を選ばない（`a_plain_deployment_never_rolls_back_to_a_withdrawn_release`）。
+- （design HIGH、直した）リリースごとの 1 行を箱にせず太字の文にし、待ち・止まりのときだけ左の線（`lineWaiting`・`lineBlocked`）。
+  戻し先がない段は「戻せる前の版はありません」、取り下げは目立たないボタン（確かめの段で danger）、空の状態のコマンドにコピーのボタン、
+  結果の `role="status"` は空なら場所を取らない。
+- （受け入れ）取り下げの行の `project_id` はリリースの行から読んだ値で書く（複合の外部キーは足さない）。取り下げの前に並んでいた
+  承認済みの行はその場で `blocked` にせず、claim で止める。ベンチは「合格（チェックの実行 #N）」のまま（緑でなければリリースは無い）。
+
+### 残すこと（P17-7b の後）
+
+- マニフェスト v2（プレイブックの行、元の MR と改善要求の id）。PFS-5 の形が決まってから。
+- 画面からのリリースの作成（今は `gstn ai-asset release` だけ。`viewer.can_release` は返している）。
+- 取り下げの前に出ていた承認待ちの要求の行を、その場で `blocked` にするか（今は承認と実行で止め、行は期限で切れる）。
+- `clippy.toml` の `sign_bundle` の禁止（P17-7 の残すことのまま、人が足す）。

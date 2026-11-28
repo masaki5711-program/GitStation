@@ -112,6 +112,7 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "llm_requests_guard",
             "llm_advice_feedback_guard",
             "ai_bundle_releases_guard",
+            "ai_bundle_withdrawals_guard",
         ]
     );
 }

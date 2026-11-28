@@ -134,7 +134,14 @@ pub async fn claim_next(db: &Db, request_id: &RequestId) -> Result<Claim, ForgeE
             return Ok(Settle::Discard(Claim::Idle));
         }
         let needs_approval = requires_approval || tier.is_prod();
-        let blocked = if frozen {
+        // Plan 17 P17-7b: a release withdrawn after it was requested or
+        // approved never runs.
+        let withdrawn =
+            super::ai_bundle::withdrawn_at(&mut tx, ProjectId::new(project_id), &sha, QUERY)
+                .await?;
+        let blocked = if withdrawn {
+            Some((ErrorCode::BundleDeployRefused, "release_withdrawn"))
+        } else if frozen {
             Some((ErrorCode::DeployFrozen, "frozen"))
         } else if needs_approval && !(approved && approval_live) {
             Some((ErrorCode::DeployApprovalRequired, "approval_expired"))
@@ -178,7 +185,7 @@ pub async fn claim_next(db: &Db, request_id: &RequestId) -> Result<Claim, ForgeE
         // key that is not revoked (never to a plain SHA, never forward to a
         // newer release: a failed rollback does not return to the release it
         // left); any other deployment to the environment's last succeeded
-        // SHA, as before.
+        // SHA, as before — never a withdrawn release's (P17-7b).
         let sha_bind = sha.clone(); // clone: the step owns its bind
         let previous_sha: Option<String> = tx
             .step(|c| async move {
@@ -188,6 +195,9 @@ pub async fn claim_next(db: &Db, request_id: &RequestId) -> Result<Claim, ForgeE
                        AND (NOT EXISTS (SELECT 1 FROM forge.ai_bundle_releases r \
                               WHERE r.project_id = d.project_id AND r.commit_sha = $2) \
                          OR {}) \
+                       AND NOT EXISTS (SELECT 1 FROM forge.ai_bundle_withdrawals w \
+                         JOIN forge.ai_bundle_releases wr ON wr.id = w.release_id \
+                         WHERE wr.project_id = d.project_id AND wr.commit_sha = d.sha) \
                      ORDER BY d.finished_at DESC, d.id DESC LIMIT 1",
                     super::ai_bundle::approved_older_release_sql("d", "$2")
                 ))

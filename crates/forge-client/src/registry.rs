@@ -1596,6 +1596,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["POST /api/v1/projects/{id}/ai-asset-rollbacks"],
         output: r#"{"type":"object","required":["release","deployment"]}"#,
     },
+    // Plan 17 P17-7b: the withdrawal of a bad release.
+    CommandSpec {
+        name: "ai-asset release-withdraw",
+        summary: "Mark a bad pfs-ai-bundle release withdrawn, for good, with a reason: it is never requested on a stage, approved, run or rolled back to again (a fixed bundle is a new release). FG-AIASSET-0010 when there is no such release, it is withdrawn already or the reason is missing (a Maintainer, people only).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--version", "option", true, "The release v<yyyy>.<ww>.<n>."),
+            arg("--reason", "option", true, "Why it is bad: 1 to 500 characters, one line."),
+        ],
+        examples: &["gstn ai-asset release-withdraw --project 7 --version v2026.48.1 --reason \"wrong threshold in playbook P-3\""],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/ai-asset-releases/{version}/withdrawal"],
+        output: r#"{"type":"object","required":["version","reason","withdrawn_by","withdrawn_at"]}"#,
+    },
     CommandSpec {
         name: "deploy envs",
         summary: "A project's deployment environments (dev, stg, prod): approval rule and window, freeze windows, automatic rollback and deployment, and their targets with the pinned host key fingerprint (project readers).",
