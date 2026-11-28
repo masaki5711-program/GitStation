@@ -37,8 +37,15 @@ async fn a_fresh_bootstrap_passes_every_guard() {
 async fn cluster_bootstrap_is_idempotent_and_records_each_run() {
     let _lock = ClusterLock::shared().await;
     let t = FreshDb::new().await;
+    // Step 1 re-runs on the maintenance database, as its header says: its
+    // advisory lock is per database, and every test process runs step 1 and
+    // the synthetic-password ALTERs there (ensure_cluster). Run from this
+    // test's own database it was not serialized with them and failed with
+    // "deadlock detected" / "tuple concurrently updated" on the role rows.
+    let mut admin = superuser(&maintenance_db()).await;
+    exec(&mut admin, &bootstrap_sql(0)).await;
+    drop(admin);
     let mut su = t.superuser().await;
-    exec(&mut su, &bootstrap_sql(0)).await;
     exec(&mut su, &bootstrap_sql(2)).await;
     let runs: Vec<(i32, String)> = sqlx::query_as(
         "SELECT bootstrap_version, txid::text FROM forge_audit.bootstrap_log ORDER BY id",
