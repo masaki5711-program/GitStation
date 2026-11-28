@@ -656,11 +656,13 @@ pub async fn create(
         // Plan 13 stage 4 part A: one open revision per document. The
         // refusal, the create and the record run under the project's
         // revision lock (two creates of this process never both pass).
-        let planned = plan_revision(&state, &w, repo).await;
+        // A rule that cannot be checked for a transient reason refuses
+        // the create (FG-DOC-0009, a-burst 2026-11-28).
+        let planned = plan_revision(&state, &w, repo).await?;
         let _serialized = match (&planned, state.doc_revisions.as_deref()) {
             (Some((_, revised)), Some(revisions)) if !revised.keys.is_empty() => {
                 let (project, _) = *w.proof.id();
-                let guard = revisions.serialize(project, &w.ctx.request_id).await;
+                let guard = revisions.serialize(project).await?;
                 refuse_second(revisions, &w, &revised.keys).await?;
                 Some(guard)
             }
@@ -679,36 +681,42 @@ pub async fn create(
 }
 
 /// The documents a new merge request would revise (plan 13 §7.5, stage 4
-/// part A, ADR-0027 §1). **Fails open** (review HIGH 1): nothing to check
-/// (`None`) without the document revisions or git configured, with a
-/// repository that is not ready, without type definitions
-/// (`.forge/doctypes/`: system code repositories pay one small listing),
-/// or when deriving them fails or takes longer than
-/// `forge_checks::doc_revision::REVISION_BUDGET` (logged
-/// `forge.doc_revision.unavailable` with its code; the version job
-/// records the documents later). A bound hit is logged and refuses nothing
-/// for what was not read.
+/// part A, ADR-0027 §1). Nothing to check (`Ok(None)`) without the
+/// document revisions or git configured, with a repository that is not
+/// ready, or without type definitions (`.forge/doctypes/`: system code
+/// repositories pay one small listing). **Fails closed** when deriving
+/// them runs out of `forge_checks::doc_revision::REVISION_BUDGET` or git
+/// times out / is busy (`FG-DOC-0009`, a-burst 2026-11-28); a document git
+/// cannot read still fails open (review HIGH 1: logged
+/// `forge.doc_revision.unavailable`, the version job records the documents
+/// later). A bound hit is logged and refuses nothing for what was not read.
 async fn plan_revision(
     state: &AppState,
     w: &WriteParts<MergeRequestCtx, CreateMergeRequest>,
     repo: ProjectRepository,
-) -> Option<(ObjectId, forge_checks::doc_revision::Revised)> {
-    let (Some(_), Some(smart)) = (state.doc_revisions.as_deref(), state.smart_http.as_ref()) else {
-        return None;
+) -> Result<Option<(ObjectId, forge_checks::doc_revision::Revised)>, ForgeError> {
+    let (Some(revisions), Some(smart)) =
+        (state.doc_revisions.as_deref(), state.smart_http.as_ref())
+    else {
+        return Ok(None);
     };
     if repo.state != forge_core::RepositoryState::Ready {
-        return None;
+        return Ok(None);
     }
     let wanted = w.proof.ctx().merge_request();
     let (project, _) = *w.proof.id();
-    let (head, revised) = forge_checks::doc_revision::revised_for_open(
-        &smart.browse,
-        repo.id,
-        (&wanted.source_branch, &wanted.target_branch),
-        project,
-        &w.ctx.request_id,
-    )
-    .await?;
+    let Some((head, revised)) = revisions
+        .plan_open(
+            &smart.browse,
+            repo.id,
+            (&wanted.source_branch, &wanted.target_branch),
+            project,
+            &w.ctx.request_id,
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
     if let Some(bound) = revised.incomplete {
         tracing::info!(
             target: "forge_web",
@@ -722,12 +730,13 @@ async fn plan_revision(
             "the documents a new merge request revises were read within a bound"
         );
     }
-    Some((head, revised))
+    Ok(Some((head, revised)))
 }
 
-/// `FG-DOC-0006` when an open merge request revises one of `keys`. A
-/// database failure of the check fails open (logged with its code): only
-/// the rule's own refusal stops the create.
+/// `FG-DOC-0006` when an open merge request revises one of `keys`. The
+/// open revisions that cannot be read refuse the create too
+/// (`FG-DOC-0009 reason=refuse_unavailable` with the cause's code,
+/// a-burst 2026-11-28: the rule is never skipped for a database failure).
 async fn refuse_second(
     revisions: &forge_checks::DocRevisions,
     w: &WriteParts<MergeRequestCtx, CreateMergeRequest>,
@@ -737,19 +746,11 @@ async fn refuse_second(
     match revisions.refuse_second(project, keys).await {
         Ok(()) => Ok(()),
         Err(e) if e.code() == ErrorCode::DocRevisionOpen => Err(e),
-        Err(e) => {
-            tracing::warn!(
-                target: "forge_web",
-                event = "forge.doc_revision.unavailable",
-                error_code = e.code().id(),
-                error = %e,
-                request_id = %w.ctx.request_id,
-                project_id = project.get(),
-                at = "refuse",
-                "the open revisions could not be read; the one-revision rule is skipped this time"
-            );
-            Ok(())
-        }
+        Err(e) => Err(
+            forge_checks::doc_revision::unchecked("refuse_unavailable", project)
+                .with_context("cause_code", e.code().id())
+                .with_source(e),
+        ),
     }
 }
 

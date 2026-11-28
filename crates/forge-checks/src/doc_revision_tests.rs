@@ -98,26 +98,32 @@ fn a_second_revision_of_a_document_is_refused_at_open() {
     assert!(refusal(ProjectId::new(7), &[], &[DocKey::original("QP-07-001")]).is_none());
 }
 
-/// Review MEDIUM: the wait for a project's revision lock is bounded and
-/// fails open; locks nobody holds are dropped from the map.
+/// Review MEDIUM: the wait for a project's revision lock is bounded; past
+/// it the create is refused (`FG-DOC-0009 reason=lock_busy`, a-burst
+/// 2026-11-28: it used to go on without the rule). Locks nobody holds are
+/// dropped from the map.
 #[tokio::test]
-async fn a_busy_revision_lock_fails_open_and_idle_locks_are_dropped() {
+async fn a_busy_revision_lock_fails_closed_and_idle_locks_are_dropped() {
     let t = forge_db::test_support::FreshDb::migrated().await;
     let revisions = DocRevisions::new(t.db.clone());
-    let request = RequestId::parse("req-lock").expect("id");
-    let held = revisions
-        .serialize(ProjectId::new(1), &request)
-        .await
-        .expect("free");
+    let held = revisions.serialize(ProjectId::new(1)).await.expect("free");
     let started = std::time::Instant::now();
-    assert!(revisions
-        .serialize(ProjectId::new(1), &request)
+    let busy = revisions
+        .serialize(ProjectId::new(1))
         .await
-        .is_none());
+        .expect_err("busy");
     assert!(started.elapsed() >= LOCK_WAIT);
+    assert_eq!(busy.code(), ErrorCode::DocRevisionUnchecked);
+    assert_eq!(busy.code().id(), "FG-DOC-0009");
+    assert!(
+        busy.context()
+            .iter()
+            .any(|(k, v)| *k == "reason" && v == "lock_busy"),
+        "{busy:?}"
+    );
     drop(held);
-    let other = revisions.serialize(ProjectId::new(2), &request).await;
-    assert!(other.is_some());
+    let other = revisions.serialize(ProjectId::new(2)).await;
+    assert!(other.is_ok());
     let projects: Vec<ProjectId> = revisions
         .locks
         .lock()

@@ -52,7 +52,9 @@ pub use update::{
     change_visibility_decided, update_decided, ProjectAccessFacts, ProjectPatch,
     ProjectUpdateFacts, VisibilityOutcome,
 };
-pub(crate) use update::{facts as locked_access_facts, lock as lock_access, lock_shared};
+pub(crate) use update::{
+    facts as locked_access_facts, key_share_first, lock as lock_access, lock_shared,
+};
 
 /// The audit resource type of projects, their repository and members
 /// (tables.toml), and the aggregate of their events.

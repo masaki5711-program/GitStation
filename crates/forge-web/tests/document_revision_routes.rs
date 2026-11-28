@@ -145,6 +145,12 @@ struct World {
 }
 
 async fn world() -> World {
+    world_within(None).await
+}
+
+/// [`world`] whose revision rule has `budget` to derive the documents of
+/// a new merge request (`None`: the default).
+async fn world_within(budget: Option<std::time::Duration>) -> World {
     let t = FreshDb::migrated().await;
     let mut ids = Vec::new();
     for name in ["olga", "mia", "dave", "dina", "rita"] {
@@ -188,7 +194,7 @@ async fn world() -> World {
     let smart = SmartHttp::new(g.clone(), storage.clone(), GitHttpLimits::default())
         .with_push(Arc::new(t.db.clone()), Arc::new(t.db.clone()));
     let browser = smart.browse.clone();
-    let state = AppState::new(
+    let mut state = AppState::new(
         "test",
         Vec::new(),
         Arc::new(NoTokens),
@@ -201,6 +207,12 @@ async fn world() -> World {
     .with_hosting(forge_hosting::Hosting::new(t.db.clone()))
     .with_review(Review::new(t.db.clone(), Arc::new(browser.clone())))
     .with_checks(forge_checks::Checks::new(t.db.clone(), Arc::new(browser)));
+    if let Some(budget) = budget {
+        state.doc_revisions = Some(Arc::new(
+            forge_checks::DocRevisions::new(t.db.clone())
+                .with_limits(budget, forge_checks::doc_revision::LOCK_WAIT),
+        ));
+    }
     let router = forge_web::app(state, AppConfig::default()).expect("router");
     World {
         owner: ids[0].user_id,
@@ -280,7 +292,11 @@ impl World {
 /// main: README + QP-07-001 v1; `a` and `b` change the document, `c` only
 /// the README.
 async fn with_branches() -> World {
-    let w = world().await;
+    branches(world().await)
+}
+
+/// [`with_branches`] on `w`.
+fn branches(w: World) -> World {
     let base = commit_files(&w.path, None, &files("# Web\n", "v1", &[]));
     w.branch("main", &base);
     let a = commit_files(&w.path, Some(&base), &files("# Web\n", "a", &[]));
@@ -670,4 +686,24 @@ async fn an_agent_is_answered_a_confidential_document_status_as_absent() {
     assert_eq!(s, StatusCode::OK, "{body}");
     let (s, body) = w.send("GET", &uri("QP-07-002"), person(w.dev), None).await;
     assert_eq!(s, StatusCode::OK, "{body}");
+}
+
+/// a-burst 2026-11-28 (M4): deriving the documents of a new merge request
+/// ran out of its budget under load and the create went on without the
+/// one-revision rule. It must fail closed: `503 FG-DOC-0009`, nothing
+/// created, and the same request succeeds once the rule can be checked.
+#[tokio::test]
+async fn a_revision_check_out_of_time_refuses_the_create_retryably() {
+    let w = branches(world_within(Some(std::time::Duration::ZERO)).await);
+    let (s, body) = w.open(w.dev, "a").await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(code(&body), "FG-DOC-0009");
+    assert!(body["request_id"].is_string(), "{body}");
+    let text = body.to_string();
+    assert!(
+        !text.contains("timeout_ms") && !text.contains("doc_revision"),
+        "no internals in the answer: {text}"
+    );
+    let n: Vec<Value> = w.t.json_rows("SELECT iid FROM forge.merge_requests").await;
+    assert!(n.is_empty(), "nothing was created: {n:?}");
 }

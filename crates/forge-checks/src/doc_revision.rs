@@ -275,36 +275,31 @@ pub async fn revised_by_branches(
 pub const REVISION_BUDGET: Duration = Duration::from_secs(5);
 
 /// The longest a create waits for its project's revision lock
-/// ([`DocRevisions::serialize`]) before it goes on without it.
+/// ([`DocRevisions::serialize`]) before it is refused (`FG-DOC-0009`).
 pub const LOCK_WAIT: Duration = Duration::from_secs(2);
 
-/// [`revised_by_branches`] for the create route, **failing open**: the
-/// rule is a safeguard, not the merge request. A failure or the
-/// [`REVISION_BUDGET`] is logged (`forge.doc_revision.unavailable`, warn,
-/// with its code) and answers `None` — nothing is refused; the version
-/// job records the documents later (and marks a second revision).
-pub async fn revised_for_open(
-    browse: &Browser,
-    repo: RepoId,
-    (source, target): (&RefName, &RefName),
-    project: ProjectId,
-    request_id: &RequestId,
-) -> Option<(ObjectId, Revised)> {
-    let limits = DocLimits::default();
-    let read = revised_by_branches(browse, repo, source, target, &limits);
-    let failed = match tokio::time::timeout(REVISION_BUDGET, read).await {
-        Ok(Ok(planned)) => return planned,
-        Ok(Err(e)) => e,
-        Err(_) => budget_spent(),
-    };
-    unavailable(&failed, request_id, project, "open");
-    None
+/// `FG-DOC-0009 reason=<reason>`: the one-revision rule could not be
+/// checked for a transient reason, so the merge request is not created
+/// (the create route; a-burst 2026-11-28).
+pub fn unchecked(reason: &'static str, project: ProjectId) -> ForgeError {
+    ForgeError::new(ErrorCode::DocRevisionUnchecked)
+        .with_context("reason", reason)
+        .with_context("project_id", project.get())
 }
 
-fn budget_spent() -> ForgeError {
+/// A git failure a retry may not see again: a timeout, git busy, git that
+/// could not start.
+fn transient_git(e: &ForgeError) -> bool {
+    matches!(
+        e.code(),
+        ErrorCode::GitTimeout | ErrorCode::GitBusy | ErrorCode::GitUnavailable
+    )
+}
+
+fn budget_spent(budget: Duration) -> ForgeError {
     ForgeError::new(ErrorCode::RequestTimeout)
         .with_context("operation", "doc_revision")
-        .with_context("timeout_ms", REVISION_BUDGET.as_millis())
+        .with_context("timeout_ms", budget.as_millis())
 }
 
 fn unavailable(e: &ForgeError, request_id: &RequestId, project: ProjectId, at: &'static str) {
@@ -387,7 +382,7 @@ pub async fn record_version(
     let failed = match tokio::time::timeout(REVISION_BUDGET, run).await {
         Ok(Ok(n)) => return VersionRecord::Recorded(n),
         Ok(Err(e)) => e,
-        Err(_) => budget_spent(),
+        Err(_) => budget_spent(REVISION_BUDGET),
     };
     unavailable(&failed, request_id, project, "version");
     VersionRecord::Skipped
@@ -410,6 +405,10 @@ pub struct DocRevisions {
     /// process never both pass the refusal; another process's race is left
     /// to the version job's mark).
     locks: std::sync::Arc<std::sync::Mutex<ProjectLocks>>,
+    /// [`REVISION_BUDGET`] (tests shorten it).
+    budget: Duration,
+    /// [`LOCK_WAIT`] (tests shorten it).
+    lock_wait: Duration,
 }
 
 type ProjectLocks = std::collections::HashMap<ProjectId, std::sync::Arc<tokio::sync::Mutex<()>>>;
@@ -439,22 +438,67 @@ impl DocRevisions {
         Self {
             db,
             locks: std::sync::Arc::default(),
+            budget: REVISION_BUDGET,
+            lock_wait: LOCK_WAIT,
         }
+    }
+
+    /// Other bounds than [`REVISION_BUDGET`] and [`LOCK_WAIT`] (tests: a
+    /// budget that is spent at once).
+    #[must_use]
+    pub fn with_limits(mut self, budget: Duration, lock_wait: Duration) -> Self {
+        self.budget = budget;
+        self.lock_wait = lock_wait;
+        self
+    }
+
+    /// [`revised_by_branches`] for the create route. **Fails closed on a
+    /// transient failure** (a-burst 2026-11-28, ADR-0027 amendment): the
+    /// budget spent or a git step that timed out, was busy or could not
+    /// start is `FG-DOC-0009` ([`unchecked`]) — the create is refused and
+    /// safe to repeat, never opened without the rule. Any other failure (a
+    /// document git cannot read: review HIGH 1 of stage 4) still fails
+    /// open: logged (`forge.doc_revision.unavailable`, warn, with its
+    /// code) and `Ok(None)`; the version job records the documents later.
+    pub async fn plan_open(
+        &self,
+        browse: &Browser,
+        repo: RepoId,
+        (source, target): (&RefName, &RefName),
+        project: ProjectId,
+        request_id: &RequestId,
+    ) -> Result<Option<(ObjectId, Revised)>, ForgeError> {
+        let limits = DocLimits::default();
+        let read = revised_by_branches(browse, repo, source, target, &limits);
+        let failed = match tokio::time::timeout(self.budget, read).await {
+            Ok(Ok(planned)) => return Ok(planned),
+            Ok(Err(e)) if transient_git(&e) => {
+                return Err(unchecked("git", project)
+                    .with_context("cause_code", e.code().id())
+                    .with_source(e))
+            }
+            Ok(Err(e)) => e,
+            Err(_) => {
+                return Err(unchecked("budget", project)
+                    .with_context("timeout_ms", self.budget.as_millis()))
+            }
+        };
+        unavailable(&failed, request_id, project, "open");
+        Ok(None)
     }
 
     /// Hold `project`'s revision lock (the refusal, the create and the
     /// record of a merge request revising documents) until the guard drops.
-    /// The wait is bounded by [`LOCK_WAIT`] and **fails open** (review
-    /// MEDIUM): past it `None` is answered and logged
-    /// (`forge.doc_revision.lock_busy`, warn, `FG-WEB-0002`) — the create
-    /// goes on unserialized and the version job marks a second revision.
-    /// Locks nobody holds or waits for are dropped from the map on each
-    /// call, so it holds only the projects being created in now.
+    /// The wait is bounded by [`LOCK_WAIT`] and **fails closed** (a-burst
+    /// 2026-11-28, ADR-0027 amendment; before, the create went on
+    /// unserialized): past it `FG-DOC-0009 reason=lock_busy` — the create
+    /// is refused and safe to repeat. Locks nobody holds or waits for are
+    /// dropped from the map on each call, so it holds only the projects
+    /// being created in now.
     pub async fn serialize(
         &self,
         project: ProjectId,
-        request_id: &RequestId,
-    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, ForgeError> {
         let lock = {
             // A panic while holding the map cannot leave it inconsistent
             // (one insert or a prune): a poisoned map is used as it is.
@@ -465,21 +509,12 @@ impl DocRevisions {
             map.retain(|p, l| *p == project || std::sync::Arc::strong_count(l) > 1);
             std::sync::Arc::clone(map.entry(project).or_default())
         };
-        match tokio::time::timeout(LOCK_WAIT, lock.lock_owned()).await {
-            Ok(guard) => Some(guard),
-            Err(_) => {
-                tracing::warn!(
-                    target: "forge_checks",
-                    event = "forge.doc_revision.lock_busy",
-                    error_code = ErrorCode::RequestTimeout.id(),
-                    request_id = %request_id,
-                    project_id = project.get(),
-                    timeout_ms = LOCK_WAIT.as_millis(),
-                    "the project's revision lock was busy; the merge request is created without it"
-                );
-                None
-            }
-        }
+        tokio::time::timeout(self.lock_wait, lock.lock_owned())
+            .await
+            .map_err(|_| {
+                unchecked("lock_busy", project)
+                    .with_context("timeout_ms", self.lock_wait.as_millis())
+            })
     }
 
     /// `GET …/documents/{doc_id}/status` (`RepoBrowse`): the open
