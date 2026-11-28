@@ -75,6 +75,7 @@
 - 数の引数（`--n`・`--burst`・`--gap`・`--person-from`・`--timeout`・`--retry-busy`・`e` の全部・`spawn-bench` の `--docs`）は整数で、下限がある（`--timeout abc` や `--n 0` は断る）。シナリオに無い `--名前` も断る。
 - `GS_LT_MIN_FREE_GB` は 0 以上の数、`GS_LT_PSQL_DIRECT` と `GS_LT_DOC_LINT_MISSING_FATAL` は `0` か `1`。
 - `GS_LT_CONCURRENCY`（既定 32、1〜1024 の整数）: 一斉作成（`a` の波・`a-burst`・`a-xref`）で同時に開く API 呼び出しの数。負荷試験の道具は 1 台の端末なので、forge の `server.max_connections_per_peer`（既定 64）を超えた接続は、要求を読む前に断られる（503 `FG-WEB-0008`、または接続が閉じられて `TypeError`）。200 人が 200 台から出す一斉作成は 200 の端末なので、この上限には当たらない。キューから見れば、32 本ずつでも一斉に届く。上限を確かめたいときだけ、`GS_LT_CONCURRENCY` を 64 より大きくする。
+- DB の読み取りは既定で `docker exec <GS_LT_PG_CONTAINER> psql -U <GS_LT_PG_USER> -d <GS_LT_PG_DB>`（既定 `gs-m3-test-gs-test-pg-1`・`postgres`・`forge`）。開発の DB（`ops/dev/compose.yml`）で測るときは `GS_LT_PG_CONTAINER=forge-dev-postgres-1 GS_LT_PG_USER=forge_dev`（記録: `docs/handoff/2026-11-28-merge-load-after-s10.md`）。
 - `GS_LT_PSQL_DIRECT=1` のときは **`PGHOST` と `PGPORT` を必ず明示する**。無いと `psql` はそのホストの既定のソケットがつながる PostgreSQL（別のシステムの DB かもしれない）を読むので、始める前に断る。
 - 検査だけをする: `node ops/loadtest/merge-load.mjs <シナリオ> … --preflight`（合っていれば 0、誤りは 2。何も始めない。`run-all.sh` はロックを取る前に全部のシナリオでこれを通す）。
 
