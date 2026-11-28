@@ -109,6 +109,9 @@ pub enum MergeRequestTransition {
     AutofixFinish,
     /// The agent builder opened an update merge request (plan 16 A9).
     AgentUpdateOpen,
+    /// The worker proposed an AI asset draft beside the merge request
+    /// (plan 17 P17-10).
+    AiDraftPropose,
 }
 
 impl MergeRequestTransition {
@@ -131,6 +134,7 @@ impl MergeRequestTransition {
         Self::RevertDraft,
         Self::AutofixFinish,
         Self::AgentUpdateOpen,
+        Self::AiDraftPropose,
     ];
 
     /// The one event the transition publishes.
@@ -153,6 +157,7 @@ impl MergeRequestTransition {
             Self::RevertDraft => EventType::MergeRequestRevertDrafted,
             Self::AutofixFinish => EventType::MergeRequestAutofixFinished,
             Self::AgentUpdateOpen => EventType::MergeRequestAgentUpdateOpened,
+            Self::AiDraftPropose => EventType::MergeRequestAiDraftProposed,
         }
     }
 }
@@ -360,6 +365,25 @@ pub enum MergeRequestChange {
         lock_digest: String,
         revoked: Option<String>,
     },
+    /// `merge_request.ai_draft_proposed` (plan 17 P17-10, ADR-0039
+    /// Amendment P17-10b): the worker's one commit `commit` (over the
+    /// merge request's head `parent`) on `branch` (`ai-draft/<id>`), the
+    /// asset paths it changes (at most 3, each checked against the assets
+    /// given to the model), how many of the model's edits the output
+    /// checks dropped, and the advice and LLM request it came from.
+    /// Deduplicated by
+    /// `merge_request_ai_draft_proposed:<merge_request_id>:<commit>`.
+    AiDraftProposed {
+        merge_request: MergeRequestId,
+        iid: i64,
+        branch: RefName,
+        commit: ObjectId,
+        parent: ObjectId,
+        files: Vec<String>,
+        dropped_edits: u32,
+        advice_id: i64,
+        llm_request_id: i64,
+    },
 }
 
 /// Why the agent builder's update merge request was opened (plan 16 A9).
@@ -432,6 +456,7 @@ impl MergeRequestChange {
             Self::RevertDrafted { .. } => MergeRequestTransition::RevertDraft,
             Self::AutofixFinished(_) => MergeRequestTransition::AutofixFinish,
             Self::AgentUpdateOpened { .. } => MergeRequestTransition::AgentUpdateOpen,
+            Self::AiDraftProposed { .. } => MergeRequestTransition::AiDraftPropose,
         }
     }
 
@@ -453,7 +478,8 @@ impl MergeRequestChange {
             | Self::Approved { merge_request, .. }
             | Self::Unapproved { merge_request, .. }
             | Self::RevertDrafted { merge_request, .. }
-            | Self::AgentUpdateOpened { merge_request, .. } => *merge_request,
+            | Self::AgentUpdateOpened { merge_request, .. }
+            | Self::AiDraftProposed { merge_request, .. } => *merge_request,
             Self::AutofixFinished(f) => f.merge_request,
         }
     }
@@ -490,6 +516,7 @@ impl MergeRequestChange {
             Self::RevertDrafted { .. } => "merge_request_revert_drafted",
             Self::AutofixFinished(_) => "merge_request_autofix_finished",
             Self::AgentUpdateOpened { .. } => "merge_request_agent_update_opened",
+            Self::AiDraftProposed { .. } => "merge_request_ai_draft_proposed",
         }
     }
 
@@ -513,7 +540,9 @@ impl MergeRequestChange {
     /// RevertDrafted `{"merge_request_id","iid","merge_id","target_branch","merged_sha",
     /// "outcome","revert_iid","conflict_files"}`, AutofixFinished
     /// `{"merge_request_id","iid","attempt_id","trigger","fixer","state","reason","commit_sha"}`,
-    /// AgentUpdateOpened `{"merge_request_id","iid","author_id","origin","lock_digest","revoked"}`.
+    /// AgentUpdateOpened `{"merge_request_id","iid","author_id","origin","lock_digest","revoked"}`,
+    /// AiDraftProposed `{"merge_request_id","iid","branch","commit_sha","parent_sha","files",
+    /// "dropped_edits","advice_id","llm_request_id"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -759,6 +788,27 @@ impl MergeRequestChange {
                 "origin": origin.as_str(),
                 "lock_digest": lock_digest,
                 "revoked": revoked,
+            }),
+            Self::AiDraftProposed {
+                merge_request,
+                iid,
+                branch,
+                commit,
+                parent,
+                files,
+                dropped_edits,
+                advice_id,
+                llm_request_id,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "branch": branch.as_str(),
+                "commit_sha": commit.as_str(),
+                "parent_sha": parent.as_str(),
+                "files": files,
+                "dropped_edits": dropped_edits,
+                "advice_id": advice_id,
+                "llm_request_id": llm_request_id,
             }),
         }
     }

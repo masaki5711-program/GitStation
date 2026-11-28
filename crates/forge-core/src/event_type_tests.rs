@@ -140,7 +140,8 @@ fn all_lists_every_event_type_once() {
             "spec.released",
             "merge_request.autofix_finished",
             "deployment.approval_summarized",
-            "merge_request.agent_update_opened"
+            "merge_request.agent_update_opened",
+            "merge_request.ai_draft_proposed"
         ]
     );
 }

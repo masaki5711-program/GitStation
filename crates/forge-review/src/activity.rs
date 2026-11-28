@@ -103,6 +103,7 @@ fn fields_of(t: EventType) -> Option<Fields> {
         | EventType::SpecReleased
         | EventType::MergeRequestRevertDrafted
         | EventType::MergeRequestAgentUpdateOpened
+        | EventType::MergeRequestAiDraftProposed
         | EventType::MergeRequestAutofixFinished
         | EventType::DeploymentApprovalSummarized => None,
     }

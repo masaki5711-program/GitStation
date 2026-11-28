@@ -157,7 +157,9 @@ fn kinds() -> Value {
         "mr_commented",
         "mr_conflict_predicted",
         "mr_revert_drafted",
-        "mr_agent_update"
+        "mr_agent_update",
+        "mr_agent_revoked",
+        "mr_ai_draft"
     ])
 }
 

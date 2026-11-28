@@ -305,6 +305,25 @@ async fn a_draft_is_proposed_beside_the_improvement_and_the_mr_stays_a_draft() {
             .await;
     assert_eq!(advice.len(), 1);
     assert_eq!(advice[0]["purpose"], "ai_asset_draft");
+    // ADR-0039 P17-10b: the proposal is recorded once (the screen's notice
+    // and the author's notification), with code-made facts only.
+    let recorded = forge_db::llm::asset_draft::latest_proposed(&f.w.t.db, f.w.project, f.mr.id)
+        .await
+        .expect("read")
+        .expect("recorded");
+    assert_eq!(recorded.branch, "refs/heads/ai-draft/ir-1");
+    assert_eq!(recorded.commit_sha, draft);
+    assert_eq!(recorded.parent_sha, f.head);
+    assert_eq!(recorded.files, ["skills/pe-quality-spc.md"]);
+    assert_eq!(recorded.dropped_edits, 0);
+    let events =
+        f.w.t
+            .json_rows(
+                "SELECT count(*) AS n FROM forge.events \
+                 WHERE event_type = 'merge_request.ai_draft_proposed'",
+            )
+            .await;
+    assert_eq!(events[0]["n"], 1);
     // Proposed once: the next pass asks nothing.
     let again = run_pass(&f, &provider, &mut memory).await;
     assert_eq!(again.asked, 0);

@@ -472,6 +472,7 @@ impl SearchIndex {
             | EventType::SpecReleased
             | EventType::MergeRequestRevertDrafted
             | EventType::MergeRequestAgentUpdateOpened
+            | EventType::MergeRequestAiDraftProposed
             | EventType::MergeRequestAutofixFinished
             | EventType::DeploymentApprovalSummarized => Ok(()),
         }

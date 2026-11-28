@@ -194,6 +194,15 @@ describe('the notifications page', () => {
     expect(screen.queryByText(/mr_future/)).toBeNull();
   });
 
+  it('says the AI draft and the revocation update in their own sentences', async () => {
+    await openPage({
+      [`GET ${LIST}`]: () =>
+        json(200, { items: [item(9, { kind: 'mr_ai_draft' }), item(8, { kind: 'mr_agent_revoked' })], next_before: null }),
+    });
+    expect(screen.getByText(/made a draft \(suggestion\) of an AI asset fix/)).toBeTruthy();
+    expect(screen.getByText(/replacing a revoked part waits for a Maintainer/)).toBeTruthy();
+  });
+
   it('marks the bell as the current page here', async () => {
     await openPage({ [`GET ${BELL_PATH}`]: () => json(200, { count: 120, capped: true }) });
     const bell = await screen.findByRole('link', { name: 'Notifications (99+ unread)' });

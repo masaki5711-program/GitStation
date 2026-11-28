@@ -11,7 +11,8 @@
 // approve / withdraw, merge), then the detail of the head's check runs and
 // the conflicts predicted with other merge requests (CheckRuns.tsx).
 // The local LLM's first pass follows the checks, as advice only
-// (AiAdvicePanel.tsx, plan 19 L5-6).
+// (AiAdvicePanel.tsx, plan 19 L5-6), then an improvement merge request's
+// AI asset draft, as a suggestion only (AiDraftPanel.tsx, plan 17 P17-10).
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router';
@@ -24,6 +25,7 @@ import { formatDateTime, formatRelative, mrStateLabel } from '../../../features/
 import { MarkdownView } from '../../../features/MarkdownView';
 import { AiEvalSection } from '../../lazyScreens';
 import { AiAdviceSection } from '../../../features/mr/AiAdvicePanel';
+import { AiDraftSection } from '../../../features/mr/AiDraftPanel';
 import { CheckRunsSection, ConflictsSection } from '../../../features/mr/CheckRuns';
 import { CommentForm } from '../../../features/mr/CommentForm';
 import { ConditionsPanel } from '../../../features/mr/ConditionsPanel';
@@ -326,6 +328,13 @@ function Overview({
       <RevertSection projectId={projectId} project={project} iid={mr.iid} merged={mr.state === 'merged'} />
       <CheckRunsSection projectId={projectId} project={project} iid={mr.iid} head={head} />
       <AiAdviceSection projectId={projectId} iid={mr.iid} open={mr.state === 'open'} />
+      <AiDraftSection
+        projectId={projectId}
+        project={project}
+        iid={mr.iid}
+        sourceBranch={mr.source_branch}
+        waiting={mr.state === 'open' && mr.draft}
+      />
       <AiEvalSection projectId={projectId} project={project} iid={mr.iid} head={head} />
       <ConflictsSection projectId={projectId} project={project} iid={mr.iid} />
       <section aria-labelledby="mr-description-title">

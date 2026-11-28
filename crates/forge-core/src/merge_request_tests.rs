@@ -144,7 +144,8 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.unapproved",
             "merge_request.revert_drafted",
             "merge_request.autofix_finished",
-            "merge_request.agent_update_opened"
+            "merge_request.agent_update_opened",
+            "merge_request.ai_draft_proposed"
         ]
     );
 }
@@ -622,5 +623,51 @@ fn agent_update_opened_is_a_transition_keyed_by_the_merge_request() {
     assert_eq!(
         details.event_type(),
         Some(EventType::MergeRequestAgentUpdateOpened)
+    );
+}
+
+/// Plan 17 P17-10: the AI asset draft is a transition of the improvement
+/// merge request, keyed by it and the draft commit (a person may delete
+/// the branch to have it drafted again); the payload carries ids, the
+/// branch, the commits, the changed asset paths and the dropped count.
+#[test]
+fn ai_draft_proposed_is_a_transition_keyed_by_the_merge_request_and_commit() {
+    use crate::{ObjectId, RefName};
+    let proposed = MergeRequestChange::AiDraftProposed {
+        merge_request: MergeRequestId::new(9),
+        iid: 3,
+        branch: RefName::parse("refs/heads/ai-draft/ir-1").expect("ref"),
+        commit: ObjectId::parse(&"b".repeat(40)).expect("oid"),
+        parent: ObjectId::parse(&"a".repeat(40)).expect("oid"),
+        files: vec!["skills/pe-quality-spc.md".to_owned()],
+        dropped_edits: 2,
+        advice_id: 5,
+        llm_request_id: 6,
+    };
+    assert_eq!(
+        proposed.transition(),
+        MergeRequestTransition::AiDraftPropose
+    );
+    assert_eq!(proposed.dedup_prefix(), "merge_request_ai_draft_proposed");
+    assert_eq!(proposed.action(), "merge_request.ai_draft_proposed");
+    assert_eq!(proposed.merge_request(), MergeRequestId::new(9));
+    assert_eq!(
+        proposed.to_value(),
+        json!({
+            "merge_request_id": 9,
+            "iid": 3,
+            "branch": "refs/heads/ai-draft/ir-1",
+            "commit_sha": "b".repeat(40),
+            "parent_sha": "a".repeat(40),
+            "files": ["skills/pe-quality-spc.md"],
+            "dropped_edits": 2,
+            "advice_id": 5,
+            "llm_request_id": 6,
+        })
+    );
+    let details = AuditDetails::MergeRequest(proposed);
+    assert_eq!(
+        details.event_type(),
+        Some(EventType::MergeRequestAiDraftProposed)
     );
 }

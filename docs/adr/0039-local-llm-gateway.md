@@ -500,3 +500,44 @@ ADR-0032 Amendment A11。
    緑になるまで押す使い方は、各回が監査と `forge.llm_review_reruns` に head つきで残り、マージを止めるのはブランチの規則で
    名指したときだけ）。`LlmPause` / `LlmResume` のボット・サービスアカウント・自動マージ・代理の deny は `matrix_rows_people.rs`
    と生成の行（`act_as_rule` / `auto_merge_may`）が持つ。公開プロジェクトの `GET …/llm` の `changed_by` は ai_assets と同じ。
+
+## Amendment（2026-11-28、P17-10b `feat/ui-ai-draft-and-revocation-notice`: AI 資産の下書きの表示と通知）
+
+P17-10 の 10「まだ無いもの」のうち、下書きの画面の表示と通知を作った。利用者の指示（計画の推奨をすべて採る）で、次を決めた。
+
+1. **記録**: worker は下書きのブランチを書いた後（push の記録の後）、新しいイベント `merge_request.ai_draft_proposed`
+   （integration、actor `system`、集約は改善の MR、dedup `merge_request_ai_draft_proposed:<mr>:<commit>` — 人がブランチを消して
+   作り直されたら別の行）と監査の行を 1 つのトランザクションで書く（`forge_db::llm::asset_draft::record_proposed`）。中身は
+   ID・ブランチ・下書きのコミット・親（MR の head）・変わる資産のパス（最大 3、モデルに渡した資産だけ）・確認で捨てた編集の数
+   （`Advice::dropped_edits`）・助言と LLM 依頼の ID。**モデルの文は入れない**。新しい表は作らない（下書きそのものは git、
+   記録は監査の行。`agent_marketplace::version_people` と同じ読み方）。記録が失敗してもブランチは残る（聞くのを終えるのは
+   ブランチ）ので、失敗はコードつきで 1 回ログ（`phase=asset_draft_proposal_record`）する。その MR の画面は「下書きは無い」
+   とは言わず、`state: unrecorded`（ブランチはあるが記録を読めない、ブランチへのリンク）を出す（独立レビュー MEDIUM）。
+   通知はその下書きには出ない（受け入れた。作り直すには人が `ai-draft/<id>` を消す）。
+2. **読みの経路**: `GET /api/v1/projects/{id}/merge-requests/{iid}/ai-draft`（`MergeRequestRead`、MR と同じローダー。
+   既存の matrix の `MergeRequestRead` の行がそのまま当たり、経路のテストで allow（Developer のセッション・`read_api`）と
+   deny（private の Guest 403・外の人 404・匿名 401）を確かめた）。答えは `improvement`（`improve/<id>` から）・`state`
+   （`none` / `proposed`）・下書き（ブランチの短い名前・コミット・親・ファイル・`dropped_edits`・`advice_id`・時刻）と、
+   **ブランチの今**（`forge_review::BranchProbe` で読む: `current` / `moved`（その後に push された、今の head を出す）/
+   `deleted`）。記録のブランチが MR の下書きのブランチと違う行は表示せず内部エラー（`ai_draft_branch_mismatch`）。gstn の
+   コマンドは作らない（`NotForCli`: エージェントはブランチとコミットをリポジトリのコマンドで読める）。
+3. **画面**: MR の概要の AI の助言の欄の後に「AI の下書き」の節。**`improve/<id>` の MR だけ**で読む（ほかの MR には要求も
+   節も無い）。文字と記号の札「AI の下書き（提案）」（色だけにしない）、ブランチ（木の画面へ）とコミット（8 桁、コミットの
+   画面へ）、変わるファイル（下書きのブランチの blob へ）、捨てた編集の数（0 なら「確認で捨てた編集はありません」）、
+   次の一手「使うときは、下書きのブランチの変更を確かめてから <元のブランチ> に取り込んでください」、「提案です。マージ
+   リクエストは変わっていません」。`moved` は今の head を、`deleted` はリンクを外して文で言う。読み込み中・まだ無い・
+   読めない（`user_message` と問い合わせ番号、再試行）も節の中。開いている下書きの MR で下書きがまだ無い間だけ 60 秒ごとに
+   読み直す（worker の周回と同じ）。文はすべて React の文字（パスに `<b>` があっても要素にならないことをテストした）。
+4. **通知**: 種類 **`mr_ai_draft`**（メールとアプリ内、改善の MR の作成者だけ）。メールは「提案」の語を必ず含み、ブランチ名・
+   ファイル・コミットは書かない（テンプレートの決まり）。表の CHECK は追記のマイグレーション `20270116100000` で広げた
+   （ADR-0032 A13 の `mr_agent_revoked` と同じファイル）。文言は ja / en / id（受信箱・設定・メール）。
+5. **独立レビュー（llm-integration-reviewer・design-reviewer。CRITICAL・HIGH なし）で変えた点**: 記録の無い下書きの
+   ブランチは `unrecorded`（上の 1）。記録を読むときもコミット・親は `ObjectId`、ブランチは `refs/heads/ai-draft/`、パスは
+   空でなく 512 バイトまでを確かめ、外れた行は `ai_draft_record_invalid`（リンクになる文字を信じない、LOW）。次の一手の行を
+   事実の一覧のすぐ下に、閉じた・準備完了の MR では「作られませんでした」（来ない下書きを約束しない）、ブランチが消された
+   ときは「何もしなくてかまいません」（MEDIUM）。**受け入れた点**: エージェントのトークンもファイルのパスを読める — パスは
+   保護されていない `skills/*.md` / `playbooks/*.toml` だけで、同じ読み手は `RepoRead` でブランチそのものを読めるので新しい
+   露出は無い（AI 資産のリポジトリに機密のパスの印は無い。仕様書の `confidential_at` は資産に当たらない）。`moved` の
+   ブランチのリンクは人の変更を含みうるが、警告の行が今の head を名指し、コミットのリンクが AI の下書きを指す（LOW）。
+6. **まだ無いもの**: ケースが増えた後の作り直し（今も人がブランチを消す）、下書きの差分をこの節の中で見せること（今は
+   ブランチとコミットの画面へのリンク）、捨てた編集の理由ごとの数（今は合計だけ。理由はログの `forge.llm.asset_draft_edits_dropped`）。

@@ -1217,7 +1217,9 @@
       "mr_commented": "Comment on a merge request",
       "mr_conflict_predicted": "Likely conflict with another merge request",
       "mr_revert_drafted": "Pipeline failed after a merge (draft revert)",
-      "mr_agent_update": "An agent configuration update was opened"
+      "mr_agent_update": "An agent configuration update was opened",
+      "mr_agent_revoked": "A project update replacing a revoked part waits for approval (Maintainers)",
+      "mr_ai_draft": "An AI draft (suggestion) was made"
     }
   },
   "inbox": {
@@ -1255,6 +1257,8 @@
       "conflictPredicted": "Your merge request is likely to conflict with another one",
       "revertDrafted": "The pipeline failed after this was merged. Check the draft revert.",
       "agentUpdate": "An agent configuration update was opened in your name. Check the changes.",
+      "agentRevoked": "An update merge request replacing a revoked part waits for a Maintainer’s approval.",
+      "aiDraft": "The local LLM made a draft (suggestion) of an AI asset fix on its own branch. Whether to use it is your decision.",
       "other": "There is a new notification about your merge request"
     }
   },
@@ -2608,5 +2612,23 @@
     "reasonInvalid": "Write the reason on one line, up to {{max}} characters.",
     "noRollback": "No earlier version to roll back to.",
     "copyCommand": "Copy the command"
+  },
+  "aiDraft": {
+    "title": "AI draft",
+    "label": "AI draft (suggestion)",
+    "none": "No AI draft yet. When the local LLM proposes a fix, it appears here.",
+    "noneDone": "No AI draft was made for this merge request.",
+    "unrecorded": "A draft branch exists, but its record could not be read. Check its contents on the branch’s page:",
+    "branch": "Draft branch",
+    "commit": "Commit",
+    "filesTitle": "Files it changes ({{n}})",
+    "noFiles": "It changes no file.",
+    "dropped": "{{n}} of the model’s edits were dropped by the checks (not in the draft).",
+    "noDropped": "No edit was dropped by the checks.",
+    "moved": "The draft branch was changed since (its head now: {{head}}). The commit above is the AI draft.",
+    "deleted": "The draft branch was deleted. Nothing is needed. While the merge request is a draft, a new one may appear later.",
+    "made": "Made {{at}}",
+    "next": "To use it, check the draft branch’s changes, then bring them into {{source}}.",
+    "suggestionOnly": "A suggestion only. The merge request is unchanged (nothing is approved, merged or marked ready)."
   }
 }
